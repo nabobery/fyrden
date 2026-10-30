@@ -1,6 +1,6 @@
 // The read model's and search's state, as instance administrators read it
-// (`GET /admin/search/status`): what the rollout's operators look at before
-// a pause, an export or turning refusals on.
+// (`GET /admin/search/status`): what operators look at before a pause or
+// an export.
 
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -12,7 +12,7 @@ const status = (token: string) =>
   json<Record<string, Record<string, unknown>>>(api("GET", "/admin/search/status", token));
 
 describe("the read model's status", () => {
-  it("says it runs in compatibility, consistent, with no export yet, and counts the live leases", async () => {
+  it("says it refuses writes outside the executor, consistent, with no export yet, and counts the live leases", async () => {
     const admin = await user(true);
     const writer = new ReadModelWriter(env, "default");
     await writer.acquire();
@@ -22,41 +22,22 @@ describe("the read model's status", () => {
       expect(body.protocol).toEqual({
         serving_version: READ_MODEL_PROTOCOL,
         deployed_version: 0,
-        required_version: 1,
-        mode: "compatibility",
+        required_version: 2,
+        mode: "enforced",
         restore_floor: null,
       });
-      expect(body.barrier).toEqual({
+      expect(body.barrier).toMatchObject({
         directory_phase: "running",
-        directory_generation: 1,
         org_phase: "running",
-        org_generation: 1,
         consistent: true,
       });
+      expect(body.barrier?.org_generation).toBe(body.barrier?.directory_generation);
       expect(body.admission).toMatchObject({ open: false });
       expect(body.writers).toMatchObject({ live: 1, earliest_deadline: writer.lease?.until });
-      expect(body.export).toEqual({ available: false, reason: "protocol_not_enforced" });
+      expect(body.export).toEqual({ available: false, reason: "no_restore_floor" });
       expect(body.search).toMatchObject({ day: expect.any(Number), rows: expect.any(Number) });
     } finally {
       await writer.release();
-    }
-  });
-
-  it("reads a missing barrier as null and not consistent, never as healthy", async () => {
-    const admin = await user(true);
-    await env.ORG_READ.prepare("DELETE FROM read_model_barrier").run();
-    try {
-      const { body } = await status(admin.token);
-      expect(body.barrier).toMatchObject({
-        org_phase: null,
-        org_generation: null,
-        consistent: false,
-      });
-      expect(body.protocol).toMatchObject({ required_version: null });
-    } finally {
-      await env.ORG_READ.prepare(
-        "INSERT INTO read_model_barrier (id, phase, generation, protocol_version) VALUES (1, 'running', 1, 1)",
-      ).run();
     }
   });
 

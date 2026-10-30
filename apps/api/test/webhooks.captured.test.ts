@@ -15,6 +15,7 @@ import { type CaptureValue, captureTree } from "../src/webhooks/capture.js";
 import { attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { bodyKeyOf, createWebhookSink, DELIVERY_POLICY } from "../src/webhooks/sink.js";
 import { user } from "./helpers/api.js";
+import { admitted } from "./helpers/read-model.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
@@ -70,20 +71,22 @@ const deliver = (
   sink(options.firstAttempts).deliver(
     effectOf(event, options.claimedAt),
     options.env ?? t.testEnv(),
-    options.db ?? env.ORG_READ,
+    admitted(options.db ?? env.ORG_READ),
   );
 
 const payloadOf = (event: DomainEvent) =>
-  env.ORG_READ.prepare(
-    "SELECT state, bytes, expires_at, payload_key FROM webhook_payloads WHERE event_key = ?",
-  )
+  admitted()
+    .prepare(
+      "SELECT state, bytes, expires_at, payload_key FROM webhook_payloads WHERE event_key = ?",
+    )
     .bind(eventKey(event.id))
     .first<{ state: string; bytes: number | null; expires_at: number; payload_key: string }>();
 
 const deliveryRows = () =>
-  env.ORG_READ.prepare(
-    "SELECT delivery_id, state, reason, expires_at FROM webhook_deliveries WHERE repo_id = ?",
-  )
+  admitted()
+    .prepare(
+      "SELECT delivery_id, state, reason, expires_at FROM webhook_deliveries WHERE repo_id = ?",
+    )
     .bind(t.repo.id)
     .all<{ delivery_id: string; state: string; reason: string | null; expires_at: number }>()
     .then((r) => r.results);
@@ -194,11 +197,13 @@ describe("webhook bodies made from captures", () => {
     await env.DIRECTORY.prepare("UPDATE principals SET handle = ? WHERE id = ?")
       .bind(`renamed-${t.owner.handle}`, t.owner.principalId)
       .run();
-    await env.ORG_READ.prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
+    await admitted()
+      .prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
       .bind(t.repo.id)
       .run();
     // Kept until the body's time, not their own.
-    await env.ORG_READ.prepare("UPDATE webhook_payloads SET expires_at = 4e12 WHERE event_key = ?")
+    await admitted()
+      .prepare("UPDATE webhook_payloads SET expires_at = 4e12 WHERE event_key = ?")
       .bind(eventKey(event.id))
       .run();
     expect(await deliver(event)).toBeUndefined();
@@ -262,7 +267,8 @@ describe("webhook bodies made from captures", () => {
       "SELECT state, expires_at FROM webhook_payloads",
       async () => {
         await deliver(event, { claimedAt: old + DAY });
-        await env.ORG_READ.prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
+        await admitted()
+          .prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
           .bind(t.repo.id)
           .run();
         return null;
@@ -278,7 +284,8 @@ describe("webhook bodies made from captures", () => {
     const event = await captured({ body: "o".repeat(2_000) }, { at: old });
     // Established, then stopped before its deliveries (they are lost the same way here).
     await deliver(event, { claimedAt: old + DAY });
-    await env.ORG_READ.prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
+    await admitted()
+      .prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
       .bind(t.repo.id)
       .run();
     expect(await deliver(event)).toBeUndefined();
@@ -341,11 +348,12 @@ describe("webhook bodies made from captures", () => {
 
   it("are not made for a deleted repository, nor left behind when it is deleted meanwhile", async () => {
     const tombstone = () =>
-      env.ORG_READ.prepare(
-        `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
+      admitted()
+        .prepare(
+          `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
          VALUES (?, 1, 1, 1, 1, 1, 0)
          ON CONFLICT (repo_id) DO UPDATE SET deleted = 1`,
-      )
+        )
         .bind(t.repo.id)
         .run()
         .then(() => {});
@@ -377,7 +385,8 @@ describe("webhook bodies made from captures", () => {
     await deliver(event);
     const payload = await payloadOf(event);
     // Its deliveries past retention go; the body stays with its row.
-    await env.ORG_READ.prepare("UPDATE webhook_deliveries SET expires_at = 0 WHERE repo_id = ?")
+    await admitted()
+      .prepare("UPDATE webhook_deliveries SET expires_at = 0 WHERE repo_id = ?")
       .bind(t.repo.id)
       .run();
     await reconcileWebhooks(t.deps());
@@ -393,10 +402,11 @@ describe("webhook bodies made from captures", () => {
     const orphan = await captured({ body: "l".repeat(2_000) });
     const key = await bodyKeyOf(t.repo.id, eventKey(orphan.id));
     const expires = orphan.at + DELIVERY_POLICY.captureDeadlineMs + DELIVERY_POLICY.intentGraceMs;
-    await env.ORG_READ.prepare(
-      `INSERT INTO webhook_payloads (event_key, repo_id, payload_key, state, expires_at)
+    await admitted()
+      .prepare(
+        `INSERT INTO webhook_payloads (event_key, repo_id, payload_key, state, expires_at)
        VALUES (?, ?, ?, 'intent', ?)`,
-    )
+      )
       .bind(eventKey(orphan.id), t.repo.id, key, expires)
       .run();
     await env.ASSETS.put(key, "{}");

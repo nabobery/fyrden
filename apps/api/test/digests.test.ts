@@ -38,6 +38,7 @@ import {
 const { windowMs, sealAfterMs } = DIGEST_POLICY;
 
 import { countingExec } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 
 afterEach(() => {
   // Back to the suite's clock (held a day ahead).
@@ -372,14 +373,16 @@ describe("digest accumulation", () => {
     const { owner, repo } = await digestRepo();
     startWindow();
     // As the day's first refusal leaves the ledger (by the database's clock).
-    const before = await env.ORG_READ.prepare(
-      "SELECT refused_day, warn_until FROM discretionary_state WHERE id = 1",
-    ).first<{ refused_day: number; warn_until: number }>();
-    await env.ORG_READ.prepare(
-      `INSERT INTO discretionary_state (id, refused_day, warn_until)
+    const before = await admitted()
+      .prepare("SELECT refused_day, warn_until FROM discretionary_state WHERE id = 1")
+      .first<{ refused_day: number; warn_until: number }>();
+    await admitted()
+      .prepare(
+        `INSERT INTO discretionary_state (id, refused_day, warn_until)
        VALUES (1, CAST(unixepoch() / 86400 AS INTEGER), 0)
        ON CONFLICT (id) DO UPDATE SET refused_day = excluded.refused_day`,
-    ).run();
+      )
+      .run();
     try {
       await open(owner, repo);
       await drain(repo.id);
@@ -389,10 +392,10 @@ describe("digest accumulation", () => {
       expect(await job(repo.id, "digest_credit")).toMatchObject({ state: "queued" });
     } finally {
       await (before
-        ? env.ORG_READ.prepare(
-            "UPDATE discretionary_state SET refused_day = ?, warn_until = ? WHERE id = 1",
-          ).bind(before.refused_day, before.warn_until)
-        : env.ORG_READ.prepare("DELETE FROM discretionary_state WHERE id = 1")
+        ? admitted()
+            .prepare("UPDATE discretionary_state SET refused_day = ?, warn_until = ? WHERE id = 1")
+            .bind(before.refused_day, before.warn_until)
+        : admitted().prepare("DELETE FROM discretionary_state WHERE id = 1")
       ).run();
     }
     const retry = await job(repo.id, "digest_credit");

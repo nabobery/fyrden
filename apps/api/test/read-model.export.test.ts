@@ -8,6 +8,7 @@
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import {
   EXPORT_PAGE,
   EXPORT_TABLES,
@@ -20,7 +21,8 @@ import {
 } from "../src/read-model/export.js";
 import { pauseReadModel, resumeReadModel } from "../src/read-model/maintenance.js";
 
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 /** The whole export from `from`: its pages. */
 async function exportAll(
@@ -183,7 +185,7 @@ describe("an export of the read model", () => {
 
 describe("the export's availability", () => {
   it("is refused until writes outside the executor are refused (the restore floor set)", () => {
-    expect(exportAvailability(null)).toEqual({ available: false, reason: "protocol_not_enforced" });
+    expect(exportAvailability(null)).toEqual({ available: false, reason: "no_restore_floor" });
     expect(exportAvailability("2026-10-30T00:00:00Z")).toEqual({ available: true, reason: null });
   });
 });

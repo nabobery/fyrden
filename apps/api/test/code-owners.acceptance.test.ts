@@ -26,6 +26,7 @@ import { FROM_START } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted } from "./helpers/read-model.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 const fx = inject("pushFixtures");
@@ -458,23 +459,25 @@ describe("a busy thread's recipients, each once an item", () => {
         { sinks: [feedSink], publish, inline: { batched: 0 }, now: () => now },
       );
       const ids = (
-        await env.ORG_READ.prepare("SELECT effect_id FROM effects WHERE effect_id LIKE ?")
+        await admitted()
+          .prepare("SELECT effect_id FROM effects WHERE effect_id LIKE ?")
           .bind(`${repo.id}:%`)
           .all<{ effect_id: string }>()
       ).results.map((row) => row.effect_id);
       if (again) {
         // As if every delivery's outcome were lost after its recipients took it: made again.
-        await env.ORG_READ.prepare(
-          `UPDATE effects SET state = 'pending', attempts = 0, lease_token = NULL,
+        await admitted()
+          .prepare(
+            `UPDATE effects SET state = 'pending', attempts = 0, lease_token = NULL,
              lease_until = NULL, done_at = NULL WHERE effect_id LIKE ?`,
-        )
+          )
           .bind(`${repo.id}:%`)
           .run();
         sent.push({ sink: feedSink.name, ids });
       }
       for (let next = sent.shift(); next; next = sent.shift())
         await deliverEffects(
-          { db: env.ORG_READ, env, sinks: [feedSink], now: () => now, publish },
+          { db: admitted(), env, sinks: [feedSink], now: () => now, publish },
           next.sink,
           next.ids,
           invocationBudget(now),
@@ -499,7 +502,8 @@ describe("a busy thread's recipients, each once an item", () => {
     const first = await snapshot();
     await deliver(true);
     const states = (
-      await env.ORG_READ.prepare("SELECT state FROM effects WHERE effect_id LIKE ?")
+      await admitted()
+        .prepare("SELECT state FROM effects WHERE effect_id LIKE ?")
         .bind(`${repo.id}:%`)
         .all<{ state: string }>()
     ).results.map((row) => row.state);

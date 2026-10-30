@@ -9,6 +9,7 @@ import type { DeliveryDeps } from "../../src/webhooks/deliver.js";
 import { bodyKeyOf, createWebhookSink } from "../../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./api.js";
 import { recordingPublish } from "./effects.js";
+import { admitted } from "./read-model.js";
 import { inRepo } from "./repo-git.js";
 
 /*
@@ -180,7 +181,7 @@ export class WebhookTest {
     for (let next = sent.shift(); next; next = sent.shift()) {
       const now = Date.now();
       await deliverEffects(
-        { db: env.ORG_READ, env: this.testEnv(), sinks: [sink], now: () => now, publish },
+        { db: admitted(), env: this.testEnv(), sinks: [sink], now: () => now, publish },
         next.sink,
         next.ids,
         invocationBudget(now),
@@ -208,10 +209,11 @@ export class WebhookTest {
   /** This repository's deliveries, oldest first. */
   async deliveries(): Promise<DeliveryRow[]> {
     return (
-      await env.ORG_READ.prepare(
-        `SELECT delivery_id, hook_id, event, state, reason, attempts, last_status, private
+      await admitted()
+        .prepare(
+          `SELECT delivery_id, hook_id, event, state, reason, attempts, last_status, private
          FROM webhook_deliveries WHERE repo_id = ? ORDER BY created_at, delivery_id`,
-      )
+        )
         .bind(this.repo.id)
         .all<DeliveryRow>()
     ).results;
@@ -221,7 +223,7 @@ export class WebhookTest {
   deps(now = Date.now()): DeliveryDeps {
     return {
       env: this.testEnv(),
-      db: env.ORG_READ,
+      db: admitted(),
       now: () => now,
       resolver: () => async () => ["93.184.216.34"],
     };

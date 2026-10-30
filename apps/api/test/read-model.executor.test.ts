@@ -2,8 +2,9 @@
 // running at the writer's lease's generation, the protocol admitted, the
 // lease's deadline ahead), each batch opening and closing admission in its
 // own transaction; leases taken at the first write, renewed only while
-// live, released at the end; writes outside admission counted, not refused,
-// while old and new code run side by side.
+// live, released at the end; writes outside admission refused. A
+// maintenance writer (the barrier's controller) writes while it is not
+// running, at its generation.
 
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
@@ -18,6 +19,8 @@ import {
   withReadModel,
   writesSql,
 } from "../src/read-model/executor.js";
+import { pauseReadModel, resumeReadModel } from "../src/read-model/maintenance.js";
+import { runningAgain } from "./helpers/read-model.js";
 
 const org = env.ORG_READ;
 
@@ -41,50 +44,136 @@ const epochOf = (source: string) =>
     .bind(source)
     .first<{ epoch_gen: number }>();
 
-afterEach(async () => {
-  await env.DIRECTORY.batch([
-    env.DIRECTORY.prepare("DELETE FROM read_model_writers"),
-    env.DIRECTORY.prepare(
-      "UPDATE read_model_barriers SET phase = 'running', generation = 1, protocol_version = 1 WHERE shard = 'default'",
-    ),
-  ]);
-  await org
-    .prepare(
-      "UPDATE read_model_barrier SET phase = 'running', generation = 1, protocol_version = 1 WHERE id = 1",
-    )
-    .run();
-});
+afterEach(() => runningAgain(env));
+
+/** A maintenance writer at the directory's generation (paused first). */
+async function maintenanceWriter(): Promise<{ writer: ReadModelWriter; generation: number }> {
+  let progress = await pauseReadModel(env, "default");
+  if (progress.phase !== "paused") progress = await pauseReadModel(env, "default");
+  expect(progress.phase).toBe("paused");
+  return {
+    writer: new ReadModelWriter(env, "default", Date.now, {
+      maintenance: { generation: progress.generation },
+    }),
+    generation: progress.generation,
+  };
+}
+
+const barrier = () =>
+  org
+    .prepare("SELECT phase, generation, protocol_version FROM read_model_barrier WHERE id = 1")
+    .first<{ phase: string; generation: number; protocol_version: number }>();
 
 describe("the read model's admission", () => {
-  it("starts closed and running, with a counting trigger for every write of every guarded table", async () => {
+  it("starts closed and running, with a refusing trigger for every write of every guarded table", async () => {
     expect(await admission()).toMatchObject({ open: 0 });
     const { results } = await org
       .prepare(
-        "SELECT count(*) AS n FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'read_model_%'",
+        `SELECT count(*) AS n, count(*) FILTER (WHERE sql LIKE '%read_model_admission_required%') AS refusing
+         FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'read_model_%'`,
       )
-      .all<{ n: number }>();
-    expect(results[0]?.n).toBe(60);
-    const barrier = await env.DIRECTORY.prepare(
-      "SELECT phase, generation, protocol_version, read_model_protocol_since FROM read_model_barriers WHERE shard = 'default'",
+      .all<{ n: number; refusing: number }>();
+    expect(results[0]).toEqual({ n: 60, refusing: 60 });
+    expect(await barrier()).toMatchObject({ phase: "running", protocol_version: 2 });
+    const directory = await env.DIRECTORY.prepare(
+      "SELECT phase, protocol_version, read_model_protocol_since FROM read_model_barriers WHERE shard = 'default'",
     ).first();
-    expect(barrier).toEqual({
+    expect(directory).toEqual({
       phase: "running",
-      generation: 1,
-      protocol_version: 1,
+      protocol_version: 2,
       read_model_protocol_since: null,
     });
   });
 
-  it("counts a write made outside it, and lets it through", async () => {
-    const before = (await admission())?.stray ?? 0;
-    const source = uniqueId("stray");
-    await epochRow(source, 1).run();
-    await org
-      .prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?")
-      .bind(source)
-      .run();
-    await org.prepare("DELETE FROM consumer_epochs WHERE source_id = ?").bind(source).run();
-    expect((await admission())?.stray).toBe(before + 3);
+  it("refuses a write made outside it, and keeps nothing of its batch", async () => {
+    const before = await admission();
+    const [kept, refused] = [uniqueId("kept"), uniqueId("refused")];
+    const writer = new ReadModelWriter(env, "default");
+    await writer.write([epochRow(kept, 1)]);
+    await writer.release();
+    const outside = [
+      epochRow(refused, 1),
+      org.prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?").bind(kept),
+      org.prepare("DELETE FROM consumer_epochs WHERE source_id = ?").bind(kept),
+    ];
+    for (const statement of outside)
+      await expect(statement.run()).rejects.toThrow(/read_model_admission_required/);
+    // A batch: what its statements before the refused one did is undone with it (a change of the
+    // admission row's sequence, which no trigger guards, here).
+    const sequence = (await admission())?.seq;
+    await expect(
+      org.batch([
+        org.prepare("UPDATE read_model_write SET seq = seq + 1 WHERE id = 1"),
+        epochRow(refused, 1),
+      ]),
+    ).rejects.toThrow(/read_model_admission_required/);
+    expect(await admission()).toMatchObject({ open: 0, seq: sequence });
+    expect([await epochOf(kept), await epochOf(refused)]).toEqual([{ epoch_gen: 1 }, null]);
+    // Nothing counted any more.
+    expect((await admission())?.stray).toBe(before?.stray);
+  });
+
+  it("never lets an ordinary writer change the barrier, nor anything insert or delete it", async () => {
+    const before = await barrier();
+    const writer = new ReadModelWriter(env, "default");
+    await expect(
+      writer.write([org.prepare("UPDATE read_model_barrier SET phase = phase WHERE id = 1")]),
+    ).rejects.toBeInstanceOf(ReadModelRefused);
+    await writer.release();
+    await expect(org.prepare("DELETE FROM read_model_barrier").run()).rejects.toThrow(
+      /read_model_admission_required/,
+    );
+    expect(await barrier()).toEqual(before);
+  });
+});
+
+describe("a maintenance writer", () => {
+  it("writes only while the directory's barrier is not running, at the generation it was given", async () => {
+    await expect(
+      new ReadModelWriter(env, "default", Date.now, {
+        maintenance: { generation: (await barrier())?.generation ?? 1 },
+      }).write([org.prepare("SELECT 1")]),
+    ).rejects.toBeInstanceOf(ReadModelRefused);
+    const { writer, generation } = await maintenanceWriter();
+    const source = uniqueId("maintained");
+    await writer.write([epochRow(source, 1)]);
+    expect(await epochOf(source)).toEqual({ epoch_gen: 1 });
+    // A lease of its own each write, never kept.
+    expect(writer.lease).toBeNull();
+    expect(await leases()).toEqual({ n: 0 });
+    const stale = new ReadModelWriter(env, "default", Date.now, {
+      maintenance: { generation: generation - 1 },
+    });
+    await expect(stale.write([epochRow(uniqueId("stale"), 1)])).rejects.toBeInstanceOf(
+      ReadModelRefused,
+    );
+    // An ordinary writer, meanwhile, writes nothing.
+    await expect(
+      withReadModel(env, "default", (db) =>
+        db
+          .prepare(
+            "INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES (?, 1, 0)",
+          )
+          .bind(uniqueId("ordinary"))
+          .run(),
+      ),
+    ).rejects.toBeInstanceOf(ReadModelRefused);
+  });
+
+  it("moves the barrier only to its own generation, never back, its protocol as it is", async () => {
+    const { writer, generation } = await maintenanceWriter();
+    const before = await barrier();
+    for (const change of [
+      `UPDATE read_model_barrier SET generation = ${generation - 1} WHERE id = 1`,
+      `UPDATE read_model_barrier SET generation = ${generation + 1} WHERE id = 1`,
+      "UPDATE read_model_barrier SET protocol_version = 3 WHERE id = 1",
+    ])
+      await expect(writer.write([org.prepare(change)])).rejects.toBeInstanceOf(ReadModelRefused);
+    expect(await barrier()).toEqual(before);
+    await writer.write([
+      org.prepare("UPDATE read_model_barrier SET phase = 'recovering' WHERE id = 1"),
+    ]);
+    expect(await barrier()).toMatchObject({ phase: "recovering", generation });
   });
 });
 
@@ -109,16 +198,29 @@ describe("a read model writer", () => {
   });
 
   it.each([
-    ["the barrier paused", "UPDATE read_model_barrier SET phase = 'pausing' WHERE id = 1"],
-    ["another generation", "UPDATE read_model_barrier SET generation = 2 WHERE id = 1"],
     [
-      "a newer protocol required",
-      "UPDATE read_model_barrier SET protocol_version = 2 WHERE id = 1",
+      "the barrier paused",
+      async () => {
+        await pauseReadModel(env, "default");
+      },
+    ],
+    [
+      "another generation",
+      async () => {
+        await pauseReadModel(env, "default");
+        await resumeReadModel(env, "default");
+      },
+    ],
+    [
+      "an older protocol than the read model's",
+      async (writer: ReadModelWriter) => {
+        Object.assign(writer.lease as object, { protocolVersion: 1 });
+      },
     ],
   ])("writes nothing with %s", async (_, change) => {
     const writer = new ReadModelWriter(env, "default");
     await writer.write([org.prepare("SELECT 1")]);
-    await org.prepare(change).run();
+    await change(writer);
     const before = await admission();
     const source = uniqueId("refused");
     await expect(writer.write([epochRow(source, 1)])).rejects.toBeInstanceOf(ReadModelRefused);
@@ -266,12 +368,13 @@ describe("a read model writer", () => {
     let now = Date.now();
     const writer = new ReadModelWriter(env, "default", () => now);
     const source = uniqueId("cost");
-    const alone = await org.batch([epochRow(`${source}-raw`, 1)]);
-    const out = await writer.write([epochRow(source, 1)]);
-    // The raw write was counted by its trigger (one row more); the writer's is not.
-    expect(out.usage.rowsWritten - ((alone[0]?.meta.rows_written ?? 0) - 1)).toBe(
-      READ_MODEL_ADMISSION.rows,
-    );
+    const one = await writer.write([epochRow(source, 1)]);
+    const two = await writer.write([epochRow(`${source}-a`, 1), epochRow(`${source}-b`, 1)]);
+    // A row's own cost twice less one batch's: what admitting a batch costs besides.
+    expect({
+      rows: 2 * one.usage.rowsWritten - two.usage.rowsWritten,
+      reads: 2 * one.usage.rowsRead - two.usage.rowsRead,
+    }).toEqual(READ_MODEL_ADMISSION);
     const taken = writer.directoryRowsWritten;
     now += READ_MODEL_LEASE_MS / 2;
     await writer.write([org.prepare("SELECT 1")]);

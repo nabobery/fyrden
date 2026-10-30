@@ -10,6 +10,7 @@ import {
   RECENTLY_FAILED_EFFECT,
 } from "../src/health.js";
 import { READ_MODEL_PROTOCOL } from "../src/read-model/executor.js";
+import { admitted } from "./helpers/read-model.js";
 
 describe("GET /healthz", () => {
   it("round-trips D1, a RepoDO and R2 and returns the request id", async () => {
@@ -81,10 +82,11 @@ describe("GET /healthz", () => {
 
   it("reports effects overdue past the threshold as degraded, without failing the check", async () => {
     const id = uniqueId("effect");
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+    await admitted()
+      .prepare(
+        `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
        VALUES (?, 'webhooks', 'hooks', '{}', ?, 0)`,
-    )
+      )
       .bind(id, Date.now() - EFFECTS_OVERDUE_MS - 60_000)
       .run();
     try {
@@ -97,16 +99,17 @@ describe("GET /healthz", () => {
       expect(body.checks.effects.ok).toBe(false);
       expect(body.checks.effects.overdueS).toBeGreaterThanOrEqual(EFFECTS_OVERDUE_MS / 1000 + 60);
     } finally {
-      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
+      await admitted().prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
     }
   });
 
   it("reports effects as ok when the oldest pending one is not due yet", async () => {
     const id = uniqueId("effect");
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+    await admitted()
+      .prepare(
+        `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
        VALUES (?, 'webhooks', 'hooks', '{}', ?, 0)`,
-    )
+      )
       .bind(id, Date.now() + 60 * 60_000)
       .run();
     try {
@@ -117,17 +120,18 @@ describe("GET /healthz", () => {
         failed: false,
       });
     } finally {
-      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
+      await admitted().prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
     }
   });
 
   it("reports an effect that failed for good lately as degraded, without failing the check", async () => {
     const id = uniqueId("effect");
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, state, attempts, next_attempt_at,
+    await admitted()
+      .prepare(
+        `INSERT INTO effects (effect_id, sink, target, payload, state, attempts, next_attempt_at,
          last_error, created_at)
        VALUES (?, 'webhooks', 'hooks', '{}', 'failed', 20, ?, 'D1 overloaded', 0)`,
-    )
+      )
       .bind(id, Date.now() - 60_000)
       .run();
     try {
@@ -136,20 +140,21 @@ describe("GET /healthz", () => {
       expect(body.ok).toBe(true);
       expect(body.checks.effects).toMatchObject({ ok: false, overdueS: 0, failed: true });
     } finally {
-      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
+      await admitted().prepare("DELETE FROM effects WHERE effect_id = ?").bind(id).run();
     }
   });
 
   it("does not report an effect ended because its source went, or one that failed long ago", async () => {
     const invalidated = uniqueId("effect");
     const old = uniqueId("effect");
-    await env.ORG_READ.prepare(
-      `INSERT INTO effects (effect_id, sink, target, payload, state, attempts, next_attempt_at,
+    await admitted()
+      .prepare(
+        `INSERT INTO effects (effect_id, sink, target, payload, state, attempts, next_attempt_at,
          last_error, created_at)
        VALUES (?1, 'webhooks', 'hooks', '{}', 'failed', 1, ?3,
            'invalidated: its source was deleted', 0),
          (?2, 'webhooks', 'hooks', '{}', 'failed', 20, ?4, 'D1 overloaded', 0)`,
-    )
+      )
       .bind(invalidated, old, Date.now(), Date.now() - EFFECTS_FAILED_MS - 60_000)
       .run();
     try {
@@ -159,14 +164,16 @@ describe("GET /healthz", () => {
         failed: false,
       });
     } finally {
-      await env.ORG_READ.prepare("DELETE FROM effects WHERE effect_id IN (?, ?)")
+      await admitted()
+        .prepare("DELETE FROM effects WHERE effect_id IN (?, ?)")
         .bind(invalidated, old)
         .run();
     }
   });
 
   it("finds a recently failed effect through an index of failures alone, not invalidations", async () => {
-    const { results } = await env.ORG_READ.prepare(`EXPLAIN QUERY PLAN ${RECENTLY_FAILED_EFFECT}`)
+    const { results } = await admitted()
+      .prepare(`EXPLAIN QUERY PLAN ${RECENTLY_FAILED_EFFECT}`)
       .bind(0)
       .all<{ detail: string }>();
     expect(results.map((r) => r.detail).join("\n")).toMatch(
@@ -175,9 +182,9 @@ describe("GET /healthz", () => {
   });
 
   it("finds the oldest pending effect through the due index", async () => {
-    const { results } = await env.ORG_READ.prepare(
-      `EXPLAIN QUERY PLAN ${OLDEST_PENDING_EFFECT}`,
-    ).all<{ detail: string }>();
+    const { results } = await admitted()
+      .prepare(`EXPLAIN QUERY PLAN ${OLDEST_PENDING_EFFECT}`)
+      .all<{ detail: string }>();
     expect(results.map((r) => r.detail).join("\n")).toMatch(
       /USING (COVERING )?INDEX effects_due_order\b/,
     );

@@ -32,6 +32,7 @@ import { api, user } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted } from "./helpers/read-model.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
@@ -452,8 +453,8 @@ describe("full webhook bodies", () => {
         }),
     );
     await Promise.all([
-      sink.deliver(effect, racing, env.ORG_READ),
-      sink.deliver(effect, racing, env.ORG_READ),
+      sink.deliver(effect, racing, admitted()),
+      sink.deliver(effect, racing, admitted()),
     ]);
     expect(puts).toHaveLength(2);
     expect(puts.filter((put) => put === null)).toHaveLength(1);
@@ -461,19 +462,21 @@ describe("full webhook bodies", () => {
     // Each delivery's first attempt, made once (by whichever run claimed it).
     expect(t.received.map((r) => r.body)).toEqual([stored, stored]);
     // Its deliveries lost, it is made again from the stored body.
-    await env.ORG_READ.prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
+    await admitted()
+      .prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
       .bind(t.repo.id)
       .run();
     let seen = t.received.length;
-    await sink.deliver(effect, t.testEnv(), env.ORG_READ);
+    await sink.deliver(effect, t.testEnv(), admitted());
     expect(t.received.slice(seen).map((r) => r.body)).toEqual([stored, stored]);
     // A delivery waiting again: a failed attempt, its retry, then a redelivery.
     const [delivery] = (await t.deliveries()).filter((d) => d.hook_id === hook.id);
     const id = delivery?.delivery_id ?? "";
-    await env.ORG_READ.prepare(
-      `UPDATE webhook_deliveries SET state = 'pending', next_attempt_at = 0, attempts = 0
+    await admitted()
+      .prepare(
+        `UPDATE webhook_deliveries SET state = 'pending', next_attempt_at = 0, attempts = 0
        WHERE delivery_id = ?`,
-    )
+      )
       .bind(id)
       .run();
     seen = t.received.length;
@@ -523,7 +526,7 @@ describe("full webhook bodies", () => {
         });
       },
     }));
-    expect(await sink.deliver(effect, moving, env.ORG_READ)).toEqual({
+    expect(await sink.deliver(effect, moving, admitted())).toEqual({
       ended: "invalidated: its source was transferred",
     });
     expect(await t.deliveries()).toEqual([]);
@@ -543,7 +546,7 @@ describe("full webhook bodies", () => {
     await runInDurableObject(env.REPO.getByName(t.repo.id), (_, state) => {
       state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 1");
     });
-    expect(await sink.deliver(effect, t.testEnv(), env.ORG_READ)).toEqual({
+    expect(await sink.deliver(effect, t.testEnv(), admitted())).toEqual({
       ended: "invalidated: its source was transferred",
     });
     expect(await t.deliveries()).toEqual([]);
@@ -572,12 +575,12 @@ describe("full webhook bodies", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    await expect(sink.deliver(effect, t.testEnv(), stopping)).rejects.toThrow("stopped");
+    await expect(sink.deliver(effect, t.testEnv(), admitted(stopping))).rejects.toThrow("stopped");
     expect(await t.deliveries()).toEqual([]);
     await runInDurableObject(env.REPO.getByName(t.repo.id), (_, state) => {
       state.storage.sql.exec("UPDATE repo_meta SET owner_gen = owner_gen + 1");
     });
-    expect(await sink.deliver(effect, t.testEnv(), env.ORG_READ)).toEqual({
+    expect(await sink.deliver(effect, t.testEnv(), admitted())).toEqual({
       ended: "invalidated: its source was transferred",
     });
     expect(await t.deliveries()).toEqual([]);
@@ -638,17 +641,18 @@ describe("full webhook bodies", () => {
     await Promise.all(
       runs.map((calls) => {
         const measuredEnv = held(calls);
-        return sink.deliver(effect, measuredEnv, measuredEnv.ORG_READ);
+        return sink.deliver(effect, measuredEnv, admitted(measuredEnv.ORG_READ));
       }),
     );
     for (const calls of runs) expect(calls.n).toBeLessThanOrEqual(reserved);
     // Its deliveries lost, made again from the stored body.
-    await env.ORG_READ.prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
+    await admitted()
+      .prepare("DELETE FROM webhook_deliveries WHERE repo_id = ?")
       .bind(t.repo.id)
       .run();
     const recovered = { n: 0 };
     const recovering = measured(t.testEnv(), recovered);
-    await sink.deliver(effect, recovering, recovering.ORG_READ);
+    await sink.deliver(effect, recovering, admitted(recovering.ORG_READ));
     expect(recovered.n).toBeLessThanOrEqual(reserved);
     // Which run claims the first attempts depends on scheduling (measured: 11 and 19, or 8 and
     // 20): each within the reservation, each composing run reading its texts in one call.

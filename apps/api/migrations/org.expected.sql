@@ -391,420 +391,708 @@ CREATE INDEX webhook_payloads_repo ON webhook_payloads (repo_id);
 
 -- trigger read_model_consumer_epochs_delete
 CREATE TRIGGER read_model_consumer_epochs_delete BEFORE DELETE ON consumer_epochs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_consumer_epochs_insert
 CREATE TRIGGER read_model_consumer_epochs_insert BEFORE INSERT ON consumer_epochs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_consumer_epochs_update
 CREATE TRIGGER read_model_consumer_epochs_update BEFORE UPDATE ON consumer_epochs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_hours_delete
 CREATE TRIGGER read_model_discretionary_hours_delete BEFORE DELETE ON discretionary_hours
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_hours_insert
 CREATE TRIGGER read_model_discretionary_hours_insert BEFORE INSERT ON discretionary_hours
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_hours_update
 CREATE TRIGGER read_model_discretionary_hours_update BEFORE UPDATE ON discretionary_hours
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_state_delete
 CREATE TRIGGER read_model_discretionary_state_delete BEFORE DELETE ON discretionary_state
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_state_insert
 CREATE TRIGGER read_model_discretionary_state_insert BEFORE INSERT ON discretionary_state
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_discretionary_state_update
 CREATE TRIGGER read_model_discretionary_state_update BEFORE UPDATE ON discretionary_state
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_effects_delete
 CREATE TRIGGER read_model_effects_delete BEFORE DELETE ON effects
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_effects_insert
 CREATE TRIGGER read_model_effects_insert BEFORE INSERT ON effects
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_effects_update
 CREATE TRIGGER read_model_effects_update BEFORE UPDATE ON effects
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_events_failed_delete
 CREATE TRIGGER read_model_events_failed_delete BEFORE DELETE ON events_failed
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_events_failed_insert
 CREATE TRIGGER read_model_events_failed_insert BEFORE INSERT ON events_failed
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_events_failed_update
 CREATE TRIGGER read_model_events_failed_update BEFORE UPDATE ON events_failed
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_read_model_barrier_delete
 CREATE TRIGGER read_model_read_model_barrier_delete BEFORE DELETE ON read_model_barrier
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_read_model_barrier_insert
 CREATE TRIGGER read_model_read_model_barrier_insert BEFORE INSERT ON read_model_barrier
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_read_model_barrier_update
 CREATE TRIGGER read_model_read_model_barrier_update BEFORE UPDATE ON read_model_barrier
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.mode = 'maintenance' AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(OLD.protocol_version, 2)
+    AND NEW.id = OLD.id AND NEW.protocol_version = OLD.protocol_version
+    AND NEW.generation = w.generation AND NEW.generation >= OLD.generation
+  FROM read_model_write w WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_repos_delete
 CREATE TRIGGER read_model_repos_delete BEFORE DELETE ON repos
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_repos_insert
 CREATE TRIGGER read_model_repos_insert BEFORE INSERT ON repos
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_repos_update
 CREATE TRIGGER read_model_repos_update BEFORE UPDATE ON repos
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_budget_delete
 CREATE TRIGGER read_model_search_budget_delete BEFORE DELETE ON search_budget
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_budget_insert
 CREATE TRIGGER read_model_search_budget_insert BEFORE INSERT ON search_budget
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_budget_update
 CREATE TRIGGER read_model_search_budget_update BEFORE UPDATE ON search_budget
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_docs_delete
 CREATE TRIGGER read_model_search_docs_delete BEFORE DELETE ON search_docs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_docs_insert
 CREATE TRIGGER read_model_search_docs_insert BEFORE INSERT ON search_docs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_docs_update
 CREATE TRIGGER read_model_search_docs_update BEFORE UPDATE ON search_docs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_labels_delete
 CREATE TRIGGER read_model_search_labels_delete BEFORE DELETE ON search_labels
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_labels_insert
 CREATE TRIGGER read_model_search_labels_insert BEFORE INSERT ON search_labels
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_labels_update
 CREATE TRIGGER read_model_search_labels_update BEFORE UPDATE ON search_labels
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_milestones_delete
 CREATE TRIGGER read_model_search_milestones_delete BEFORE DELETE ON search_milestones
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_milestones_insert
 CREATE TRIGGER read_model_search_milestones_insert BEFORE INSERT ON search_milestones
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_milestones_update
 CREATE TRIGGER read_model_search_milestones_update BEFORE UPDATE ON search_milestones
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_reconciles_delete
 CREATE TRIGGER read_model_search_reconciles_delete BEFORE DELETE ON search_reconciles
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_reconciles_insert
 CREATE TRIGGER read_model_search_reconciles_insert BEFORE INSERT ON search_reconciles
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_reconciles_update
 CREATE TRIGGER read_model_search_reconciles_update BEFORE UPDATE ON search_reconciles
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_repairs_delete
 CREATE TRIGGER read_model_search_repairs_delete BEFORE DELETE ON search_repairs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_repairs_insert
 CREATE TRIGGER read_model_search_repairs_insert BEFORE INSERT ON search_repairs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_repairs_update
 CREATE TRIGGER read_model_search_repairs_update BEFORE UPDATE ON search_repairs
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_size_delete
 CREATE TRIGGER read_model_search_size_delete BEFORE DELETE ON search_size
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_size_insert
 CREATE TRIGGER read_model_search_size_insert BEFORE INSERT ON search_size
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_size_update
 CREATE TRIGGER read_model_search_size_update BEFORE UPDATE ON search_size
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sources_delete
 CREATE TRIGGER read_model_search_sources_delete BEFORE DELETE ON search_sources
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sources_insert
 CREATE TRIGGER read_model_search_sources_insert BEFORE INSERT ON search_sources
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sources_update
 CREATE TRIGGER read_model_search_sources_update BEFORE UPDATE ON search_sources
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sweep_delete
 CREATE TRIGGER read_model_search_sweep_delete BEFORE DELETE ON search_sweep
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sweep_insert
 CREATE TRIGGER read_model_search_sweep_insert BEFORE INSERT ON search_sweep
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_search_sweep_update
 CREATE TRIGGER read_model_search_sweep_update BEFORE UPDATE ON search_sweep
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_source_owner_delete
 CREATE TRIGGER read_model_source_owner_delete BEFORE DELETE ON source_owner
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_source_owner_insert
 CREATE TRIGGER read_model_source_owner_insert BEFORE INSERT ON source_owner
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_source_owner_update
 CREATE TRIGGER read_model_source_owner_update BEFORE UPDATE ON source_owner
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_attempts_delete
 CREATE TRIGGER read_model_webhook_attempts_delete BEFORE DELETE ON webhook_attempts
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_attempts_insert
 CREATE TRIGGER read_model_webhook_attempts_insert BEFORE INSERT ON webhook_attempts
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_attempts_update
 CREATE TRIGGER read_model_webhook_attempts_update BEFORE UPDATE ON webhook_attempts
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_deliveries_delete
 CREATE TRIGGER read_model_webhook_deliveries_delete BEFORE DELETE ON webhook_deliveries
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_deliveries_insert
 CREATE TRIGGER read_model_webhook_deliveries_insert BEFORE INSERT ON webhook_deliveries
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_deliveries_update
 CREATE TRIGGER read_model_webhook_deliveries_update BEFORE UPDATE ON webhook_deliveries
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_payloads_delete
 CREATE TRIGGER read_model_webhook_payloads_delete BEFORE DELETE ON webhook_payloads
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_payloads_insert
 CREATE TRIGGER read_model_webhook_payloads_insert BEFORE INSERT ON webhook_payloads
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;
 
 -- trigger read_model_webhook_payloads_update
 CREATE TRIGGER read_model_webhook_payloads_update BEFORE UPDATE ON webhook_payloads
-WHEN coalesce((SELECT open FROM read_model_write WHERE id = 1), 0) <> 1
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
-  UPDATE read_model_write SET stray = stray + 1 WHERE id = 1;
+  SELECT RAISE(ABORT, 'read_model_admission_required');
 END;

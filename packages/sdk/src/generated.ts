@@ -1788,7 +1788,7 @@ export type AdminSearchStatusOutput = {
   };
   export: {
     available: boolean;
-    reason: "protocol_not_enforced" | null;
+    reason: "no_restore_floor" | null;
   };
   search: {
     day: number;
@@ -7959,7 +7959,7 @@ export interface Operations {
   "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** Turn search indexing on or off. Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`). Setting the state it is in changes nothing. Instance administrators only. */
   "admin.search.indexing": { input: AdminSearchIndexingInput; output: AdminSearchIndexingOutput };
-  /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before writes outside the executor are refused). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only. */
+  /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only. */
   "admin.search.status": { input: AdminSearchStatusInput; output: AdminSearchStatusOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };

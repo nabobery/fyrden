@@ -19,6 +19,7 @@ import { entry as feedEntry } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted, runningAgain } from "./helpers/read-model.js";
 
 const fx = inject("pushFixtures");
 
@@ -99,9 +100,8 @@ describe("repository transfers", () => {
     );
     expect(staleVersion).toBeGreaterThan(0);
     const row = () =>
-      env.ORG_READ.prepare(
-        "SELECT owner_id, owner_gen, version, description FROM repos WHERE repo_id = ?",
-      )
+      admitted()
+        .prepare("SELECT owner_id, owner_gen, version, description FROM repos WHERE repo_id = ?")
         .bind(repo.id)
         .first<{ owner_id: string; owner_gen: number; version: number; description: string }>();
     // The move commits first; then the old owner's batch, the newest event yet: refused.
@@ -157,9 +157,8 @@ describe("repository transfers", () => {
     expect(await quota("/user/quota", owner.token)).toBe(0);
     expect(await quota(`/orgs/${org}/quota`, owner.token)).toBe(used);
     // The read model takes no event of the old owner generation.
-    const fence = await env.ORG_READ.prepare(
-      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
-    )
+    const fence = await admitted()
+      .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
       .bind(repo.id)
       .first<{ owner_gen: number }>();
     expect(fence?.owner_gen).toBe(2);
@@ -189,7 +188,8 @@ describe("repository transfers", () => {
             "DELETE FROM deployment_settings WHERE name = 'search_indexing'",
           ).run();
     const repair = (repoId: string) =>
-      env.ORG_READ.prepare("SELECT reason FROM search_repairs WHERE repo_id = ?")
+      admitted()
+        .prepare("SELECT reason FROM search_repairs WHERE repo_id = ?")
         .bind(repoId)
         .first<{ reason: string }>();
     const owner = await user();
@@ -230,7 +230,8 @@ describe("repository transfers", () => {
       });
       // The fence's batch was refused: nothing written, the step still the fence's.
       expect(
-        await env.ORG_READ.prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+        await admitted()
+          .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
           .bind(repo.id)
           .first(),
       ).toBeNull();
@@ -246,18 +247,14 @@ describe("repository transfers", () => {
         .run();
       expect(await advanceTransfer(env, repo.id)).toMatchObject({ state: "transferred" });
       expect(
-        await env.ORG_READ.prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+        await admitted()
+          .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
           .bind(repo.id)
           .first(),
       ).toEqual({ owner_gen: 2 });
     } finally {
       delete transferHooks.afterGeneration;
-      await env.DIRECTORY.prepare(
-        "UPDATE read_model_barriers SET phase = 'running', generation = 1 WHERE shard = 'default'",
-      ).run();
-      await env.ORG_READ.prepare(
-        "UPDATE read_model_barrier SET phase = 'running', generation = 1 WHERE id = 1",
-      ).run();
+      await runningAgain(env);
     }
   });
 
@@ -661,9 +658,8 @@ describe("a restore", () => {
     // A new instance, as after a restore.
     const restored = env.REPO.getByName(repo.id);
     await restored.checkEpoch();
-    const fence = await env.ORG_READ.prepare(
-      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
-    )
+    const fence = await admitted()
+      .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
       .bind(repo.id)
       .first<{ owner_gen: number }>();
     const account = await runInDurableObject(restored, (r: RepoDO) => r.events.account());
@@ -701,7 +697,8 @@ describe("a restore, further", () => {
 
   const fenceOf = async (repoId: string) =>
     (
-      await env.ORG_READ.prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+      await admitted()
+        .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
         .bind(repoId)
         .first<{ owner_gen: number }>()
     )?.owner_gen ?? 0;

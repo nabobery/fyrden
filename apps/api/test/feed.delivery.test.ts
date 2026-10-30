@@ -38,6 +38,7 @@ import {
 } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
 import { FROM_START } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
@@ -122,9 +123,10 @@ function recordingFeeds(failing = new Set<string>()) {
 }
 
 async function effectRows(repoId: string) {
-  const { results } = await env.ORG_READ.prepare(
-    "SELECT effect_id, state, attempts FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
-  )
+  const { results } = await admitted()
+    .prepare(
+      "SELECT effect_id, state, attempts FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
+    )
     .bind(`${repoId}:%`)
     .all<{ effect_id: string; state: string; attempts: number }>();
   return results;
@@ -256,7 +258,7 @@ describe("the feed sink", () => {
     calls.length = 0;
     const due = T0 + EFFECT_POLICY.backoffMs;
     await deliverEffects(
-      { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => due, publish },
+      { db: admitted(), env: on, sinks: [feedSink], now: () => due, publish },
       "feed",
       sent[0]?.ids ?? [],
       invocationBudget(due),
@@ -385,7 +387,7 @@ describe("the feed sink", () => {
     count.queries = 0;
     calls.length = 0;
     await deliverEffects(
-      { db: measured.ORG_READ, env: measured, sinks: [feedSink], now: () => T0, publish },
+      { db: admitted(measured.ORG_READ), env: measured, sinks: [feedSink], now: () => T0, publish },
       "feed",
       sent[0]?.ids ?? [],
       invocationBudget(T0),

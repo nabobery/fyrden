@@ -41,6 +41,7 @@ import { feedSink } from "../src/feed/sink.js";
 import { consumeEffects } from "../src/queues/effects-consumer.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
@@ -110,19 +111,21 @@ function recordingSink(extra: Partial<EffectSink> = {}) {
 }
 
 async function effectRows(repoId: string) {
-  const { results } = await env.ORG_READ.prepare(
-    "SELECT effect_id, state, attempts FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
-  )
+  const { results } = await admitted()
+    .prepare(
+      "SELECT effect_id, state, attempts FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
+    )
     .bind(`${repoId}:%`)
     .all<{ effect_id: string; state: string; attempts: number }>();
   return results;
 }
 
 async function effectRow(id: string) {
-  return env.ORG_READ.prepare(
-    `SELECT state, attempts, next_attempt_at, recover_at, lease_token, last_error, source_id,
+  return admitted()
+    .prepare(
+      `SELECT state, attempts, next_attempt_at, recover_at, lease_token, last_error, source_id,
        epoch_gen, owner_gen, any_owner, deliver_until FROM effects WHERE effect_id = ?`,
-  )
+    )
     .bind(id)
     .first<{
       state: string;
@@ -141,9 +144,8 @@ async function effectRow(id: string) {
 
 /** Makes `id` an effect delivered until `until` (a horizon), its attempts `attempts` so far. */
 async function withHorizon(id: string, until: number, attempts: number): Promise<void> {
-  await env.ORG_READ.prepare(
-    "UPDATE effects SET deliver_until = ?, attempts = ? WHERE effect_id = ?",
-  )
+  await admitted()
+    .prepare("UPDATE effects SET deliver_until = ?, attempts = ? WHERE effect_id = ?")
     .bind(until, attempts, id)
     .run();
 }
@@ -155,7 +157,7 @@ function depsOf(
   policy?: EffectPolicy,
 ): DispatchDeps {
   return {
-    db: env.ORG_READ,
+    db: admitted(),
     env,
     sinks,
     now: typeof now === "number" ? () => now : now,
@@ -188,11 +190,12 @@ async function dueEffects(
   payload = "{}",
   recoverAt = at + EFFECT_POLICY.lateMs,
 ): Promise<string[]> {
-  await env.ORG_READ.prepare(
-    `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
+  await admitted()
+    .prepare(
+      `WITH RECURSIVE e(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM e WHERE i < ?2)
      INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at, recover_at)
      SELECT ?1 || ':1:' || i || ':test_hook:hook_1', 'test_hook', 'hook_1', ?4, ?3, ?3, ?5 FROM e`,
-  )
+    )
     .bind(repoId, n, at, payload, recoverAt)
     .run();
   return Array.from({ length: n }, (_, i) => idOf(repoId, i + 1));
@@ -306,7 +309,7 @@ describe("journaling and sending effects", () => {
       }),
     ).rejects.toThrow();
     const row = () =>
-      env.ORG_READ.prepare("SELECT version FROM repos WHERE repo_id = ?").bind(repoId).first();
+      admitted().prepare("SELECT version FROM repos WHERE repo_id = ?").bind(repoId).first();
     expect(await row()).toBeNull();
     expect(await effectRows(repoId)).toEqual([]);
     expect(sent).toEqual([]);
@@ -618,7 +621,7 @@ describe("delivering effects a message names", () => {
     for (let run = 0; run < 2; run++) {
       await expect(
         deliverEffects(
-          { ...depsOf([dying], now, publish, policy), db: deadMark },
+          { ...depsOf([dying], now, publish, policy), db: admitted(deadMark) },
           "test_hook",
           [id],
           budget(now, policy),
@@ -723,16 +726,19 @@ describe("delivering effects a message names", () => {
         now: () => T0,
       });
     // A restore: the read model saw a newer epoch. A transfer: a newer ownership generation.
-    await env.ORG_READ.prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?")
+    await admitted()
+      .prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?")
       .bind(restored)
       .run();
-    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+    await admitted()
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
       .bind(transferred)
       .run();
-    await env.ORG_READ.prepare(
-      `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
+    await admitted()
+      .prepare(
+        `INSERT INTO repos (repo_id, deleted, epoch_gen, version, owner_gen, updated_seq, updated_at)
        VALUES (?, 1, 1, 9, 1, 9, 0)`,
-    )
+      )
       .bind(deleted)
       .run();
     const ids = [restored, transferred, deleted].map((repoId) => idOf(repoId, 1));
@@ -768,7 +774,8 @@ describe("delivering effects a message names", () => {
       publish,
       now: () => T0,
     });
-    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+    await admitted()
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
       .bind(transferred)
       .run();
     const ordinary = idOf(transferred, 1);
@@ -816,9 +823,8 @@ describe("an effect delivered until its horizon", () => {
       publish,
       now: () => T0,
     });
-    const { results } = await env.ORG_READ.prepare(
-      "SELECT sink, deliver_until FROM effects WHERE source_id = ? ORDER BY sink",
-    )
+    const { results } = await admitted()
+      .prepare("SELECT sink, deliver_until FROM effects WHERE source_id = ? ORDER BY sink")
       .bind(repoId)
       .all();
     expect(results).toEqual([
@@ -854,9 +860,7 @@ describe("an effect delivered until its horizon", () => {
     const repoId = await listedRepo();
     const [id = ""] = await dueEffects(repoId, 1, T0);
     const policy = { ...EFFECT_POLICY, maxAttempts: 200 };
-    await env.ORG_READ.prepare("UPDATE effects SET attempts = 64 WHERE effect_id = ?")
-      .bind(id)
-      .run();
+    await admitted().prepare("UPDATE effects SET attempts = 64 WHERE effect_id = ?").bind(id).run();
     const { sink, failNext } = recordingSink();
     const { publish } = recordingPublish();
     failNext(1);
@@ -921,7 +925,7 @@ describe("an effect delivered until its horizon", () => {
     const { publish, sent } = recordingPublish();
     await expect(
       deliverEffects(
-        { ...depsOf([dying], T0, publish), db: deadMark, metrics },
+        { ...depsOf([dying], T0, publish), db: admitted(deadMark), metrics },
         "test_hook",
         [id],
         budget(T0),
@@ -1035,7 +1039,7 @@ describe("an effect delivered until its horizon", () => {
     };
     await expect(
       deliverEffects(
-        { ...depsOf([thrower], T0, publish), db: deadMark },
+        { ...depsOf([thrower], T0, publish), db: admitted(deadMark) },
         "test_hook",
         [dying],
         budget(T0),
@@ -1110,7 +1114,7 @@ describe("a single-effect sink's outcome", () => {
     });
     const run = async (sink: EffectSink, id: string) => {
       late = false;
-      const deps = { ...depsOf([sink], clock, recordingPublish().publish), db: claiming };
+      const deps = { ...depsOf([sink], clock, recordingPublish().publish), db: admitted(claiming) };
       expect(await deliverEffects(deps, "test_hook", [id], budget(T0))).toBe(1);
     };
     await run(
@@ -1151,7 +1155,12 @@ describe("a single-effect sink's outcome", () => {
     });
     const { publish, sent } = recordingPublish();
     await expect(
-      deliverEffects({ ...depsOf([sink], T0, publish), db: lost }, "test_hook", [id], budget(T0)),
+      deliverEffects(
+        { ...depsOf([sink], T0, publish), db: admitted(lost) },
+        "test_hook",
+        [id],
+        budget(T0),
+      ),
     ).rejects.toThrow(/D1 down/);
     // Still claimed, its claim to expire: nothing marked it failed or sent a retry.
     expect(await effectRow(id)).toMatchObject({ state: "pending", last_error: null });
@@ -1321,7 +1330,7 @@ describe("an invocation's budget", () => {
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
-      const deps = { ...depsOf([sink], () => clock, publish), db: slowClaim };
+      const deps = { ...depsOf([sink], () => clock, publish), db: admitted(slowClaim) };
       // An invocation that already delivered: nothing starts, and the claims are given back.
       const started = { ...budget(T0), started: true };
       expect(await deliverEffects(deps, "test_hook", ids, started)).toBe(0);
@@ -1466,7 +1475,8 @@ describe("effects queue messages", () => {
     ]);
     // This queue's sink, as the deployment names it, delivering like the recording sink.
     const webhooks = { ...sink, name: "webhooks" };
-    await env.ORG_READ.prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id LIKE ?")
+    await admitted()
+      .prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id LIKE ?")
       .bind(`${repoId}:%`)
       .run();
     await consumeEffects(batch, env, { sinks: [webhooks], publish });
@@ -1478,7 +1488,8 @@ describe("effects queue messages", () => {
 
     // Marking the outcome fails: the message is retried, and its retry finds the effect claimed.
     const [id = ""] = await dueEffects(await listedRepo(), 1, Date.now());
-    await env.ORG_READ.prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id = ?")
+    await admitted()
+      .prepare("UPDATE effects SET sink = 'webhooks' WHERE effect_id = ?")
       .bind(id)
       .run();
     const lostMark = new Proxy(env.ORG_READ, {
@@ -1518,7 +1529,8 @@ describe("recovering overdue effects", () => {
     // Overdue at 1, 2, ... (before anything other tests in this file leave).
     const ids = await dueEffects(repoId, 5, 0, "{}", 1);
     for (const [i, id] of ids.entries())
-      await env.ORG_READ.prepare("UPDATE effects SET recover_at = ? WHERE effect_id = ?")
+      await admitted()
+        .prepare("UPDATE effects SET recover_at = ? WHERE effect_id = ?")
         .bind(i + 1, id)
         .run();
     const notYet = await dueEffects(await listedRepo(), 1, 0, "{}", 10_000_000);
@@ -1559,10 +1571,11 @@ describe("recovering overdue effects", () => {
     const repoId = await listedRepo();
     const id = idOf(repoId, 1);
     // That Worker's insert: none of the new columns.
-    await env.ORG_READ.prepare(
-      `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
+    await admitted()
+      .prepare(
+        `INSERT OR IGNORE INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
        VALUES (?, 'test_hook', 'hook_1', '{}', ?, ?)`,
-    )
+      )
       .bind(id, T0 + 60_000, T0)
       .run();
     expect(await effectRow(id)).toMatchObject({ recover_at: 0, source_id: null });
@@ -1581,22 +1594,19 @@ describe("recovering overdue effects", () => {
     // Many pending effects not overdue: the recovery reads none of them.
     await dueEffects(repoId, 500, 0, "{}", Number.MAX_SAFE_INTEGER);
     const [id = ""] = await dueEffects(await listedRepo(), 1, 0, "{}", 1);
-    const statements: { query: string; args: unknown[]; rowsRead: number }[] = [];
+    // What each statement read, as its batch reports it (the executor's admission included).
+    const statements: { query: string; rowsRead: number }[] = [];
     const recording = new Proxy(env.ORG_READ, {
       get(target, prop) {
-        if (prop === "prepare")
-          return (query: string) => {
-            const statement = target.prepare(query);
-            if (!query.includes("ORDER BY recover_at")) return statement;
-            return {
-              bind: (...args: unknown[]) => ({
-                all: async () => {
-                  const result = await statement.bind(...args).all();
-                  statements.push({ query, args, rowsRead: result.meta.rows_read });
-                  return result;
-                },
-              }),
-            };
+        if (prop === "batch")
+          return async (batch: D1PreparedStatement[]) => {
+            const results = await target.batch(batch);
+            batch.forEach((statement, i) => {
+              const query = (statement as unknown as { statement?: string }).statement ?? "";
+              if (query.includes("ORDER BY recover_at"))
+                statements.push({ query, rowsRead: results[i]?.meta.rows_read ?? 0 });
+            });
+            return results;
           };
         const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
@@ -1604,12 +1614,13 @@ describe("recovering overdue effects", () => {
     });
     const { sink } = recordingSink();
     const { publish, sent } = recordingPublish();
-    await recoverEffects({ ...depsOf([sink], 3_000, publish), db: recording });
+    await recoverEffects({ ...depsOf([sink], 3_000, publish), db: admitted(recording) });
     expect(sent.flatMap((s) => s.ids)).toContain(id);
     const [claim] = statements;
     expect(claim?.rowsRead).toBeLessThan(50);
     const select = claim?.query.match(/SELECT effect_id FROM effects WHERE[^)]*LIMIT \?3/)?.[0];
-    const { results } = await env.ORG_READ.prepare(`EXPLAIN QUERY PLAN ${select}`)
+    const { results } = await admitted()
+      .prepare(`EXPLAIN QUERY PLAN ${select}`)
       .bind(3_000, 0, 10)
       .all<{ detail: string }>();
     const plan = results.map((row) => row.detail).join("\n");
@@ -1636,11 +1647,12 @@ describe("the effects cron", () => {
     const [id = ""] = await dueEffects(repoId, 1, 0, "{}", 1);
     // A delivery past retention whose body was never stored: reconciling deletes it.
     const delivery = `${repoId}-delivery`;
-    await env.ORG_READ.prepare(
-      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
+    await admitted()
+      .prepare(
+        `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
          payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at, expires_at)
        VALUES (?, ?, 1, 'push', NULL, 1, ?, 'dropped', 'payload_too_large', 0, 0, 0, 0, 1)`,
-    )
+      )
       .bind(delivery, repoId, `webhooks/${delivery}.json`)
       .run();
     const { sink, calls } = recordingSink();
@@ -1652,7 +1664,8 @@ describe("the effects cron", () => {
       publish,
     });
     expect(
-      await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
+      await admitted()
+        .prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
         .bind(delivery)
         .first(),
     ).toBeNull();

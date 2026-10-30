@@ -10,6 +10,7 @@ import { api, json } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted } from "./helpers/read-model.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
@@ -168,9 +169,10 @@ describe("pull request webhooks", () => {
     // One event per run: a run delivers only a few effects itself (the rest wait for the sweep).
     for (const event of (await t.outbox()).filter((e) => e.webhooks)) await t.materialize([event]);
     const actions = (
-      await env.ORG_READ.prepare(
-        "SELECT event, action FROM webhook_deliveries WHERE repo_id = ? AND event != 'ping'",
-      )
+      await admitted()
+        .prepare(
+          "SELECT event, action FROM webhook_deliveries WHERE repo_id = ? AND event != 'ping'",
+        )
         .bind(t.repo.id)
         .all<{ event: string; action: string }>()
     ).results.map((r) => `${r.event}.${r.action}`);

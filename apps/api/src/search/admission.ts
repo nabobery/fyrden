@@ -54,7 +54,7 @@ export interface Reservation {
  */
 export const SETTLING = {
   rows: 1 + READ_MODEL_ADMISSION.rows,
-  reads: 3 + READ_MODEL_ADMISSION.reads,
+  reads: 5 + READ_MODEL_ADMISSION.reads,
 };
 
 /**
@@ -67,7 +67,7 @@ export const SPENDING = {
 };
 
 /** A spending's own statement: its row and the reads of its upsert (measured). */
-const SPENT = { rows: 1, reads: 4 };
+const SPENT = { rows: 1, reads: 8 };
 
 /**
  * Reserves `rows` and `reads` from the database's day; null when the day's

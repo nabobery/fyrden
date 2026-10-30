@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { HOOK_POLICY } from "../src/do/repo/hooks.js";
 import { ATTEMPT_POLICY, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { createWebhookSink } from "../src/webhooks/sink.js";
+import { admitted } from "./helpers/read-model.js";
 
 /** Runs of the effects cron a day (wrangler.jsonc: `2-59/5 * * * *`, every 5 minutes). */
 const CRON_RUNS_A_DAY = (24 * 60) / 5;
@@ -24,8 +25,9 @@ const EVENTS = ATTEMPT_POLICY.pruneBatch / HOOK_POLICY.maxHooks;
 async function admit(repoId: string, run: number, expiresAt: number): Promise<string[]> {
   const prefix = `webhooks/${repoId}/${run}-`;
   const dropped = "(i % 5 = 0 OR (i % 5 = 1 AND j % 2 = 0))";
-  await env.ORG_READ.prepare(
-    `WITH RECURSIVE e(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM e WHERE i < ?3 - 1),
+  await admitted()
+    .prepare(
+      `WITH RECURSIVE e(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM e WHERE i < ?3 - 1),
        h(j) AS (SELECT 1 UNION ALL SELECT j + 1 FROM h WHERE j < ?4)
      INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
        payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at, expires_at)
@@ -34,14 +36,15 @@ async function admit(repoId: string, run: number, expiresAt: number): Promise<st
        CASE WHEN ${dropped} THEN 'payload_too_large' END,
        CASE WHEN ${dropped} THEN 0 ELSE 1 END, ?6, ?6, ?6, ?7
      FROM e, h`,
-  )
+    )
     .bind(repoId, run, EVENTS, HOOK_POLICY.maxHooks, prefix, expiresAt - 1, expiresAt)
     .run();
-  await env.ORG_READ.prepare(
-    `INSERT INTO webhook_attempts (delivery_id, n, at, status, response_excerpt)
+  await admitted()
+    .prepare(
+      `INSERT INTO webhook_attempts (delivery_id, n, at, status, response_excerpt)
      SELECT delivery_id, 1, created_at, 200, 'ok' FROM webhook_deliveries
      WHERE repo_id = ?1 AND substr(payload_key, 1, length(?2)) = ?2 AND state = 'done'`,
-  )
+    )
     .bind(repoId, prefix)
     .run();
   const stored: string[] = [];
@@ -55,7 +58,8 @@ async function admit(repoId: string, run: number, expiresAt: number): Promise<st
 
 const count = async (sql: string, ...values: unknown[]) =>
   (
-    await env.ORG_READ.prepare(sql)
+    await admitted()
+      .prepare(sql)
       .bind(...values)
       .first<{ n: number }>()
   )?.n;
@@ -87,7 +91,7 @@ describe("webhook retention", () => {
           },
         },
       } as unknown as Env,
-      db: env.ORG_READ,
+      db: admitted(),
       now: () => now,
     });
     const start = Date.now();
@@ -149,12 +153,13 @@ describe("webhook retention", () => {
         ],
       },
     };
-    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    await webhookSink.deliver(effect, quiet, admitted());
     const rows = async () =>
       (
-        await env.ORG_READ.prepare(
-          "SELECT delivery_id, payload_key FROM webhook_deliveries WHERE repo_id = ? ORDER BY hook_id",
-        )
+        await admitted()
+          .prepare(
+            "SELECT delivery_id, payload_key FROM webhook_deliveries WHERE repo_id = ? ORDER BY hook_id",
+          )
           .bind(repoId)
           .all<{ delivery_id: string; payload_key: string }>()
       ).results;
@@ -162,9 +167,8 @@ describe("webhook retention", () => {
     expect(made).toHaveLength(2);
     const key = made[0]?.payload_key as string;
     // Sent, and past retention; two older deliveries ahead of them.
-    await env.ORG_READ.prepare(
-      "UPDATE webhook_deliveries SET state = 'done', expires_at = 1 WHERE repo_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE webhook_deliveries SET state = 'done', expires_at = 1 WHERE repo_id = ?")
       .bind(repoId)
       .run();
     await admitOlder(repoId);
@@ -172,7 +176,7 @@ describe("webhook retention", () => {
     const prune = () =>
       reconcileWebhooks({
         env: quiet,
-        db: env.ORG_READ,
+        db: admitted(),
         now: () => Date.now(),
         policy: { ...ATTEMPT_POLICY, pruneBatch: 3 },
       });
@@ -180,14 +184,14 @@ describe("webhook retention", () => {
     expect(await rows()).toHaveLength(2);
     expect(await env.ASSETS.head(key)).not.toBeNull();
     // Its effect retried meanwhile: nothing to make again.
-    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    await webhookSink.deliver(effect, quiet, admitted());
     expect(await rows()).toEqual(made);
     // The next run takes the event whole: its rows, then its body.
     await prune();
     expect(await rows()).toEqual([]);
     expect(await env.ASSETS.head(key)).toBeNull();
     // Made again after that, the event is whole again, its body stored with it.
-    await webhookSink.deliver(effect, quiet, env.ORG_READ);
+    await webhookSink.deliver(effect, quiet, admitted());
     expect(await rows()).toHaveLength(2);
     expect(await env.ASSETS.head(key)).not.toBeNull();
     await prune();
@@ -200,11 +204,12 @@ async function admitOlder(repoId: string): Promise<void> {
   for (const n of [0, 1]) {
     const key = `webhooks/${repoId}/older-${n}.json`;
     await env.ASSETS.put(key, "{}");
-    await env.ORG_READ.prepare(
-      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, private, payload_key,
+    await admitted()
+      .prepare(
+        `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, private, payload_key,
          state, attempts, next_attempt_at, created_at, updated_at, expires_at)
        VALUES (?1, ?2, 1, 'push', 0, ?3, 'done', 1, 0, 0, 0, 0)`,
-    )
+      )
       .bind(`${repoId}-older-${n}`, repoId, key)
       .run();
   }

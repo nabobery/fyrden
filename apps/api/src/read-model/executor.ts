@@ -1,7 +1,8 @@
 import { rawReadModel } from "../events/read-model.js";
 
 /*
- * The read model's one way to write (org migration 0017, directory 0034).
+ * The read model's one way to write (org migrations 0017 and 0018,
+ * directory 0034 and 0036).
  * A writer holds a lease in the directory, under the shard's barrier
  * generation, with an absolute deadline; every write batch it sends starts
  * with a statement that opens admission only if the read model's barrier is
@@ -14,12 +15,14 @@ import { rawReadModel } from "../events/read-model.js";
  * Code receives a database whose batches, and whose statements that write,
  * go through the writer (`withReadModel`); reads go to the database as
  * they are. A lease is taken at the first write and released when the work
- * ends. Writes outside admission are counted by the read model's triggers
- * (`read_model_write.stray`) while old and new code run side by side.
+ * ends. The read model's triggers refuse any write outside an admission
+ * (org migration 0018). The barrier's controller writes as a maintenance
+ * writer: under the directory's barrier while it is not running, at the
+ * generation the controller decided on (see `WriterOptions.maintenance`).
  */
 
-/** The executor's protocol, carried in every admission. */
-export const READ_MODEL_PROTOCOL = 1;
+/** The executor's protocol, carried in every admission (2: writes outside admission refused). */
+export const READ_MODEL_PROTOCOL = 2;
 
 /**
  * What admitting a write batch costs, besides its statements: its opening and
@@ -52,7 +55,7 @@ export const READ_MODEL_LONE_WRITE = {
  */
 export const READ_MODEL_OBSERVATION = {
   rows: 1 + READ_MODEL_ADMISSION.rows,
-  reads: 3 + READ_MODEL_ADMISSION.reads,
+  reads: 5 + READ_MODEL_ADMISSION.reads,
 } as const;
 
 /** A lease's life; a writer renews it once less than half is left. */
@@ -103,6 +106,16 @@ export interface WriteOptions {
 export interface WriterOptions {
   readonly leasePerWrite?: boolean;
   readonly renews?: boolean;
+  /**
+   * The barrier's controller only (read-model/maintenance.ts): a writer
+   * whose every write takes a lease of its own, never renewed, while the
+   * directory's barrier is not running and still at `generation` (else
+   * refused: another step moved it). Its admission opens while the read
+   * model's barrier is at that generation or an older one (a step moving it
+   * there in the same batch), and its writes then hold only once the
+   * barrier is at that generation and not running.
+   */
+  readonly maintenance?: { readonly generation: number };
 }
 
 /** One piece of work's writer: its lease, taken at its first write. */
@@ -130,6 +143,7 @@ export class ReadModelWriter {
    * lease's deadline passes (work bounded in calls and rows, as repairs are).
    */
   readonly #renews: boolean;
+  readonly #maintenance: { readonly generation: number } | null;
 
   constructor(
     env: Pick<Env, "DIRECTORY" | "ORG_READ">,
@@ -141,8 +155,9 @@ export class ReadModelWriter {
     this.#org = rawReadModel(env, shard);
     this.#shard = shard;
     this.#now = now;
-    this.#leasePerWrite = options.leasePerWrite ?? false;
-    this.#renews = options.renews ?? true;
+    this.#maintenance = options.maintenance ?? null;
+    this.#leasePerWrite = this.#maintenance !== null || (options.leasePerWrite ?? false);
+    this.#renews = this.#maintenance === null && (options.renews ?? true);
   }
 
   get lease(): ReadModelLease | null {
@@ -186,11 +201,13 @@ export class ReadModelWriter {
          VALUES (1,
            CASE WHEN EXISTS (
                SELECT 1 FROM read_model_barrier
-               WHERE id = 1 AND phase = 'running' AND generation = ?2 AND ?3 >= protocol_version)
+               WHERE id = 1 AND ?3 >= protocol_version AND (
+                 (?6 = 'ordinary' AND phase = 'running' AND generation = ?2)
+                 OR (?6 = 'maintenance' AND generation <= ?2)))
              AND ?4 > ${NOW}
              AND (?5 IS NULL OR ?5 = CAST(unixepoch() / 86400 AS INTEGER))
            THEN 1 ELSE -1 END,
-           0, 1, ?1, ?2, ?3, ?4, 'ordinary')
+           0, 1, ?1, ?2, ?3, ?4, ?6)
          ON CONFLICT (id) DO UPDATE SET
            open = excluded.open,
            seq = max(read_model_write.seq,
@@ -207,6 +224,7 @@ export class ReadModelWriter {
         lease.protocolVersion,
         lease.until,
         options.reservationDay ?? null,
+        this.#maintenance ? "maintenance" : "ordinary",
       );
     const close = this.#org.prepare(
       `UPDATE read_model_write SET open = 0, lease_id = NULL, generation = NULL,
@@ -216,8 +234,13 @@ export class ReadModelWriter {
     try {
       out = await this.#org.batch([open, ...statements, close]);
     } catch (error) {
-      // The admission statement failing (its CHECK) is a refusal; anything else is the caller's.
-      if (/read_model_write|CHECK constraint failed: open/i.test(String(error)))
+      // The admission statement failing (its CHECK), or a write the read model's triggers refused
+      // (a deadline passing within the batch), is a refusal; anything else is the caller's.
+      if (
+        /read_model_write|CHECK constraint failed: open|read_model_admission_required/i.test(
+          String(error),
+        )
+      )
         throw new ReadModelRefused("barrier");
       throw error;
     } finally {
@@ -283,17 +306,29 @@ export class ReadModelWriter {
     return usage;
   }
 
-  /** A newly taken lease (refused unless the shard's barrier is running and admits this protocol). */
+  /**
+   * A newly taken lease, refused unless the shard's barrier admits this
+   * protocol and is running (a maintenance writer's: not running, at its
+   * generation).
+   */
   async #take(): Promise<ReadModelLease> {
     const taken = await this.#directory
       .prepare(
         `INSERT INTO read_model_writers (lease_id, shard, generation, protocol_version, mode, until)
-           SELECT ?1, shard, generation, ?3, 'ordinary', ${NOW} + ${READ_MODEL_LEASE_MS}
+           SELECT ?1, shard, generation, ?3, ?4, ${NOW} + ${READ_MODEL_LEASE_MS}
            FROM read_model_barriers
-           WHERE shard = ?2 AND phase = 'running' AND ?3 >= protocol_version
+           WHERE shard = ?2 AND ?3 >= protocol_version AND CASE ?4
+             WHEN 'ordinary' THEN phase = 'running'
+             ELSE phase <> 'running' AND generation = ?5 END
            RETURNING lease_id, generation, protocol_version, until`,
       )
-      .bind(crypto.randomUUID(), this.#shard, READ_MODEL_PROTOCOL)
+      .bind(
+        crypto.randomUUID(),
+        this.#shard,
+        READ_MODEL_PROTOCOL,
+        this.#maintenance ? "maintenance" : "ordinary",
+        this.#maintenance?.generation ?? null,
+      )
       .run<{ lease_id: string; generation: number; protocol_version: number; until: number }>();
     this.#directoryWritten += taken.meta.rows_written ?? 0;
     const row = taken.results[0];

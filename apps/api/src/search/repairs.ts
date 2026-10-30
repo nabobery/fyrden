@@ -8,7 +8,7 @@ import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.
  * What a rotation writes and reads at most: the source's row and its due index
  * entry, and its batch's spending.
  */
-const ROTATION = { rows: 2 + SPENDING.rows, reads: 4 + SPENDING.reads };
+const ROTATION = { rows: 2 + SPENDING.rows, reads: 6 + SPENDING.reads };
 
 import { reconcileSource, STEP_CALLS, sweepTombstones } from "./reconcile.js";
 

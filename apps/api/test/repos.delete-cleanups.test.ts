@@ -15,6 +15,7 @@ import { advanceDeletion, keepTombstone, markDeletions } from "../src/repos/dele
 import { bodyKeyOf, deliveryIdOf, webhookSink } from "../src/webhooks/sink.js";
 import type { Owner } from "./helpers/network.js";
 import { principalWithToken } from "./helpers/principals.js";
+import { admitted } from "./helpers/read-model.js";
 
 const ORIGIN = "https://fyrden.test";
 
@@ -67,61 +68,72 @@ async function deleteFully(repo: { id: string; name: string }): Promise<void> {
  * and a body for each delivery, owned by a payload row.
  */
 async function leaveTraces(repoId: string, effects: number, deliveries: number): Promise<void> {
-  await env.ORG_READ.prepare(
-    `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+  await admitted()
+    .prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
      INSERT INTO effects (effect_id, sink, target, payload, state, next_attempt_at, created_at,
        source_id)
      SELECT ?1 || ':1:' || i || ':webhooks:hooks', 'webhooks', 'hooks', '{}',
        CASE WHEN i = 1 THEN 'done' ELSE 'pending' END, 0, 0, ?1 FROM n`,
-  )
+    )
     .bind(repoId, effects)
     .run();
-  await env.ORG_READ.prepare(
-    `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+  await admitted()
+    .prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
      INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
        payload_key, state, attempts, next_attempt_at, created_at, updated_at, expires_at)
      SELECT ?1 || '-' || i, ?1, 1, 'push', NULL, 0, 'webhooks/' || ?1 || '/' || i || '.json',
        CASE WHEN i % 2 = 0 THEN 'pending' ELSE 'done' END, 1, 0, 0, 0, 9e15 FROM n`,
-  )
+    )
     .bind(repoId, deliveries)
     .run();
-  await env.ORG_READ.prepare(
-    `INSERT INTO webhook_attempts (delivery_id, n, at, status)
+  await admitted()
+    .prepare(
+      `INSERT INTO webhook_attempts (delivery_id, n, at, status)
      SELECT delivery_id, 1, 0, 200 FROM webhook_deliveries WHERE repo_id = ?`,
-  )
+    )
     .bind(repoId)
     .run();
-  await env.ORG_READ.prepare(
-    `INSERT INTO webhook_payloads (event_key, repo_id, payload_key, state, bytes, expires_at)
+  await admitted()
+    .prepare(
+      `INSERT INTO webhook_payloads (event_key, repo_id, payload_key, state, bytes, expires_at)
      SELECT delivery_id, repo_id, payload_key, 'established', 2, 9e15
      FROM webhook_deliveries WHERE repo_id = ?`,
-  )
+    )
     .bind(repoId)
     .run();
   for (let i = 1; i <= deliveries; i++) await env.ASSETS.put(`webhooks/${repoId}/${i}.json`, "{}");
   // A search projection of each kind, and its search state.
-  await env.ORG_READ.batch([
-    env.ORG_READ.prepare(
-      `INSERT INTO search_docs (repo_id, number, kind, deleted, epoch_gen, owner_gen, version,
+  await admitted().batch([
+    admitted()
+      .prepare(
+        `INSERT INTO search_docs (repo_id, number, kind, deleted, epoch_gen, owner_gen, version,
          updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1, 1)`,
-    ).bind(repoId),
-    env.ORG_READ.prepare(
-      `INSERT INTO search_labels (repo_id, label_id, deleted, epoch_gen, owner_gen, version,
+      )
+      .bind(repoId),
+    admitted()
+      .prepare(
+        `INSERT INTO search_labels (repo_id, label_id, deleted, epoch_gen, owner_gen, version,
          updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1)`,
-    ).bind(repoId),
-    env.ORG_READ.prepare(
-      `INSERT INTO search_milestones (repo_id, number, deleted, epoch_gen, owner_gen, version,
+      )
+      .bind(repoId),
+    admitted()
+      .prepare(
+        `INSERT INTO search_milestones (repo_id, number, deleted, epoch_gen, owner_gen, version,
          updated_seq) VALUES (?, 1, 1, 1, 1, 1, 1)`,
-    ).bind(repoId),
-    env.ORG_READ.prepare(
-      "INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) VALUES (?, 1, 1)",
-    ).bind(repoId),
+      )
+      .bind(repoId),
+    admitted()
+      .prepare("INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) VALUES (?, 1, 1)")
+      .bind(repoId),
   ]);
 }
 
 const count = async (sql: string, ...values: unknown[]) =>
   (
-    await env.ORG_READ.prepare(sql)
+    await admitted()
+      .prepare(sql)
       .bind(...values)
       .first<{ n: number }>()
   )?.n ?? 0;
@@ -264,9 +276,8 @@ describe("repository deletion cleanups", () => {
     const repo = await createRepo();
     await leaveTraces(repo.id, 2, 2);
     // A delivery holds the second effect: it may still be making deliveries and storing bodies.
-    await env.ORG_READ.prepare(
-      "UPDATE effects SET lease_token = 'held', lease_until = 9e15 WHERE effect_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE effects SET lease_token = 'held', lease_until = 9e15 WHERE effect_id = ?")
       .bind(`${repo.id}:1:2:webhooks:hooks`)
       .run();
     await mark(repo);
@@ -284,9 +295,8 @@ describe("repository deletion cleanups", () => {
     expect(await cleanupsDone(repo.id)).toEqual([]);
 
     // The delivery ended (its lease released or lapsed).
-    await env.ORG_READ.prepare(
-      "UPDATE effects SET lease_token = NULL, lease_until = NULL WHERE effect_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE effects SET lease_token = NULL, lease_until = NULL WHERE effect_id = ?")
       .bind(`${repo.id}:1:2:webhooks:hooks`)
       .run();
     expect(await runCleanups(env, target)).toBe(true);
@@ -300,10 +310,11 @@ describe("repository deletion cleanups", () => {
     // The first was made just now; the second was claimed, and its claim lapsed: whoever
     // claimed it may still be making its deliveries. The third was never claimed.
     const now = Date.now();
-    await env.ORG_READ.prepare(
-      `UPDATE effects SET attempts = 1, done_at = CASE WHEN effect_id = ?1 THEN ?3 END
+    await admitted()
+      .prepare(
+        `UPDATE effects SET attempts = 1, done_at = CASE WHEN effect_id = ?1 THEN ?3 END
        WHERE effect_id IN (?1, ?2)`,
-    )
+      )
       .bind(id(1), id(2), now)
       .run();
     await mark(repo);
@@ -319,9 +330,8 @@ describe("repository deletion cleanups", () => {
       search: 4,
     });
     // The claimed one is ended, as its next claim would end it.
-    const ended = await env.ORG_READ.prepare(
-      "SELECT state, last_error, next_attempt_at FROM effects WHERE effect_id = ?",
-    )
+    const ended = await admitted()
+      .prepare("SELECT state, last_error, next_attempt_at FROM effects WHERE effect_id = ?")
       .bind(id(2))
       .first<{ state: string; last_error: string; next_attempt_at: number }>();
     expect(ended).toMatchObject({
@@ -331,10 +341,11 @@ describe("repository deletion cleanups", () => {
     expect(ended?.next_attempt_at).toBeGreaterThanOrEqual(now);
 
     // Once the queue's longest invocation has passed since each ended, the cleanups go on.
-    await env.ORG_READ.prepare(
-      `UPDATE effects SET done_at = done_at - ?2, next_attempt_at = next_attempt_at - ?2
+    await admitted()
+      .prepare(
+        `UPDATE effects SET done_at = done_at - ?2, next_attempt_at = next_attempt_at - ?2
        WHERE effect_id IN (SELECT value FROM json_each(?1))`,
-    )
+      )
       .bind(JSON.stringify([id(1), id(2)]), CLEANUP_POLICY.settleMs)
       .run();
     expect(await runCleanups(env, target)).toBe(true);
@@ -347,18 +358,20 @@ describe("repository deletion cleanups", () => {
     const id = (i: number) => `${repo.id}:1:${i}:webhooks:hooks`;
     // The second was journaled before claims counted as attempts or effects named their
     // source: it may have been claimed, and no claim of it checks the deletion.
-    await env.ORG_READ.prepare(
-      "UPDATE effects SET source_id = CASE WHEN effect_id = ?2 THEN NULL ELSE ?1 END WHERE effect_id IN (?2, ?3)",
-    )
+    await admitted()
+      .prepare(
+        "UPDATE effects SET source_id = CASE WHEN effect_id = ?2 THEN NULL ELSE ?1 END WHERE effect_id IN (?2, ?3)",
+      )
       .bind(repo.id, id(2), id(3))
       .run();
     await mark(repo);
     const target = { repoId: repo.id, shard: DEFAULT_ORG_SHARD, gen: 0 };
 
     expect(await runCleanups(env, target)).toBe(false);
-    const { results } = await env.ORG_READ.prepare(
-      "SELECT effect_id, state, last_error FROM effects WHERE effect_id IN (?, ?) ORDER BY effect_id",
-    )
+    const { results } = await admitted()
+      .prepare(
+        "SELECT effect_id, state, last_error FROM effects WHERE effect_id IN (?, ?) ORDER BY effect_id",
+      )
       .bind(id(2), id(3))
       .all();
     expect(results).toEqual([
@@ -366,9 +379,8 @@ describe("repository deletion cleanups", () => {
       { effect_id: id(3), state: "failed", last_error: "invalidated: its source was deleted" },
     ]);
     // Only the one that may have been claimed is waited for.
-    await env.ORG_READ.prepare(
-      "UPDATE effects SET next_attempt_at = next_attempt_at - ? WHERE effect_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE effects SET next_attempt_at = next_attempt_at - ? WHERE effect_id = ?")
       .bind(CLEANUP_POLICY.settleMs, id(2))
       .run();
     expect(await runCleanups(env, target)).toBe(true);
@@ -462,19 +474,20 @@ describe("repository deletion cleanups", () => {
     };
     const effect = { id: uniqueId("effect"), payload: planned } as unknown as Effect;
 
-    await webhookSink.deliver(effect, env, env.ORG_READ);
+    await webhookSink.deliver(effect, env, admitted());
     expect(await traces(repo.id)).toEqual(NONE);
 
     // A delivery made before the tombstone, whose body is stored after the cleanup listed
     // the repository's bodies: the body does not outlive it.
-    await env.ORG_READ.prepare(
-      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
+    await admitted()
+      .prepare(
+        `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
          payload_key, state, attempts, next_attempt_at, created_at, updated_at, expires_at)
        VALUES (?1, ?2, 1, 'push', NULL, 0, ?3, 'pending', 0, 0, 0, 0, 9e15)`,
-    )
+      )
       .bind(await deliveryIdOf(eventKey, 1), repo.id, await bodyKeyOf(repo.id, eventKey))
       .run();
-    await webhookSink.deliver(effect, env, env.ORG_READ);
+    await webhookSink.deliver(effect, env, admitted());
     expect((await traces(repo.id)).bodies).toBe(0);
   });
 });

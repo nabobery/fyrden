@@ -13,8 +13,8 @@
  * the protocol tables' state (an import makes its own: admission closed,
  * its own barrier, never an exported lease).
  *
- * Not available until writes outside the executor are refused: a pause
- * cannot wait for writers that hold no lease (`exportAvailability`).
+ * Not available until a restore floor is recorded (`exportAvailability`):
+ * a point from which every write went through the executor.
  */
 
 /** A page's bounds (Proposed). */
@@ -218,15 +218,14 @@ export async function exportManifest(db: D1Database, generation: number): Promis
 }
 
 /**
- * Whether a coherent export can be made: only once writes outside the
- * executor are refused (the restore floor is set), for a pause cannot wait
- * for writers that hold no lease.
+ * Whether a coherent export can be made: only once the restore floor (a
+ * point from which writes outside the executor were refused) is recorded.
  */
 export function exportAvailability(restoreFloor: string | null): {
   readonly available: boolean;
-  readonly reason: "protocol_not_enforced" | null;
+  readonly reason: "no_restore_floor" | null;
 } {
   return restoreFloor === null
-    ? { available: false, reason: "protocol_not_enforced" }
+    ? { available: false, reason: "no_restore_floor" }
     : { available: true, reason: null };
 }

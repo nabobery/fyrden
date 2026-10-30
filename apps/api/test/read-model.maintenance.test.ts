@@ -14,7 +14,7 @@ import {
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { runMaintenance } from "../src/cron/maintenance.js";
 import worker from "../src/index.js";
@@ -29,6 +29,7 @@ import {
 } from "../src/read-model/maintenance.js";
 import { user } from "./helpers/api.js";
 import { ORIGIN } from "./helpers/git-http.js";
+import { leftAs, runningAgain } from "./helpers/read-model.js";
 
 const org = env.ORG_READ;
 const MAINTENANCE = { FYRDEN_READ_MODEL_MAINTENANCE: "on" };
@@ -65,16 +66,16 @@ const consume = worker.queue as unknown as (
   ctx: ExecutionContext,
 ) => Promise<void>;
 
-afterEach(async () => {
-  await env.DIRECTORY.batch([
-    env.DIRECTORY.prepare("DELETE FROM read_model_writers"),
-    env.DIRECTORY.prepare(
-      "UPDATE read_model_barriers SET phase = 'running', generation = 1 WHERE shard = 'default'",
-    ),
-  ]);
-  await org
-    .prepare("UPDATE read_model_barrier SET phase = 'running', generation = 1 WHERE id = 1")
-    .run();
+/** The generation each test starts at (running): generations only go up. */
+let g = 0;
+beforeEach(async () => {
+  await runningAgain(env);
+  g =
+    (
+      await env.DIRECTORY.prepare(
+        "SELECT generation FROM read_model_barriers WHERE shard = 'default'",
+      ).first<{ generation: number }>()
+    )?.generation ?? 0;
 });
 
 describe("pausing the read model's writers", () => {
@@ -83,13 +84,13 @@ describe("pausing the read model's writers", () => {
     await held.acquire();
     expect(await pauseReadModel(env, "default")).toMatchObject({
       phase: "pausing",
-      generation: 2,
+      generation: g + 1,
       live: 1,
       until: held.lease?.until,
     });
     expect(await barriers()).toEqual({
-      directory: { phase: "pausing", generation: 2 },
-      org: { phase: "pausing", generation: 2 },
+      directory: { phase: "pausing", generation: g + 1 },
+      org: { phase: "pausing", generation: g + 1 },
     });
     // The held writer's batch is refused (its generation is over); no new lease is taken.
     const source = uniqueId("held");
@@ -102,20 +103,23 @@ describe("pausing the read model's writers", () => {
     await held.release();
     expect(await pauseReadModel(env, "default")).toEqual({
       phase: "paused",
-      generation: 2,
+      generation: g + 1,
       live: 0,
       until: null,
     });
     expect(await barriers()).toEqual({
-      directory: { phase: "paused", generation: 2 },
-      org: { phase: "paused", generation: 2 },
+      directory: { phase: "paused", generation: g + 1 },
+      org: { phase: "paused", generation: g + 1 },
     });
     // Paused stays paused, at the same generation.
-    expect(await pauseReadModel(env, "default")).toMatchObject({ phase: "paused", generation: 2 });
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: 2 });
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "paused",
+      generation: g + 1,
+    });
+    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: g + 1 });
     expect(await barriers()).toEqual({
-      directory: { phase: "running", generation: 2 },
-      org: { phase: "running", generation: 2 },
+      directory: { phase: "running", generation: g + 1 },
+      org: { phase: "running", generation: g + 1 },
     });
     const writer = new ReadModelWriter(env, "default");
     await writer.write([epochRow(source)]);
@@ -140,19 +144,36 @@ describe("pausing the read model's writers", () => {
   });
 
   it("never lowers the read model's generation when it resumes", async () => {
-    await pauseReadModel(env, "default");
-    await pauseReadModel(env, "default");
     // The read model ahead of the directory (as after a restore of the directory).
-    await org.prepare("UPDATE read_model_barrier SET generation = 5 WHERE id = 1").run();
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: 5 });
+    await leftAs(
+      env,
+      { phase: "paused", generation: g + 1 },
+      { phase: "paused", generation: g + 4 },
+    );
+    expect(await resumeReadModel(env, "default")).toEqual({
+      phase: "running",
+      generation: g + 4,
+    });
     expect(await barriers()).toEqual({
-      directory: { phase: "running", generation: 5 },
-      org: { phase: "running", generation: 5 },
+      directory: { phase: "running", generation: g + 4 },
+      org: { phase: "running", generation: g + 4 },
+    });
+  });
+
+  it("pauses past a read model ahead of the directory", async () => {
+    await leftAs(env, { phase: "running", generation: g }, { phase: "running", generation: g + 4 });
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "paused",
+      generation: g + 5,
+    });
+    expect(await barriers()).toEqual({
+      directory: { phase: "paused", generation: g + 5 },
+      org: { phase: "paused", generation: g + 5 },
     });
   });
 
   it("refuses while the barrier is recovering, and leaves a running one as it is on resume", async () => {
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: 1 });
+    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: g });
     await env.DIRECTORY.prepare(
       "UPDATE read_model_barriers SET phase = 'recovering' WHERE shard = 'default'",
     ).run();
@@ -163,6 +184,7 @@ describe("pausing the read model's writers", () => {
 describe("pausing and resuming at once", () => {
   afterEach(() => {
     delete barrierHooks.beforeChange;
+    delete barrierHooks.afterPausing;
   });
 
   it("leaves a resume that comes before a pause's last change standing, and the pause says so", async () => {
@@ -171,10 +193,28 @@ describe("pausing and resuming at once", () => {
       delete barrierHooks.beforeChange;
       await resumeReadModel(env, "default");
     };
-    expect(await pauseReadModel(env, "default")).toMatchObject({ phase: "running", generation: 2 });
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "running",
+      generation: g + 1,
+    });
     expect(await barriers()).toEqual({
-      directory: { phase: "running", generation: 2 },
-      org: { phase: "running", generation: 2 },
+      directory: { phase: "running", generation: g + 1 },
+      org: { phase: "running", generation: g + 1 },
+    });
+  });
+
+  it("leaves a resume that comes right after a pause's first change standing, and the pause says so", async () => {
+    barrierHooks.afterPausing = async () => {
+      delete barrierHooks.afterPausing;
+      await resumeReadModel(env, "default");
+    };
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "running",
+      generation: g + 1,
+    });
+    expect(await barriers()).toEqual({
+      directory: { phase: "running", generation: g + 1 },
+      org: { phase: "running", generation: g + 1 },
     });
   });
 
@@ -189,53 +229,51 @@ describe("pausing and resuming at once", () => {
       await pauseReadModel(env, "default");
       await pauseReadModel(env, "default");
     };
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "paused", generation: 3 });
+    expect(await resumeReadModel(env, "default")).toEqual({ phase: "paused", generation: g + 2 });
     expect(await barriers()).toEqual({
-      directory: { phase: "paused", generation: 3 },
-      org: { phase: "paused", generation: 3 },
+      directory: { phase: "paused", generation: g + 2 },
+      org: { phase: "paused", generation: g + 2 },
     });
   });
 });
 
 describe("a pause or a resume interrupted between its two changes", () => {
   /** The directory's barrier and the read model's as an interrupted step left them. */
-  const left = async (directory: string, local: string, generation = 2) => {
-    await env.DIRECTORY.prepare(
-      "UPDATE read_model_barriers SET phase = ?, generation = ? WHERE shard = 'default'",
-    )
-      .bind(directory, generation)
-      .run();
-    await org
-      .prepare("UPDATE read_model_barrier SET phase = ?, generation = ? WHERE id = 1")
-      .bind(local, generation)
-      .run();
-  };
+  const left = (directory: string, local: string, generation = g + 1) =>
+    leftAs(env, { phase: directory, generation }, { phase: local, generation });
 
   afterEach(() => {
     delete barrierHooks.beforeChange;
+    delete barrierHooks.afterPausing;
   });
 
   it("is finished by the next pause, at its generation", async () => {
     await left("paused", "pausing");
-    expect(await pauseReadModel(env, "default")).toMatchObject({ phase: "paused", generation: 2 });
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "paused",
+      generation: g + 1,
+    });
     expect(await barriers()).toEqual({
-      directory: { phase: "paused", generation: 2 },
-      org: { phase: "paused", generation: 2 },
+      directory: { phase: "paused", generation: g + 1 },
+      org: { phase: "paused", generation: g + 1 },
     });
   });
 
   it("is fenced off by the next pause when it was a resume, or finished by the next resume", async () => {
     await left("paused", "running");
-    expect(await pauseReadModel(env, "default")).toMatchObject({ phase: "paused", generation: 3 });
-    expect(await barriers()).toEqual({
-      directory: { phase: "paused", generation: 3 },
-      org: { phase: "paused", generation: 3 },
+    expect(await pauseReadModel(env, "default")).toMatchObject({
+      phase: "paused",
+      generation: g + 2,
     });
-    await left("paused", "running");
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: 2 });
     expect(await barriers()).toEqual({
-      directory: { phase: "running", generation: 2 },
-      org: { phase: "running", generation: 2 },
+      directory: { phase: "paused", generation: g + 2 },
+      org: { phase: "paused", generation: g + 2 },
+    });
+    await left("paused", "running", g + 3);
+    expect(await resumeReadModel(env, "default")).toEqual({ phase: "running", generation: g + 3 });
+    expect(await barriers()).toEqual({
+      directory: { phase: "running", generation: g + 3 },
+      org: { phase: "running", generation: g + 3 },
     });
   });
 
@@ -246,10 +284,10 @@ describe("a pause or a resume interrupted between its two changes", () => {
       delete barrierHooks.beforeChange;
       await pauseReadModel(env, "default");
     };
-    expect(await resumeReadModel(env, "default")).toEqual({ phase: "paused", generation: 2 });
+    expect(await resumeReadModel(env, "default")).toEqual({ phase: "paused", generation: g + 1 });
     expect(await barriers()).toEqual({
-      directory: { phase: "paused", generation: 2 },
-      org: { phase: "paused", generation: 2 },
+      directory: { phase: "paused", generation: g + 1 },
+      org: { phase: "paused", generation: g + 1 },
     });
   });
 });

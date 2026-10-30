@@ -48,7 +48,8 @@ export async function getSearchStatusOperation(
       serving_version: READ_MODEL_PROTOCOL,
       deployed_version: directory?.executorVersion ?? null,
       required_version: local?.protocolVersion ?? null,
-      mode: directory?.floor ? "enforced" : "compatibility",
+      // Refused from protocol 2 on (org migration 0018); only counted before.
+      mode: (local?.protocolVersion ?? 0) >= 2 ? "enforced" : "compatibility",
       restore_floor: directory?.floor ?? null,
     },
     barrier: {

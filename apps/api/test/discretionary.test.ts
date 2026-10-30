@@ -31,6 +31,7 @@ import { feedSink, WATCH_PRICE, watchPrice } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { recordingPublish } from "./helpers/effects.js";
 import { entry as byHand, countingExec } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H9";
@@ -127,35 +128,40 @@ type EffectRow = {
 };
 
 async function effects(repoId: string): Promise<EffectRow[]> {
-  const { results } = await env.ORG_READ.prepare(
-    `SELECT effect_id, state, attempts, max_attempts, deliver_until, last_error, created_at
+  const { results } = await admitted()
+    .prepare(
+      `SELECT effect_id, state, attempts, max_attempts, deliver_until, last_error, created_at
      FROM effects WHERE effect_id LIKE ? ORDER BY effect_id`,
-  )
+    )
     .bind(`${repoId}:%`)
     .all<EffectRow>();
   return results;
 }
 
 const state = () =>
-  env.ORG_READ.prepare("SELECT refused_day, warn_until FROM discretionary_state").first<{
+  admitted().prepare("SELECT refused_day, warn_until FROM discretionary_state").first<{
     refused_day: number;
     warn_until: number;
   }>();
 const granted = async () =>
-  (await env.ORG_READ.prepare(
-    "SELECT coalesce(sum(granted), 0) AS n, coalesce(sum(do_requests), 0) AS requests FROM discretionary_hours",
-  ).first<{ n: number; requests: number }>()) ?? { n: 0, requests: 0 };
+  (await admitted()
+    .prepare(
+      "SELECT coalesce(sum(granted), 0) AS n, coalesce(sum(do_requests), 0) AS requests FROM discretionary_hours",
+    )
+    .first<{ n: number; requests: number }>()) ?? { n: 0, requests: 0 };
 
 /** The database's own clock (admission's), in UTC days and hours since the epoch. */
 const clock = async () =>
-  (await env.ORG_READ.prepare(
-    "SELECT CAST(unixepoch() / 86400 AS INTEGER) AS day, CAST(unixepoch() / 3600 AS INTEGER) AS hour",
-  ).first<{ day: number; hour: number }>()) as { day: number; hour: number };
+  (await admitted()
+    .prepare(
+      "SELECT CAST(unixepoch() / 86400 AS INTEGER) AS day, CAST(unixepoch() / 3600 AS INTEGER) AS hour",
+    )
+    .first<{ day: number; hour: number }>()) as { day: number; hour: number };
 
 beforeEach(async () => {
-  await env.ORG_READ.batch([
-    env.ORG_READ.prepare("DELETE FROM discretionary_hours"),
-    env.ORG_READ.prepare("DELETE FROM discretionary_state"),
+  await admitted().batch([
+    admitted().prepare("DELETE FROM discretionary_hours"),
+    admitted().prepare("DELETE FROM discretionary_state"),
   ]);
   forgetDeliveryState();
 });
@@ -229,9 +235,8 @@ describe("admission", () => {
   it("counts what a later hour admitted, as a batch made before midnight and run after it finds it", async () => {
     const repoId = await listedRepo();
     const { on } = deployment({ FYRDEN_DISCRETIONARY_DAILY: "do_requests=3" });
-    await env.ORG_READ.prepare(
-      "INSERT INTO discretionary_hours (hour, do_requests, granted) VALUES (?, 3, 1)",
-    )
+    await admitted()
+      .prepare("INSERT INTO discretionary_hours (hour, do_requests, granted) VALUES (?, 3, 1)")
       .bind((await clock()).hour + 1)
       .run();
     await applyEnvelope(on, envelope(repoId, [event(repoId, 1, block(1, [], ["usr_w1"]))]), {
@@ -245,9 +250,10 @@ describe("admission", () => {
     const repoId = await listedRepo();
     const { on } = deployment({ FYRDEN_DISCRETIONARY_DAILY: "do_requests=3" });
     const start = (await clock()).day * 24;
-    await env.ORG_READ.prepare(
-      "INSERT INTO discretionary_hours (hour, do_requests, granted) VALUES (?, 2, 1), (?, 100, 1)",
-    )
+    await admitted()
+      .prepare(
+        "INSERT INTO discretionary_hours (hour, do_requests, granted) VALUES (?, 2, 1), (?, 100, 1)",
+      )
       .bind(start - 1, start - 2)
       .run();
     await applyEnvelope(on, envelope(repoId, [event(repoId, 1, block(1, [], ["usr_w1"]))]), {
@@ -290,10 +296,11 @@ describe("admission", () => {
     const repoId = await listedRepo();
     const { on } = deployment({ FYRDEN_DISCRETIONARY_DAILY: "do_requests=10" });
     // The read model's tombstone for it.
-    await env.ORG_READ.prepare(
-      `INSERT INTO repos (repo_id, owner_id, name, visibility, deleted, epoch_gen, version,
+    await admitted()
+      .prepare(
+        `INSERT INTO repos (repo_id, owner_id, name, visibility, deleted, epoch_gen, version,
          owner_gen, updated_seq, updated_at) VALUES (?, ?, 'gone', 'private', 1, 1, 1, 1, 1, 0)`,
-    )
+      )
       .bind(repoId, OWNER)
       .run();
     await applyEnvelope(on, envelope(repoId, [event(repoId, 1, block(1, [], ["usr_w"]))]), {
@@ -355,7 +362,7 @@ describe("a watch effect's delivery", () => {
     expect(ids).toHaveLength(2);
     // An invocation with calls left for one (two recipients): both are claimed, the second given
     // back.
-    const deps = { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => t0, publish };
+    const deps = { db: admitted(), env: on, sinks: [feedSink], now: () => t0, publish };
     await deliverEffects(deps, "feed", ids, {
       ...invocationBudget(t0),
       calls: MESSAGE_CALLS + 3,
@@ -391,7 +398,7 @@ describe("a watch effect's delivery", () => {
     });
     const ids = (await effects(repoId)).map((e) => e.effect_id);
     await deliverEffects(
-      { db: env.ORG_READ, env: on, sinks: [feedSink], now: () => t0, publish },
+      { db: admitted(), env: on, sinks: [feedSink], now: () => t0, publish },
       "feed",
       ids,
       invocationBudget(t0),
@@ -410,9 +417,8 @@ describe("the delivery a feed reports", () => {
   it("is degraded while a refusal's warning lasts, the same for everyone, read at most once a minute", async () => {
     const now = Date.now();
     expect(await deliveryState(env.ORG_READ, now)).toBe("complete");
-    await env.ORG_READ.prepare(
-      "INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)",
-    )
+    await admitted()
+      .prepare("INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)")
       .bind((await clock()).day, now + DAY)
       .run();
     // Within the minute: what the isolate read.
@@ -446,9 +452,8 @@ describe("the delivery a feed reports", () => {
 
   it("keeps what it knew when the read fails, tries again only once the minute is past, then reads on", async () => {
     const now = Date.now();
-    await env.ORG_READ.prepare(
-      "INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)",
-    )
+    await admitted()
+      .prepare("INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)")
       .bind((await clock()).day, now + DAY)
       .run();
     expect(await deliveryState(env.ORG_READ, now)).toBe("degraded");
@@ -468,7 +473,7 @@ describe("the delivery a feed reports", () => {
     expect(await deliveryState(failing("later"), now + 120_000)).toBe("degraded");
     expect(tries).toBe(2);
     // Healthy again, past the minute: read, and the warning (since removed) is gone.
-    await env.ORG_READ.prepare("DELETE FROM discretionary_state").run();
+    await admitted().prepare("DELETE FROM discretionary_state").run();
     expect(await deliveryState(env.ORG_READ, now + 180_000)).toBe("complete");
   });
 
@@ -476,9 +481,8 @@ describe("the delivery a feed reports", () => {
     const repoId = await listedRepo();
     const { on } = deployment({ FYRDEN_DISCRETIONARY_DAILY: "do_requests=0" });
     // An earlier day's refusal, its warning ending sooner.
-    await env.ORG_READ.prepare(
-      "INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)",
-    )
+    await admitted()
+      .prepare("INSERT INTO discretionary_state (id, refused_day, warn_until) VALUES (1, ?, ?)")
       .bind((await clock()).day - 3, ((await clock()).day - 2) * DAY + FEED_HORIZON_MS)
       .run();
     await applyEnvelope(on, envelope(repoId, [event(repoId, 1, block(1, [], ["usr_w"]))]), {
@@ -617,7 +621,7 @@ function metered(db: D1Database, rows: { read: number; written: number }): D1Dat
 
 describe("a watch effect's price", () => {
   it("covers its journal row's life in D1, at its worst (sent, recovered, given back, ended, pruned)", async () => {
-    await env.ORG_READ.prepare("DELETE FROM effects").run();
+    await admitted().prepare("DELETE FROM effects").run();
     const t0 = Date.now();
     /** The read model's rows read and written through an event's whole life, with or without watchers. */
     const life = async (watchers: string[]) => {

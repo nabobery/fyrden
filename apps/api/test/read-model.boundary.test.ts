@@ -1,7 +1,8 @@
 // The read model is written only through its executor: no source reaches its
 // binding (`env.ORG_READ`) or the raw database (`rawReadModel`) but the
 // executor's own modules and the exceptions named here, so a write cannot go
-// around admission by holding the database.
+// around admission by holding the database. The read model's triggers refuse
+// what does; they trust its admission row, which only the executor writes.
 
 import { describe, expect, it } from "vitest";
 
@@ -20,7 +21,8 @@ const COUNTING = ["RepoDO", "UserDO", "OrgDO", "MaintenanceDO"].map(
 const ALLOWED: Record<string, string> = {
   "../src/events/read-model.ts": "where the raw database comes from",
   "../src/read-model/executor.ts": "the executor",
-  "../src/read-model/maintenance.ts": "the barrier's steps (its tables are not guarded)",
+  "../src/read-model/maintenance.ts":
+    "the barrier's steps: their reads, and their changes as a maintenance writer",
   ...Object.fromEntries(
     COUNTING.map((path) => [
       path,
@@ -85,5 +87,20 @@ describe("the read model's binding", () => {
       expect(source, path).toContain("ORG_READ: countedD1(env.ORG_READ)");
       expect(reaches(source.replaceAll("ORG_READ: countedD1(env.ORG_READ)", "")), path).toBe(false);
     }
+  });
+
+  it("is admitted only by the executor, and only the barrier's steps write as maintenance", () => {
+    // The admission row: what the read model's triggers trust (a raw write to it would open
+    // admission for itself).
+    const admitting = Object.entries(SOURCES)
+      .filter(([, source]) =>
+        /\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+read_model_write\b/i.test(source),
+      )
+      .map(([path]) => path);
+    expect(admitting).toEqual(["../src/read-model/executor.ts"]);
+    const maintaining = Object.entries(SOURCES)
+      .filter(([, source]) => /\bmaintenance:\s*\{\s*generation\b/.test(code(source)))
+      .map(([path]) => path);
+    expect(maintaining).toEqual(["../src/read-model/maintenance.ts"]);
   });
 });

@@ -29,6 +29,7 @@ import { api, json, user } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted } from "./helpers/read-model.js";
 
 const fx = inject("pushFixtures");
 // Written as production writes it: through the read model's executor.
@@ -448,7 +449,7 @@ describe("search's allowance", () => {
       .bind(ADMISSION.maxBytes)
       .run();
     const seen = { calls: 0, written: 0 };
-    const taken = await reserve(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ, {
+    const taken = await reserve(admitted(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ), {
       rows: 1,
       reads: 1,
     });
@@ -598,7 +599,7 @@ describe("search's allowance", () => {
       let sweeps = 0;
       while ((await left()) !== 0 && sweeps < 20) {
         const seen = { calls: 0, written: 0, read: 0 };
-        await sweepTombstones(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ);
+        await sweepTombstones(admitted(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ));
         sweeps++;
         // Each sweep reads about its page of each table, not every deletion there is.
         expect(seen.read).toBeLessThan(3 * 20 * 4);
@@ -684,9 +685,9 @@ describe("search's allowance", () => {
         .bind(repoId),
     ]);
     const seen = { calls: 0, written: 0, read: 0 };
-    expect(await collectTombstones(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ, repoId)).toBe(
-      0,
-    );
+    expect(
+      await collectTombstones(admitted(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ), repoId),
+    ).toBe(0);
     expect(seen.read).toBeLessThan(50);
   });
 
@@ -726,7 +727,7 @@ describe("search's allowance", () => {
         .bind(repoId, near?.row)
         .run();
       const seen = { calls: 0, written: 0, read: 0 };
-      await sweepTombstones(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ);
+      await sweepTombstones(admitted(clocked(Number.POSITIVE_INFINITY, seen).ORG_READ));
       expect(seen.read).toBeLessThan(4 * 20 * 3 + 50);
     } finally {
       RECONCILE_POLICY.collectPage = page;

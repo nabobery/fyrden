@@ -12,6 +12,7 @@ import type { Effect } from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { user } from "./helpers/api.js";
 import { FROM_START, feedIn, shownCount } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 
 function entry(principal: string, version: number): FeedEntry {
   const repoId = "rep_feedretire";
@@ -202,7 +203,7 @@ describe("a retired feed", () => {
         feed: { ...feed, audience: [recipient(live.principalId), recipient(gone.principalId)] },
       },
     } as unknown as Effect;
-    await feedSink.deliver(effect, env, env.ORG_READ);
+    await feedSink.deliver(effect, env, admitted());
     expect((await rows(env.USER.getByName(live.principalId))).items).toBe(1);
     expect(await rows(env.USER.getByName(gone.principalId))).toEqual({
       items: 0,

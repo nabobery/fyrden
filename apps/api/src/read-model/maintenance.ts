@@ -1,4 +1,5 @@
 import { rawReadModel } from "../events/read-model.js";
+import { ReadModelRefused, ReadModelWriter } from "./executor.js";
 
 /*
  * The read model's maintenance (a restore's or an export's): the deployment
@@ -12,7 +13,9 @@ import { rawReadModel } from "../events/read-model.js";
  * generation is still live. Each step returns where it got to: a caller
  * runs it again rather than waiting in one invocation. Resuming sets the
  * read model's barrier running first, then the directory's (a generation
- * never goes down).
+ * never goes down). The read model's barrier is changed only as a
+ * maintenance writer of the executor, at the generation the directory's
+ * barrier holds (not running), which the step decided on.
  */
 
 /** Whether the deployment holds the read model's ordinary work back. */
@@ -96,8 +99,60 @@ async function localBarrier(env: Pick<Env, "ORG_READ">, shard: string): Promise<
   return row;
 }
 
+/**
+ * Makes `change` (of the read model's barrier, on its raw database) as a
+ * maintenance writer at the directory's `generation`: false when refused
+ * (the directory's barrier is no longer at it, not running: another step
+ * moved it).
+ */
+async function admitted(
+  env: Pick<Env, "DIRECTORY" | "ORG_READ">,
+  shard: string,
+  generation: number,
+  change: (org: D1Database) => D1PreparedStatement,
+): Promise<boolean> {
+  const writer = new ReadModelWriter(env, shard, Date.now, { maintenance: { generation } });
+  try {
+    await writer.write([change(rawReadModel(env, shard))], { observe: false });
+    return true;
+  } catch (error) {
+    if (error instanceof ReadModelRefused) return false;
+    throw error;
+  } finally {
+    await writer.release();
+  }
+}
+
+/**
+ * Moves the directory's barrier (not running, as `from`) past a read model
+ * barrier ahead of it (restored, or a resume half made: running at its
+ * generation), pausing at the generation after: a maintenance writer can
+ * then bring the read model's to it. Nothing when the read model's is not
+ * ahead, or `from` no longer holds.
+ */
+async function overtake(
+  env: Pick<Env, "DIRECTORY">,
+  shard: string,
+  from: Barrier,
+  local: Barrier,
+): Promise<void> {
+  if (
+    local.generation < from.generation ||
+    (local.generation === from.generation && local.phase !== "running")
+  )
+    return;
+  await env.DIRECTORY.prepare(
+    `UPDATE read_model_barriers SET phase = 'pausing', generation = ?4, since = ${NOW}
+     WHERE shard = ?1 AND phase = ?2 AND generation = ?3 AND phase <> 'running'`,
+  )
+    .bind(shard, from.phase, from.generation, local.generation + 1)
+    .run();
+}
+
 /** Hooks between a step's look at the barriers and its last change of them. For tests. */
 export const barrierHooks: {
+  /** After a pause's first change (the directory's barrier pausing), before it looks again. */
+  afterPausing?: () => Promise<void>;
   beforeChange?: (step: "pause" | "resume") => Promise<void>;
 } = {};
 
@@ -135,30 +190,36 @@ export async function pauseReadModel(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
   shard: string,
 ): Promise<PauseProgress> {
-  const pausing = (from: BarrierPhase) =>
-    env.DIRECTORY.prepare(
-      `UPDATE read_model_barriers SET phase = 'pausing', generation = generation + 1, since = ${NOW}
-       WHERE shard = ? AND phase = ?`,
-    )
-      .bind(shard, from)
-      .run();
-  await pausing("running");
-  let { phase, generation } = await directoryBarrier(env, shard);
-  if (phase !== "pausing" && phase !== "paused")
-    throw new Error(`the read model's barrier is ${phase}`);
-  const local = await localBarrier(env, shard);
-  if (phase === "paused" && local.phase === "running" && local.generation === generation) {
-    // A resume reopened the read model's barrier but not yet the directory's: a new generation.
-    await pausing("paused");
-    ({ phase, generation } = await directoryBarrier(env, shard));
-  }
-  // The read model's own, from an older generation to this one: no older batch is admitted.
-  await rawReadModel(env, shard)
-    .prepare(
-      "UPDATE read_model_barrier SET phase = 'pausing', generation = ?1 WHERE id = 1 AND generation < ?1",
-    )
-    .bind(generation)
+  let local = await localBarrier(env, shard);
+  // Past the read model's generation too, should it be ahead.
+  await env.DIRECTORY.prepare(
+    `UPDATE read_model_barriers SET phase = 'pausing', generation = max(generation, ?2) + 1,
+       since = ${NOW}
+     WHERE shard = ?1 AND phase = 'running'`,
+  )
+    .bind(shard, local.generation)
     .run();
+  await barrierHooks.afterPausing?.();
+  let directory = await directoryBarrier(env, shard);
+  if (directory.phase === "recovering") throw new Error("the read model's barrier is recovering");
+  // A resume came between: it stands, and the step says so.
+  if (directory.phase === "running") return standing(env, shard, { live: 0, until: null });
+  local = await localBarrier(env, shard);
+  // A resume that reopened the read model's barrier but not yet the directory's (or a read model
+  // ahead of it): a new generation past it.
+  await overtake(env, shard, directory, local);
+  directory = await directoryBarrier(env, shard);
+  const { generation } = directory;
+  // The read model's own, from an older generation to this one: no older batch is admitted. (A
+  // step that moved the directory's meanwhile is seen below.)
+  if (local.generation < generation && directory.phase !== "running")
+    await admitted(env, shard, generation, (org) =>
+      org
+        .prepare(
+          "UPDATE read_model_barrier SET phase = 'pausing', generation = ?1 WHERE id = 1 AND generation < ?1",
+        )
+        .bind(generation),
+    );
   const counted = await env.DIRECTORY.prepare(
     `SELECT count(*) AS live, max(until) AS until FROM read_model_writers
      WHERE shard = ? AND generation < ? AND until > ${NOW}`,
@@ -177,14 +238,15 @@ export async function pauseReadModel(
   )
     .bind(shard, generation)
     .run();
-  const directory = await directoryBarrier(env, shard);
+  directory = await directoryBarrier(env, shard);
   if (directory.phase === "paused" && directory.generation === generation)
-    await rawReadModel(env, shard)
-      .prepare(
-        "UPDATE read_model_barrier SET phase = 'paused' WHERE id = 1 AND phase = 'pausing' AND generation = ?",
-      )
-      .bind(generation)
-      .run();
+    await admitted(env, shard, generation, (org) =>
+      org
+        .prepare(
+          "UPDATE read_model_barrier SET phase = 'paused' WHERE id = 1 AND phase = 'pausing' AND generation = ?",
+        )
+        .bind(generation),
+    );
   return standing(env, shard, older);
 }
 
@@ -200,18 +262,31 @@ export async function resumeReadModel(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
   shard: string,
 ): Promise<Barrier> {
-  const barrier = await directoryBarrier(env, shard);
+  let barrier = await directoryBarrier(env, shard);
   if (barrier.phase === "running" || barrier.phase === "recovering") return barrier;
   const local = await localBarrier(env, shard);
-  const generation = Math.max(barrier.generation, local.generation);
-  await barrierHooks.beforeChange?.("resume");
-  await rawReadModel(env, shard)
-    .prepare(
-      `UPDATE read_model_barrier SET phase = 'running', generation = ?3
-       WHERE id = 1 AND phase = ?1 AND generation = ?2`,
+  if (local.generation > barrier.generation) {
+    // A read model ahead of the directory (restored): the directory's barrier moves up to it
+    // first (still not running), so a maintenance writer can write at it.
+    await env.DIRECTORY.prepare(
+      `UPDATE read_model_barriers SET generation = ?4, since = ${NOW}
+       WHERE shard = ?1 AND phase = ?2 AND generation = ?3`,
     )
-    .bind(local.phase, local.generation, generation)
-    .run();
+      .bind(shard, barrier.phase, barrier.generation, local.generation)
+      .run();
+    barrier = await directoryBarrier(env, shard);
+    if (barrier.phase === "running" || barrier.generation !== local.generation) return barrier;
+  }
+  const { generation } = barrier;
+  await barrierHooks.beforeChange?.("resume");
+  await admitted(env, shard, generation, (org) =>
+    org
+      .prepare(
+        `UPDATE read_model_barrier SET phase = 'running', generation = ?3
+         WHERE id = 1 AND phase = ?1 AND generation = ?2`,
+      )
+      .bind(local.phase, local.generation, generation),
+  );
   // A pause between the look and the change keeps the read model's barrier: so does the directory's.
   const now = await localBarrier(env, shard);
   if (now.phase === "running" && now.generation === generation)

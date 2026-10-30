@@ -41,6 +41,7 @@ import {
 import { recordingPublish } from "./helpers/effects.js";
 import { countingExec, entry, feedIn, inFeed } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
+import { admitted } from "./helpers/read-model.js";
 
 type Item = {
   item_key: string;
@@ -95,7 +96,7 @@ async function deliver(repo: Repo, event: DomainEvent, deliverAt?: number) {
   if (deliverAt !== undefined) vi.setSystemTime(deliverAt);
   for (let next = sent.shift(); next; next = sent.shift())
     await deliverEffects(
-      { db: env.ORG_READ, env, sinks: [feedSink], now: () => Date.now(), publish },
+      { db: admitted(), env, sinks: [feedSink], now: () => Date.now(), publish },
       next.sink,
       next.ids,
       invocationBudget(Date.now()),
@@ -106,9 +107,10 @@ async function deliver(repo: Repo, event: DomainEvent, deliverAt?: number) {
 /** The repository's digest effects. */
 const effectsOf = async (repo: Repo) =>
   (
-    await env.ORG_READ.prepare(
-      "SELECT target, state, last_error FROM effects WHERE effect_id LIKE ? ORDER BY target",
-    )
+    await admitted()
+      .prepare(
+        "SELECT target, state, last_error FROM effects WHERE effect_id LIKE ? ORDER BY target",
+      )
       .bind(`${repo.id}:%`)
       .all<{ target: string; state: string; last_error: string | null }>()
   ).results.filter((e) => e.target.startsWith("digest:"));
@@ -369,7 +371,7 @@ describe("a digest", () => {
     ]);
     const { publish } = recordingPublish();
     await recoverEffects({
-      db: env.ORG_READ,
+      db: admitted(),
       env,
       sinks: [feedSink],
       now: () => Date.now(),

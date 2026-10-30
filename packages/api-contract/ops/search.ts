@@ -46,7 +46,7 @@ export const getSearchStatus = defineOperation({
   path: "/admin/search/status",
   summary: "Get the read model's and search's state",
   description:
-    "Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before writes outside the executor are refused). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only.",
+    "Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only.",
   input: z.object({}),
   output: z.object({
     indexing: z.boolean(),
@@ -76,7 +76,7 @@ export const getSearchStatus = defineOperation({
     }),
     export: z.object({
       available: z.boolean(),
-      reason: z.enum(["protocol_not_enforced"]).nullable(),
+      reason: z.enum(["no_restore_floor"]).nullable(),
     }),
     search: z.object({
       day: z.number().int(),

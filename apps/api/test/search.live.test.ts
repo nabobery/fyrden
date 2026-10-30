@@ -25,10 +25,12 @@ import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events
 import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
 import { ADMISSION } from "../src/search/admission.js";
 import { liveSearch } from "../src/search/live.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
-const db = env.ORG_READ;
+// Written as production writes it: through the read model's executor.
+const db = admitted();
 
 async function listedRepo(): Promise<string> {
   const id = newId("rep");

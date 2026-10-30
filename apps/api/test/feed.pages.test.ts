@@ -33,6 +33,7 @@ import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { recordingPublish } from "./helpers/effects.js";
 import { FROM_START } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 import { inRepo } from "./helpers/repo-git.js";
 
 let owner: Who;
@@ -119,7 +120,7 @@ async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics, 
   for (let next = sent.shift(); next; next = sent.shift())
     await deliverEffects(
       {
-        db: env.ORG_READ,
+        db: admitted(),
         env: via,
         sinks: [feedSink],
         now: () => now,
@@ -134,9 +135,10 @@ async function deliver(event: DomainEvent, now = Date.now(), metrics?: Metrics, 
 
 const effects = async () =>
   (
-    await env.ORG_READ.prepare(
-      "SELECT target, state, last_error FROM effects WHERE effect_id LIKE ? ORDER BY target",
-    )
+    await admitted()
+      .prepare(
+        "SELECT target, state, last_error FROM effects WHERE effect_id LIKE ? ORDER BY target",
+      )
       .bind(`${repo.id}:%`)
       .all<{ target: string; state: string; last_error: string | null }>()
   ).results;
@@ -423,7 +425,7 @@ describe("audience pages", () => {
     // The first messages only: a retry goes out again, delayed, for later.
     for (const next of sent.splice(0))
       await deliverEffects(
-        { db: env.ORG_READ, env: unavailable, sinks: [feedSink], now: () => now, publish },
+        { db: admitted(), env: unavailable, sinks: [feedSink], now: () => now, publish },
         next.sink,
         next.ids,
         invocationBudget(now),
