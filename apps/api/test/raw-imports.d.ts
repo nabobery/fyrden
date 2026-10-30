@@ -1,4 +1,9 @@
 // Vite `?raw` imports used by tests to load SQL fixtures.
+declare module "*.ts?raw" {
+  const source: string;
+  export default source;
+}
+
 declare module "*.sql?raw" {
   const sql: string;
   export default sql;

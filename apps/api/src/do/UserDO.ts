@@ -75,6 +75,7 @@ import {
   ticketHash,
 } from "./user/live.js";
 import { LiveBudget } from "./user/live-budget.js";
+import { eligibleLiveDeadline, LIVE_BLOCKED, type LiveReadiness } from "./user/live-schedule.js";
 
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
 export const LIVE_ADMITTED = "X-Fyrden-Live-Admitted";
@@ -153,6 +154,10 @@ export const feedHooks: {
   beforePreferenceRead?: () => Promise<void>;
   /** Whether a live authorization is outstanding (its owner arrives with the budgets' wiring). */
   liveOwnerPending?: () => boolean;
+  /** Funded live work's readiness for a feed (none in production yet: blocked). */
+  liveReadiness?: (feed: string) => LiveReadiness | undefined;
+  /** Before the alarm is read or written while it is reconciled. */
+  beforeAlarmWrite?: () => Promise<void>;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -533,7 +538,11 @@ export class UserDO extends MigratingDO {
     try {
       await this.#checkEpoch();
     } catch {
-      await this.ctx.storage.setAlarm(Date.now() + EPOCH_RETRY_MS);
+      // Overdue work waits for a retry (the schedule itself unchanged); funded live work, whose
+      // readiness is unknown now, wakes nothing.
+      this.#epochRetryAt = Date.now() + EPOCH_RETRY_MS;
+      this.#liveReadiness = LIVE_BLOCKED;
+      await this.#arm();
       return;
     }
     const feed = this.#feed();
@@ -588,9 +597,8 @@ export class UserDO extends MigratingDO {
             : this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS),
       );
     }
-    // Exactly by the schedule as the steps left it: an alarm set earlier in this run (the epoch
-    // check arms one) is moved to what is due now; calls made meanwhile left their rows.
-    await this.#arm(true);
+    // By the schedule as the steps left it (calls made meanwhile left their rows).
+    await this.#arm();
   }
 
   /**
@@ -1141,6 +1149,7 @@ export class UserDO extends MigratingDO {
 
   /** `kind` due at `at` (null: nothing left of it). */
   #setDue(kind: Kind, at: number | null): void {
+    this.#changed(kind, at);
     if (at === null) this.ctx.storage.sql.exec("DELETE FROM user_schedule WHERE kind = ?", kind);
     else
       this.ctx.storage.sql.exec(
@@ -1153,6 +1162,7 @@ export class UserDO extends MigratingDO {
 
   /** `kind` due by `at`: an earlier time it is due already is kept. */
   #schedule(kind: Kind, at: number): void {
+    this.#changed(kind, at);
     this.ctx.storage.sql.exec(
       `INSERT INTO user_schedule (kind, due_at) VALUES (?, ?)
        ON CONFLICT (kind) DO UPDATE SET due_at = min(due_at, excluded.due_at)`,
@@ -1161,27 +1171,75 @@ export class UserDO extends MigratingDO {
     );
   }
 
+  /** Funded live work's readiness (blocked until funded reconciliation establishes it). */
+  #liveReadiness: LiveReadiness = LIVE_BLOCKED;
+  /** Live work held back from the alarm (by a recovery) until a live change schedules it again. */
+  #liveHeld = false;
+  /** While the epoch could not be read: when overdue work is tried again. */
+  #epochRetryAt: number | null = null;
+  #arming: Promise<void> = Promise.resolve();
+
+  /** A schedule row changed: live work scheduled again is no longer held back. */
+  #changed(kind: Kind, at: number | null): void {
+    if (kind === "live" && at !== null) this.#liveHeld = false;
+  }
+
   /**
-   * The alarm by the earliest row (now when that is past): set when there
-   * is none (as during the alarm's own run) or it is later, or whatever it
-   * is when `exact` (the end of an alarm's run); deleted when nothing is
-   * scheduled. Read and set with no other write between, after every
-   * change.
+   * When the alarm should ring: the earliest of the schedule's rows (live
+   * ones unless held back; while the epoch could not be read, overdue rows
+   * at the retry) and funded live work's eligible deadline; null for none.
    */
-  /** Sets the alarm by the schedule (`liveToo` false: by every kind but live). */
-  async #arm(exact = false, liveToo = true): Promise<void> {
-    const earliest = this.ctx.storage.sql
-      .exec<{ at: number | null }>(
-        `SELECT min(due_at) AS at FROM user_schedule${liveToo ? "" : " WHERE kind <> 'live'"}`,
+  #desiredAlarm(now: number): number | null {
+    const rows = this.ctx.storage.sql
+      .exec<{ kind: Kind; due_at: number }>("SELECT kind, due_at FROM user_schedule")
+      .toArray();
+    const retry = this.#epochRetryAt;
+    const times = rows
+      .filter((row) => !(row.kind === "live" && this.#liveHeld))
+      .map((row) => (retry !== null && row.due_at <= now ? retry : row.due_at));
+    const feed = this.ctx.id.name;
+    const readiness =
+      (feed !== undefined ? feedHooks.liveReadiness?.(feed) : undefined) ?? this.#liveReadiness;
+    const live = retry === null ? eligibleLiveDeadline(readiness, now) : null;
+    if (live !== null) times.push(live);
+    return times.length === 0 ? null : Math.max(Math.min(...times), now);
+  }
+
+  /**
+   * Sets the alarm to what the schedule wants (earlier or later), deletes
+   * it when nothing is due, and leaves it when it already rings then (two
+   * times both past are the same). One reconciliation at a time, deciding
+   * after its last await, and going again when what is wanted changed while
+   * it wrote.
+   */
+  #arm(): Promise<void> {
+    const run = this.#arming.then(() => this.#reconcileAlarm());
+    this.#arming = run.catch(() => {});
+    return run;
+  }
+
+  async #reconcileAlarm(): Promise<void> {
+    for (let pass = 0; pass < 4; pass++) {
+      await feedHooks.beforeAlarmWrite?.();
+      const current = await this.ctx.storage.getAlarm();
+      // Decided after the last await: the schedule, readiness and time as they are now.
+      const now = Date.now();
+      const desired = this.#desiredAlarm(now);
+      const same = (at: number | null) =>
+        at === null
+          ? current === null
+          : current !== null && (current === at || (current <= now && at <= now));
+      if (same(desired)) return;
+      if (desired === null) await this.ctx.storage.deleteAlarm();
+      else await this.ctx.storage.setAlarm(desired);
+      // Still what is wanted once written (nothing changed meanwhile): done.
+      const after = this.#desiredAlarm(Date.now());
+      if (
+        after === desired ||
+        (after !== null && desired !== null && after <= Date.now() && desired <= Date.now())
       )
-      .one().at;
-    if (earliest === null) {
-      await this.ctx.storage.deleteAlarm();
-      return;
+        return;
     }
-    const at = Math.max(earliest, Date.now());
-    const current = exact ? null : await this.ctx.storage.getAlarm();
-    if (current === null || current > at) await this.ctx.storage.setAlarm(at);
   }
 
   #epochChecked = false;
@@ -1214,6 +1272,8 @@ export class UserDO extends MigratingDO {
           live_incarnation: string | null;
         }>();
       this.#applyEpoch(row?.epoch_gen ?? null, row?.live_incarnation ?? null);
+      // Read: overdue work runs at its own time again.
+      this.#epochRetryAt = null;
       // Being deleted, or deleted: an object restored from before its retirement retires again.
       if (row?.lifecycle === "deleting" || row?.lifecycle === "deleted") await this.#retireNow();
     }
@@ -1342,8 +1402,10 @@ export class UserDO extends MigratingDO {
     );
     for (const id of page.closedSocketIds)
       for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_EXPIRED, "expired: reconnect");
-    // The alarm by non-live work alone, exactly (an earlier live one goes).
-    await this.#arm(true, false);
+    // The alarm by non-live work alone (an earlier live one goes) until a live change schedules
+    // live work again.
+    this.#liveHeld = true;
+    await this.#arm();
     const completion = finishLiveDuration(guard, Date.now());
     if (!completion) return refuse("expired");
     return {
