@@ -9,7 +9,14 @@ import {
   setTeamMembership,
   setTeamRepo,
 } from "../ops/access.js";
-import { createToken, createUser, deleteUser, suspendUser, unsuspendUser } from "../ops/admin.js";
+import {
+  createToken,
+  createUser,
+  deleteUser,
+  repairEffects,
+  suspendUser,
+  unsuspendUser,
+} from "../ops/admin.js";
 import {
   createAgent,
   createAgentToken,
@@ -272,6 +279,7 @@ export const registry = defineRegistry([
   getHookDelivery,
   redeliverHookDelivery,
   resealHookSecrets,
+  repairEffects,
   backfillSearch,
   setSearchIndexing,
   getSearchStatus,

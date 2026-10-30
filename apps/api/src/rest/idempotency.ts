@@ -203,7 +203,14 @@ export async function finishIdempotent(
  */
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
 // `merge_in_progress`: a rebase going on in the background; sent again, the request answers its outcome.
-const RETRYABLE_CODES: ReadonlySet<string> = new Set(["busy", "network_busy", "merge_in_progress"]);
+// `read_model_maintenance`: answered only when nothing was written (refused before it ran, or its
+// write refused whole by the read model's barrier).
+const RETRYABLE_CODES: ReadonlySet<string> = new Set([
+  "busy",
+  "network_busy",
+  "merge_in_progress",
+  "read_model_maintenance",
+]);
 
 /** Answers that are not final: the same request has more to do when it is sent again. */
 const NOT_FINAL: Readonly<Record<string, (output: unknown) => boolean>> = {

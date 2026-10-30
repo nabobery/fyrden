@@ -185,3 +185,27 @@ export const unsuspendUser = defineOperation({
     readOnly: false,
   },
 });
+
+export const repairEffects = defineOperation({
+  id: "admin.effects.repair",
+  method: "POST",
+  path: "/admin/effects/repair",
+  summary: "Reopen effects that failed for good",
+  description:
+    "Fyrden: counts the effects of `sink` journaled since `since` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless `dry_run` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only.",
+  input: z.object({
+    sink: z.enum(["feed", "webhooks", "references"]),
+    since: z.number().int().nonnegative(),
+    dry_run: z.boolean().default(true),
+  }),
+  output: z.object({
+    eligible: z.number().int(),
+    oldest: z.number().int().nullable(),
+    reopened: z.number().int(),
+  }),
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: false,
+});

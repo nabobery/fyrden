@@ -1721,6 +1721,20 @@ export type AdminWebhooksResealOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `admin.effects.repair`: Reopen effects that failed for good. */
+export type AdminEffectsRepairInput = {
+  sink: "feed" | "webhooks" | "references";
+  since: number;
+  dry_run?: boolean;
+};
+
+/** Output of `admin.effects.repair`. */
+export type AdminEffectsRepairOutput = {
+  eligible: number;
+  oldest: number | null;
+  reopened: number;
+};
+
 /** Input of `admin.search.backfill`: Ask search to reconcile every repository. */
 export type AdminSearchBackfillInput = {
   cursor?: string;
@@ -7680,6 +7694,7 @@ export const OPERATIONS = {
   "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false, items: "attempts_made" },
   "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
+  "admin.effects.repair": { method: "POST", path: "/admin/effects/repair", pathParams: [], idempotent: true },
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "admin.search.indexing": { method: "PUT", path: "/admin/search/indexing", pathParams: [], idempotent: true },
   "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
@@ -7938,6 +7953,8 @@ export interface Operations {
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
+  /** Reopen effects that failed for good. Fyrden: counts the effects of `sink` journaled since `since` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless `dry_run` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only. */
+  "admin.effects.repair": { input: AdminEffectsRepairInput; output: AdminEffectsRepairOutput };
   /** Ask search to reconcile every repository. Fyrden: asks for a reconciliation of every active repository's search projections, a page of repositories at a time (call again with `cursor` until `next_cursor` is null); `requested` counts the repositories newly asked (one already waiting is not asked again). The reconciliations run in the five-minute maintenance within search's daily allowance. Refused (409) while search indexing is off: run it once indexing is on, after which repositories made meanwhile are projected from their events (or reconciled, when published late). Instance administrators only. */
   "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** Turn search indexing on or off. Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`). Setting the state it is in changes nothing. Instance administrators only. */

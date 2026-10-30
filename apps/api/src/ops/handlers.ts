@@ -65,6 +65,7 @@ import {
   mintAs,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
+import { repairEffectsOperation } from "../effects/repair.js";
 import {
   ackFeedItemOperation,
   getFeedDigestOperation,
@@ -602,6 +603,9 @@ export const handlers: Handlers = {
   "quotas.user.get": getUserQuotaOperation,
   "quotas.org.get": getOrgQuotaOperation,
   "admin.quotas.set": setQuotaOperation,
+
+  // Effects that failed for good, reopened by an operator (effects/repair).
+  "admin.effects.repair": repairEffectsOperation,
 
   // Search's projections, populated by reconciliation (search/backfill).
   "admin.search.backfill": backfillSearchOperation,

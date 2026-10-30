@@ -44,7 +44,8 @@ const USAGE = `usage:
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
-                                     count effects that failed for good and may still matter; with --yes reopen them
+                                     count effects that failed for good and may still matter; with --yes reopen
+                                     them (FYRDEN_TOKEN: an instance administrator's token)
   ${PUSH_USAGE}
                                      push, checking the size first; --chunked uploads a large push in parts`;
 
@@ -336,20 +337,13 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (command === "effects") {
     const [sub, ...args] = rest;
-    const parsed = sub === "repair" ? parseRepairArgs(args, Date.now()) : { error: USAGE };
+    const parsed =
+      sub === "repair" ? parseRepairArgs(args, Date.now(), process.env) : { error: USAGE };
     if ("error" in parsed) {
       console.error(parsed.error);
       return 2;
     }
-    const repoRoot = findRepoRoot(process.cwd());
-    await repairEffects({
-      repoRoot,
-      runner: nodeWranglerRunner(repoRoot),
-      args: parsed,
-      now: Date.now,
-      envAccountId: process.env.CLOUDFLARE_ACCOUNT_ID || undefined,
-      log,
-    });
+    await repairEffects({ args: parsed, fetch, log });
     return 0;
   }
   const known = command === "deploy" || command === "doctor" || command === "destroy";
