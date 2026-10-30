@@ -222,7 +222,10 @@ CREATE TABLE live_budget_days (
       AND json_extract(cleanup_debt, '$.queue_ops') = 0,
       0
     ))
-) STRICT;
+, reserve_used_ms INTEGER NOT NULL DEFAULT 0
+  CHECK (reserve_used_ms BETWEEN 0 AND 9007199254740991), debt_withheld_ms INTEGER NOT NULL DEFAULT 0
+  CHECK (debt_withheld_ms BETWEEN 0 AND 9007199254740991), duration_breach INTEGER NOT NULL DEFAULT 0
+  CHECK (duration_breach IN (0, 1))) STRICT;
 
 -- table live_budget_receipts
 CREATE TABLE live_budget_receipts (
@@ -270,7 +273,10 @@ CREATE TABLE live_budget_receipts (
   completion TEXT CHECK (
     completion IS NULL OR (json_valid(completion) AND json_type(completion) = 'object')
   ),
-  settlement_mint TEXT,
+  settlement_mint TEXT, released_owners TEXT NOT NULL DEFAULT '[]' CHECK (
+  json_valid(released_owners) AND json_type(released_owners) = 'array'
+    AND json_array_length(released_owners) <= 1
+),
   CHECK (
     (settled_at IS NULL AND completion IS NULL AND settlement_mint IS NULL)
     OR (settled_at IS NOT NULL AND completion IS NOT NULL AND settlement_mint IS NOT NULL)
@@ -292,7 +298,44 @@ CREATE TABLE live_budget_state (
   debt_d1_rows_read INTEGER NOT NULL DEFAULT 0 CHECK (debt_d1_rows_read BETWEEN 0 AND 9007199254740991),
   debt_d1_rows_written INTEGER NOT NULL DEFAULT 0 CHECK (debt_d1_rows_written BETWEEN 0 AND 9007199254740991),
   debt_queue_ops INTEGER NOT NULL DEFAULT 0 CHECK (debt_queue_ops = 0)
-) STRICT;
+, duration_debt_ms INTEGER NOT NULL DEFAULT 0
+  CHECK (duration_debt_ms BETWEEN 0 AND 9007199254740991), debt_service_day INTEGER NOT NULL DEFAULT 0
+  CHECK (debt_service_day >= 0), owner_mint TEXT, duration_reserve_ms INTEGER NOT NULL DEFAULT 0
+  CHECK (duration_reserve_ms BETWEEN 0 AND 9007199254740991), ordinary_duration_blocked INTEGER NOT NULL DEFAULT 0
+  CHECK (ordinary_duration_blocked IN (0, 1))) STRICT;
+
+-- table live_duration_owners
+CREATE TABLE live_duration_owners (
+  owner_id TEXT PRIMARY KEY CHECK (length(owner_id) BETWEEN 1 AND 400),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) BETWEEN 1 AND 300),
+  object_type TEXT NOT NULL CHECK (object_type IN ('UserDO', 'OrgDO', 'MaintenanceDO')),
+  object_id TEXT NOT NULL CHECK (length(object_id) > 0),
+  parent_id TEXT,
+  class TEXT NOT NULL CHECK (class IN ('ordinary', 'cleanup')),
+  epoch INTEGER NOT NULL CHECK (epoch >= 0),
+  incarnation TEXT NOT NULL CHECK (length(incarnation) = 32),
+  dispatch_from INTEGER NOT NULL CHECK (dispatch_from >= 0),
+  dispatch_until INTEGER NOT NULL CHECK (dispatch_until > dispatch_from),
+  holds TEXT NOT NULL CHECK (
+    json_valid(holds) AND json_type(holds) = 'array' AND json_array_length(holds) <= 2
+  ),
+  status TEXT NOT NULL CHECK (
+    status IN ('reserved', 'dispatched', 'uncertain', 'observing', 'accounted')
+  ),
+  instance TEXT,
+  started_at INTEGER CHECK (started_at IS NULL OR started_at >= 0),
+  finished_at INTEGER,
+  charged_through INTEGER,
+  cursor INTEGER CHECK (cursor IS NULL OR cursor >= 0),
+  accounting_mint TEXT,
+  admitted_at INTEGER NOT NULL CHECK (admitted_at >= 0),
+  CHECK ((status = 'reserved') = (instance IS NULL AND started_at IS NULL)),
+  CHECK (
+    (finished_at IS NULL AND charged_through IS NULL AND cursor IS NULL)
+    OR (finished_at >= started_at AND charged_through >= finished_at AND cursor IS NOT NULL)
+  ),
+  CHECK ((status IN ('observing', 'accounted')) = (finished_at IS NOT NULL))
+) STRICT, WITHOUT ROWID;
 
 -- table live_recovery_targets
 CREATE TABLE live_recovery_targets (
@@ -737,6 +780,19 @@ CREATE INDEX live_admissions_day ON live_admissions (day, principal_id);
 
 -- index live_budget_receipts_expiry
 CREATE INDEX live_budget_receipts_expiry ON live_budget_receipts (expires_at, seq);
+
+-- index live_duration_owners_class
+CREATE INDEX live_duration_owners_class ON live_duration_owners (class, status);
+
+-- index live_duration_owners_object
+CREATE INDEX live_duration_owners_object ON live_duration_owners (object_type, object_id, class);
+
+-- index live_duration_owners_operation
+CREATE UNIQUE INDEX live_duration_owners_operation ON live_duration_owners (operation_id);
+
+-- index live_duration_owners_parent
+CREATE INDEX live_duration_owners_parent ON live_duration_owners (parent_id)
+  WHERE parent_id IS NOT NULL;
 
 -- index live_recovery_targets_due
 CREATE INDEX live_recovery_targets_due ON live_recovery_targets (next_attempt_at, feed);

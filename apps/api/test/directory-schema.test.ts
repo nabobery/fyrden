@@ -43,6 +43,7 @@ describe("D1 directory schema", () => {
       "live_budget_days",
       "live_budget_receipts",
       "live_budget_state",
+      "live_duration_owners",
       "live_recovery_targets",
       "live_socket_deps",
       "live_sockets",

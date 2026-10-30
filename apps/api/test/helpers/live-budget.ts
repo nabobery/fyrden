@@ -131,6 +131,8 @@ export async function isolated(fn: () => Promise<void>): Promise<void> {
       ),
       env.DIRECTORY.prepare("DELETE FROM live_budget_days"),
       env.DIRECTORY.prepare("DELETE FROM live_recovery_targets"),
+      // Owners never expire (an uncertain one keeps its place): every test's own goes.
+      env.DIRECTORY.prepare("DELETE FROM live_duration_owners"),
       env.DIRECTORY.prepare(
         `UPDATE live_budget_state SET incarnation = ?, ${DEBTS.map((d, i) => `${d} = ?${i + 2}`).join(", ")} WHERE id = 1`,
       ).bind(before.incarnation, ...DEBTS.map((d) => before[d])),
@@ -139,6 +141,10 @@ export async function isolated(fn: () => Promise<void>): Promise<void> {
 }
 
 const DEBTS = [
+  "duration_debt_ms",
+  "debt_service_day",
+  "duration_reserve_ms",
+  "ordinary_duration_blocked",
   "debt_do_requests",
   "debt_do_rows_read",
   "debt_do_rows_written",

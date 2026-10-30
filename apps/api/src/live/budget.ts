@@ -350,10 +350,20 @@ function fits(charge: LiveDayCharge, ordinary: boolean): string {
     `coalesce((SELECT ${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r]}`,
     ...(ordinary
       ? [
-          `coalesce((SELECT ${r} - protected_${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`,
+          r === "do_duration_ms"
+            ? // Ordinary duration leaves the day's reserve, its withheld debt and the debt owed.
+              `coalesce((SELECT do_duration_ms - protected_do_duration_ms + debt_withheld_ms FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]}
+                + (SELECT duration_reserve_ms + duration_debt_ms FROM live_budget_state WHERE id = 1)
+                <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`
+            : `coalesce((SELECT ${r} - protected_${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`,
         ]
       : []),
   ]);
+  if (ordinary && charge.resources.do_duration_ms > 0)
+    // Not while ordinary duration is blocked, or once the day's reserve is spent.
+    parts.push(`(SELECT ordinary_duration_blocked = 0 AND (duration_reserve_ms = 0
+      OR coalesce((SELECT reserve_used_ms FROM live_budget_days WHERE day = ${charge.day}), 0)
+        < duration_reserve_ms) FROM live_budget_state WHERE id = 1)`);
   if (charge.duration)
     parts.push(
       `coalesce((SELECT json_array_length(escrow) FROM live_budget_days WHERE day = ${charge.day}), 0) < ${LIVE_ESCROW_ENTRIES}`,
@@ -708,6 +718,8 @@ export async function settleLiveDuration(
   SET settled_at = ${N}, completion = ${b(text)}, settlement_mint = ${b(mint)}
   WHERE operation_id = ${b(op)} AND incarnation = ${b(completion.incarnation)}
     AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+    -- An operation with owners is settled by them alone.
+    AND NOT EXISTS (SELECT 1 FROM live_duration_owners WHERE operation_id = r.operation_id)
     AND recipient_type = ${b(completion.recipientType)} AND recipient = ${b(completion.recipient)}
     AND epoch = ${completion.epoch} AND settled_at IS NULL AND ${N} < settle_until
     -- Exactly the reserved days, each within its hold and still in escrow.
