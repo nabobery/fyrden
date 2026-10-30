@@ -40,12 +40,15 @@ export class FreshAccess {
    * while a deploy rolls out). `live`: the accounts one at a time, each
    * through its bounded check (`confirmReadersLive`), a role it could not
    * bound read as `unknown` (an object without the call: all `unknown`,
-   * never the unbounded check).
+   * never the unbounded check). `checkpoint` (live only): called after
+   * each await and before each account; what it throws stops the chain
+   * (never read as an account's `unknown`).
    */
   async decide(
     entries: readonly RepoEntry[],
-    options: { readonly live?: boolean } = {},
+    options: { readonly live?: boolean; readonly checkpoint?: () => void } = {},
   ): Promise<Map<string, FreshDecision>> {
+    const checkpoint = options.live ? options.checkpoint : undefined;
     const decided = new Map<string, FreshDecision>();
     if (entries.length === 0) return decided;
     const byAccount = new Map<string, RepoEntry[]>();
@@ -55,9 +58,11 @@ export class FreshAccess {
     try {
       ceilings = await this.#ceilingsOf();
     } catch {
+      checkpoint?.();
       for (const entry of entries) decided.set(entry.id, "unknown");
       return decided;
     }
+    checkpoint?.();
     const principal = this.auth.principalId;
     const decideAccount = async ([accountId, repos]: [string, RepoEntry[]]) => {
       const ids = repos.map((r) => r.id);
@@ -71,6 +76,8 @@ export class FreshAccess {
         ? stub.confirmReadersLive(ids, readers)
         : stub.confirmReaders(ids, readers)
       ).catch(() => undefined);
+      // Outside the catch: an invalidation stops the chain.
+      checkpoint?.();
       for (const entry of repos) {
         const repo = answer?.repos?.[entry.id];
         const roles = repo?.roles as
@@ -96,7 +103,11 @@ export class FreshAccess {
         });
       }
     };
-    if (options.live) for (const account of byAccount) await decideAccount(account);
+    if (options.live)
+      for (const account of byAccount) {
+        checkpoint?.();
+        await decideAccount(account);
+      }
     else await Promise.all([...byAccount].map(decideAccount));
     return decided;
   }
