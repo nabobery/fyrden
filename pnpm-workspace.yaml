@@ -13,7 +13,12 @@ catalog:
   "@stryker-mutator/core": 10.0.0
   "@stryker-mutator/vitest-runner": 10.0.0
   "@types/node": 24.19.1
-  "@vitest/coverage-istanbul": 5.0.5
+  # Vitest stays on 5.0.3 (with its coverage provider): 5.0.4 turned
+  # fsModuleCache on, and with it fyrden-api's Istanbul run in the Workers pool
+  # loses its workerd workers ("Worker exited unexpectedly", 124 of 128 files)
+  # at twice the memory (measured 2026-10-30: 4.6 GiB against 2.5 GiB on 5.0.3),
+  # enough to take down a CI runner.
+  "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
   hono: 4.13.13
   msw: 3.0.3
@@ -21,10 +26,10 @@ catalog:
   typescript: 7.0.2
   # Not 8.3.5 yet: with vitest 5.0.5 it crashes formatting any stack trace that
   # passes through a globalSetup module ("No test files found"; verified:
-  # https://github.com/vitest-dev/vitest/issues/11682). Upgrade with the vitest
-  # release that carries the fix (vitest-dev/vitest#11709).
+  # https://github.com/vitest-dev/vitest/issues/11682). Upgrade it with the
+  # vitest release that carries the fix (vitest-dev/vitest#11709).
   vite: 8.3.4
-  vitest: 5.0.5
+  vitest: 5.0.3
   wrangler: 4.154.0
   zod: 4.6.7
 
