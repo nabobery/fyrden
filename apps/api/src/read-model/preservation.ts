@@ -48,6 +48,13 @@ export type PreservedTable = (typeof PRESERVED_TABLES)[number];
 export const PRESERVATION_PAGE = { rows: 200, bytes: 256 * 1024 } as const;
 export const PRESERVATION_PAGES = 5_000;
 
+/**
+ * A row's key at most, as JSON (its typed values): what a page's catalog,
+ * its recovery's place and an import's bound keys hold within D1's limits
+ * (keys are ids, far shorter).
+ */
+export const PRESERVED_KEY = 1024;
+
 /** A recovery's id: short enough for its pages' object keys. */
 const RECOVERY_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -66,6 +73,8 @@ export interface PreservedPage {
   readonly table: PreservedTable;
   readonly page: number;
   readonly columns: readonly string[];
+  /** Each column's declared type, as the table was when preserved (an import's own is checked). */
+  readonly types: readonly string[];
   /** Each row's values, in `columns`' order. */
   readonly rows: readonly (readonly Typed[])[];
 }
@@ -97,7 +106,7 @@ export class PreservationMismatch extends Error {
   }
 }
 
-const keyOf = (table: PreservedTable): readonly string[] => {
+export const keyOf = (table: PreservedTable): readonly string[] => {
   const spec = EXPORT_TABLES.find((t) => t.table === table);
   if (!spec) throw new Error(`${table} is not an exported table`);
   return spec.key;
@@ -107,13 +116,13 @@ const keyOf = (table: PreservedTable): readonly string[] => {
  * SQL of a column's typed value, as two columns (its type `t<i>`, its text
  * `v<i>`): each no larger than the value, never one string of the row.
  */
-const typed = (column: string, i: number) =>
+export const typed = (column: string, i: number) =>
   `typeof(${column}) AS t${i}, CASE typeof(${column})
      WHEN 'null' THEN NULL WHEN 'blob' THEN hex(${column}) WHEN 'real' THEN printf('%!.17g', ${column})
      ELSE CAST(${column} AS TEXT) END AS v${i}`;
 
 /** A row of `typed` columns, as preserved. */
-const typedRow = (row: Record<string, unknown>, columns: number): Typed[] =>
+export const typedRow = (row: Record<string, unknown>, columns: number): Typed[] =>
   Array.from(
     { length: columns },
     (_, i) => [row[`t${i}`] as Typed[0], (row[`v${i}`] ?? null) as string | null] as const,
@@ -275,12 +284,13 @@ async function readPage(
   generation: number,
   table: PreservedTable,
   after: readonly Typed[] | null,
-): Promise<{ columns: string[]; rows: Typed[][]; bytes: number; more: boolean }> {
+): Promise<{ columns: string[]; types: string[]; rows: Typed[][]; bytes: number; more: boolean }> {
   const key = keyOf(table);
   const [info] = await fenced(db, generation, [
-    db.prepare("SELECT name FROM pragma_table_info(?) ORDER BY cid").bind(table),
+    db.prepare("SELECT name, type FROM pragma_table_info(?) ORDER BY cid").bind(table),
   ]);
   const columns = (info?.results ?? []).map((r) => r.name as string);
+  const types = (info?.results ?? []).map((r) => r.type as string);
   const order = key.join(", ");
   const bounds = (n: number) => key.map((_, i) => untyped(n + 2 * i)).join(", ");
   const stored = columns
@@ -307,7 +317,7 @@ async function readPage(
     take++;
     bytes += size;
   }
-  if (take === 0) return { columns, rows: [], bytes: 0, more: false };
+  if (take === 0) return { columns, types, rows: [], bytes: 0, more: false };
   const [first, last] = [keys[0]?.key ?? [], keys[take - 1]?.key ?? []];
   const [loaded] = await fenced(db, generation, [
     db
@@ -319,7 +329,7 @@ async function readPage(
       .bind(...first.flat(), ...last.flat()),
   ]);
   const rows = (loaded?.results ?? []).map((row) => typedRow(row, columns.length));
-  return { columns, rows, bytes, more: take < keys.length };
+  return { columns, types, rows, bytes, more: take < keys.length };
 }
 
 /** The page's object key: the recovery's, the table's, its number and digest. */
@@ -353,7 +363,7 @@ export async function preserveStep(
     );
   const table = PRESERVED_TABLES[cursor.table] as PreservedTable;
   const db = readModelFor(env, shard);
-  const { columns, rows, bytes, more } = await readPage(
+  const { columns, types, rows, bytes, more } = await readPage(
     db,
     recovery.generation,
     table,
@@ -365,14 +375,20 @@ export async function preserveStep(
     table,
     page: cursor.page,
     columns,
+    types,
     rows,
   };
   const text = JSON.stringify(page);
   const digest = await digestOf(text);
   const key = objectKey(recoveryId, table, cursor.page, digest);
+  const keyColumns = keyOf(table).map((k) => columns.indexOf(k));
+  for (const row of rows)
+    if (JSON.stringify(keyColumns.map((i) => row[i])).length > PRESERVED_KEY)
+      throw new PreservationRefused(
+        `a ${table} key longer than ${PRESERVED_KEY} bytes: recover into a fresh database instead`,
+      );
   // The object first (its name holds its digest: one already there is this page), then its record.
   if (!(await env.ASSETS.head(key))) await env.ASSETS.put(key, text);
-  const keyColumns = keyOf(table).map((k) => columns.indexOf(k));
   const last = rows.at(-1);
   const lastKey = last ? keyColumns.map((i) => last[i] as Typed) : null;
   const pages = cursor.pages + 1;

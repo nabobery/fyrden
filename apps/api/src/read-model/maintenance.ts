@@ -108,7 +108,8 @@ async function localBarrier(env: Pick<Env, "ORG_READ">, shard: string): Promise<
 }
 
 /**
- * Makes `change` (of the read model's barrier, on its raw database) as a
+ * Makes `change` (statements on the read model's raw database: its
+ * barrier's, its restore token's, a recovery's) in one batch as a
  * maintenance writer at the directory's `generation`: false when refused
  * (the directory's barrier is no longer at it, not running: another step
  * moved it).
@@ -117,11 +118,12 @@ export async function admitted(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
   shard: string,
   generation: number,
-  change: (org: D1Database) => D1PreparedStatement,
+  change: (org: D1Database) => D1PreparedStatement | D1PreparedStatement[],
 ): Promise<boolean> {
   const writer = new ReadModelWriter(env, shard, Date.now, { maintenance: { generation } });
   try {
-    await writer.write([change(rawReadModel(env, shard))], { observe: false });
+    const statements = change(rawReadModel(env, shard));
+    await writer.write(Array.isArray(statements) ? statements : [statements], { observe: false });
     return true;
   } catch (error) {
     if (error instanceof ReadModelRefused) return false;

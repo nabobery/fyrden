@@ -75,6 +75,7 @@ export const PROTOCOL_TABLES = [
   "read_model_barrier",
   "read_model_write",
   "read_model_restore_token",
+  "read_model_recovery_progress",
 ] as const;
 
 type Key = readonly (string | number)[];

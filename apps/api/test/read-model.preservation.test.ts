@@ -21,6 +21,7 @@ import {
   beginRecovery,
   PRESERVATION_PAGE,
   PRESERVATION_PAGES,
+  PRESERVED_KEY,
   PRESERVED_TABLES,
   PreservationMismatch,
   PreservationRefused,
@@ -344,6 +345,21 @@ describe("a recovery's preservation", () => {
     expect(most).toBeLessThan(2 * PRESERVATION_PAGE.bytes);
     await finished();
     await db.prepare("DELETE FROM events_failed WHERE id LIKE ?").bind(`${prefix}-%`).run();
+  });
+
+  it("refuses a key longer than it keeps, before anything of its page is recorded", async () => {
+    const key = "k".repeat(PRESERVED_KEY);
+    await db
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 1)")
+      .bind(key)
+      .run();
+    await paused();
+    const id = uniqueId("rcv");
+    await beginRecovery(env, DEFAULT_ORG_SHARD, id);
+    await expect(preserved(id)).rejects.toThrow(/longer than/);
+    expect(await pages(id, "source_owner")).toEqual([]);
+    await finished();
+    await db.prepare("DELETE FROM source_owner WHERE source_id = ?").bind(key).run();
   });
 
   it("refuses to preserve more pages than a recovery holds", async () => {
