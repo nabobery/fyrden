@@ -101,6 +101,11 @@ import {
   resumeReadModelOperation,
 } from "../read-model/operations.js";
 import {
+  beginReadModelRecoveryOperation,
+  getReadModelRecoveryOperation,
+  stepReadModelRecoveryOperation,
+} from "../read-model/recovery-operations.js";
+import {
   compareCommitsOperation,
   getArchiveOperation,
   getBranchOperation,
@@ -622,6 +627,9 @@ export const handlers: Handlers = {
   "admin.read_model.pause": pauseReadModelOperation,
   "admin.read_model.resume": resumeReadModelOperation,
   "admin.read_model.handshake": handshakeReadModelOperation,
+  "admin.read_model.recovery.begin": beginReadModelRecoveryOperation,
+  "admin.read_model.recovery.get": getReadModelRecoveryOperation,
+  "admin.read_model.recovery.step": stepReadModelRecoveryOperation,
   "admin.read_model.export": getReadModelExportOperation,
   "admin.read_model.export_page": getReadModelExportPageOperation,
 

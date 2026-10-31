@@ -116,8 +116,9 @@ export async function importStep(
   const upper = last ? `(${order}) <= ${bound(keysOf(last))}` : "1";
   const range = `${lower} AND ${upper}`;
   // The page's keys, as JSON (each at most `PRESERVED_KEY` bytes: within what one string may hold).
-  const member = `EXISTS (SELECT 1 FROM json_each(?1) j
-    WHERE ${key.map((k, i) => `${table}.${k} IS ${keyFrom(i)}`).join(" AND ")})`;
+  // (A subquery SQLite reads once, not again for each row it tests.)
+  const member = `(${order}) IN (SELECT ${key.map((_, i) => keyFrom(i)).join(", ")}
+    FROM json_each(?1) j)`;
   const rangeParams = [JSON.stringify(page.rows.map(keysOf)), ...bounds.flat().flat()];
   // How many rows of the range the page does not have (one past what a step removes), and
   // whether each of its rows is held as preserved: only that, never the rows themselves (a

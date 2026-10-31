@@ -484,6 +484,9 @@ CREATE INDEX search_repo_nums_indexed ON search_repo_nums (repo_id) WHERE indexe
 -- index search_sources_uncovered
 CREATE INDEX search_sources_uncovered ON search_sources (repo_id) WHERE index_covered = 0;
 
+-- index search_sources_visible
+CREATE INDEX search_sources_visible ON search_sources (visible_gen, repo_id);
+
 -- index webhook_deliveries_disable
 CREATE INDEX webhook_deliveries_disable ON webhook_deliveries (disable_retry_at)
   WHERE disable_hook_version IS NOT NULL;

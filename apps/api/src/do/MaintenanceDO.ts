@@ -5,6 +5,7 @@ import { recheckSuppressions } from "../email/suppressions.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { reaping, sweep } from "../live/directory.js";
 import { readModelMaintenance } from "../read-model/maintenance.js";
+import { type RecoveryState, type RestoreReceipt, recoveryStep } from "../read-model/recovery.js";
 import { runSearchPurges } from "../search/recovery.js";
 import { REPAIR_POLICY, runSearchRepairs } from "../search/repairs.js";
 
@@ -24,6 +25,22 @@ export class MaintenanceDO extends DurableObject<Env> {
   #repairing: Promise<void> | null = null;
   #rechecking: Promise<void> | null = null;
   #sweeping: Promise<void> | null = null;
+  /** The read model recovery's steps, one after another. */
+  #recovering: Promise<unknown> = Promise.resolve();
+
+  /**
+   * One step of the read model's recovery `recoveryId` (`recoveryStep`), in a
+   * request of its own: a page's digest or comparison takes more than a
+   * Worker's request may on Workers Free. Steps asked at once are taken one
+   * after another.
+   */
+  recoverReadModel(recoveryId: string, restore?: RestoreReceipt): Promise<RecoveryState> {
+    const step = this.#recovering.then(() =>
+      recoveryStep(this.env, DEFAULT_ORG_SHARD, recoveryId, restore),
+    );
+    this.#recovering = step.catch(() => {});
+    return step;
+  }
 
   /**
    * Reconciles the search projections that need it (`runSearchRepairs`), in

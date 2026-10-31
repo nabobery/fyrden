@@ -159,7 +159,8 @@ async function recoveryOf(env: Pick<Env, "DIRECTORY">, shard: string): Promise<R
 /**
  * Brings the read model's barrier to `generation`, paused, as a maintenance
  * writer at it: past whatever a step of an older generation (a resume under
- * way) left there.
+ * way) left there. Never one already at it (running at it, the recovery's
+ * own resume opened it).
  */
 async function pausedAt(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
@@ -169,12 +170,12 @@ async function pausedAt(
   const local = await readModelFor(env, shard)
     .prepare("SELECT phase, generation FROM read_model_barrier WHERE id = 1")
     .first<{ phase: string; generation: number }>();
-  if (local?.phase === "paused" && local.generation === generation) return;
+  if (local && local.generation >= generation) return;
   await admitted(env, shard, generation, (org) =>
     org
       .prepare(
         `UPDATE read_model_barrier SET phase = 'paused', generation = ?1
-         WHERE id = 1 AND generation <= ?1`,
+         WHERE id = 1 AND generation < ?1`,
       )
       .bind(generation),
   );
@@ -201,7 +202,8 @@ export async function beginRecovery(
   if (under && under.stage !== "complete") {
     if (under.recovery_id !== recoveryId)
       throw new PreservationRefused("another recovery is under way");
-    await pausedAt(env, shard, under.generation);
+    // Its start finished, while it is still preserving (later stages move the barrier themselves).
+    if (under.stage === "preserving") await pausedAt(env, shard, under.generation);
     return { generation: under.generation, stage: under.stage };
   }
   const directory = await env.DIRECTORY.prepare(
@@ -231,6 +233,7 @@ export async function beginRecovery(
            WHERE shard = ?1 AND phase = 'paused' AND generation = ?3)
        ON CONFLICT (shard) DO UPDATE SET recovery_id = excluded.recovery_id,
          generation = excluded.generation, stage = 'preserving', cursor = NULL, manifest = NULL,
+         restore_bookmark = NULL, undo_bookmark = NULL, usage_rows = 0, usage_reads = 0,
          started_at = excluded.started_at, updated_at = excluded.updated_at
        WHERE read_model_recoveries.stage = 'complete'
          AND read_model_recoveries.recovery_id <> excluded.recovery_id`,

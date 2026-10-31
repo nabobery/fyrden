@@ -508,7 +508,9 @@ CREATE TABLE read_model_recoveries (
   manifest TEXT CHECK (manifest IS NULL OR json_valid(manifest)),
   started_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
-) STRICT;
+, restore_bookmark TEXT, undo_bookmark TEXT, usage_rows INTEGER NOT NULL DEFAULT 0
+  CHECK (usage_rows >= 0), usage_reads INTEGER NOT NULL DEFAULT 0
+  CHECK (usage_reads >= 0)) STRICT;
 
 -- table read_model_writers
 CREATE TABLE read_model_writers (

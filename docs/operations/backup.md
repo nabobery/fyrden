@@ -102,3 +102,42 @@ write back.
 
 Restoring from an export (importing it into a database) is not built yet:
 keep the files, and use Time Travel to restore.
+
+## Recovering after a restore
+
+Restoring `fyrden-org` with Time Travel rolls back everything in it,
+including what must not go back: effects already delivered, webhook
+deliveries and their attempts, the sources' fences and the spending of
+search's and the discretionary allowances. A recovery keeps those across
+the restore, and readies search for what it brings back. With an instance
+administrator's token, against the API:
+
+1. Pause the writers (`POST /api/admin/read-model/pause` until `paused`),
+   and start a recovery with an id of your choosing, never used before:
+   `POST /api/admin/read-model/recovery` with `{ "recovery_id": … }`. The
+   barrier moves to the next generation and to `recovering`: nothing
+   resumes the writers until the recovery does.
+2. Step it (`POST /api/admin/read-model/recovery/step` with
+   `{ "recovery_id": … }`) until its stage is `awaiting_restore`: its
+   operational rows are preserved a page at a time, each digested into
+   `fyrden-assets` under `read-model-recovery/<recovery>/`, then sealed.
+3. Restore the read model to the bookmark you chose (one from after the
+   restore floor), keep the bookmark that undoes it, and apply the
+   migrations the restored database lacks.
+4. Report the restore: a step with `{ "recovery_id": …, "restore":
+   { "bookmark": …, "undo_bookmark": … } }`. The restored read model's
+   barrier is brought to the recovery's generation, paused.
+5. Step it on until `complete`: the operational rows are made exactly as
+   preserved (`importing`), search is readied (`fencing`: every restored
+   repository hidden until a reconciliation of it ends, those the directory
+   no longer has active tombstoned and their search rows purged later,
+   every active repository asked a reconciliation), and the writers resume
+   (`resuming`: the restore token taken over from the restored database and
+   replaced, the recovery's charges added to search's recovery spending).
+
+A step whose answer was lost is taken again safely; `GET
+/api/admin/read-model/recovery` and `GET /api/admin/search/status`
+(`recovery`) say where it stands. A preserved page that no longer matches
+its digest, or a table whose columns changed since it was preserved (a
+migration that altered it), is refused (409 `preservation_mismatch`): such a
+restore cannot be recovered in place.

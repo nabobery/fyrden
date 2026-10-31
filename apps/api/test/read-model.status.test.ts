@@ -186,6 +186,8 @@ describe("search's status", () => {
       nextDue: "search_repairs_due",
       nextParked: "search_repairs_retry",
       firstUncovered: "search_sources_uncovered",
+      firstHidden: "search_sources_visible",
+      nextPurge: "search_purges_generation",
     };
     for (const [name, sql] of Object.entries(STATUS_QUERIES)) {
       const { results } = await db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all<{ detail: string }>();

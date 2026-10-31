@@ -116,3 +116,76 @@ export const getReadModelExportPage = defineOperation({
   idempotency: "none",
   mcp: false,
 });
+
+const RecoveryStage = z.enum([
+  "preserving",
+  "awaiting_restore",
+  "importing",
+  "fencing",
+  "resuming",
+  "complete",
+]);
+const Recovery = z.object({
+  recovery_id: z.string(),
+  generation: z.number().int(),
+  stage: RecoveryStage,
+});
+const RecoveryId = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/)
+  .describe("The recovery's id: 1 to 64 letters, digits, _ or -, never used before.");
+
+export const beginReadModelRecovery = defineOperation({
+  id: "admin.read_model.recovery.begin",
+  method: "POST",
+  path: "/admin/read-model/recovery",
+  summary: "Start a recovery of the read model",
+  description:
+    "Fyrden: starts a recovery of the org read model before restoring it (D1 Time Travel), once its writers are paused (`admin.read_model.pause` until `paused`): at the next generation, the barrier `recovering` (nothing resumes the writers until the recovery does), its operational rows to be preserved first. The one under way, when `recovery_id` is its id. Refused (409 `recovery_refused`) while the writers are not paused, while another recovery is under way, and for an id used before. Drive it with `admin.read_model.recovery.step`. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only.",
+  input: z.object({ recovery_id: RecoveryId }),
+  output: Recovery,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  duringMaintenance: true,
+  mcp: false,
+});
+
+export const getReadModelRecovery = defineOperation({
+  id: "admin.read_model.recovery.get",
+  method: "GET",
+  path: "/admin/read-model/recovery",
+  summary: "Get the read model's recovery",
+  description:
+    "Fyrden: the org read model's latest recovery (complete or not): its id, generation and stage. 404 when there never was one. Instance administrators only.",
+  input: z.object({}),
+  output: Recovery,
+  permission: INSTANCE_READ,
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
+export const stepReadModelRecovery = defineOperation({
+  id: "admin.read_model.recovery.step",
+  method: "POST",
+  path: "/admin/read-model/recovery/step",
+  summary: "Take a recovery of the read model one step on",
+  description:
+    "Fyrden: one bounded step of the org read model's recovery `recovery_id`, as its stage says: `preserving` (its operational rows kept, a page a step, until sealed), `awaiting_restore` (restore the read model to the bookmark you chose, apply its missing migrations, then step with `restore`: the bookmark restored to and the one that undoes it), `importing` (the operational rows made exactly as preserved), `fencing` (search readied: restored sources hidden until reconciled, those no longer active tombstoned and purged later, every active repository asked a reconciliation), `resuming` (the restore token replaced, the recovery's charges added to search's recovery spending, the writers running again); then `complete`. Call again until `complete`; a step whose answer was lost is taken again safely. Refused (409 `recovery_refused`) for another recovery's id or once the barrier left its generation, and (409 `preservation_mismatch`) when a preserved page or a table does not match what was recorded. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only.",
+  input: z.object({
+    recovery_id: RecoveryId,
+    restore: z
+      .object({ bookmark: z.string().min(1).max(200), undo_bookmark: z.string().min(1).max(200) })
+      .optional(),
+  }),
+  output: Recovery,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  duringMaintenance: true,
+  mcp: false,
+});

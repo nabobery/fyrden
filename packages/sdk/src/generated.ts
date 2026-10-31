@@ -1791,6 +1791,11 @@ export type AdminSearchStatusOutput = {
     available: boolean;
     reason: "no_restore_floor" | null;
   };
+  recovery: {
+    recovery_id: string;
+    generation: number;
+    stage: "preserving" | "awaiting_restore" | "importing" | "fencing" | "resuming" | "complete";
+  } | null;
   search: {
     day: number;
     rows: number;
@@ -1816,6 +1821,9 @@ export type AdminSearchStatusOutput = {
       retry_at: number;
     } | null;
     first_uncovered: string | null;
+    recovery_gen: number;
+    first_hidden: string | null;
+    next_purge: string | null;
   };
 };
 
@@ -1874,6 +1882,46 @@ export type AdminReadModelHandshakeInput = Record<string, never>;
 /** Output of `admin.read_model.handshake`. */
 export type AdminReadModelHandshakeOutput = {
   restore_token: "matched";
+};
+
+/** Input of `admin.read_model.recovery.begin`: Start a recovery of the read model. */
+export type AdminReadModelRecoveryBeginInput = {
+  /** The recovery's id: 1 to 64 letters, digits, _ or -, never used before. */
+  recovery_id: string;
+};
+
+/** Output of `admin.read_model.recovery.begin`. */
+export type AdminReadModelRecoveryBeginOutput = {
+  recovery_id: string;
+  generation: number;
+  stage: "preserving" | "awaiting_restore" | "importing" | "fencing" | "resuming" | "complete";
+};
+
+/** Input of `admin.read_model.recovery.get`: Get the read model's recovery. */
+export type AdminReadModelRecoveryGetInput = Record<string, never>;
+
+/** Output of `admin.read_model.recovery.get`. */
+export type AdminReadModelRecoveryGetOutput = {
+  recovery_id: string;
+  generation: number;
+  stage: "preserving" | "awaiting_restore" | "importing" | "fencing" | "resuming" | "complete";
+};
+
+/** Input of `admin.read_model.recovery.step`: Take a recovery of the read model one step on. */
+export type AdminReadModelRecoveryStepInput = {
+  /** The recovery's id: 1 to 64 letters, digits, _ or -, never used before. */
+  recovery_id: string;
+  restore?: {
+    bookmark: string;
+    undo_bookmark: string;
+  };
+};
+
+/** Output of `admin.read_model.recovery.step`. */
+export type AdminReadModelRecoveryStepOutput = {
+  recovery_id: string;
+  generation: number;
+  stage: "preserving" | "awaiting_restore" | "importing" | "fencing" | "resuming" | "complete";
 };
 
 /** Input of `admin.read_model.export`: Get the read model export's manifest. */
@@ -7811,6 +7859,9 @@ export const OPERATIONS = {
   "admin.read_model.pause": { method: "POST", path: "/admin/read-model/pause", pathParams: [], idempotent: true },
   "admin.read_model.resume": { method: "POST", path: "/admin/read-model/resume", pathParams: [], idempotent: true },
   "admin.read_model.handshake": { method: "POST", path: "/admin/read-model/handshake", pathParams: [], idempotent: true },
+  "admin.read_model.recovery.begin": { method: "POST", path: "/admin/read-model/recovery", pathParams: [], idempotent: true },
+  "admin.read_model.recovery.get": { method: "GET", path: "/admin/read-model/recovery", pathParams: [], idempotent: false },
+  "admin.read_model.recovery.step": { method: "POST", path: "/admin/read-model/recovery/step", pathParams: [], idempotent: true },
   "admin.read_model.export": { method: "GET", path: "/admin/read-model/export", pathParams: [], idempotent: false },
   "admin.read_model.export_page": { method: "GET", path: "/admin/read-model/export/pages", pathParams: [], idempotent: false, items: "rows" },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
@@ -8074,7 +8125,7 @@ export interface Operations {
   "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** Turn search indexing on or off. Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`). Setting the state it is in changes nothing. Instance administrators only. */
   "admin.search.indexing": { input: AdminSearchIndexingInput; output: AdminSearchIndexingOutput };
-  /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`), the restore floor, and the restore token (`restore_token`: none written yet, `uninitialized`, until the first handshake; `matched`; a handshake under way, `intent`; or `mismatch`, the read model restored or changed since the last handshake, best effort). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spending of its allowance and of the repository index's, with the limits (`limits`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (`live_docs`) and the repositories (`indexed_repos`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (`next_parked`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (`first_uncovered`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only. */
+  /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`), the restore floor, and the restore token (`restore_token`: none written yet, `uninitialized`, until the first handshake; `matched`; a handshake under way, `intent`; or `mismatch`, the read model restored or changed since the last handshake, best effort). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `recovery`: the latest recovery of the read model (`admin.read_model.recovery.*`), its id, generation and stage, or null when there never was one. `search`: today's spending of its allowance and of the repository index's, with the limits (`limits`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (`live_docs`) and the repositories (`indexed_repos`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (`next_parked`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (`first_uncovered`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository); the read model's recovery generation (`recovery_gen`), a repository hidden since a recovery until its reconciliation (`first_hidden`), and the purge of a tombstoned repository's search rows next (`next_purge`). Instance administrators only. */
   "admin.search.status": { input: AdminSearchStatusInput; output: AdminSearchStatusOutput };
   /** Check search's full-text indexes against their projections. Fyrden: checks a full-text index (`documents`: issues' and pull requests' titles and bodies; `repositories`: names and descriptions; `both`, in that order) against the projections it is built from, each on its own: `ok` false when the index is damaged or does not match them, which it also does while some live projections are not in it yet (projected before the index existed, or their growth refused): ask for a backfill (`POST /admin/search/backfill`), or rebuild a small index (`POST /admin/search/indexes/rebuild`). Allowed at the size threshold; charged to search's allowance. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only. */
   "admin.search.check_index": { input: AdminSearchCheckIndexInput; output: AdminSearchCheckIndexOutput };
@@ -8086,6 +8137,12 @@ export interface Operations {
   "admin.read_model.resume": { input: AdminReadModelResumeInput; output: AdminReadModelResumeOutput };
   /** Replace the read model's restore token. Fyrden: replaces the token the org read model holds and the directory records (a handshake), so that a read model restored behind the directory's back, to before the last handshake, is told apart from the one it knew (`admin.search.status` says `protocol.restore_token`: `mismatch`). The first one, after a deploy recorded the restore floor, starts the token; one interrupted is finished by the next. Best effort: a restore to after the last handshake keeps its token. Refused (409 `restore_token_mismatch`) when the read model holds a token the directory does not know, nothing changed: recover the read model before anything writes it again. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */
   "admin.read_model.handshake": { input: AdminReadModelHandshakeInput; output: AdminReadModelHandshakeOutput };
+  /** Start a recovery of the read model. Fyrden: starts a recovery of the org read model before restoring it (D1 Time Travel), once its writers are paused (`admin.read_model.pause` until `paused`): at the next generation, the barrier `recovering` (nothing resumes the writers until the recovery does), its operational rows to be preserved first. The one under way, when `recovery_id` is its id. Refused (409 `recovery_refused`) while the writers are not paused, while another recovery is under way, and for an id used before. Drive it with `admin.read_model.recovery.step`. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */
+  "admin.read_model.recovery.begin": { input: AdminReadModelRecoveryBeginInput; output: AdminReadModelRecoveryBeginOutput };
+  /** Get the read model's recovery. Fyrden: the org read model's latest recovery (complete or not): its id, generation and stage. 404 when there never was one. Instance administrators only. */
+  "admin.read_model.recovery.get": { input: AdminReadModelRecoveryGetInput; output: AdminReadModelRecoveryGetOutput };
+  /** Take a recovery of the read model one step on. Fyrden: one bounded step of the org read model's recovery `recovery_id`, as its stage says: `preserving` (its operational rows kept, a page a step, until sealed), `awaiting_restore` (restore the read model to the bookmark you chose, apply its missing migrations, then step with `restore`: the bookmark restored to and the one that undoes it), `importing` (the operational rows made exactly as preserved), `fencing` (search readied: restored sources hidden until reconciled, those no longer active tombstoned and purged later, every active repository asked a reconciliation), `resuming` (the restore token replaced, the recovery's charges added to search's recovery spending, the writers running again); then `complete`. Call again until `complete`; a step whose answer was lost is taken again safely. Refused (409 `recovery_refused`) for another recovery's id or once the barrier left its generation, and (409 `preservation_mismatch`) when a preserved page or a table does not match what was recorded. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */
+  "admin.read_model.recovery.step": { input: AdminReadModelRecoveryStepInput; output: AdminReadModelRecoveryStepOutput };
   /** Get the read model export's manifest. Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, the protocol tables' state, and the tables left out (`derived`: the full-text indexes, rebuilt from the exported tables). Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only. */
   "admin.read_model.export": { input: AdminReadModelExportInput; output: AdminReadModelExportOutput };
   /** Get a page of the read model export. Fyrden: a page of a coherent export of the org read model, paused at `generation`: rows of one table in key order (200 rows or 2 MiB of JSON at most; one larger row is a page of its own), from `cursor` (the first page without one). Call again with `next_cursor` until it is null; every table follows the one before. Refused as the manifest is. Instance administrators only. */

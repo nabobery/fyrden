@@ -157,11 +157,14 @@ import {
   listReviewCommentReactions,
 } from "../ops/reactions.js";
 import {
+  beginReadModelRecovery,
   getReadModelExport,
   getReadModelExportPage,
+  getReadModelRecovery,
   handshakeReadModel,
   pauseReadModel,
   resumeReadModel,
+  stepReadModelRecovery,
 } from "../ops/read-model.js";
 import {
   createOrgRepo,
@@ -301,6 +304,9 @@ export const registry = defineRegistry([
   pauseReadModel,
   resumeReadModel,
   handshakeReadModel,
+  beginReadModelRecovery,
+  getReadModelRecovery,
+  stepReadModelRecovery,
   getReadModelExport,
   getReadModelExportPage,
   listPulls,

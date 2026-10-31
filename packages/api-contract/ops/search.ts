@@ -46,7 +46,7 @@ export const getSearchStatus = defineOperation({
   path: "/admin/search/status",
   summary: "Get the read model's and search's state",
   description:
-    "Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`), the restore floor, and the restore token (`restore_token`: none written yet, `uninitialized`, until the first handshake; `matched`; a handshake under way, `intent`; or `mismatch`, the read model restored or changed since the last handshake, best effort). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spending of its allowance and of the repository index's, with the limits (`limits`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (`live_docs`) and the repositories (`indexed_repos`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (`next_parked`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (`first_uncovered`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only.",
+    "Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`), the restore floor, and the restore token (`restore_token`: none written yet, `uninitialized`, until the first handshake; `matched`; a handshake under way, `intent`; or `mismatch`, the read model restored or changed since the last handshake, best effort). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `recovery`: the latest recovery of the read model (`admin.read_model.recovery.*`), its id, generation and stage, or null when there never was one. `search`: today's spending of its allowance and of the repository index's, with the limits (`limits`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (`live_docs`) and the repositories (`indexed_repos`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (`next_parked`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (`first_uncovered`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository); the read model's recovery generation (`recovery_gen`), a repository hidden since a recovery until its reconciliation (`first_hidden`), and the purge of a tombstoned repository's search rows next (`next_purge`). Instance administrators only.",
   input: z.object({}),
   output: z.object({
     indexing: z.boolean(),
@@ -79,6 +79,20 @@ export const getSearchStatus = defineOperation({
       available: z.boolean(),
       reason: z.enum(["no_restore_floor"]).nullable(),
     }),
+    recovery: z
+      .object({
+        recovery_id: z.string(),
+        generation: z.number().int(),
+        stage: z.enum([
+          "preserving",
+          "awaiting_restore",
+          "importing",
+          "fencing",
+          "resuming",
+          "complete",
+        ]),
+      })
+      .nullable(),
     search: z.object({
       day: z.number().int(),
       rows: z.number().int(),
@@ -102,6 +116,9 @@ export const getSearchStatus = defineOperation({
         .object({ repo_id: z.string(), reason: z.string(), retry_at: z.number().int() })
         .nullable(),
       first_uncovered: z.string().nullable(),
+      recovery_gen: z.number().int(),
+      first_hidden: z.string().nullable(),
+      next_purge: z.string().nullable(),
     }),
   }),
   permission: INSTANCE_READ,

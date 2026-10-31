@@ -21,6 +21,7 @@ import {
   preserveStep,
   type Typed,
 } from "../src/read-model/preservation.js";
+import { CHARGES } from "../src/read-model/recovery.js";
 
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
@@ -145,11 +146,63 @@ describe("a recovery's import", () => {
         .bind(`${a}-0`, `${b}-0`, "zzzz-restored")
         .first(),
     ).toEqual({ n: 0 });
-    expect(await db.prepare("SELECT rows FROM search_budget WHERE day = 900100").first()).toEqual({
-      rows: 9007199254740993,
-    });
+    expect(
+      await db
+        .prepare("SELECT CAST(rows AS TEXT) AS rows FROM search_budget WHERE day = 900100")
+        .first(),
+    ).toEqual({ rows: "9007199254740993" });
     // Once through, it stays through.
     expect(await importStep(env, DEFAULT_ORG_SHARD, id)).toEqual({ done: true });
+  });
+
+  it("reads and writes no more a step than a step is charged", async () => {
+    // Pages of the preserved rows' keys (even), the restore's own between them (odd): each page's
+    // range holds its 200 keys and hundreds the restore made.
+    const prefix = uniqueId("mix");
+    await db
+      .prepare(
+        `INSERT INTO source_owner (source_id, owner_gen)
+         WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v + 1 FROM n WHERE v < 600)
+         SELECT '${prefix}-' || printf('%06d', 2 * v), 1 FROM n`,
+      )
+      .run();
+    const id = await restored((org) => [
+      org.prepare(
+        `INSERT INTO source_owner (source_id, owner_gen)
+         WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v + 1 FROM n WHERE v < 1200)
+         SELECT '${prefix}-' || printf('%06d', v / 2 * 2 + 1) || '-' || (v % 2), 1 FROM n`,
+      ),
+    ]);
+    let used = { rows: 0, reads: 0 };
+    let most = { rows: 0, reads: 0 };
+    const org = new Proxy(env.ORG_READ, {
+      get(target, prop) {
+        if (prop === "batch")
+          return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch(statements);
+            for (const r of results) {
+              used.rows += r.meta.rows_written ?? 0;
+              used.reads += r.meta.rows_read ?? 0;
+            }
+            return results;
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const watched = new Proxy(env, {
+      get: (target, prop) => (prop === "ORG_READ" ? org : Reflect.get(target, prop)),
+    });
+    for (let step = 0; step < 500; step++) {
+      used = { rows: 0, reads: 0 };
+      const { done } = await importStep(watched, DEFAULT_ORG_SHARD, id);
+      most = { rows: Math.max(most.rows, used.rows), reads: Math.max(most.reads, used.reads) };
+      if (done) break;
+    }
+    // (Hundreds removed a step.)
+    expect(most.rows).toBeGreaterThan(300);
+    expect(most.rows).toBeLessThanOrEqual(CHARGES.importing?.rows ?? 0);
+    expect(most.reads).toBeLessThanOrEqual(CHARGES.importing?.reads ?? 0);
   });
 
   it("removes no more rows a step than it may, however many only the restore had", async () => {
