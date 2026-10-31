@@ -484,6 +484,32 @@ CREATE TABLE read_model_barriers (
   read_model_protocol_since TEXT
 , token_previous TEXT, token_next TEXT, token_completed TEXT) STRICT, WITHOUT ROWID;
 
+-- table read_model_preservation_pages
+CREATE TABLE read_model_preservation_pages (
+  recovery_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  page INTEGER NOT NULL CHECK (page >= 0),
+  object_key TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  rows INTEGER NOT NULL CHECK (rows >= 0),
+  bytes INTEGER NOT NULL CHECK (bytes >= 0),
+  last_key TEXT CHECK (last_key IS NULL OR json_valid(last_key)),
+  PRIMARY KEY (recovery_id, table_name, page)
+) STRICT;
+
+-- table read_model_recoveries
+CREATE TABLE read_model_recoveries (
+  shard TEXT PRIMARY KEY,
+  recovery_id TEXT NOT NULL UNIQUE,
+  generation INTEGER NOT NULL CHECK (generation >= 1),
+  stage TEXT NOT NULL CHECK (stage IN ('preserving', 'awaiting_restore', 'importing', 'fencing',
+    'resuming', 'complete')),
+  cursor TEXT CHECK (cursor IS NULL OR json_valid(cursor)),
+  manifest TEXT CHECK (manifest IS NULL OR json_valid(manifest)),
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 -- table read_model_writers
 CREATE TABLE read_model_writers (
   lease_id TEXT PRIMARY KEY,

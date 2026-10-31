@@ -54,6 +54,8 @@ describe("D1 directory schema", () => {
       "principal_lifecycle",
       "principals",
       "read_model_barriers",
+      "read_model_preservation_pages",
+      "read_model_recoveries",
       "read_model_writers",
       "refresh_tokens",
       "repo_deletion_cleanups",
