@@ -203,7 +203,7 @@ const webhookPayloads: RepoCleanup = {
  * token) once none of its documents is left, its own indexed tuple first.
  * Its owner's number stays (other repositories may share it).
  */
-const searchProjections: RepoCleanup = {
+export const searchProjections: RepoCleanup = {
   name: "search",
   async page(env, { repoId, shard }, metrics) {
     const db = readModelFor(env, shard);

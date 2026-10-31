@@ -2,9 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import { countedD1, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { runMaintenance } from "../cron/maintenance.js";
 import { recheckSuppressions } from "../email/suppressions.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { reaping, sweep } from "../live/directory.js";
 import { readModelMaintenance } from "../read-model/maintenance.js";
-import { runSearchRepairs } from "../search/repairs.js";
+import { runSearchPurges } from "../search/recovery.js";
+import { REPAIR_POLICY, runSearchRepairs } from "../search/repairs.js";
 
 /**
  * Runs the five-minute maintenance (`runMaintenance`) for the cron trigger,
@@ -35,7 +37,15 @@ export class MaintenanceDO extends DurableObject<Env> {
     this.#repairing = measureInvocation(
       metrics,
       { where: "do", op: "repairSearch", doClass: "MaintenanceDO" },
-      () => runSearchRepairs(this.env, { metrics }).then(() => {}),
+      async () => {
+        // A recovery's purges first (whether search indexes or not), then the repairs, with the
+        // calls the purges left.
+        const purged = await runSearchPurges(this.env, DEFAULT_ORG_SHARD, metrics);
+        await runSearchRepairs(this.env, {
+          metrics,
+          calls: REPAIR_POLICY.callsPerRun - purged,
+        });
+      },
     ).finally(() => {
       this.#repairing = null;
     });

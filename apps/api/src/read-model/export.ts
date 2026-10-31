@@ -39,6 +39,7 @@ export const EXPORT_TABLES: readonly { readonly table: string; readonly key: rea
     { table: "search_labels", key: ["repo_id", "label_id"] },
     { table: "search_milestones", key: ["repo_id", "number"] },
     { table: "search_owner_nums", key: ["owner_id"] },
+    { table: "search_purges", key: ["repo_id"] },
     { table: "search_reconciles", key: ["repo_id"] },
     { table: "search_repo_nums", key: ["repo_id"] },
     { table: "search_repairs", key: ["repo_id"] },

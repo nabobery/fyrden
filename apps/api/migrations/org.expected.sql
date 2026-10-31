@@ -253,6 +253,12 @@ CREATE TABLE search_owner_nums (
   num INTEGER NOT NULL UNIQUE
 ) STRICT;
 
+-- table search_purges
+CREATE TABLE search_purges (
+  repo_id TEXT PRIMARY KEY,
+  recovery_gen INTEGER NOT NULL CHECK (recovery_gen >= 1)
+) STRICT;
+
 -- table search_reconciles
 CREATE TABLE search_reconciles (
   repo_id TEXT PRIMARY KEY,
@@ -460,6 +466,9 @@ CREATE INDEX search_labels_deleted ON search_labels (repo_id, deleted_epoch, del
 -- index search_milestones_deleted
 CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_epoch, deleted_seq)
   WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
+
+-- index search_purges_generation
+CREATE INDEX search_purges_generation ON search_purges (recovery_gen, repo_id);
 
 -- index search_repairs_due
 CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id)
@@ -1077,6 +1086,42 @@ END;
 
 -- trigger read_model_search_owner_nums_update
 CREATE TRIGGER read_model_search_owner_nums_update BEFORE UPDATE ON search_owner_nums
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
+BEGIN
+  SELECT RAISE(ABORT, 'read_model_admission_required');
+END;
+
+-- trigger read_model_search_purges_delete
+CREATE TRIGGER read_model_search_purges_delete BEFORE DELETE ON search_purges
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
+BEGIN
+  SELECT RAISE(ABORT, 'read_model_admission_required');
+END;
+
+-- trigger read_model_search_purges_insert
+CREATE TRIGGER read_model_search_purges_insert BEFORE INSERT ON search_purges
+WHEN NOT coalesce((
+  SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
+    AND ((w.mode = 'ordinary' AND b.phase = 'running')
+      OR (w.mode = 'maintenance' AND b.phase IN ('pausing', 'paused', 'recovering')))
+  FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
+BEGIN
+  SELECT RAISE(ABORT, 'read_model_admission_required');
+END;
+
+-- trigger read_model_search_purges_update
+CREATE TRIGGER read_model_search_purges_update BEFORE UPDATE ON search_purges
 WHEN NOT coalesce((
   SELECT w.open = 1 AND w.lease_id IS NOT NULL AND w.until > CAST(unixepoch('subsec') * 1000 AS INTEGER)
     AND w.protocol_version >= max(b.protocol_version, 2) AND w.generation = b.generation
