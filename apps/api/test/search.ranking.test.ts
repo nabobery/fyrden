@@ -101,8 +101,18 @@ describe("a ranked search's admission", () => {
     ]);
     expect([await cnt(a), await cnt(b)]).toEqual([4, 2]);
     // Two clauses, and a phrase repeating a term: charged twice.
-    expect((await rank(`${a} ${b}`))?.charge).toEqual({ expansions: 0, clause: 4, total: 6 });
-    expect((await rank(`"${a} ${a}"`))?.charge).toEqual({ expansions: 0, clause: 8, total: 8 });
+    expect((await rank(`${a} ${b}`))?.charge).toEqual({
+      expansions: 0,
+      clause: 4,
+      total: 6,
+      narrowest: 2,
+    });
+    expect((await rank(`"${a} ${a}"`))?.charge).toEqual({
+      expansions: 0,
+      clause: 8,
+      total: 8,
+      narrowest: 8,
+    });
     // In either order alike.
     expect((await rank(`${b} ${a}`))?.charge).toEqual((await rank(`${a} ${b}`))?.charge);
     // A clause an `in:` column each.
@@ -110,12 +120,14 @@ describe("a ranked search's admission", () => {
       expansions: 0,
       clause: 4,
       total: 8,
+      narrowest: 4,
     });
     // A prefix: every term it stands for.
     expect((await rank(`${b} ${a.slice(0, 8)}*`))?.charge).toEqual({
       expansions: 1,
       clause: 4,
       total: 6,
+      narrowest: 2,
     });
   });
 
@@ -129,7 +141,12 @@ describe("a ranked search's admission", () => {
     const k1 = await cnt("k1");
     const ranked = await rank(a, { repos: [num], kinds: [1] });
     expect(await cnt(`r${num}`)).toBe(3);
-    expect(ranked?.charge).toEqual({ expansions: 0, clause: k1, total: 2 + 3 + k1 });
+    expect(ranked?.charge).toEqual({
+      expansions: 0,
+      clause: k1,
+      total: 2 + 3 + k1,
+      narrowest: 2,
+    });
     expect(ranked?.candidates).toHaveLength(2);
   });
 
@@ -169,6 +186,10 @@ describe("a ranked search's admission", () => {
     expect((await rank(a, {}, { ...limits, queryOccurrences: 10 }))?.refused).toBe(
       "query_too_broad",
     );
+    // Its narrowest clause past the documents it may score: a 3, b 2.
+    const wide = { ...RANKING, matches: 1 };
+    expect((await rank(`${a} ${b}`, {}, wide))?.refused).toBe("query_too_broad");
+    expect((await rank(`${a} ${b}`, {}, { ...wide, matches: 2 }))?.refused).toBeUndefined();
   });
 
   it("takes no candidates when it refuses", async () => {

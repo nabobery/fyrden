@@ -277,9 +277,22 @@ export const searchIssues = defineOperation({
   method: "GET",
   path: "/search/issues",
   summary: "Search issues and pull requests",
-  description: `Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. The text is required for now. ${SEARCH_ERRORS}`,
+  description: `Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. Without text, or with \`sort\`, the search lists one repository's issues and pull requests of one state in that order. ${SEARCH_ERRORS}`,
   input: z
-    .object({ q: SearchQuery, ...SearchPage })
+    .object({
+      q: SearchQuery,
+      sort: z
+        .enum(["created", "updated"])
+        .optional()
+        .describe(
+          "By when they were opened or last updated, instead of relevance; a query with no text is sorted by `updated`. A sorted search needs one `repo:` and one of `is:open`, `is:closed`, `is:merged` (`sort_needs_scope`), and looks through that repository's first 5,000 of them in that order.",
+        ),
+      order: z
+        .enum(["asc", "desc"])
+        .default("desc")
+        .describe("With `sort`: the newest first, or the oldest."),
+      ...SearchPage,
+    })
     .refine(withinDepth, { message: DEPTH_MESSAGE }),
   output: searchResults(SearchIssue),
   permission: AUTHENTICATED,
@@ -302,7 +315,7 @@ export const searchRepositories = defineOperation({
   method: "GET",
   path: "/search/repositories",
   summary: "Search repositories",
-  description: `Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now. ${SEARCH_ERRORS}`,
+  description: `Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now, by relevance; text is required (\`search_text_required\`). ${SEARCH_ERRORS}`,
   input: z
     .object({ q: SearchQuery, ...SearchPage })
     .refine(withinDepth, { message: DEPTH_MESSAGE }),

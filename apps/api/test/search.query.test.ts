@@ -20,7 +20,13 @@ import type { RepoEntry } from "../src/repos/directory.js";
 import type { ScopedRepo } from "../src/search/authorization.js";
 import { reserveInteractive } from "../src/search/interactive.js";
 import { parseSearchQuery } from "../src/search/parser.js";
-import { matchDocuments, matchRepositories, type People, RESULTS } from "../src/search/query.js";
+import {
+  type ListingOrder,
+  matchDocuments,
+  matchRepositories,
+  type People,
+  RESULTS,
+} from "../src/search/query.js";
 import { docStatements } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -143,7 +149,13 @@ const NOBODY: People = { authors: [], assignees: [] };
 async function docs(
   q: string,
   scope: readonly ScopedRepo[],
-  options: { people?: People; page?: number; perPage?: number; indexing?: boolean } = {},
+  options: {
+    people?: People;
+    page?: number;
+    perPage?: number;
+    indexing?: boolean;
+    order?: ListingOrder;
+  } = {},
 ) {
   const found = await matchDocuments(
     db,
@@ -153,8 +165,8 @@ async function docs(
     options.people ?? NOBODY,
     { page: options.page ?? 1, perPage: options.perPage ?? 30 },
     options.indexing ?? true,
+    options.order,
   );
-  if (!found) throw new Error("no free text");
   return { ...found, numbers: found.items.map((i) => i.number) };
 }
 
@@ -423,6 +435,123 @@ describe("an issue search's matches", () => {
     ]);
     const refused = await docs(`${stem}*`, [scoped(repo)]);
     expect(refused).toMatchObject({ refused: "prefix_too_broad", numbers: [], totalCount: 0 });
+  });
+});
+
+describe("an issue search's listing", () => {
+  /** A source of issues 1-4 (created in order, updated in reverse), 3 closed, and pull request 5 merged. */
+  async function listedSource(t: string) {
+    const repo = await source([
+      ...[1, 2, 3, 4].map((n) => ({
+        number: n,
+        title: n % 2 === 0 ? `${t} even` : "odd",
+        issue: { createdAt: n, updatedAt: 10 - n, ...(n === 3 && { state: "closed" as const }) },
+      })),
+      { number: 5, title: t, pull: { state: "merged", mergedAt: 9, createdAt: 5, updatedAt: 9 } },
+    ]);
+    return { repo, q: (more: string) => `repo:owner/${repo} ${more}` };
+  }
+
+  it("lists one repository's state, the newest updated first, or as asked", async () => {
+    const t = term();
+    const { repo, q } = await listedSource(t);
+    const scope = [scoped(repo)];
+    expect((await docs(q("is:open"), scope)).numbers).toEqual([1, 2, 4]);
+    expect(
+      (await docs(q("is:open"), scope, { order: { sort: "created", direction: "asc" } })).numbers,
+    ).toEqual([1, 2, 4]);
+    expect(
+      (await docs(q("is:open"), scope, { order: { sort: "created", direction: "desc" } })).numbers,
+    ).toEqual([4, 2, 1]);
+    expect((await docs(q("is:closed"), scope)).numbers).toEqual([5, 3]);
+    expect((await docs(q("is:merged"), scope)).numbers).toEqual([5]);
+    expect((await docs(q("is:open is:issue"), scope)).totalCount).toBe(3);
+  });
+
+  it("holds its text within the rows it lists", async () => {
+    const t = term();
+    const { repo, q } = await listedSource(t);
+    const sorted = await docs(q(`is:open ${t}`), [scoped(repo)], {
+      order: { sort: "created", direction: "asc" },
+    });
+    expect(sorted.numbers).toEqual([2, 4]);
+  });
+
+  it("is never said complete where the caller may not read a kind", async () => {
+    const t = term();
+    const { repo, q } = await listedSource(t);
+    expect((await docs(q("is:open"), [scoped(repo)])).incomplete).toBe(false);
+    const pullsOnly = await docs(q("is:open"), [scoped(repo, { issues: false })]);
+    expect(pullsOnly).toMatchObject({ incomplete: true, numbers: [] });
+    // Its own filter narrows nothing it may not read.
+    expect((await docs(q("is:open is:issue"), [scoped(repo)])).incomplete).toBe(false);
+  });
+
+  it("is empty, not refused, when the scope leaves nothing of the repository named", async () => {
+    const { q } = await listedSource(term());
+    expect(await docs(`${q("is:open")} user:someone`, [])).toMatchObject({
+      numbers: [],
+      totalCount: 0,
+    });
+    expect((await docs(`${q("is:open")} user:someone`, [])).refused).toBeUndefined();
+  });
+
+  it("needs one named repository and one state", async () => {
+    const t = term();
+    const { repo, q } = await listedSource(t);
+    for (const query of [`user:someone is:open`, q(""), q("is:open is:closed")])
+      expect((await docs(query, [scoped(repo)])).refused, query).toBe("sort_needs_scope");
+    // Text sorted too.
+    expect(
+      (
+        await docs(`user:someone ${t}`, [scoped(repo)], {
+          order: { sort: "updated", direction: "desc" },
+        })
+      ).refused,
+    ).toBe("sort_needs_scope");
+  });
+
+  it("examines its first rows alone, incomplete past them", async () => {
+    const t = term();
+    const repoId = newId("rep");
+    await epochStatement(db, repoId, 1, 0).run();
+    for (let start = 1; start <= RESULTS.listing + 1; start += 100) {
+      const group: D1PreparedStatement[] = [];
+      for (let n = start; n <= Math.min(RESULTS.listing + 1, start + 99); n++)
+        group.push(
+          ...docStatements(
+            db,
+            { repoId, epochGen: 1, ownerGen: 1, sourceSeq: n },
+            {
+              type: "issue",
+              id: `${repoId}#${n}`,
+              version: 1,
+              deleted: false,
+              // The two oldest updated hold the term: one is the last row examined, the other past.
+              row: issueRow(n, n <= 2 ? t : "plain", { updatedAt: n }) as unknown as Record<
+                string,
+                unknown
+              >,
+            },
+          ),
+        );
+      await db.batch(group);
+    }
+    await db
+      .prepare(
+        `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq, index_covered, visible_gen)
+         VALUES (?, 1, 0, 1, ?)`,
+      )
+      .bind(repoId, SHOWN)
+      .run();
+    const found = await docs(`repo:owner/${repoId} is:open ${t}`, [scoped(repoId)], {
+      order: { sort: "updated", direction: "desc" },
+    });
+    // The newest first: the row updated second is the last examined, the first past them.
+    expect(found).toMatchObject({ incomplete: true, totalCount: 1, numbers: [2] });
+    const all = await docs(`repo:owner/${repoId} is:open`, [scoped(repoId)], { perPage: 2 });
+    expect(all).toMatchObject({ incomplete: true, totalCount: RESULTS.depth });
+    expect(all.numbers).toEqual([RESULTS.listing + 1, RESULTS.listing]);
   });
 });
 

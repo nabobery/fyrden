@@ -25,6 +25,13 @@ export const RANKING = {
   clauseOccurrences: 1_000_000,
   /** Occurrences the whole expression may cover, its generated filters' included (Proposed). */
   queryOccurrences: 2_000_000,
+  /**
+   * Occurrences its narrowest clause may cover: the documents it scores at
+   * most (each it matches holds one of every clause's at least), which a
+   * ranking reads about three rows each and a listing's match four
+   * (measured locally; Proposed).
+   */
+  matches: 10_000,
 } as const;
 
 const INDEX: Record<SearchTarget, { fts: string; vocab: string; none: string }> = {
@@ -34,11 +41,13 @@ const INDEX: Record<SearchTarget, { fts: string; vocab: string; none: string }> 
 
 export type RankingLimits = { readonly [K in keyof typeof RANKING]: number };
 
-/** What a ranked search's expression covers: its prefix's terms, its widest clause's and its whole's occurrences. */
+/** What a ranked search's expression covers: its prefix's terms, its widest clause's, its whole's and its narrowest clause's occurrences. */
 export interface RankingCharge {
   readonly expansions: number;
   readonly clause: number;
   readonly total: number;
+  /** Its narrowest clause's. */
+  readonly narrowest: number;
 }
 
 export interface Ranked {
@@ -60,7 +69,9 @@ const past = (prefix: string): string => {
 /**
  * `parsed`'s free text, with `generated`'s filters, admitted and ranked in
  * `target`'s index, read on `reservation`'s day (`readOnDay`); null when it
- * has no free text.
+ * has no free text. With `within` (rowids, a listing's), those of them it
+ * matches instead, in their order (`rank` their place): its whole match
+ * taken once, which its admission bounds as it bounds a ranking.
  */
 export async function rankCandidates(
   db: D1Database,
@@ -69,6 +80,7 @@ export async function rankCandidates(
   parsed: ParsedQuery,
   generated: GeneratedFilters,
   limits: RankingLimits = RANKING,
+  within?: readonly number[],
 ): Promise<Ranked | null> {
   const clauses = compileClauses(parsed, target, generated);
   if (clauses.length === 0) return null;
@@ -87,15 +99,25 @@ export async function rankCandidates(
            FROM json_each(?1) c),
          charges AS MATERIALIZED (
            SELECT (SELECT n FROM expanded) AS expansions, (SELECT max(n) FROM charged) AS clause,
-                  (SELECT sum(n) FROM charged) AS total),
+                  (SELECT sum(n) FROM charged) AS total, (SELECT min(n) FROM charged) AS narrowest),
          admission AS MATERIALIZED (
-           SELECT *, expansions <= ?4 AND clause <= ?5 AND total <= ?6 AND ${SAME_DAY(9)} AS ok
+           SELECT *, expansions <= ?4 AND clause <= ?5 AND total <= ?6 AND narrowest <= ?10
+             AND ${SAME_DAY(9)} AS ok
            FROM charges),
-         ranked AS MATERIALIZED (
+         ${
+           within === undefined
+             ? `ranked AS MATERIALIZED (
            SELECT rowid, rank FROM ${fts}
            WHERE ${fts} MATCH (SELECT CASE WHEN ok THEN ?7 ELSE '${none}' END FROM admission)
-           ORDER BY rank LIMIT (SELECT CASE WHEN ok THEN ?8 ELSE 0 END FROM admission))
-         SELECT a.expansions, a.clause, a.total, r.rowid, r.rank
+           ORDER BY rank LIMIT (SELECT CASE WHEN ok THEN ?8 ELSE 0 END FROM admission))`
+             : `matched AS MATERIALIZED (
+           SELECT rowid FROM ${fts}
+           WHERE ${fts} MATCH (SELECT CASE WHEN ok THEN ?7 ELSE '${none}' END FROM admission)),
+         ranked AS (
+           SELECT w.value AS rowid, CAST(w.key AS INTEGER) AS rank FROM json_each(?11) w
+           WHERE w.value IN (SELECT rowid FROM matched) AND (SELECT ok FROM admission))`
+         }
+         SELECT a.expansions, a.clause, a.total, a.narrowest, r.rowid, r.rank
          FROM admission a LEFT JOIN ranked r ORDER BY r.rank, r.rowid`,
       )
       .bind(
@@ -108,22 +130,34 @@ export async function rankCandidates(
         clauses.map((c) => c.text).join(" AND "),
         limits.candidates,
         reservation.day,
+        limits.matches,
+        ...(within === undefined ? [] : [JSON.stringify(within)]),
       ),
   ]);
   const rows = (result?.results ?? []) as {
     expansions: number;
     clause: number;
     total: number;
+    narrowest: number;
     rowid: number | null;
     rank: number | null;
   }[];
   const reads = result?.meta.rows_read ?? 0;
   const [first] = rows;
   if (!first) throw new Error("the ranking's admission returned no row");
-  const charge = { expansions: first.expansions, clause: first.clause, total: first.total };
+  const charge = {
+    expansions: first.expansions,
+    clause: first.clause,
+    total: first.total,
+    narrowest: first.narrowest,
+  };
   if (charge.expansions > limits.expansions)
     return { refused: "prefix_too_broad", charge, candidates: [], reads };
-  if (charge.clause > limits.clauseOccurrences || charge.total > limits.queryOccurrences)
+  if (
+    charge.clause > limits.clauseOccurrences ||
+    charge.total > limits.queryOccurrences ||
+    charge.narrowest > limits.matches
+  )
     return { refused: "query_too_broad", charge, candidates: [], reads };
   return {
     charge,

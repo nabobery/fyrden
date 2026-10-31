@@ -131,13 +131,15 @@ describe("search.issues", () => {
     for (const [q, code] of [
       [t, "search_scope_required"],
       [`user:${someone.handle} "unclosed`, "invalid_search_query"],
-      [`user:${someone.handle} is:open`, "search_text_required"],
+      [`user:${someone.handle} is:open`, "sort_needs_scope"],
       [`repo:${someone.handle}/missing ${t}`, "repo_not_found"],
     ] as const) {
       const res = await search(someone.token, "issues", q);
       expect(((await res.json()) as { code: string }).code, q).toBe(code);
       expect(res.headers.get("Cache-Control"), q).toBe("private, no-store");
     }
+    const repos = await search(someone.token, "repositories", `user:${someone.handle}`);
+    expect(((await repos.json()) as { code: string }).code).toBe("search_text_required");
     // Refused before it runs, unauthenticated, all the same.
     const anonymous = await exports.default.fetch(
       `https://fyrden.test/api/search/issues?q=${encodeURIComponent(t)}`,
@@ -152,6 +154,25 @@ describe("search.issues", () => {
       "&page=11&per_page=100",
     );
     expect(deep.status).toBe(422);
+  });
+
+  it("lists one repository's issues of one state without text, or sorted", async () => {
+    const t = term();
+    const { owner, repo } = await searchable([{ title: `${t} first` }, { title: "second" }]);
+    const listed = await json<{ items: { number: number }[]; total_count: number }>(
+      search(owner.token, "issues", `repo:${repo.full_name} is:open`),
+    );
+    expect(listed.status).toBe(200);
+    expect(listed.body.total_count).toBe(2);
+    const oldest = await json<{ items: { number: number }[] }>(
+      search(
+        owner.token,
+        "issues",
+        `repo:${repo.full_name} is:open ${t}`,
+        "&sort=created&order=asc",
+      ),
+    );
+    expect(oldest.body.items.map((i) => i.number)).toEqual([1]);
   });
 
   it("answers what the token allows: issues and pull requests apart", async () => {

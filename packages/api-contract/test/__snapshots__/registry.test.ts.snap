@@ -37249,7 +37249,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/search/issues": {
       "get": {
-        "description": "Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. The text is required for now. A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
+        "description": "Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. Without text, or with \`sort\`, the search lists one repository's issues and pull requests of one state in that order. A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
         "operationId": "search.issues",
         "parameters": [
           {
@@ -37260,6 +37260,33 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               "description": "The query, 256 characters at most: free text (words, \`"quoted phrases"\`, a last word ending in \`*\` for a prefix of at least three letters) and qualifiers. A scope is required: \`repo:owner/name\`, \`org:handle\` or \`user:handle\` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (\`unsupported_search_text\`). It names 4 different repositories at most.",
               "maxLength": 512,
               "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "description": "By when they were opened or last updated, instead of relevance; a query with no text is sorted by \`updated\`. A sorted search needs one \`repo:\` and one of \`is:open\`, \`is:closed\`, \`is:merged\` (\`sort_needs_scope\`), and looks through that repository's first 5,000 of them in that order.",
+              "enum": [
+                "created",
+                "updated",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "default": "desc",
+              "description": "With \`sort\`: the newest first, or the oldest.",
+              "enum": [
+                "asc",
+                "desc",
+              ],
               "type": "string",
             },
           },
@@ -37653,7 +37680,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/search/repositories": {
       "get": {
-        "description": "Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now. A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
+        "description": "Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now, by relevance; text is required (\`search_text_required\`). A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
         "operationId": "search.repositories",
         "parameters": [
           {

@@ -35,10 +35,15 @@ import { searchIndexing } from "./repairs.js";
  * reservation's day ends while it reads is run once more on the new day.
  */
 
-/** The reads a search reserves (Proposed: its scope, ranking, candidates and page at most). */
+/**
+ * The reads a search reserves (Proposed): its scope's (about 6 a
+ * repository), its ranking's or listing's (about 4 a document scored, at
+ * most `RANKING.matches`, and a listing's 5,001 rows), its candidates' (about
+ * 4 each) and its page's, at most.
+ */
 export const SEARCH_RESERVE: Record<SearchTarget, number> = {
-  issues: 60_000,
-  repositories: 30_000,
+  issues: 100_000,
+  repositories: 100_000,
 };
 
 const SEARCH_RATE_RETRY = 60;
@@ -49,6 +54,7 @@ export async function searchIssuesOperation(
   input: Input<typeof searchIssues>,
 ): Promise<Output<typeof searchIssues>> {
   const parsed = await admitted(ctx, input.q, "issues");
+  const order = input.sort && { sort: input.sort, direction: input.order };
   const scoped = await authorizeScope(ctx, parsed);
   const repos = new Map(scoped.map((r) => [r.entry.id, r.entry]));
   const handles = [...parsed.authors, ...parsed.assignees];
@@ -64,6 +70,7 @@ export async function searchIssuesOperation(
       people,
       { page: input.page, perPage: input.per_page },
       indexing,
+      order || (parsed.text.length === 0 ? { sort: "updated", direction: input.order } : undefined),
     );
     return pageOf(matches, (items) => hydrateIssues(ctx, db, reservation, items, repos));
   });
@@ -108,11 +115,11 @@ async function admitted(ctx: OpContext, q: string, target: SearchTarget): Promis
     if (error instanceof SearchQueryError) throw new OperationError(422, error.code, error.message);
     throw error;
   }
-  if (parsed.text.length === 0)
+  if (target === "repositories" && parsed.text.length === 0)
     throw new OperationError(
       422,
       "search_text_required",
-      "A search needs text to match, besides its qualifiers.",
+      "A repository search needs text to match, besides its qualifiers.",
     );
   return parsed;
 }
@@ -127,7 +134,16 @@ async function pageOf<M, T>(
   matches: Matches<M> | null,
   hydrate: (items: readonly M[]) => Promise<{ items: T[]; reads: number }>,
 ): Promise<Page<T>> {
-  if (!matches) throw new Error("a search with text matched nothing ranked");
+  if (!matches) throw new Error("a repository search with text matched nothing ranked");
+  if (matches.refused === "sort_needs_scope")
+    throw new Refused(
+      matches.reads,
+      new OperationError(
+        422,
+        "sort_needs_scope",
+        "A search without text, or sorted, needs one repository (repo:owner/name) and one state (is:open, is:closed or is:merged).",
+      ),
+    );
   if (matches.refused === "prefix_too_broad")
     throw new Refused(
       matches.reads,

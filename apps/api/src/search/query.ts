@@ -26,6 +26,8 @@ export const RESULTS = {
   depth: 1_000,
   /** Scope repositories a search filters by in its expression at most, past which it filters after. */
   generatedRepos: 50,
+  /** A listing's rows examined at most (from its first). */
+  listing: 5_000,
 } as const;
 
 export interface PageRequest {
@@ -35,7 +37,7 @@ export interface PageRequest {
 
 export interface Matches<T> {
   /** Why the query was refused, if it was (nothing matched). */
-  readonly refused?: "prefix_too_broad" | "query_too_broad";
+  readonly refused?: "prefix_too_broad" | "query_too_broad" | "sort_needs_scope";
   readonly totalCount: number;
   readonly incomplete: boolean;
   readonly items: readonly T[];
@@ -167,10 +169,74 @@ const none = <T>(incomplete: boolean, reads: number): Matches<T> => ({
 
 const QUERY_KINDS = { issue: DOC_KIND.issue, pr: DOC_KIND.pull } as const;
 
+/** A listing's order: by when its items were made or last updated. */
+export interface ListingOrder {
+  readonly sort: "created" | "updated";
+  readonly direction: "asc" | "desc";
+}
+
+/** Each listing's index, by the state it lists and its order (each holds the repository first). */
+const LISTING_INDEX = {
+  open: {
+    column: "open_state",
+    value: 1,
+    created: "search_docs_open_created",
+    updated: "search_docs_open_updated",
+  },
+  closed: {
+    column: "open_state",
+    value: 2,
+    created: "search_docs_open_created",
+    updated: "search_docs_open_updated",
+  },
+  merged: {
+    column: "state",
+    value: DOC_STATE.merged,
+    created: "search_docs_state_created",
+    updated: "search_docs_state_updated",
+  },
+} as const;
+
 /**
- * An issue search's ranked matches in `scoped` (what the caller may read
- * of each), `people` its handles' principals, the page asked for; null
- * when it has no free text.
+ * The first rows of one repository's listing of one state, in `order` (the
+ * newest first, or the oldest), at most `RESULTS.listing` and one more to
+ * tell there are more: their documents' ids.
+ */
+async function listed(
+  db: D1Database,
+  reservation: InteractiveReservation,
+  repoId: string,
+  state: keyof typeof LISTING_INDEX,
+  order: ListingOrder,
+): Promise<{ ids: number[]; more: boolean; reads: number }> {
+  const index = LISTING_INDEX[state];
+  const column = order.sort === "created" ? "created_at" : "updated_at";
+  const direction = order.direction === "asc" ? "ASC" : "DESC";
+  const [result] = await readOnDay(db, reservation, [
+    db
+      .prepare(
+        `SELECT d.doc_id FROM search_docs d INDEXED BY ${index[order.sort]}
+         WHERE d.repo_id = ?1 AND d.${index.column} = ?2 AND d.deleted = 0 AND ${SAME_DAY(3)}
+         ORDER BY d.${column} ${direction}, d.doc_id ${direction} LIMIT ?4 + 1`,
+      )
+      .bind(repoId, index.value, reservation.day, RESULTS.listing),
+  ]);
+  const ids = ((result?.results ?? []) as { doc_id: number }[]).map((r) => r.doc_id);
+  return {
+    ids: ids.slice(0, RESULTS.listing),
+    more: ids.length > RESULTS.listing,
+    reads: result?.meta.rows_read ?? 0,
+  };
+}
+
+/**
+ * An issue search's matches in `scoped` (what the caller may read of
+ * each), `people` its handles' principals, the page asked for: by rank,
+ * or, with no free text or an `order` asked for, one repository's listing
+ * of one state in that order (the newest updated first by default), its
+ * first `RESULTS.listing` rows examined (and the free text held within
+ * them). A listing needs its scope to be one named repository, and one
+ * state (`sort_needs_scope`).
  */
 export async function matchDocuments(
   db: D1Database,
@@ -180,8 +246,15 @@ export async function matchDocuments(
   people: People,
   request: PageRequest,
   indexing: boolean,
-): Promise<Matches<DocMatch> | null> {
-  if (parsed.text.length === 0) return null;
+  order?: ListingOrder,
+): Promise<Matches<DocMatch>> {
+  const listing =
+    order ?? (parsed.text.length === 0 ? { sort: "updated", direction: "desc" } : undefined);
+  const [state] = parsed.states;
+  // One repository named (however written), one state; what the scope leaves of it may be none.
+  const named = new Set(parsed.repos.map((r) => `${r.owner}/${r.name}`.toLowerCase()));
+  if (listing && (named.size !== 1 || parsed.states.length !== 1))
+    return { ...none(false, 0), refused: "sort_needs_scope" };
   // The kinds asked for (repeated, each of them), of those each repository's the caller may read.
   const asked = [DOC_KIND.issue, DOC_KIND.pull].filter((k) =>
     parsed.kinds.every((q) => QUERY_KINDS[q] === k),
@@ -206,14 +279,26 @@ export async function matchDocuments(
       ...(kinds.length === 1 &&
         readable.every((r) => r.kinds.length === 1 && r.kinds[0] === kinds[0]) && { kinds }),
     };
-    const ranked = await rankCandidates(db, reservation, "issues", parsed, generated);
+    let within: readonly number[] | undefined;
+    if (listing && first && state) {
+      const examined = await listed(db, reservation, first.id, state, listing);
+      reads += examined.reads;
+      // Rows of a kind the caller may not read count against what is examined: whether they
+      // passed it would tell of them, so it is never said complete then.
+      if (examined.more || first.kinds.length < asked.length) incomplete = true;
+      within = examined.ids;
+    }
+    const ranked =
+      within !== undefined && parsed.text.length === 0
+        ? null
+        : await rankCandidates(db, reservation, "issues", parsed, generated, RANKING, within);
     if (ranked) {
       reads += ranked.reads;
       if (ranked.refused)
         return { ...none(incomplete, reads), refused: ranked.refused, charge: ranked.charge };
-      if (ranked.candidates.length >= RANKING.candidates) incomplete = true;
+      if (within === undefined && ranked.candidates.length >= RANKING.candidates) incomplete = true;
       candidates = ranked.candidates.map((c) => c.rowid);
-    }
+    } else candidates = within ?? [];
   }
   const binds = pageBinds(
     candidates,
