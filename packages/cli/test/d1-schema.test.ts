@@ -209,12 +209,27 @@ describe("diffSchema", () => {
   const org = parseExpectedSchema(readFileSync(resolve(migrations, "org.expected.sql"), "utf8"));
   const effects = org.find((o) => o.name === "effects") ?? { type: "table", name: "", sql: "" };
 
+  const virtuals = org.filter((o) => /^CREATE VIRTUAL TABLE/i.test(o.sql)).map((o) => o.name);
+  const shadows = new Set(
+    org
+      .filter((o) =>
+        virtuals.some(
+          (v) =>
+            /^(config|data|docsize|idx)$/.test(o.name.slice(v.length + 1)) &&
+            o.name.startsWith(`${v}_`),
+        ),
+      )
+      .map((o) => o.name),
+  );
+
   /** The committed `fyrden-org` schema with `effects` rebuilt by renaming a new table into place. */
   function rebuiltOrg(definition: string): SchemaObject[] {
     const db = new DatabaseSync(":memory:");
     // Its triggers last: they refuse any write without the executor's admission, and this
     // fixture writes with none.
-    for (const object of org) if (object.type !== "trigger") db.exec(object.sql);
+    // (A full-text index's shadow tables are made with it.)
+    for (const object of org)
+      if (object.type !== "trigger" && !shadows.has(object.name)) db.exec(object.sql);
     db.exec(
       "INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at) VALUES ('e1', 's', 't', '{}', 1, 1)",
     );

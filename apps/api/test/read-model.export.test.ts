@@ -10,6 +10,7 @@ import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import {
+  DERIVED_TABLES,
   EXPORT_PAGE,
   EXPORT_TABLES,
   type ExportCursor,
@@ -93,7 +94,7 @@ describe("an export of the read model", () => {
       )
       .all<{ name: string }>();
     expect(results.map((r) => r.name)).toEqual(
-      [...EXPORT_TABLES.map((t) => t.table), ...PROTOCOL_TABLES].sort(),
+      [...EXPORT_TABLES.map((t) => t.table), ...PROTOCOL_TABLES, ...DERIVED_TABLES].sort(),
     );
     for (const { table, key } of EXPORT_TABLES) {
       const pk = await db
@@ -174,6 +175,8 @@ describe("an export of the read model", () => {
     const { generation } = await pauseReadModel(env, "default");
     const manifest = await exportManifest(db, generation);
     expect(manifest.generation).toBe(generation);
+    // What it leaves out, by name: the full-text indexes, rebuilt from the tables it has.
+    expect(manifest.derived).toEqual(DERIVED_TABLES);
     expect(manifest.migrations).toContain("0017_read_model_executor.sql");
     expect(manifest.tables.find((t) => t.table === "search_labels")?.columns).toEqual(
       expect.arrayContaining(["repo_id", "label_id", "name"]),

@@ -3,9 +3,12 @@ import type { RepoExport } from "../do/repo/events.js";
 import {
   type Admission,
   epochStatement,
-  repoStatement,
+  indexRows,
+  repoStatements,
   type Snapshot,
 } from "../queues/events-consumer.js";
+import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
+import { spentStatement } from "../search/admission.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 
 /**
@@ -62,19 +65,38 @@ export async function applyExport(
 ): Promise<void> {
   const now = options.now?.() ?? Date.now();
   const db = readModelFor(env, shard);
-  const statements = exportStatements(db, exported, now);
+  // Its repository index entry kept while search indexes.
+  options.metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+  const indexing =
+    (
+      await env.DIRECTORY.prepare(
+        "SELECT value FROM deployment_settings WHERE name = 'search_indexing'",
+      ).first<{ value: string }>()
+    )?.value === "on";
+  const statements = exportStatements(db, exported, now, indexing);
   options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
-  await db.batch(statements);
+  const results = await db.batch(statements);
+  // What its index entry wrote, charged with search's spending (a write of its own).
+  const indexed = indexRows(results.slice(1), true);
+  if (indexed > 0) {
+    options.metrics?.count("d1.query", { db: "org", op: "search_spent" });
+    await spentStatement(db, {
+      rows: indexed + READ_MODEL_LONE_WRITE.rows,
+      reads: READ_MODEL_LONE_WRITE.reads,
+    }).run();
+  }
 }
 
 /**
  * The statements that apply an exported snapshot: the source's epoch, then
- * each entity through the consumer's guarded upsert.
+ * each entity through the consumer's guarded upsert (its repository index
+ * entry kept while search indexes, `indexing`).
  */
 export function exportStatements(
   db: D1Database,
   exported: RepoExport,
   now: number,
+  indexing: boolean,
   admit?: Admission,
 ): D1PreparedStatement[] {
   const { sourceId } = exported;
@@ -95,7 +117,9 @@ export function exportStatements(
   }));
   return [
     epochStatement(db, sourceId, exported.epochGen, now),
-    ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now, admit)),
+    ...snapshots.flatMap((snapshot) =>
+      repoStatements(db, sourceId, snapshot, now, indexing, admit),
+    ),
   ];
 }
 

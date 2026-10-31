@@ -466,7 +466,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/admin/read-model/export": {
       "get": {
-        "description": "Fyrden: the manifest of a coherent export of the org read model, paused at \`generation\`: its migrations, each table's columns in order, and the protocol tables' state. Refused (409 \`no_restore_floor\`) until a restore floor is recorded, and (409 \`export_fence_lost\`) once the read model is no longer paused at \`generation\`: pause again and start over. Instance administrators only.",
+        "description": "Fyrden: the manifest of a coherent export of the org read model, paused at \`generation\`: its migrations, each table's columns in order, the protocol tables' state, and the tables left out (\`derived\`: the full-text indexes, rebuilt from the exported tables). Refused (409 \`no_restore_floor\`) until a restore floor is recorded, and (409 \`export_fence_lost\`) once the read model is no longer paused at \`generation\`: pause again and start over. Instance administrators only.",
         "operationId": "admin.read_model.export",
         "parameters": [
           {
@@ -488,6 +488,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "schema": {
                   "additionalProperties": false,
                   "properties": {
+                    "derived": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
                     "generation": {
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
@@ -540,6 +546,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "required": [
                     "generation",
+                    "derived",
                     "migrations",
                     "tables",
                     "protocol",

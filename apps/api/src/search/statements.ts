@@ -118,6 +118,45 @@ const flag = (value: boolean) => (value ? 1 : 0);
 type Value = string | number | null;
 
 /**
+ * An entity's row: its key, version and deletion (where it is: an event's
+ * own position, an export's tombstone's, or unknown), then `fields`.
+ */
+function rowValues(
+  position: SearchPosition,
+  entity: ProjectedEntity,
+  column: string,
+  key: number,
+  fields: Readonly<Record<string, Value>>,
+): Record<string, Value> {
+  const deletedAt = !entity.deleted
+    ? null
+    : entity.deletedAt !== undefined
+      ? entity.deletedAt
+      : { epochGen: position.epochGen, sourceSeq: position.sourceSeq };
+  return {
+    [column]: key,
+    version: entity.version,
+    deleted: flag(entity.deleted),
+    deleted_epoch: deletedAt?.epochGen ?? null,
+    deleted_seq: deletedAt?.sourceSeq ?? null,
+    ...fields,
+  };
+}
+
+/**
+ * The writer's admission, for an event's write with one (its token at
+ * `?<at>`): admitted, or a removal emptying a row already there (keyed
+ * `?5`).
+ */
+function admitted(writer: SearchWriter, table: string, column: string, at: number): string {
+  if (writer.by !== "event" || writer.admission === undefined) return "";
+  return writer.admission.removal
+    ? ` AND (${ADMITTED(at)} OR EXISTS (SELECT 1 FROM ${table}
+        WHERE repo_id = ?1 AND ${column} = ?5))`
+    : ` AND ${ADMITTED(at)}`;
+}
+
+/**
  * The guarded upsert of one entity's row into `table` (keyed by its
  * repository and `key`): the fences and the writer's condition, then a row
  * replaced only by one written at a later epoch, ownership or version, and
@@ -136,30 +175,11 @@ function upsert(
   fields: Readonly<Record<string, Value>>,
   writer: SearchWriter,
 ): D1PreparedStatement {
-  const deletedAt = !entity.deleted
-    ? null
-    : entity.deletedAt !== undefined
-      ? entity.deletedAt
-      : { epochGen: position.epochGen, sourceSeq: position.sourceSeq };
-  const values: Record<string, Value> = {
-    [key.column]: key.value,
-    version: entity.version,
-    deleted: flag(entity.deleted),
-    deleted_epoch: deletedAt?.epochGen ?? null,
-    deleted_seq: deletedAt?.sourceSeq ?? null,
-    ...fields,
-  };
+  const values = rowValues(position, entity, key.column, key.value, fields);
   const columns = Object.keys(values);
   // ?1–?4 are the position's; the row's values follow (the key first, ?5), then the writer's.
   const at = columns.length + 5;
-  // An admitted event's write, or a removal emptying a row already there.
-  const admission =
-    writer.by !== "event" || writer.admission === undefined
-      ? ""
-      : writer.admission.removal
-        ? ` AND (${ADMITTED(at)} OR EXISTS (SELECT 1 FROM ${table}
-            WHERE repo_id = ?1 AND ${key.column} = ?5))`
-        : ` AND ${ADMITTED(at)}`;
+  const admission = admitted(writer, table, key.column, at);
   const updated = [
     "epoch_gen",
     "owner_gen",
@@ -190,16 +210,34 @@ function upsert(
 }
 
 /**
- * The statement that projects an issue or pull request (a deletion's
- * included). A live entity's row must be present (a stored event's is
- * resolved first).
+ * The statements that project an issue or pull request (a deletion's
+ * included), in one batch: its row and its full-text index together. A
+ * live entity's row must be present (a stored event's is resolved first).
+ *
+ * Every statement takes the same decision (the fences, the writer's
+ * condition and the version guard, over the row as it was), so the group
+ * either moves the row and its indexed tuple or touches neither:
+ *
+ * 1. its repository's number, allocated when a tuple is to be indexed and
+ *    it has none, and the counter moved past it;
+ * 2. the count of indexed documents, by what the write changes;
+ * 3. the old indexed tuple deleted from the index while the row still has
+ *    it (its text, its repository's and kind's tokens);
+ * 4. the row upserted, marked with this group's token when its indexed
+ *    tuple (title, body, kind, whether deleted) changes, its mark kept when
+ *    only metadata does, cleared with a deletion;
+ * 5. the row marked with the token indexed.
+ *
+ * A row written before its index existed carries no mark: nothing of it is
+ * deleted from the index, and it is indexed once its text changes (or a
+ * repair indexes it).
  */
-export function docStatement(
+export function docStatements(
   db: D1Database,
   position: SearchPosition,
   entity: ProjectedEntity,
   writer: SearchWriter = EVENT_WRITER,
-): D1PreparedStatement {
+): D1PreparedStatement[] {
   const number = keyOf(position, entity, "");
   const kind =
     entity.type === ISSUE_ENTITY
@@ -240,15 +278,115 @@ export function docStatement(
       merged_at: "mergedAt" in row ? row.mergedAt : null,
     };
   }
-  return upsert(
-    db,
-    "search_docs",
-    { column: "number", value: number },
-    position,
-    entity,
-    fields,
-    writer,
-  );
+  const values = { ...rowValues(position, entity, "number", number, fields), fts_token: null };
+  const columns = Object.keys(values);
+  // ?1–?4 the position's, the row's values from ?5 (the key first), then this group's token and
+  // the writer's.
+  const p = (column: string) => `?${columns.indexOf(column) + 5}`;
+  const token = columns.length + 5;
+  const at = token + 1;
+  const params = [
+    position.repoId,
+    position.epochGen,
+    position.ownerGen,
+    position.sourceSeq,
+    ...Object.values(values),
+    crypto.randomUUID(),
+    ...writerParams(writer),
+  ];
+  const decided = `${eligible(writer, at)}${admitted(writer, "search_docs", "number", at)}`;
+  // The row as it was is replaced (see `upsert`).
+  const newer = (
+    d: string,
+  ) => `(?2, ?3, ${p("version")}) > (${d}.epoch_gen, ${d}.owner_gen, ${d}.version)
+    AND NOT (${d}.deleted = 1 AND ${d}.deleted_epoch IS NOT NULL
+      AND (?2, ?4) <= (${d}.deleted_epoch, ${d}.deleted_seq))`;
+  // Its indexed tuple changes.
+  const changes = (d: string) => `(${d}.deleted IS NOT ${p("deleted")} OR (${p("deleted")} = 0
+    AND (${d}.title IS NOT ${p("title")} OR ${d}.body IS NOT ${p("body")} OR ${d}.kind IS NOT ${p("kind")})))`;
+  const old = "SELECT 1 FROM search_docs d WHERE d.repo_id = ?1 AND d.number = ?5";
+  // The write is taken: no row yet, or one it replaces.
+  const taken = `(NOT EXISTS (${old}) OR EXISTS (${old} AND ${newer("d")}))`;
+  const indexed = "d.deleted = 0 AND d.fts_token IS NOT NULL";
+  const delta = `((CASE WHEN ${p("deleted")} = 0 AND (NOT EXISTS (${old})
+      OR EXISTS (${old} AND ${changes("d")}) OR EXISTS (${old} AND ${indexed})) THEN 1 ELSE 0 END)
+    - (CASE WHEN EXISTS (${old} AND ${indexed}) THEN 1 ELSE 0 END))`;
+  const updated = [
+    "epoch_gen",
+    "owner_gen",
+    "updated_seq",
+    ...columns.filter((c) => c !== "number" && c !== "fts_token"),
+  ];
+  return [
+    bound(
+      db,
+      `INSERT INTO search_repo_nums (repo_id, num)
+       SELECT ?1, next_repo_num FROM search_index_state
+       WHERE id = 1 AND ${p("deleted")} = 0
+         AND NOT EXISTS (SELECT 1 FROM search_repo_nums WHERE repo_id = ?1)
+         AND (NOT EXISTS (${old}) OR EXISTS (${old} AND ${newer("d")} AND ${changes("d")}))
+         AND ${decided}`,
+      params,
+    ),
+    db
+      .prepare(
+        `UPDATE search_index_state SET next_repo_num = next_repo_num + 1
+       WHERE id = 1 AND EXISTS (SELECT 1 FROM search_repo_nums
+         WHERE repo_id = ?1 AND num = search_index_state.next_repo_num)`,
+      )
+      .bind(position.repoId),
+    // Indexed after (live, and new or changed) less indexed before, when they differ.
+    bound(
+      db,
+      `UPDATE search_index_state SET live_docs = live_docs + ${delta}
+       WHERE id = 1 AND ${delta} <> 0 AND ${taken} AND ${decided}`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
+       SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+       FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+       WHERE d.repo_id = ?1 AND d.number = ?5 AND ${indexed}
+         AND ${newer("d")} AND ${changes("d")} AND ${decided}`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_docs (repo_id, epoch_gen, owner_gen, updated_seq, ${columns.join(", ")})
+       SELECT ?1, ?2, ?3, ?4, ${columns.map((c) => (c === "fts_token" ? `CASE WHEN ${p("deleted")} = 0 THEN ?${token} END` : p(c))).join(", ")}
+       WHERE ${decided}
+       ON CONFLICT (repo_id, number) DO UPDATE SET
+         ${updated.map((c) => `${c} = excluded.${c}`).join(", ")},
+         fts_token = CASE
+           WHEN excluded.deleted = 1 THEN NULL
+           WHEN ${changes("search_docs")} THEN ?${token}
+           ELSE search_docs.fts_token END
+       WHERE ${newer("search_docs")}`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_fts (rowid, title, body, repo, kind)
+       SELECT d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+       FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+       WHERE d.repo_id = ?1 AND d.number = ?5 AND d.deleted = 0 AND d.fts_token = ?${token}`,
+      params,
+    ),
+  ];
+}
+
+/**
+ * `sql` bound to `params` through its highest placeholder (a statement of a
+ * group that shares one numbering takes no more values than it names).
+ */
+export function bound(
+  db: D1Database,
+  sql: string,
+  params: readonly (string | number | null)[],
+): D1PreparedStatement {
+  const last = Math.max(0, ...[...sql.matchAll(/\?(\d+)/g)].map((m) => Number(m[1])));
+  return db.prepare(sql).bind(...params.slice(0, last));
 }
 
 /** The columns a deleted issue's row keeps empty. */
@@ -334,21 +472,21 @@ export function milestoneStatement(
   );
 }
 
-/** The statement projecting any entity search projects; undefined for others. */
-export function searchStatement(
+/** The statements projecting any entity search projects (one batch); undefined for others. */
+export function searchStatements(
   db: D1Database,
   position: SearchPosition,
   entity: ProjectedEntity,
   writer: SearchWriter = EVENT_WRITER,
-): D1PreparedStatement | undefined {
+): D1PreparedStatement[] | undefined {
   switch (entity.type) {
     case ISSUE_ENTITY:
     case PULL_ENTITY:
-      return docStatement(db, position, entity, writer);
+      return docStatements(db, position, entity, writer);
     case LABEL_ENTITY:
-      return labelStatement(db, position, entity, writer);
+      return [labelStatement(db, position, entity, writer)];
     case MILESTONE_ENTITY:
-      return milestoneStatement(db, position, entity, writer);
+      return [milestoneStatement(db, position, entity, writer)];
     default:
       return undefined;
   }

@@ -19,6 +19,7 @@ import {
   reserve,
   SAME_DAY,
   SPENDING,
+  STATEMENT_READS,
   STATEMENT_ROWS,
   settleStatement,
   spentStatement,
@@ -29,7 +30,7 @@ import {
   FENCES,
   type SearchPosition,
   type SearchWriter,
-  searchStatement,
+  searchStatements,
   writerParams,
 } from "./statements.js";
 
@@ -196,8 +197,17 @@ export async function reconcileSource(
               entities: entity ? [{ ...entity, row: entity.row as RepoRow | null }] : [],
             },
             clock(),
-            // Within its reservation's day, as every other write of the step.
-            { where: SAME_DAY, params: [reservation.day] },
+            // Reconciled only while search indexes.
+            true,
+            // While this pass is the source's, at this step, under its epoch and ownership (another
+            // caller that worked it first, or a newer pass, leaves these refused), and within its
+            // reservation's day, as every other write of the step.
+            {
+              where: (n) => `${SAME_DAY(n)} AND EXISTS (SELECT 1 FROM search_reconciles
+                WHERE repo_id = ?1 AND gen = ?${n + 1} AND kind = ?${n + 2} AND after = ?${n + 3}
+                  AND epoch_gen = ?${n + 4} AND owner_gen = ?${n + 5})`,
+              params: [reservation.day, pass.gen, kind, after, pass.epochGen, pass.ownerGen],
+            },
           );
       next = "done";
       nextAfter = 0;
@@ -224,7 +234,8 @@ export async function reconcileSource(
         .prepare(
           `UPDATE search_reconciles SET kind = ?7, after = ?8
            WHERE repo_id = ?1 AND gen = ?4 AND kind = ?5 AND after = ?6 AND ${FENCES}
-             AND ${SAME_DAY(9)}`,
+             AND ${SAME_DAY(9)}
+           RETURNING 1`,
         )
         .bind(
           repoId,
@@ -260,7 +271,8 @@ export async function reconcileSource(
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
     await account(db, reservation, results, read, metrics, lookups);
-    if ((results[checkpoint]?.meta.changes ?? 0) === 0) {
+    // By the row it returned (a statement's changes, after an index's, count its work too).
+    if ((results[checkpoint]?.results.length ?? 0) === 0) {
       const reloaded = await current(db, repoId, lookups, metrics);
       // The source's fences refuse this pass (a transfer or restore landing), or its day ended
       // while it ran: tried again later (a new pass once the repository answers under its new
@@ -300,14 +312,14 @@ const SMALL_STEP = {
 
 /**
  * What a page reserves: every exported entity and every projection row it
- * compares written (6 rows each at most, an issue first projected), and
- * read (the range, and each statement's checks).
+ * compares written (an issue first projected, each), and read (the range,
+ * and each entity's checks).
  */
 function pageStep(): { rows: number; reads: number } {
-  const statements = EXPORT_PAGE.entities + RECONCILE_POLICY.rowsPerPage;
+  const entities = EXPORT_PAGE.entities + RECONCILE_POLICY.rowsPerPage;
   return {
-    rows: statements * STATEMENT_ROWS + SMALL_STEP.rows,
-    reads: RECONCILE_POLICY.rowsPerPage + 1 + statements * 10 + SMALL_STEP.reads,
+    rows: entities * STATEMENT_ROWS + SMALL_STEP.rows,
+    reads: RECONCILE_POLICY.rowsPerPage + 1 + entities * STATEMENT_READS + SMALL_STEP.reads,
   };
 }
 
@@ -492,8 +504,7 @@ async function differences(
     if (row && !newer(position, entity.version, row)) continue;
     // Only removals while the database is at its size threshold.
     if (removalsOnly && !entity.deleted) continue;
-    const statement = searchStatement(db, position, entity, writer);
-    if (statement) statements.push(statement);
+    statements.push(...(searchStatements(db, position, entity, writer) ?? []));
   }
   // Where the rows the export lacks were found gone: this page's reading. A row this page
   // lacks that an event up to it wrote is gone (deleted before the page was read, after the
@@ -506,7 +517,7 @@ async function differences(
       (row.epoch_gen === seen.epochGen && row.updated_seq > seen.sourceSeq)
     )
       continue;
-    statements.push(absentStatement(db, table, key, position, seen, row.key, writer));
+    statements.push(...absentStatements(db, table, key, position, seen, row.key, writer));
   }
   return { statements, upTo, ended: !cut && page.next === null, read: meta.rows_read ?? 0 };
 }
@@ -538,7 +549,7 @@ const EMPTIED: Record<string, string> = {
   search_docs: `state = NULL, open_state = NULL, state_reason = NULL, draft = 0, locked = 0,
     lock_reason = NULL, author_id = NULL, author_root = NULL, assignees = '[]', labels = '[]',
     milestone = NULL, title = NULL, body = NULL, created_at = NULL, updated_at = NULL,
-    closed_at = NULL, merged_at = NULL`,
+    closed_at = NULL, merged_at = NULL, fts_token = NULL`,
   search_labels: "name = NULL, color = NULL, description = NULL",
   search_milestones:
     "title = NULL, state = NULL, description = NULL, due_on = NULL, closed_at = NULL",
@@ -549,9 +560,11 @@ const EMPTIED: Record<string, string> = {
  * read wrote it meanwhile. Its deletion is placed where the page found it
  * gone (`seen`): the row's version stays, and nothing at or before that
  * place may change it again (an earlier change, delivered late); it is
- * collected once a later pass's cutoff covers that place.
+ * collected once a later pass's cutoff covers that place. An issue's or
+ * pull request's indexed tuple goes first, in the same batch, while the
+ * row still has its text.
  */
-function absentStatement(
+function absentStatements(
   db: D1Database,
   table: string,
   key: string,
@@ -559,25 +572,45 @@ function absentStatement(
   seen: SearchPosition,
   value: number,
   writer: SearchWriter,
-): D1PreparedStatement {
-  return db
-    .prepare(
-      `UPDATE ${table} SET deleted = 1, ${EMPTIED[table]}, deleted_epoch = ?6,
-         deleted_seq = ?7
-       WHERE repo_id = ?1 AND ${key} = ?5 AND deleted = 0
-         AND (epoch_gen < ?6 OR (epoch_gen = ?6 AND updated_seq <= ?7))
-         AND ${eligible(writer, 8)}`,
-    )
-    .bind(
-      position.repoId,
-      position.epochGen,
-      position.ownerGen,
-      position.sourceSeq,
-      value,
-      seen.epochGen,
-      seen.sourceSeq,
-      ...writerParams(writer),
-    );
+): D1PreparedStatement[] {
+  const absent = (d: string) => `${d}.repo_id = ?1 AND ${d}.${key} = ?5 AND ${d}.deleted = 0
+    AND (${d}.epoch_gen < ?6 OR (${d}.epoch_gen = ?6 AND ${d}.updated_seq <= ?7))
+    AND ${eligible(writer, 8)}`;
+  const params = [
+    position.repoId,
+    position.epochGen,
+    position.ownerGen,
+    position.sourceSeq,
+    value,
+    seen.epochGen,
+    seen.sourceSeq,
+    ...writerParams(writer),
+  ];
+  const marked = (sql: string) => db.prepare(sql).bind(...params);
+  const indexed =
+    table !== "search_docs"
+      ? []
+      : [
+          marked(
+            `UPDATE search_index_state SET live_docs = live_docs - 1
+             WHERE id = 1 AND EXISTS (SELECT 1 FROM search_docs d
+               WHERE ${absent("d")} AND d.fts_token IS NOT NULL)`,
+          ),
+          marked(
+            `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
+             SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+             FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+             WHERE ${absent("d")} AND d.fts_token IS NOT NULL`,
+          ),
+        ];
+  return [
+    ...indexed,
+    marked(
+      `UPDATE ${table} AS d SET deleted = 1, ${EMPTIED[table]},
+         deleted_epoch = ?6, deleted_seq = ?7
+       WHERE ${absent("d")}`,
+    ),
+  ];
 }
 
 /**

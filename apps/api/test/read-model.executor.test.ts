@@ -73,7 +73,7 @@ describe("the read model's admission", () => {
          FROM sqlite_schema WHERE type = 'trigger' AND name LIKE 'read_model_%'`,
       )
       .all<{ n: number; refusing: number }>();
-    expect(results[0]).toEqual({ n: 60, refusing: 60 });
+    expect(results[0]).toEqual({ n: 72, refusing: 72 });
     expect(await barrier()).toMatchObject({ phase: "running", protocol_version: 2 });
     const directory = await env.DIRECTORY.prepare(
       "SELECT phase, protocol_version, read_model_protocol_since FROM read_model_barriers WHERE shard = 'default'",

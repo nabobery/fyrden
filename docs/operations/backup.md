@@ -11,7 +11,10 @@ and their payloads' records, failed events). Two ways keep a copy of it:
   A restore puts back every table as it was, the protocol's own included.
 - **A coherent export**, Fyrden's: every table of the read model, each
   row once, in key order, while its writers are paused, written to files
-  you keep.
+  you keep. Search's full-text indexes are not in it (they are derived from
+  the projections, which are). `wrangler d1 export` cannot export
+  `fyrden-org` from migration 0019 on: it holds those indexes as virtual
+  tables ([D1 docs](https://developers.cloudflare.com/d1/best-practices/import-export-data/#known-limitations)).
 
 ## The restore floor
 

@@ -296,14 +296,56 @@ describe("search's live projection, admitted", () => {
     const repoId = await listedRepo();
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
     const first = await spent();
-    // A document's insert (its indexes included) and the bookkeeping (9 as measured), with the
-    // admissions of its batch and of the settlement's, less than the 14 reserved (6 for the
-    // statement, 8 for bookkeeping) and the settlement's charge.
+    // A document's insert (its indexes, its repository's number, the counters and its full-text
+    // entry included) and the bookkeeping (15 as measured), with the admissions of its batch and
+    // of the settlement's, less than the 24 reserved (16 for the document, 8 for bookkeeping)
+    // and the settlement's charge.
     const admissions = 2 * READ_MODEL_ADMISSION.rows;
-    expect(first).toBe(9 + admissions);
+    expect(first).toBe(15 + admissions);
     // A duplicate writes no projection row: only the bookkeeping is charged (2 as measured).
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
     expect((await spent()) - first).toBe(2 + admissions);
+  });
+
+  it("charges the day what a repository's own index entry writes", async () => {
+    const repoId = await listedRepo();
+    const before = await spent();
+    const repository: DomainEvent = {
+      id: { sourceId: repoId, epochGen: 1, sourceSeq: 1 },
+      type: "repo.updated",
+      at: 1,
+      actor: null,
+      actChain: [],
+      ownerGen: 1,
+      entity: {
+        type: "repo",
+        id: repoId,
+        version: 1,
+        deleted: false,
+        row: {
+          ownerId: "usr_01K742SG00NAWD8WB4RTMJF8H9",
+          name: `indexed-${repoId}`,
+          visibility: "private",
+          defaultBranch: "refs/heads/main",
+          pushedAt: null,
+          createdAt: 1,
+          description: "Charged",
+        },
+      },
+      data: null,
+      stored: false,
+    };
+    await deliver([{ sourceId: repoId, events: [repository] }]);
+    expect(
+      await db
+        .prepare("SELECT indexed FROM search_repo_nums WHERE repo_id = ?")
+        .bind(repoId)
+        .first(),
+    ).toEqual({ indexed: 1 });
+    // Its numbers (its repository's and its owner's, each with two keys), the counters past them,
+    // the count, its membership and its entry (11, measured; the repository's row is the read
+    // model's, not search's), the spending's own row and the admission of its batch.
+    expect((await spent()) - before).toBe(11 + 1 + READ_MODEL_ADMISSION.rows);
   });
 
   it("charges the admission of an invocation's settlements once", async () => {
@@ -316,7 +358,7 @@ describe("search's live projection, admitted", () => {
     // Each message's as one alone (today's row made by the first only), but one settlement
     // batch: its admission charged once.
     expect((await spent()) - before).toBe(
-      2 * (9 + READ_MODEL_ADMISSION.rows) - 1 + READ_MODEL_ADMISSION.rows,
+      2 * (15 + READ_MODEL_ADMISSION.rows) - 1 + READ_MODEL_ADMISSION.rows,
     );
   });
 
@@ -459,7 +501,7 @@ describe("search's live projection, admitted", () => {
         sinks: [],
       },
     );
-    expect(await spent()).toBeLessThanOrEqual(12 + 2 * READ_MODEL_ADMISSION.rows);
+    expect(await spent()).toBe(15 + 2 * READ_MODEL_ADMISSION.rows);
     expect(await docs(repoId)).toMatchObject([{ number: 1 }]);
   });
 

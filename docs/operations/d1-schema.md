@@ -52,7 +52,11 @@ npx wrangler d1 execute fyrden-org --remote --json \
 
 ## Repairing
 
-Back up first: `npx wrangler d1 export <database> --remote --output backup.sql`.
+Back up first: `npx wrangler d1 export fyrden-directory --remote --output backup.sql`
+for the directory; `fyrden-org` holds full-text indexes (virtual tables, from
+migration 0019), which `wrangler d1 export` cannot export
+([D1 docs](https://developers.cloudflare.com/d1/best-practices/import-export-data/#known-limitations)):
+export it with `fyrden read-model export` (backup.md).
 Never edit `d1_migrations` and never edit a released migration file. Then
 either:
 

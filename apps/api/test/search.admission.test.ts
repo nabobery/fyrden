@@ -24,12 +24,31 @@ import {
   sweepTombstones,
 } from "../src/search/reconcile.js";
 import { repairStatement, runSearchRepairs } from "../src/search/repairs.js";
-import { docStatement } from "../src/search/statements.js";
+import { docStatements } from "../src/search/statements.js";
 import { api, json, user } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 import { admitted } from "./helpers/read-model.js";
+
+/**
+ * An issue's statement group, run in one batch as production runs it;
+ * `changes` whether its row changed (D1's own count takes in the full-text
+ * index's work).
+ */
+const docStatement = (...args: Parameters<typeof docStatements>) => ({
+  run: async () => {
+    const [db, position, entity] = args;
+    const row = () =>
+      db
+        .prepare("SELECT * FROM search_docs WHERE repo_id = ? AND number = ?")
+        .bind(position.repoId, Number(entity.id.slice(entity.id.lastIndexOf("#") + 1)))
+        .first();
+    const before = JSON.stringify(await row());
+    await db.batch(docStatements(...args));
+    return { meta: { changes: JSON.stringify(await row()) === before ? 0 : 1 } };
+  },
+});
 
 const fx = inject("pushFixtures");
 // Written as production writes it: through the read model's executor.

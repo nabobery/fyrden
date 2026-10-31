@@ -11,7 +11,7 @@ import {
   usedBy,
 } from "./admission.js";
 import { repairStatement } from "./repairs.js";
-import { searchStatement } from "./statements.js";
+import { searchStatements } from "./statements.js";
 
 /*
  * Search's projections written by the events consumer while search
@@ -42,7 +42,8 @@ export interface LiveSearch {
   /**
    * What settles the batch's reservation (or counts what it wrote, when it
    * reserved nothing or was refused), from the results of `before` and
-   * `after` and the batch's last; charged with the admission of the batch
+   * `after` and the batch's last, with the rows the repository's index entry
+   * wrote in the batch (`indexed`); charged with the admission of the batch
    * they are applied in unless `admitted` is false (another in that batch
    * is charged with it).
    */
@@ -51,6 +52,7 @@ export interface LiveSearch {
     after: readonly D1Result[],
     last: D1Result | undefined,
     admitted?: boolean,
+    indexed?: number,
   ): D1PreparedStatement[];
 }
 
@@ -63,6 +65,7 @@ export function liveSearch(
   const { epochGen, now } = options;
   const token = options.token ?? crypto.randomUUID();
   const projections: D1PreparedStatement[] = [];
+  let projected = 0;
   let malformed = false;
   for (const event of snapshots) {
     const { entity } = event;
@@ -75,11 +78,14 @@ export function liveSearch(
     try {
       // A deletion empties a row already there whatever the admission (the database shrinks); one
       // of an entity never projected adds a row, admitted as any other.
-      const statement = searchStatement(db, position, entity, {
+      const statements = searchStatements(db, position, entity, {
         by: "event",
         admission: { token, removal: entity.deleted },
       });
-      if (statement) projections.push(statement);
+      if (statements) {
+        projections.push(...statements);
+        projected++;
+      }
     } catch (error) {
       // Skipped: the rest of the envelope applies, and the reconciliation reads it again.
       malformed = true;
@@ -96,7 +102,7 @@ export function liveSearch(
     }),
   ];
   const admitting = projections.length > 0;
-  const reserved = projections.length * STATEMENT_ROWS + BOOKKEEPING_ROWS;
+  const reserved = projected * STATEMENT_ROWS + BOOKKEEPING_ROWS;
   const requests = [
     ...(admitting
       ? [
@@ -117,7 +123,7 @@ export function liveSearch(
   return {
     before,
     after,
-    settlement(beforeResults, results, last, admitted = true) {
+    settlement(beforeResults, results, last, admitted = true, indexed = 0) {
       const admission = admitting ? results.slice(0, 2) : [];
       const day = (admission[1]?.results[0] as { day?: number } | undefined)?.day;
       const overhead = usedBy(admission);
@@ -128,7 +134,7 @@ export function liveSearch(
       const after = usedBy([...beforeResults, ...results.slice(admission.length)]);
       const othersLast = results.length > 0 && last !== undefined && last !== results.at(-1);
       const used = {
-        rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0),
+        rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0) + indexed,
         reads: after.reads,
       };
       if (day !== undefined)

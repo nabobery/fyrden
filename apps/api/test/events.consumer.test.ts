@@ -441,9 +441,10 @@ describe("events consumer", () => {
     // A D1 batch counts as one call against the per-invocation limit, on Free
     // the 1,000 internal-service calls (measured on Workers Free, 2026-10-10).
     // And the invocation's writer's lease in the directory, taken and released, and each
-    // batch's admission (its opening and closing) around the message's two statements; then the
-    // size the invocation left, recorded once (its own admitted batch).
-    expect(calls).toEqual({ directory: 5 + 2, batches: [4, 4, 4, 4, 4, 3] });
+    // batch's admission (its opening and closing) around the message's statements (its epoch,
+    // and its repository's row with its index entry: nine); then the size the invocation left,
+    // recorded once (its own admitted batch).
+    expect(calls).toEqual({ directory: 5 + 2, batches: [12, 12, 12, 12, 12, 3] });
     expect(result.explicitAcks).toHaveLength(5);
     for (const repoId of repos) expect(await readRow(repoId)).toMatchObject({ version: 2 });
   });

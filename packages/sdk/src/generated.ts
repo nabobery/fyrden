@@ -1833,6 +1833,7 @@ export type AdminReadModelExportInput = {
 /** Output of `admin.read_model.export`. */
 export type AdminReadModelExportOutput = {
   generation: number;
+  derived: string[];
   migrations: string[];
   tables: {
     table: string;
@@ -8024,7 +8025,7 @@ export interface Operations {
   "admin.read_model.pause": { input: AdminReadModelPauseInput; output: AdminReadModelPauseOutput };
   /** Resume the read model's writers. Fyrden: lets the org read model's writers write again, at the latest generation either barrier holds (a generation never goes down); a newer pause that came between stands. With `generation`, only the pause at that generation is resumed (another, newer, stands). Nothing while it runs already or is recovering. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */
   "admin.read_model.resume": { input: AdminReadModelResumeInput; output: AdminReadModelResumeOutput };
-  /** Get the read model export's manifest. Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, and the protocol tables' state. Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only. */
+  /** Get the read model export's manifest. Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, the protocol tables' state, and the tables left out (`derived`: the full-text indexes, rebuilt from the exported tables). Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only. */
   "admin.read_model.export": { input: AdminReadModelExportInput; output: AdminReadModelExportOutput };
   /** Get a page of the read model export. Fyrden: a page of a coherent export of the org read model, paused at `generation`: rows of one table in key order (200 rows or 2 MiB of JSON at most; one larger row is a page of its own), from `cursor` (the first page without one). Call again with `next_cursor` until it is null; every table follows the one before. Refused as the manifest is. Instance administrators only. */
   "admin.read_model.export_page": { input: AdminReadModelExportPageInput; output: AdminReadModelExportPageOutput };

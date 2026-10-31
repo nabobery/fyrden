@@ -30,8 +30,9 @@ import { EFFECT_SINKS, effectQueues } from "../effects/sinks.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { feedSink } from "../feed/sink.js";
 import { consumerCalls } from "../invocation-calls.js";
-import { withReadModel } from "../read-model/executor.js";
+import { READ_MODEL_ADMISSION, withReadModel } from "../read-model/executor.js";
 import { liveSearch, Settling } from "../search/live.js";
+import { bound } from "../search/statements.js";
 
 /** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
@@ -411,10 +412,11 @@ export async function applyEnvelope(
       now,
       missing: repos.missing || searched.missing,
     });
+  const repoRows = snapshots.flatMap((event) => repoStatements(db, sourceId, event, now, indexing));
   const statements = [
     ...(live?.before ?? []),
     epochStatement(db, sourceId, epochGen, now),
-    ...snapshots.map((event) => repoStatement(db, sourceId, event, now)),
+    ...repoRows,
     ...(live?.after ?? []),
     ...effects,
   ];
@@ -424,13 +426,15 @@ export async function applyEnvelope(
     statements,
   );
   if (live) {
-    const start = live.before.length + 1 + snapshots.length;
+    const start = live.before.length + 1 + repoRows.length;
+    const groups = results.slice(live.before.length + 1, start);
     const settle = (admitted: boolean) =>
       live.settlement(
         results.slice(0, live.before.length),
         results.slice(start, start + live.after.length),
         results.at(-1),
         admitted,
+        indexRows(groups, start === results.length),
       );
     const settlement = options.settling ? [] : settle(true);
     if (options.settling) options.settling.add(db, settle);
@@ -655,18 +659,54 @@ async function hydrate(payloads: Payloads, events: readonly DomainEvent[]): Prom
   return whole;
 }
 
+/** Statements a repository snapshot writes in (see `repoStatements`), and where its row's is. */
+export const REPO_STATEMENTS = 9;
+const REPO_ROW = 7;
+
 /**
- * The guarded upsert of one repository snapshot: written only if its epoch
- * is not older than the source's newest, its ownership generation is
- * current, and it is newer than the row it replaces.
+ * Rows repository snapshots' groups (`results`, theirs in order) wrote for
+ * search's index, all but their rows' own (the read model's), charged with
+ * search's spending; less the batch's admission, which the executor counts
+ * with the batch's last result, when they end the batch.
  */
-export function repoStatement(
+export function indexRows(results: readonly D1Result[], last: boolean): number {
+  const rows = results.reduce(
+    (n, r, i) => n + (i % REPO_STATEMENTS === REPO_ROW ? 0 : (r.meta.rows_written ?? 0)),
+    0,
+  );
+  return Math.max(0, rows - (last && results.length > 0 ? READ_MODEL_ADMISSION.rows : 0));
+}
+
+/**
+ * The statements that write one repository snapshot (one batch): its row,
+ * written only if its epoch is not older than the source's newest, its
+ * ownership generation is current, and it is newer than the row it
+ * replaces (by epoch, ownership, version: a transfer at one version moves
+ * it), and its repository index entry (name, description and a token of its
+ * owner) with it. Every statement takes that decision over the row as it
+ * was:
+ *
+ * 1. the repository's and its owner's numbers, allocated when a live tuple
+ *    is to be indexed and they have none, and the counters moved past them;
+ * 2. the count of indexed repositories, by what the write changes;
+ * 3. the old indexed tuple deleted from the index while the row still has
+ *    it, when the row is deleted or its tuple changes;
+ * 4. its membership: indexed (marked with this group's token) when its
+ *    tuple changes while search indexes (`indexing`), kept as it was when
+ *    only other fields change, cleared otherwise;
+ * 5. the row upserted;
+ * 6. the tuple marked with the token indexed.
+ *
+ * The row is written whether or not search indexes: it is the read model's.
+ */
+export function repoStatements(
   db: D1Database,
   sourceId: string,
   event: Snapshot,
   now: number,
+  indexing: boolean,
   admit?: Admission,
-): D1PreparedStatement {
+): D1PreparedStatement[] {
   const { entity } = event;
   if (entity.id !== sourceId)
     throw new Error(`a repository event for another repository: ${entity.id}`);
@@ -678,14 +718,104 @@ export function repoStatement(
     // A tombstone a deletion kept (never an event's) carries the row it ended with.
     row = parseRepoRow(entity.row);
   }
-  return db
-    .prepare(
+  const params = [
+    sourceId,
+    row?.ownerId ?? null,
+    row?.name ?? null,
+    row?.visibility ?? null,
+    row?.defaultBranch ?? null,
+    row?.pushedAt ?? null,
+    row?.createdAt ?? null,
+    entity.deleted ? 1 : 0,
+    event.id.epochGen,
+    entity.version,
+    event.ownerGen,
+    event.id.sourceSeq,
+    now,
+    row?.description ?? null,
+    entity.deleted && row === undefined ? 1 : 0,
+    crypto.randomUUID(),
+    indexing ? 1 : 0,
+    ...(admit?.params ?? []),
+  ];
+  // ?1–?15 the row's, ?16 this group's token, ?17 whether search indexes, the writer's from ?18.
+  const fences = `?9 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?1)
+    AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
+    ${admit ? `AND ${admit.where(18)}` : ""}`;
+  // The write is taken: the fences hold, and no row is there or it is newer than the row.
+  const taken = `${fences} AND NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
+    AND (?9, ?11, ?10) <= (r.epoch_gen, r.owner_gen, r.version))`;
+  // Its indexed tuple changes (an event's tombstone carries no row: its fields stay).
+  const changes = `NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
+    AND r.deleted IS ?8 AND (?8 = 1 OR ?15 = 1 OR (r.name IS ?3 AND r.description IS ?14
+      AND r.owner_id IS ?2)))`;
+  const member = "coalesce((SELECT indexed FROM search_repo_nums WHERE repo_id = ?1), 0)";
+  const insert = `(?8 = 0 AND ?17 = 1 AND ?2 IS NOT NULL AND ${changes})`;
+  const remove = `(${member} = 1 AND (?8 = 1 OR ${changes}))`;
+  const after = `(CASE WHEN ${insert} THEN 1 WHEN ${remove} THEN 0 ELSE ${member} END)`;
+  return [
+    bound(
+      db,
+      `INSERT INTO search_repo_nums (repo_id, num)
+       SELECT ?1, next_repo_num FROM search_index_state
+       WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM search_repo_nums WHERE repo_id = ?1)
+         AND ${insert} AND ${taken}`,
+      params,
+    ),
+    db
+      .prepare(
+        `UPDATE search_index_state SET next_repo_num = next_repo_num + 1
+       WHERE id = 1 AND EXISTS (SELECT 1 FROM search_repo_nums
+         WHERE repo_id = ?1 AND num = search_index_state.next_repo_num)`,
+      )
+      .bind(sourceId),
+    bound(
+      db,
+      `INSERT INTO search_owner_nums (owner_id, num)
+       SELECT ?2, next_owner_num FROM search_index_state
+       WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM search_owner_nums WHERE owner_id = ?2)
+         AND ${insert} AND ${taken}`,
+      params,
+    ),
+    db
+      .prepare(
+        `UPDATE search_index_state SET next_owner_num = next_owner_num + 1
+       WHERE id = 1 AND EXISTS (SELECT 1 FROM search_owner_nums
+         WHERE owner_id = ?1 AND num = search_index_state.next_owner_num)`,
+      )
+      .bind(row?.ownerId ?? null),
+    bound(
+      db,
+      `UPDATE search_index_state SET indexed_repos = indexed_repos + ${after} - ${member}
+       WHERE id = 1 AND ${after} <> ${member} AND ${taken}`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_repos_fts (search_repos_fts, rowid, name, description, owner)
+       SELECT 'delete', n.num, r.name, r.description, 'o' || o.num
+       FROM repos r JOIN search_repo_nums n ON n.repo_id = r.repo_id
+       JOIN search_owner_nums o ON o.owner_id = r.owner_id
+       WHERE r.repo_id = ?1 AND n.indexed = 1 AND ${remove} AND ${taken}`,
+      params,
+    ),
+    bound(
+      db,
+      `UPDATE search_repo_nums SET
+         fts_token = CASE WHEN ${insert} THEN ?16 WHEN ${after} = 1 THEN fts_token END,
+         indexed_epoch = CASE WHEN ${after} = 1 THEN ?9 END,
+         indexed_owner_gen = CASE WHEN ${after} = 1 THEN ?11 END,
+         indexed_version = CASE WHEN ${after} = 1 THEN ?10 END,
+         indexed = ${after}
+       WHERE repo_id = ?1 AND ${taken}`,
+      params,
+    ),
+    bound(
+      db,
       `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at,
          deleted, epoch_gen, version, owner_gen, updated_seq, updated_at, description)
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
-       WHERE ?9 >= (SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?1)
-         AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
-         ${admit ? `AND ${admit.where(16)}` : ""}
+       WHERE ${fences}
        -- An event's tombstone carries no row: the row's fields stay as they were.
        ON CONFLICT (repo_id) DO UPDATE SET
          owner_id = CASE WHEN ?15 = 1 THEN repos.owner_id ELSE excluded.owner_id END,
@@ -703,26 +833,20 @@ export function repoStatement(
          owner_gen = excluded.owner_gen,
          updated_seq = excluded.updated_seq,
          updated_at = excluded.updated_at
-       WHERE (excluded.epoch_gen, excluded.version) > (repos.epoch_gen, repos.version)`,
-    )
-    .bind(
-      sourceId,
-      row?.ownerId ?? null,
-      row?.name ?? null,
-      row?.visibility ?? null,
-      row?.defaultBranch ?? null,
-      row?.pushedAt ?? null,
-      row?.createdAt ?? null,
-      entity.deleted ? 1 : 0,
-      event.id.epochGen,
-      entity.version,
-      event.ownerGen,
-      event.id.sourceSeq,
-      now,
-      row?.description ?? null,
-      entity.deleted && row === undefined ? 1 : 0,
-      ...(admit?.params ?? []),
-    );
+       WHERE (excluded.epoch_gen, excluded.owner_gen, excluded.version)
+         > (repos.epoch_gen, repos.owner_gen, repos.version)`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_repos_fts (rowid, name, description, owner)
+       SELECT n.num, r.name, r.description, 'o' || o.num
+       FROM repos r JOIN search_repo_nums n ON n.repo_id = r.repo_id
+       JOIN search_owner_nums o ON o.owner_id = r.owner_id
+       WHERE r.repo_id = ?1 AND r.deleted = 0 AND n.indexed = 1 AND n.fts_token = ?16`,
+      params,
+    ),
+  ];
 }
 
 /**

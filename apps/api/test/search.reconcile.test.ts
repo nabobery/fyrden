@@ -14,11 +14,30 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { epochStatement } from "../src/queues/events-consumer.js";
 import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
 import { repairStatement } from "../src/search/repairs.js";
-import { docStatement, labelStatement } from "../src/search/statements.js";
+import { docStatements, labelStatement } from "../src/search/statements.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+
+/**
+ * An issue's statement group, run in one batch as production runs it;
+ * `changes` whether its row changed (D1's own count takes in the full-text
+ * index's work).
+ */
+const docStatement = (...args: Parameters<typeof docStatements>) => ({
+  run: async () => {
+    const [db, position, entity] = args;
+    const row = () =>
+      db
+        .prepare("SELECT * FROM search_docs WHERE repo_id = ? AND number = ?")
+        .bind(position.repoId, Number(entity.id.slice(entity.id.lastIndexOf("#") + 1)))
+        .first();
+    const before = JSON.stringify(await row());
+    await db.batch(docStatements(...args));
+    return { meta: { changes: JSON.stringify(await row()) === before ? 0 : 1 } };
+  },
+});
 
 const fx = inject("pushFixtures");
 // Written as production writes it: through the read model's executor.
@@ -191,10 +210,10 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // Each kind's page: its checkpoint alone; then the repository's own row with the last
-    // checkpoint and the revision covered; each batch between the executor's opening and closing
-    // of admission.
-    expect(batches).toEqual([1, 1, 1, 4].map((n) => n + 2));
+    // Each kind's page: its checkpoint alone; then the repository's own row (its epoch and its
+    // nine statements, its index entry with it) with the last checkpoint and the revision
+    // covered; each batch between the executor's opening and closing of admission.
+    expect(batches).toEqual([1, 1, 1, 12].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -624,9 +643,10 @@ describe("search reconciliation", () => {
       const batches: number[] = [];
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
       // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
-      // deleted and its checkpoint (issue 1, matching, writes nothing), between the executor's
-      // opening and closing of admission.
-      expect(batches.slice(0, 3)).toEqual([3, 4, 3].map((n) => n + 2));
+      // deleted (three statements each: the indexed count, the index entry, the row) and its
+      // checkpoint (issue 1, matching, writes nothing), between the executor's opening and
+      // closing of admission.
+      expect(batches.slice(0, 3)).toEqual([7, 10, 7].map((n) => n + 2));
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }
@@ -710,6 +730,58 @@ describe("search reconciliation", () => {
         .first(),
     ).toEqual({ kind: "subjects", after: 0 });
     expect(await count("search_docs")).toBe(0);
+  });
+
+  it("writes nothing of a finishing step another pass superseded, and does not call it done", async () => {
+    await call("PATCH", "", { description: "before" });
+    expect(await reconcileSource(env, target())).toBe("done");
+    await call("PATCH", "", { description: "after" });
+    await repairStatement(db, repo.id, "changed", 2).run();
+    // Up to the pass's last step: the repository's own row.
+    for (let step = 0; step < 4; step++)
+      expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+    const pass = await db
+      .prepare("SELECT gen, kind, after FROM search_reconciles WHERE repo_id = ?")
+      .bind(repo.id)
+      .first<{ gen: number; kind: string; after: number }>();
+    expect(pass).toMatchObject({ kind: "milestones", after: -1 });
+    // Once this step has read the repository, a newer pass takes the source over.
+    const stubs = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop !== "getByName") {
+          const value = Reflect.get(target, prop);
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return (name: string) => {
+          const real = target.getByName(name);
+          return {
+            exportPage: async (request: ExportPageRequest) => {
+              const page = await real.exportPage(request);
+              await db
+                .prepare(
+                  "UPDATE search_reconciles SET gen = gen + 1, kind = 'subjects', after = 0 WHERE repo_id = ?",
+                )
+                .bind(repo.id)
+                .run();
+              return page;
+            },
+          };
+        };
+      },
+    });
+    const racing = new Proxy(env, {
+      get: (target, prop) => (prop === "REPO" ? stubs : Reflect.get(target, prop)),
+    });
+    expect(await reconcileSource(racing, target(), { pages: 1 })).toBe("more");
+    expect(
+      await db.prepare("SELECT description FROM repos WHERE repo_id = ?").bind(repo.id).first(),
+    ).toEqual({ description: "before" });
+    expect(
+      await db
+        .prepare("SELECT gen, kind, after FROM search_reconciles WHERE repo_id = ?")
+        .bind(repo.id)
+        .first(),
+    ).toEqual({ gen: (pass?.gen ?? 0) + 1, kind: "subjects", after: 0 });
   });
 
   it("writes the repository's own row from a snapshot read after the pass took its revision", async () => {

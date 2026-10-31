@@ -32,8 +32,17 @@ export const SAME_DAY = (n: number) => `${TODAY} = ?${n}`;
 export const ADMITTED = (n: number) =>
   `EXISTS (SELECT 1 FROM search_budget WHERE day = ${TODAY} AND admitted = ?${n})`;
 
-/** Rows one projected entity's statement writes at most (a document's insert, its indexes included). */
-export const STATEMENT_ROWS = 6;
+/**
+ * Rows one projected entity's statements write, reserved: an issue first
+ * projected writes 12 (its row and indexes, its repository's number, the
+ * counters and its full-text entry; measured, a 9,000-word body as many as
+ * a short one), and the full-text index's merges now and then more (not
+ * measured; settled at what was written).
+ */
+export const STATEMENT_ROWS = 16;
+
+/** Rows one projected entity's statements read, reserved (an issue's group: 26, measured). */
+export const STATEMENT_READS = 40;
 
 export interface Reservation {
   readonly day: number;
@@ -132,8 +141,8 @@ export async function reserve(
 
 /**
  * Settles a reservation to what its step used, with what reserving and
- * settling it cost: the rest goes back (and nothing more is charged than
- * was reserved, nor less than the bookkeeping).
+ * settling it cost: the rest goes back, and a step that used more than it
+ * reserved is charged all of it (the day may then end over its allowance).
  */
 export function settleStatement(
   db: D1Database,
@@ -148,19 +157,14 @@ export function settleStatement(
         rows: SETTLING.rows - READ_MODEL_ADMISSION.rows,
         reads: SETTLING.reads - READ_MODEL_ADMISSION.reads,
       };
+  // What was used, all of it: more than was reserved too (an estimate exceeded is still spent).
   const rows = used.rows + reservation.overhead.rows + settling.rows;
   const reads = used.reads + reservation.overhead.reads + settling.reads;
   return db
     .prepare(
       `UPDATE search_budget SET rows = rows - ?2 + ?4, reads = reads - ?3 + ?5 WHERE day = ?1`,
     )
-    .bind(
-      reservation.day,
-      reservation.rows,
-      reservation.reads,
-      Math.min(rows, reservation.rows + reservation.overhead.rows + settling.rows),
-      Math.min(reads, reservation.reads + reservation.overhead.reads + settling.reads),
-    );
+    .bind(reservation.day, reservation.rows, reservation.reads, rows, reads);
 }
 
 /**

@@ -33,10 +33,14 @@ export const EXPORT_TABLES: readonly { readonly table: string; readonly key: rea
     { table: "events_failed", key: ["id"] },
     { table: "repos", key: ["repo_id"] },
     { table: "search_budget", key: ["day"] },
+    { table: "search_byte_reservations", key: ["token"] },
     { table: "search_docs", key: ["doc_id"] },
+    { table: "search_index_state", key: ["id"] },
     { table: "search_labels", key: ["repo_id", "label_id"] },
     { table: "search_milestones", key: ["repo_id", "number"] },
+    { table: "search_owner_nums", key: ["owner_id"] },
     { table: "search_reconciles", key: ["repo_id"] },
+    { table: "search_repo_nums", key: ["repo_id"] },
     { table: "search_repairs", key: ["repo_id"] },
     { table: "search_size", key: ["id"] },
     { table: "search_sources", key: ["repo_id"] },
@@ -46,6 +50,25 @@ export const EXPORT_TABLES: readonly { readonly table: string; readonly key: rea
     { table: "webhook_deliveries", key: ["delivery_id"] },
     { table: "webhook_payloads", key: ["event_key"] },
   ];
+
+/**
+ * The full-text indexes, their vocabularies and their shadow tables: derived
+ * from the projections (rebuilt from them), never exported.
+ */
+export const DERIVED_TABLES = [
+  "search_fts",
+  "search_fts_config",
+  "search_fts_data",
+  "search_fts_docsize",
+  "search_fts_idx",
+  "search_repos_fts",
+  "search_repos_fts_config",
+  "search_repos_fts_data",
+  "search_repos_fts_docsize",
+  "search_repos_fts_idx",
+  "search_repos_vocab",
+  "search_vocab",
+] as const;
 
 /** The tables that hold the protocol's state, not data. */
 export const PROTOCOL_TABLES = ["read_model_barrier", "read_model_write"] as const;
@@ -67,6 +90,8 @@ export interface ExportPage {
 
 export interface ExportManifest {
   readonly generation: number;
+  /** Tables left out: derived from the exported ones (the full-text indexes), rebuilt from them. */
+  readonly derived: readonly string[];
   readonly migrations: readonly string[];
   readonly tables: readonly { readonly table: string; readonly columns: readonly string[] }[];
   readonly protocol: Record<string, readonly Record<string, unknown>[]>;
@@ -206,6 +231,7 @@ export async function exportManifest(db: D1Database, generation: number): Promis
   const protocol = rest.slice(EXPORT_TABLES.length);
   return {
     generation,
+    derived: DERIVED_TABLES,
     migrations: (migrations?.results ?? []).map((row) => row.name as string),
     tables: EXPORT_TABLES.map(({ table }, i) => ({
       table,

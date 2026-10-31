@@ -93,6 +93,7 @@ export async function getReadModelExportOperation(
   );
   return {
     ...manifest,
+    derived: [...manifest.derived],
     migrations: [...manifest.migrations],
     tables: manifest.tables.map((t) => ({ table: t.table, columns: [...t.columns] })),
     protocol: Object.fromEntries(Object.entries(manifest.protocol).map(([k, v]) => [k, [...v]])),

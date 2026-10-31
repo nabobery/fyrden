@@ -61,10 +61,11 @@ export const getReadModelExport = defineOperation({
   path: "/admin/read-model/export",
   summary: "Get the read model export's manifest",
   description:
-    "Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, and the protocol tables' state. Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only.",
+    "Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, the protocol tables' state, and the tables left out (`derived`: the full-text indexes, rebuilt from the exported tables). Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only.",
   input: z.object({ generation: Generation }),
   output: z.object({
     generation: z.number().int(),
+    derived: z.array(z.string()),
     migrations: z.array(z.string()),
     tables: z.array(z.object({ table: z.string(), columns: z.array(z.string()) })),
     protocol: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))),

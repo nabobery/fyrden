@@ -197,21 +197,63 @@ const webhookPayloads: RepoCleanup = {
  * its search state (its cutoff, its reconciliation and repairs), and the
  * envelopes of its events the consumer gave up on, a page of each a call. None is written once its
  * tombstone is in the read model (every projection statement checks it).
+ * An issue's indexed tuple goes before its row, in the same batch, while
+ * the row still has its text; the repository's number (its documents'
+ * token) once none of its documents is left, its own indexed tuple first.
+ * Its owner's number stays (other repositories may share it).
  */
 const searchProjections: RepoCleanup = {
   name: "search",
   async page(env, { repoId, shard }, metrics) {
     const db = readModelFor(env, shard);
-    const page = (table: string, column = "repo_id") =>
+    const page = (table: string, column = "repo_id", order = "") =>
       db
         .prepare(
           `DELETE FROM ${table} WHERE rowid IN
-             (SELECT rowid FROM ${table} WHERE ${column} = ? LIMIT ?)`,
+             (SELECT rowid FROM ${table} WHERE ${column} = ? ${order} LIMIT ?)
+           RETURNING 1`,
         )
         .bind(repoId, CLEANUP_POLICY.searchPage);
-    metrics?.count("d1.query", { db: "org", op: "cleanup_search" }, 7);
+    // The documents the page deletes (in an order its key gives: the same rows in each statement,
+    // none read past them) that are indexed.
+    const docs = "ORDER BY number";
+    const indexed = `FROM search_docs d WHERE d.rowid IN
+      (SELECT rowid FROM search_docs WHERE repo_id = ?1 ${docs} LIMIT ?2)
+      AND d.deleted = 0 AND d.fts_token IS NOT NULL`;
+    const gone = "NOT EXISTS (SELECT 1 FROM search_docs WHERE repo_id = ?1)";
+    const repository = `FROM repos r JOIN search_repo_nums n ON n.repo_id = r.repo_id
+      JOIN search_owner_nums o ON o.owner_id = r.owner_id
+      WHERE r.repo_id = ?1 AND n.indexed = 1 AND ${gone}`;
+    metrics?.count("d1.query", { db: "org", op: "cleanup_search" }, 12);
     const removed = await db.batch([
-      page("search_docs"),
+      db
+        .prepare(
+          `UPDATE search_index_state SET live_docs = live_docs - (SELECT count(*) ${indexed})
+           WHERE id = 1`,
+        )
+        .bind(repoId, CLEANUP_POLICY.searchPage),
+      db
+        .prepare(
+          `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
+           SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+           FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+           WHERE d.doc_id IN (SELECT d.doc_id ${indexed})`,
+        )
+        .bind(repoId, CLEANUP_POLICY.searchPage),
+      page("search_docs", "repo_id", docs),
+      db
+        .prepare(
+          `INSERT INTO search_repos_fts (search_repos_fts, rowid, name, description, owner)
+           SELECT 'delete', n.num, r.name, r.description, 'o' || o.num ${repository}`,
+        )
+        .bind(repoId),
+      db
+        .prepare(
+          `UPDATE search_index_state SET indexed_repos = indexed_repos - 1
+           WHERE id = 1 AND EXISTS (SELECT 1 ${repository})`,
+        )
+        .bind(repoId),
+      db.prepare(`DELETE FROM search_repo_nums WHERE repo_id = ?1 AND ${gone}`).bind(repoId),
       page("search_labels"),
       page("search_milestones"),
       page("search_sources"),
@@ -219,7 +261,9 @@ const searchProjections: RepoCleanup = {
       page("search_repairs"),
       page("events_failed", "source_id"),
     ]);
-    const most = Math.max(...removed.map((r) => r.meta.changes));
+    // By the rows the pages deleted (a statement's changes, after an index's, count its work too).
+    const pages = [removed[2], ...removed.slice(6)];
+    const most = Math.max(...pages.map((r) => r?.results.length ?? 0));
     return pageOutcome(most, CLEANUP_POLICY.searchPage);
   },
 };

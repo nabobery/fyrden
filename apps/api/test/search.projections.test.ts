@@ -20,11 +20,11 @@ import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
 import { CLEANUP_POLICY, REPO_CLEANUPS } from "../src/repos/cleanups.js";
 import { repairStatement } from "../src/search/repairs.js";
 import {
-  docStatement,
+  docStatements,
   labelStatement,
   milestoneStatement,
   type SearchPosition,
-  searchStatement,
+  searchStatements,
 } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -148,10 +148,33 @@ async function doc(repoId: string, number: number) {
     .first<Record<string, unknown>>();
 }
 
+/** Where an entity's row is: its table and key. */
+function rowOf(position: SearchPosition, snapshot: EntitySnapshot) {
+  const key = Number(
+    snapshot.id.slice(Math.max(snapshot.id.lastIndexOf("#"), snapshot.id.lastIndexOf("/")) + 1),
+  );
+  const [table, column] =
+    snapshot.type === "label"
+      ? ["search_labels", "label_id"]
+      : snapshot.type === "milestone"
+        ? ["search_milestones", "number"]
+        : ["search_docs", "number"];
+  return db
+    .prepare(`SELECT * FROM ${table} WHERE repo_id = ? AND ${column} = ?`)
+    .bind(position.repoId, key)
+    .first();
+}
+
+/**
+ * Projects `snapshot` in one batch, as production does: 1 when its row
+ * changed, else 0 (D1's own count takes in the full-text index's work).
+ */
 async function project(position: SearchPosition, snapshot: EntitySnapshot): Promise<number> {
-  const statement = searchStatement(db, position, snapshot);
-  if (!statement) throw new Error("not projected");
-  return (await statement.run()).meta.changes;
+  const statements = searchStatements(db, position, snapshot);
+  if (!statements) throw new Error("not projected");
+  const before = JSON.stringify(await rowOf(position, snapshot));
+  await db.batch(statements);
+  return JSON.stringify(await rowOf(position, snapshot)) === before ? 0 : 1;
 }
 
 describe("search projections", () => {
@@ -358,16 +381,16 @@ describe("search projections", () => {
 
   it("refuses another repository's entity, a malformed row and a stored event's missing row", () => {
     const position = at("rep_one");
-    expect(() => docStatement(db, position, entity("issue", "rep_two#1", 1, issue(1)))).toThrow(
+    expect(() => docStatements(db, position, entity("issue", "rep_two#1", 1, issue(1)))).toThrow(
       /another repository/,
     );
-    expect(() => docStatement(db, position, entity("issue", "rep_one#2", 1, issue(1)))).toThrow(
+    expect(() => docStatements(db, position, entity("issue", "rep_one#2", 1, issue(1)))).toThrow(
       /malformed/,
     );
     expect(() =>
-      docStatement(db, position, entity("issue", "rep_one#1", 1, { title: "x" })),
+      docStatements(db, position, entity("issue", "rep_one#1", 1, { title: "x" })),
     ).toThrow(/malformed/);
-    expect(() => docStatement(db, position, entity("issue", "rep_one#1", 1, null))).toThrow(
+    expect(() => docStatements(db, position, entity("issue", "rep_one#1", 1, null))).toThrow(
       /malformed/,
     );
     expect(() =>
@@ -376,7 +399,7 @@ describe("search projections", () => {
     expect(() =>
       milestoneStatement(db, position, entity("milestone", "rep_one#milestones/1", 1, label(1))),
     ).toThrow(/malformed/);
-    expect(searchStatement(db, position, entity("repo", "rep_one", 1, {}))).toBeUndefined();
+    expect(searchStatements(db, position, entity("repo", "rep_one", 1, {}))).toBeUndefined();
   });
 });
 
@@ -450,16 +473,22 @@ async function rows(repoId: string): Promise<number[]> {
 
 describe("search projections' write costs", () => {
   // Rows written, as D1 counts them (the row and each index entry it changes): an issue
-  // first projected writes its row, its unique key and its four listing indexes; a change
-  // rewrites the row and the listing indexes; a deletion takes it out of them and into the
-  // index of deletions waiting to be collected.
+  // first projected writes its row, its unique key and its four listing indexes, its
+  // repository's number (its row and two keys) and the counter past it, the count of indexed
+  // documents and its full-text entry; a change of its text rewrites the row and the listing
+  // indexes and replaces its full-text entry; a change of metadata only leaves the index as it
+  // is; a deletion takes it out of the listing indexes, into the index of deletions waiting to
+  // be collected, and out of the count and the full-text index.
   it("are pinned", async () => {
     const repo = await source();
     const written = async (position: SearchPosition, snapshot: EntitySnapshot) => {
-      const statement = searchStatement(db, position, snapshot);
-      if (!statement) throw new Error("not projected");
-      // Less its batch's admission (the read model writes each statement under one).
-      return ((await statement.run()).meta.rows_written ?? 0) - READ_MODEL_ADMISSION.rows;
+      const statements = searchStatements(db, position, snapshot);
+      if (!statements) throw new Error("not projected");
+      // The whole group, less its batch's admission (the read model writes each batch under one).
+      const results = await db.batch(statements);
+      return (
+        results.reduce((n, r) => n + (r.meta.rows_written ?? 0), 0) - READ_MODEL_ADMISSION.rows
+      );
     };
     const edited = issue(1, { title: "Renamed", updatedAt: 21 });
     expect({
@@ -480,11 +509,11 @@ describe("search projections' write costs", () => {
         entity("milestone", `${repo}#milestones/1`, 1, milestone(1)),
       ),
     }).toEqual({
-      insert: 6,
-      text: 5,
+      insert: 12,
+      text: 7,
       metadata: 5,
       duplicate: 0,
-      deletion: 2,
+      deletion: 4,
       label: 2,
       milestone: 2,
     });
