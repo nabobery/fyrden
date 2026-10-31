@@ -11,9 +11,11 @@ import { readModelFor } from "../events/read-model.js";
 import { exportStatements } from "../events/rebuild.js";
 import {
   epochStatement,
+  indexedBytes,
   repoIndexStatement,
   repoIndexUse,
   repoRowsOf,
+  SEARCH_CHUNK,
 } from "../queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import { clock } from "../services.js";
@@ -37,6 +39,9 @@ import {
 import {
   eligible,
   FENCES,
+  IN_INDEX,
+  IN_REPO_INDEX,
+  reindexStatements,
   type SearchPosition,
   type SearchWriter,
   searchStatements,
@@ -220,6 +225,8 @@ export async function reconcileSource(
                   AND epoch_gen = ?${n + 4} AND owner_gen = ?${n + 5})`,
               params: [reservation.day, pass.gen, kind, after, pass.epochGen, pass.ownerGen],
             },
+            // And its entry in the repository index put back, when missing.
+            true,
           );
       // Its epoch's statement, then its group.
       group = statements.length - 1;
@@ -271,7 +278,21 @@ export async function reconcileSource(
           .prepare("UPDATE search_reconciles SET partial = 1 WHERE repo_id = ? AND gen = ?")
           .bind(repoId, pass.gen),
       );
-    // Its last step: the repair revision it covered is covered (by a whole pass only).
+    // Its last step: a live repository whose entry is not in the repository index (refused, or a
+    // newer event's row) leaves the pass partial; then the repair revision it covered is covered,
+    // and the source known whole, by a whole pass only, nothing asked for since.
+    if (next === "done")
+      statements.push(
+        db
+          .prepare(
+            `UPDATE search_reconciles SET partial = 1
+             WHERE repo_id = ?1 AND gen = ?2 AND ?3 = 1
+               AND EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 0)
+               AND NOT EXISTS (SELECT 1 FROM search_repo_nums n WHERE n.repo_id = ?1
+                 AND n.indexed = 1 AND n.fts_token IS NOT NULL AND ${IN_REPO_INDEX()})`,
+          )
+          .bind(repoId, pass.gen, removalsOnly ? 0 : 1),
+      );
     if (next === "done")
       statements.push(
         db
@@ -282,6 +303,16 @@ export async function reconcileSource(
                  AND kind = 'done' AND partial = 0)`,
           )
           .bind(repoId, pass.gen),
+        db
+          .prepare(
+            `UPDATE search_sources SET index_covered = 1
+             WHERE repo_id = ?1 AND ${FENCES} AND ${SAME_DAY(5)}
+               AND EXISTS (SELECT 1 FROM search_reconciles c WHERE c.repo_id = ?1 AND c.gen = ?4
+                 AND c.kind = 'done' AND c.partial = 0 AND c.coverage = 1)
+               AND NOT EXISTS (SELECT 1 FROM search_repairs r
+                 WHERE r.repo_id = ?1 AND r.dirty > r.covered)`,
+          )
+          .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, reservation.day),
       );
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
@@ -443,23 +474,28 @@ async function start(
     epochStatement(db, repoId, page.epochGen, now),
     db
       .prepare(
+        // Its cutoff moved on (never back), and the source not known whole until this pass ends.
         `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) SELECT ?1, ?2, ?4
          WHERE ${FENCES} AND ${SAME_DAY(5)}
-         ON CONFLICT (repo_id) DO UPDATE SET cutoff_epoch = excluded.cutoff_epoch,
-           cutoff_seq = excluded.cutoff_seq
-         WHERE (excluded.cutoff_epoch, excluded.cutoff_seq)
-           > (search_sources.cutoff_epoch, search_sources.cutoff_seq)`,
+         ON CONFLICT (repo_id) DO UPDATE SET
+           cutoff_epoch = CASE WHEN (excluded.cutoff_epoch, excluded.cutoff_seq)
+             > (search_sources.cutoff_epoch, search_sources.cutoff_seq)
+             THEN excluded.cutoff_epoch ELSE search_sources.cutoff_epoch END,
+           cutoff_seq = CASE WHEN (excluded.cutoff_epoch, excluded.cutoff_seq)
+             > (search_sources.cutoff_epoch, search_sources.cutoff_seq)
+             THEN excluded.cutoff_seq ELSE search_sources.cutoff_seq END,
+           index_covered = 0`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, page.watermark, reservation.day),
     db
       .prepare(
         `INSERT INTO search_reconciles (repo_id, gen, epoch_gen, owner_gen, watermark, kind,
-           after, started_at)
-         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5 WHERE ${FENCES} AND ${SAME_DAY(6)}
+           after, started_at, coverage)
+         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5, 1 WHERE ${FENCES} AND ${SAME_DAY(6)}
          ON CONFLICT (repo_id) DO UPDATE SET gen = search_reconciles.gen + 1,
            epoch_gen = excluded.epoch_gen, owner_gen = excluded.owner_gen,
            watermark = excluded.watermark, kind = 'subjects', after = 0,
-           started_at = excluded.started_at, partial = 0
+           started_at = excluded.started_at, partial = 0, coverage = 1
          RETURNING gen`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now, reservation.day),
@@ -491,6 +527,9 @@ interface ProjectedRow {
   version: number;
   deleted: number;
   updated_seq: number;
+  /** An issue's: its mark, and whether its entry is in the full-text index (1). */
+  fts_token: string | null;
+  indexed: number;
 }
 
 /**
@@ -522,7 +561,9 @@ async function differences(
   metrics?.count("d1.query", { db: "org", op: "reconcile_rows" });
   const { results, meta } = await db
     .prepare(
-      `SELECT ${key} AS key, epoch_gen, owner_gen, version, deleted, updated_seq FROM ${table}
+      `SELECT ${key} AS key, epoch_gen, owner_gen, version, deleted, updated_seq,
+         ${kind === "subjects" ? `fts_token, fts_token IS NOT NULL AND ${IN_INDEX(table)} AS indexed` : "NULL AS fts_token, 1 AS indexed"}
+       FROM ${table}
        WHERE repo_id = ?1 AND ${key} > ?2 AND ${key} <= ?3 AND ${SAME_DAY(5)}
        ORDER BY ${key} LIMIT ?4`,
     )
@@ -545,20 +586,82 @@ async function differences(
   const grown: (Record<string, unknown> | null)[] = [];
   const statements: D1PreparedStatement[] = [];
   const exported = new Set<number>();
+  // The text its writes index, at most a batch's (as the consumer's): the page stops before an
+  // entity past it, its range with it.
+  let text = 0;
+  let truncated = false;
+  let last = pass.after;
+  const fits = (row: Record<string, unknown> | null) => {
+    const bytes = indexedBytes(row);
+    if (text > 0 && text + bytes > SEARCH_CHUNK.bytes) return false;
+    text += bytes;
+    return true;
+  };
   for (const entity of page.entities) {
     const k = keyOf(entity);
     if (k > upTo) break;
-    exported.add(k);
+    const before = last;
+    last = k;
+    const stop = () => {
+      upTo = before;
+      truncated = true;
+    };
     const row = byKey.get(k);
     // A deletion the cutoff covers needs no row: nothing at or before it is admitted. One
     // after it (an entity made and deleted since the pass began) keeps its row, so its
     // earlier events, delivered late, find it deleted. A row already deleted is compared as
     // any other: a newer deletion (after a restore, say) moves its place on.
-    if (entity.deleted && !row && !after(entity.deletedAt, position)) continue;
-    if (row && !newer(position, entity.version, row)) continue;
+    if (entity.deleted && !row && !after(entity.deletedAt, position)) {
+      exported.add(k);
+      continue;
+    }
     // Only removals while the database is at its size threshold.
-    if (removalsOnly && !entity.deleted) continue;
     const admitted = { ...writer, admission: { token, removal: entity.deleted } };
+    if (row && !newer(position, entity.version, row)) {
+      // The row as exported, its entry out of the full-text index (projected before the index was
+      // there, or lost from it): put back, the row as it is.
+      if (
+        kind === "subjects" &&
+        !removalsOnly &&
+        !entity.deleted &&
+        row.deleted === 0 &&
+        row.indexed === 0 &&
+        same(position, entity.version, row)
+      ) {
+        if (!fits(entity.row)) {
+          stop();
+          break;
+        }
+        exported.add(k);
+        statements.push(
+          ...reindexStatements(
+            db,
+            position,
+            k,
+            {
+              epochGen: row.epoch_gen,
+              ownerGen: row.owner_gen,
+              version: row.version,
+              token: row.fts_token,
+            },
+            admitted,
+          ),
+        );
+        grown.push(entity.row);
+        continue;
+      }
+      exported.add(k);
+      continue;
+    }
+    if (removalsOnly && !entity.deleted) {
+      exported.add(k);
+      continue;
+    }
+    if (!entity.deleted && !fits(entity.row)) {
+      stop();
+      break;
+    }
+    exported.add(k);
     const group = searchStatements(db, position, entity, admitted) ?? [];
     statements.push(...group);
     if (group.length > 0) grown.push(entity.deleted ? null : entity.row);
@@ -568,7 +671,7 @@ async function differences(
   // pass took its revision); one an event after it wrote is kept.
   const seen: SearchPosition = { ...position, epochGen: page.epochGen, sourceSeq: page.watermark };
   for (const row of rows) {
-    if (exported.has(row.key) || row.deleted === 1) continue;
+    if (row.key > upTo || exported.has(row.key) || row.deleted === 1) continue;
     if (
       row.epoch_gen > seen.epochGen ||
       (row.epoch_gen === seen.epochGen && row.updated_seq > seen.sourceSeq)
@@ -576,6 +679,21 @@ async function differences(
       continue;
     statements.push(...absentStatements(db, table, key, position, seen, row.key, writer));
   }
+  // A live issue the page looked at still out of the full-text index once it is written (its
+  // growth refused, or a newer event changed it meanwhile) leaves the pass partial: of its own
+  // keys alone (those exported and those compared, within its range).
+  const looked = [...new Set([...exported, ...rows.map((r) => r.key).filter((r) => r <= upTo)])];
+  if (kind === "subjects" && looked.length > 0)
+    statements.push(
+      db
+        .prepare(
+          `UPDATE search_reconciles SET partial = 1
+           WHERE repo_id = ?1 AND gen = ?2 AND EXISTS (SELECT 1 FROM json_each(?3) k
+             JOIN search_docs d ON d.repo_id = ?1 AND d.number = k.value
+             WHERE d.deleted = 0 AND (d.fts_token IS NULL OR NOT ${IN_INDEX()}))`,
+        )
+        .bind(repoId, pass.gen, JSON.stringify(looked)),
+    );
   if (grown.length > 0) {
     statements.unshift(...growthStatements(db, token, day, growthOf(grown)));
     // Writes its growth was refused for (an addition, or a deletion's new row) leave the pass
@@ -592,7 +710,7 @@ async function differences(
   return {
     statements,
     upTo,
-    ended: !cut && page.next === null,
+    ended: !cut && !truncated && page.next === null,
     read: meta.rows_read ?? 0,
     grows: grown.length > 0,
   };
@@ -604,6 +722,15 @@ function after(deletedAt: ExportedEntity["deletedAt"], position: SearchPosition)
   return deletedAt.epochGen !== position.epochGen
     ? deletedAt.epochGen > position.epochGen
     : deletedAt.sourceSeq > position.sourceSeq;
+}
+
+/** Whether the row is at `position`'s epoch and ownership and at `version`. */
+function same(position: SearchPosition, version: number, row: ProjectedRow): boolean {
+  return (
+    position.epochGen === row.epoch_gen &&
+    position.ownerGen === row.owner_gen &&
+    version === row.version
+  );
 }
 
 /** Whether a write at `position` of `version` is later than the row's (epoch, ownership, version). */
@@ -676,7 +803,7 @@ function absentStatements(
             `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
              SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
              FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
-             WHERE ${absent("d")} AND d.fts_token IS NOT NULL`,
+             WHERE ${absent("d")} AND d.fts_token IS NOT NULL AND ${IN_INDEX()}`,
           ),
         ];
   return [

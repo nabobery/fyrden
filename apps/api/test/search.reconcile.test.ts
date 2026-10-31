@@ -212,10 +212,12 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // Each kind's page: its checkpoint alone; then the repository's own row (its epoch and its
-    // fourteen statements, its index entry with it) with the last checkpoint and the revision
-    // covered; each batch between the executor's opening and closing of admission.
-    expect(batches).toEqual([1, 1, 1, 17].map((n) => n + 2));
+    // Each kind's page: its checkpoint alone (the subjects' with a check that every issue of its
+    // range is in the full-text index); then the repository's own row (its epoch and its
+    // fourteen statements, its index entry with it) with the last checkpoint, a check of its
+    // entry, the revision covered and the source known whole; each batch between the executor's
+    // opening and closing of admission.
+    expect(batches).toEqual([2, 1, 1, 19].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -678,10 +680,10 @@ describe("search reconciliation", () => {
       const batches: number[] = [];
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
       // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
-      // deleted (three statements each: the indexed count, the index entry, the row) and its
-      // checkpoint (issue 1, matching, writes nothing), between the executor's opening and
-      // closing of admission.
-      expect(batches.slice(0, 3)).toEqual([7, 10, 7].map((n) => n + 2));
+      // deleted (three statements each: the indexed count, the index entry, the row), a check
+      // that its range is in the full-text index, and its checkpoint (issue 1, matching, writes
+      // nothing), between the executor's opening and closing of admission.
+      expect(batches.slice(0, 3)).toEqual([8, 11, 8].map((n) => n + 2));
     } finally {
       RECONCILE_POLICY.rowsPerPage = rows;
     }
@@ -909,5 +911,179 @@ describe("search reconciliation", () => {
     expect(calls.n).toBe(4);
     expect(await reconcileSource(watched(calls), target(), { pages: 1 })).toBe("done");
     expect(calls.n).toBe(5);
+  });
+});
+
+describe("a reconciliation, of the full-text indexes", () => {
+  /** This repository's issues whose entries the index holds, and their marks. */
+  const indexed = async () =>
+    (
+      await db
+        .prepare(
+          `SELECT d.number, d.version, d.fts_token IS NOT NULL AS marked,
+             EXISTS (SELECT 1 FROM search_fts_docsize z WHERE z.id = d.doc_id) AS present
+           FROM search_docs d WHERE d.repo_id = ? AND d.deleted = 0 ORDER BY d.number`,
+        )
+        .bind(repo.id)
+        .all<{ number: number; version: number; marked: number; present: number }>()
+    ).results;
+  const counters = () =>
+    db
+      .prepare("SELECT live_docs, indexed_repos FROM search_index_state WHERE id = 1")
+      .first<{ live_docs: number; indexed_repos: number }>();
+  const covered = async () =>
+    (
+      await db
+        .prepare("SELECT index_covered AS c FROM search_sources WHERE repo_id = ?")
+        .bind(repo.id)
+        .first<{ c: number }>()
+    )?.c;
+  /** Whether the repository's entry is in its index, and found by its name there. */
+  const repoEntry = () =>
+    db
+      .prepare(
+        `SELECT EXISTS (SELECT 1 FROM search_repos_fts_docsize z WHERE z.id = n.num) AS present,
+           (SELECT count(*) FROM search_repos_fts f
+             WHERE search_repos_fts MATCH ?2 AND f.rowid = n.num) AS found
+         FROM search_repo_nums n WHERE n.repo_id = ?1`,
+      )
+      .bind(repo.id, `name : "${repo.name}"`)
+      .first<{ present: number; found: number }>();
+  /**
+   * Both indexes whole within themselves (each throws if not). Not against their content: the
+   * file's other tests leave rows of their own out of the index, as rows projected before it.
+   */
+  const integrity = () =>
+    db.batch([
+      db.prepare("INSERT INTO search_fts (search_fts) VALUES ('integrity-check')"),
+      db.prepare("INSERT INTO search_repos_fts (search_repos_fts) VALUES ('integrity-check')"),
+    ]);
+  /** This repository's entries taken out of both indexes, as the index losing them would. */
+  async function lose(options: { unmark: boolean }) {
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
+           SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+           FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+           WHERE d.repo_id = ?1 AND d.deleted = 0 AND d.fts_token IS NOT NULL
+             AND EXISTS (SELECT 1 FROM search_fts_docsize z WHERE z.id = d.doc_id)`,
+        )
+        .bind(repo.id),
+      db
+        .prepare(
+          `INSERT INTO search_repos_fts (search_repos_fts, rowid, name, description, owner)
+           SELECT 'delete', n.num, r.name, r.description, 'o' || o.num
+           FROM repos r JOIN search_repo_nums n ON n.repo_id = r.repo_id
+           JOIN search_owner_nums o ON o.owner_id = r.owner_id
+           WHERE r.repo_id = ?1 AND n.indexed = 1
+             AND EXISTS (SELECT 1 FROM search_repos_fts_docsize z WHERE z.id = n.num)`,
+        )
+        .bind(repo.id),
+      // As rows projected before the index was there: unmarked, and not counted.
+      ...(options.unmark
+        ? [
+            db
+              .prepare(
+                `UPDATE search_index_state SET
+                   live_docs = live_docs - (SELECT count(*) FROM search_docs
+                     WHERE repo_id = ?1 AND deleted = 0 AND fts_token IS NOT NULL),
+                   indexed_repos = indexed_repos - (SELECT count(*) FROM search_repo_nums
+                     WHERE repo_id = ?1 AND indexed = 1)
+                 WHERE id = 1`,
+              )
+              .bind(repo.id),
+            db.prepare("UPDATE search_docs SET fts_token = NULL WHERE repo_id = ?1").bind(repo.id),
+            db
+              .prepare(
+                "UPDATE search_repo_nums SET indexed = 0, fts_token = NULL WHERE repo_id = ?1",
+              )
+              .bind(repo.id),
+          ]
+        : []),
+    ]);
+  }
+
+  it.each([
+    ["projected before the index was there", true],
+    ["lost from the index", false],
+  ])(
+    "puts back the entries of rows %s, their rows as they are, and knows the source whole once done",
+    async (_, unmark) => {
+      await call("POST", "/issues", { title: "Lantern flickers" });
+      await call("POST", "/issues", { title: "Kettle whistles" });
+      expect(await reconcileSource(env, target())).toBe("done");
+      expect(await covered()).toBe(1);
+      const before = await indexed();
+      expect(before.map((d) => [d.marked, d.present])).toEqual([
+        [1, 1],
+        [1, 1],
+      ]);
+      const counted = await counters();
+      await lose({ unmark });
+      expect((await indexed()).map((d) => d.present)).toEqual([0, 0]);
+      expect((await repoEntry())?.present).toBe(0);
+      // Asked for again: not known whole until the pass is through.
+      await repairStatement(db, repo.id, "backfill", 1).run();
+      expect(await covered()).toBe(0);
+      expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+      expect(await covered()).toBe(0);
+      expect(await reconcileSource(env, target())).toBe("done");
+      // Back, at the versions they were, counted as before.
+      expect(await indexed()).toEqual(before);
+      expect(await counters()).toEqual(counted);
+      // The repository's entry too: held, and found by its name.
+      expect(await repoEntry()).toEqual({ present: 1, found: 1 });
+      expect(
+        (
+          await db
+            .prepare(
+              `SELECT count(*) AS n FROM search_fts f JOIN search_docs d ON d.doc_id = f.rowid
+               WHERE search_fts MATCH 'lantern' AND d.repo_id = ?`,
+            )
+            .bind(repo.id)
+            .first<{ n: number }>()
+        )?.n,
+      ).toBe(1);
+      expect(await covered()).toBe(1);
+      await integrity();
+    },
+  );
+
+  it("puts back no more text in a page's batch than a batch may write", async () => {
+    // Seventeen of the longest bodies: more than one batch's text.
+    for (let i = 0; i < 17; i++)
+      await call("POST", "/issues", { title: `Long ${i}`, body: `${i} ${"a".repeat(65_530)}` });
+    while ((await reconcileSource(env, target())) === "more");
+    expect(await indexed()).toHaveLength(17);
+    await lose({ unmark: false });
+    await repairStatement(db, repo.id, "backfill", 1).run();
+    const present = async () => (await indexed()).filter((d) => d.present === 1).length;
+    let last = 0;
+    let state: string;
+    do {
+      state = await reconcileSource(env, target(), { pages: 1 });
+      const now = await present();
+      // At most 16 of 64 KiB in 1 MiB, the titles less.
+      expect(now - last).toBeLessThan(16);
+      last = now;
+    } while (state === "more");
+    expect(state).toBe("done");
+    expect(last).toBe(17);
+    expect(await covered()).toBe(1);
+    await integrity();
+  });
+
+  it("deletes an issue whose entry the index lost without harm to the index", async () => {
+    await call("POST", "/issues", { title: "Fleeting entry" });
+    expect(await reconcileSource(env, target())).toBe("done");
+    const counted = await counters();
+    await lose({ unmark: false });
+    await call("DELETE", "/issues/1");
+    await repairStatement(db, repo.id, "backfill", 1).run();
+    expect(await reconcileSource(env, target())).toBe("done");
+    expect(await indexed()).toEqual([]);
+    expect((await counters())?.live_docs).toBe((counted?.live_docs ?? 0) - 1);
+    await integrity();
   });
 });

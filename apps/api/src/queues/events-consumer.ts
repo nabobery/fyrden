@@ -40,7 +40,7 @@ import {
 } from "../search/admission.js";
 import { liveSearch, Settling } from "../search/live.js";
 import { repairSql } from "../search/repairs.js";
-import { bound } from "../search/statements.js";
+import { bound, IN_REPO_INDEX } from "../search/statements.js";
 
 /** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
@@ -785,7 +785,7 @@ async function resolveChunk(
 const textEncoder = new TextEncoder();
 
 /** The bytes of the text a projected row indexes or holds (its title, body, name, description). */
-function indexedBytes(row: Record<string, unknown> | null): number {
+export function indexedBytes(row: Record<string, unknown> | null): number {
   if (!row) return 0;
   let bytes = 0;
   for (const field of ["title", "body", "name", "description"])
@@ -947,6 +947,9 @@ export function repoIndexStatement(
  * 7. the tuple marked with the token indexed.
  *
  * The row is written whether or not search indexes: it is the read model's.
+ * With `repairIndex` (a reconciliation's last step), an entry missing from
+ * the index is put back too: of a row at the snapshot's own version (as it
+ * is), or of a newer one whatever changed.
  */
 export function repoStatements(
   db: D1Database,
@@ -955,6 +958,7 @@ export function repoStatements(
   now: number,
   indexing: boolean,
   admit?: Admission,
+  repairIndex = false,
 ): D1PreparedStatement[] {
   const { entity } = event;
   if (entity.id !== sourceId)
@@ -992,12 +996,25 @@ export function repoStatements(
     AND ?11 >= coalesce((SELECT owner_gen FROM source_owner WHERE source_id = ?1), 0)
     ${admit ? `AND ${admit.where(18)}` : ""}`;
   // The write is taken: the fences hold, and no row is there or it is newer than the row.
-  const taken = `${fences} AND NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
+  const newer = `${fences} AND NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
     AND (?9, ?11, ?10) <= (r.epoch_gen, r.owner_gen, r.version))`;
-  // Its indexed tuple changes (an event's tombstone carries no row: its fields stay).
-  const changes = `NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
+  // Its entry is not in the index (not a member, or a member whose entry is gone).
+  const missing = `NOT EXISTS (SELECT 1 FROM search_repo_nums n WHERE n.repo_id = ?1
+    AND n.indexed = 1 AND n.fts_token IS NOT NULL AND ${IN_REPO_INDEX()})`;
+  // A repair of the entry of the row as it is: at the snapshot's version, live, its tuple the
+  // snapshot's, its entry missing.
+  const repair = repairIndex
+    ? `(${fences} AND ?8 = 0 AND ${missing} AND EXISTS (SELECT 1 FROM repos r
+        WHERE r.repo_id = ?1 AND r.deleted = 0 AND (r.epoch_gen, r.owner_gen, r.version) = (?9, ?11, ?10)
+          AND r.owner_id IS ?2 AND r.name IS ?3 AND r.description IS ?14))`
+    : "0";
+  // What the entry's statements go by: the row's write, or a repair of the entry alone.
+  const taken = `(${newer} OR ${repair})`;
+  // Its indexed tuple changes (an event's tombstone carries no row: its fields stay), or its entry,
+  // missing, is put back.
+  const changes = `(NOT EXISTS (SELECT 1 FROM repos r WHERE r.repo_id = ?1
     AND r.deleted IS ?8 AND (?8 = 1 OR ?15 = 1 OR (r.name IS ?3 AND r.description IS ?14
-      AND r.owner_id IS ?2)))`;
+      AND r.owner_id IS ?2))) OR ${repair}${repairIndex ? ` OR (${newer} AND ${missing})` : ""})`;
   const member = "coalesce((SELECT indexed FROM search_repo_nums WHERE repo_id = ?1), 0)";
   // Its entry is wanted: a live tuple that changes, while search indexes.
   const wanted = `(?8 = 0 AND ?17 = 1 AND ?2 IS NOT NULL AND ${changes} AND ${taken})`;
@@ -1075,7 +1092,7 @@ export function repoStatements(
        SELECT 'delete', n.num, r.name, r.description, 'o' || o.num
        FROM repos r JOIN search_repo_nums n ON n.repo_id = r.repo_id
        JOIN search_owner_nums o ON o.owner_id = r.owner_id
-       WHERE r.repo_id = ?1 AND n.indexed = 1 AND ${remove} AND ${taken}`,
+       WHERE r.repo_id = ?1 AND n.indexed = 1 AND ${IN_REPO_INDEX()} AND ${remove} AND ${taken}`,
       params,
     ),
     bound(

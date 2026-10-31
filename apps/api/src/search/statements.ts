@@ -100,6 +100,18 @@ export function writerParams(writer: SearchWriter): (string | number)[] {
   return token;
 }
 
+/**
+ * SQL true while a document's (`d`) or a repository's (`n`, its number)
+ * entry is in its full-text index: its row of the index's document sizes.
+ * A delete of an entry not there would leave the index unreadable
+ * (external content), so every delete is guarded by it; the counters go by
+ * the rows' marks, whatever the index holds.
+ */
+export const IN_INDEX = (d = "d") =>
+  `EXISTS (SELECT 1 FROM search_fts_docsize z WHERE z.id = ${d}.doc_id)`;
+export const IN_REPO_INDEX = (n = "n") =>
+  `EXISTS (SELECT 1 FROM search_repos_fts_docsize z WHERE z.id = ${n}.num)`;
+
 /** What `search_docs.kind` and `state` hold. */
 export const DOC_KIND = { issue: 1, pull: 2 } as const;
 export const DOC_STATE = { open: 1, closed: 2, merged: 3 } as const;
@@ -352,7 +364,7 @@ export function docStatements(
       `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
        SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
        FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
-       WHERE d.repo_id = ?1 AND d.number = ?5 AND ${indexed}
+       WHERE d.repo_id = ?1 AND d.number = ?5 AND ${indexed} AND ${IN_INDEX()}
          AND ${newer("d")} AND ${changes("d")} AND ${decided}`,
       params,
     ),
@@ -376,6 +388,89 @@ export function docStatements(
        SELECT d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
        FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
        WHERE d.repo_id = ?1 AND d.number = ?5 AND d.deleted = 0 AND d.fts_token = ?${token}`,
+      params,
+    ),
+  ];
+}
+
+/**
+ * The statements that put an issue's or pull request's entry back in the
+ * full-text index while its row is as `observed` (live, its epoch,
+ * ownership, version and mark), unchanged otherwise: a row projected before
+ * the index was there (unmarked), or marked but missing from the index.
+ * Under the writer's fences and admission, in one batch: its repository's
+ * number when it has none, the count of indexed documents when it was
+ * unmarked, its mark (this group's token), and its entry from the row's
+ * text. A reconciliation's, for rows it found at the export's version.
+ */
+export function reindexStatements(
+  db: D1Database,
+  position: SearchPosition,
+  number: number,
+  observed: {
+    readonly epochGen: number;
+    readonly ownerGen: number;
+    readonly version: number;
+    readonly token: string | null;
+  },
+  writer: SearchWriter,
+): D1PreparedStatement[] {
+  // ?1–?4 the position's, ?5 the key, ?6–?9 the row as observed, ?10 this group's token, the
+  // writer's from ?11.
+  const at = 11;
+  const params = [
+    position.repoId,
+    position.epochGen,
+    position.ownerGen,
+    position.sourceSeq,
+    number,
+    observed.epochGen,
+    observed.ownerGen,
+    observed.version,
+    observed.token,
+    crypto.randomUUID(),
+    ...writerParams(writer),
+  ];
+  const decided = `${eligible(writer, at)}${admitted(writer, "search_docs", "number", at)}`;
+  // Still the row observed, still out of the index.
+  const out = (d: string) => `${d}.repo_id = ?1 AND ${d}.number = ?5 AND ${d}.deleted = 0
+    AND (${d}.epoch_gen, ${d}.owner_gen, ${d}.version) = (?6, ?7, ?8) AND ${d}.fts_token IS ?9
+    AND (${d}.fts_token IS NULL OR NOT ${IN_INDEX(d)})`;
+  return [
+    bound(
+      db,
+      `INSERT INTO search_repo_nums (repo_id, num)
+       SELECT ?1, next_repo_num FROM search_index_state
+       WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM search_repo_nums WHERE repo_id = ?1)
+         AND EXISTS (SELECT 1 FROM search_docs d WHERE ${out("d")}) AND ${decided}`,
+      params,
+    ),
+    db
+      .prepare(
+        `UPDATE search_index_state SET next_repo_num = next_repo_num + 1
+         WHERE id = 1 AND EXISTS (SELECT 1 FROM search_repo_nums
+           WHERE repo_id = ?1 AND num = search_index_state.next_repo_num)`,
+      )
+      .bind(position.repoId),
+    bound(
+      db,
+      `UPDATE search_index_state SET live_docs = live_docs + 1
+       WHERE id = 1 AND EXISTS (SELECT 1 FROM search_docs d WHERE ${out("d")}
+         AND d.fts_token IS NULL) AND ${decided}`,
+      params,
+    ),
+    bound(
+      db,
+      `UPDATE search_docs AS d SET fts_token = ?10 WHERE ${out("d")} AND ${decided}`,
+      params,
+    ),
+    bound(
+      db,
+      `INSERT INTO search_fts (rowid, title, body, repo, kind)
+       SELECT d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
+       FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
+       WHERE d.repo_id = ?1 AND d.number = ?5 AND d.deleted = 0 AND d.fts_token = ?10
+         AND NOT ${IN_INDEX()}`,
       params,
     ),
   ];

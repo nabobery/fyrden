@@ -250,7 +250,8 @@ CREATE TABLE search_reconciles (
   after INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER NOT NULL
 , partial INTEGER NOT NULL DEFAULT 0
-  CHECK (partial IN (0, 1))) STRICT;
+  CHECK (partial IN (0, 1)), coverage INTEGER NOT NULL DEFAULT 0
+  CHECK (coverage IN (0, 1))) STRICT;
 
 -- table search_repairs
 CREATE TABLE search_repairs (
@@ -312,7 +313,8 @@ CREATE TABLE search_sources (
   repo_id TEXT PRIMARY KEY,
   cutoff_epoch INTEGER NOT NULL,
   cutoff_seq INTEGER NOT NULL
-) STRICT;
+, index_covered INTEGER NOT NULL DEFAULT 0
+  CHECK (index_covered IN (0, 1))) STRICT;
 
 -- table search_sweep
 CREATE TABLE search_sweep (
@@ -445,6 +447,9 @@ CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_ep
 
 -- index search_repairs_due
 CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id) WHERE dirty > covered;
+
+-- index search_sources_uncovered
+CREATE INDEX search_sources_uncovered ON search_sources (repo_id) WHERE index_covered = 0;
 
 -- index webhook_deliveries_disable
 CREATE INDEX webhook_deliveries_disable ON webhook_deliveries (disable_retry_at)
@@ -1344,4 +1349,20 @@ WHEN NOT coalesce((
   FROM read_model_write w JOIN read_model_barrier b ON b.id = 1 WHERE w.id = 1), 0)
 BEGIN
   SELECT RAISE(ABORT, 'read_model_admission_required');
+END;
+
+-- trigger search_repairs_uncover_insert
+CREATE TRIGGER search_repairs_uncover_insert AFTER INSERT ON search_repairs
+WHEN NEW.dirty > NEW.covered
+BEGIN
+  UPDATE search_sources SET index_covered = 0
+  WHERE repo_id = NEW.repo_id AND index_covered <> 0;
+END;
+
+-- trigger search_repairs_uncover_update
+CREATE TRIGGER search_repairs_uncover_update AFTER UPDATE OF dirty ON search_repairs
+WHEN NEW.dirty > OLD.dirty AND NEW.dirty > NEW.covered
+BEGIN
+  UPDATE search_sources SET index_covered = 0
+  WHERE repo_id = NEW.repo_id AND index_covered <> 0;
 END;

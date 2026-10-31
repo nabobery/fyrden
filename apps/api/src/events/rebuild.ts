@@ -94,6 +94,8 @@ export function exportStatements(
   now: number,
   indexing: boolean,
   admit?: Admission,
+  /** A missing repository index entry put back (a reconciliation's last step). */
+  repairIndex = false,
 ): D1PreparedStatement[] {
   const { sourceId } = exported;
   const snapshots: Snapshot[] = exported.entities.map((entity) => ({
@@ -114,7 +116,7 @@ export function exportStatements(
   return [
     epochStatement(db, sourceId, exported.epochGen, now),
     ...snapshots.flatMap((snapshot) =>
-      repoStatements(db, sourceId, snapshot, now, indexing, admit),
+      repoStatements(db, sourceId, snapshot, now, indexing, admit, repairIndex),
     ),
   ];
 }

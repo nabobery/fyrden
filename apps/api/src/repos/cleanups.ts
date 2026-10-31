@@ -1,5 +1,6 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { readModelFor } from "../events/read-model.js";
+import { IN_INDEX, IN_REPO_INDEX } from "../search/statements.js";
 import { clock } from "../services.js";
 
 /*
@@ -237,14 +238,15 @@ const searchProjections: RepoCleanup = {
           `INSERT INTO search_fts (search_fts, rowid, title, body, repo, kind)
            SELECT 'delete', d.doc_id, d.title, d.body, 'r' || n.num, 'k' || d.kind
            FROM search_docs d JOIN search_repo_nums n ON n.repo_id = d.repo_id
-           WHERE d.doc_id IN (SELECT d.doc_id ${indexed})`,
+           WHERE d.doc_id IN (SELECT d.doc_id ${indexed}) AND ${IN_INDEX()}`,
         )
         .bind(repoId, CLEANUP_POLICY.searchPage),
       page("search_docs", "repo_id", docs),
       db
         .prepare(
           `INSERT INTO search_repos_fts (search_repos_fts, rowid, name, description, owner)
-           SELECT 'delete', n.num, r.name, r.description, 'o' || o.num ${repository}`,
+           SELECT 'delete', n.num, r.name, r.description, 'o' || o.num ${repository}
+             AND ${IN_REPO_INDEX()}`,
         )
         .bind(repoId),
       db
