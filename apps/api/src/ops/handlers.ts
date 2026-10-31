@@ -253,6 +253,10 @@ import {
   setRepoSubscriptionOperation,
 } from "../repos/watching.js";
 import { backfillSearchOperation, setSearchIndexingOperation } from "../search/backfill.js";
+import {
+  checkSearchIndexOperation,
+  rebuildSearchIndexOperation,
+} from "../search/index-operations.js";
 import { getSearchStatusOperation } from "../search/status.js";
 import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
@@ -623,6 +627,8 @@ export const handlers: Handlers = {
   "admin.search.backfill": backfillSearchOperation,
   "admin.search.indexing": setSearchIndexingOperation,
   "admin.search.status": getSearchStatusOperation,
+  "admin.search.check_index": checkSearchIndexOperation,
+  "admin.search.rebuild_index": rebuildSearchIndexOperation,
 
   // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,

@@ -453,6 +453,9 @@ CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id)
 CREATE INDEX search_repairs_retry ON search_repairs (retry_at, repo_id)
   WHERE dirty > covered AND blocked_reason IS NOT NULL;
 
+-- index search_repo_nums_indexed
+CREATE INDEX search_repo_nums_indexed ON search_repo_nums (repo_id) WHERE indexed = 1;
+
 -- index search_sources_uncovered
 CREATE INDEX search_sources_uncovered ON search_sources (repo_id) WHERE index_covered = 0;
 

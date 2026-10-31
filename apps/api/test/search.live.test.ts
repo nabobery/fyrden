@@ -368,8 +368,9 @@ describe("search's live projection, admitted", () => {
     ).toEqual({ indexed: 1 });
     // Charged with the repository index's own allowance: its admission and receipt, its numbers
     // (its repository's and its owner's, each with two keys), the counters past them, the count,
-    // its membership and its entry (the repository's row is the read model's, not search's), its
-    // receipt's release later, and the settlement's own row: 20, measured; and the admissions of
+    // its membership (with its key among the index's members) and its entry (the repository's row
+    // is the read model's, not search's), its receipt's release later, and the settlement's own
+    // row: 21, measured; and the admissions of
     // the batch and of the settlement's, its alone. None with the projection rows.
     expect((await spent()) - before).toBe(0);
     expect(
@@ -378,7 +379,7 @@ describe("search's live projection, admitted", () => {
           "SELECT repo_rows FROM search_budget WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
         )
         .first(),
-    ).toEqual({ repo_rows: 20 + 2 * READ_MODEL_ADMISSION.rows });
+    ).toEqual({ repo_rows: 21 + 2 * READ_MODEL_ADMISSION.rows });
     // Renamed while search does not index: its entry taken out, and that charged too.
     await indexing(false);
     const renamed = {
@@ -402,7 +403,7 @@ describe("search's live projection, admitted", () => {
         "SELECT repo_rows FROM search_budget WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
       )
       .first<{ repo_rows: number }>();
-    expect(after?.repo_rows).toBeGreaterThan(20 + 2 * READ_MODEL_ADMISSION.rows);
+    expect(after?.repo_rows).toBeGreaterThan(21 + 2 * READ_MODEL_ADMISSION.rows);
   });
 
   it("admits growth only within the threshold, counting what other batches of the invocation reserved", async () => {

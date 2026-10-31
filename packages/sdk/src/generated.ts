@@ -1818,6 +1818,32 @@ export type AdminSearchStatusOutput = {
   };
 };
 
+/** Input of `admin.search.check_index`: Check search's full-text indexes against their projections. */
+export type AdminSearchCheckIndexInput = {
+  index: "documents" | "repositories" | "both";
+};
+
+/** Output of `admin.search.check_index`. */
+export type AdminSearchCheckIndexOutput = {
+  indexes: ({
+    index: "documents" | "repositories";
+    ok: boolean;
+  })[];
+};
+
+/** Input of `admin.search.rebuild_index`: Rebuild a small full-text index of search's from its projections. */
+export type AdminSearchRebuildIndexInput = {
+  index: "documents" | "repositories" | "both";
+};
+
+/** Output of `admin.search.rebuild_index`. */
+export type AdminSearchRebuildIndexOutput = {
+  indexes: ({
+    index: "documents" | "repositories";
+    ok: boolean;
+  })[];
+};
+
 /** Input of `admin.read_model.pause`: Pause the read model's writers. */
 export type AdminReadModelPauseInput = Record<string, never>;
 
@@ -7771,6 +7797,8 @@ export const OPERATIONS = {
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "admin.search.indexing": { method: "PUT", path: "/admin/search/indexing", pathParams: [], idempotent: true },
   "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
+  "admin.search.check_index": { method: "POST", path: "/admin/search/indexes/check", pathParams: [], idempotent: true },
+  "admin.search.rebuild_index": { method: "POST", path: "/admin/search/indexes/rebuild", pathParams: [], idempotent: true },
   "admin.read_model.pause": { method: "POST", path: "/admin/read-model/pause", pathParams: [], idempotent: true },
   "admin.read_model.resume": { method: "POST", path: "/admin/read-model/resume", pathParams: [], idempotent: true },
   "admin.read_model.export": { method: "GET", path: "/admin/read-model/export", pathParams: [], idempotent: false },
@@ -8038,6 +8066,10 @@ export interface Operations {
   "admin.search.indexing": { input: AdminSearchIndexingInput; output: AdminSearchIndexingOutput };
   /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spending of its allowance and of the repository index's, with the limits (`limits`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (`live_docs`) and the repositories (`indexed_repos`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (`next_parked`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (`first_uncovered`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only. */
   "admin.search.status": { input: AdminSearchStatusInput; output: AdminSearchStatusOutput };
+  /** Check search's full-text indexes against their projections. Fyrden: checks a full-text index (`documents`: issues' and pull requests' titles and bodies; `repositories`: names and descriptions; `both`, in that order) against the projections it is built from, each on its own: `ok` false when the index is damaged or does not match them, which it also does while some live projections are not in it yet (projected before the index existed, or their growth refused): ask for a backfill (`POST /admin/search/backfill`), or rebuild a small index (`POST /admin/search/indexes/rebuild`). Allowed at the size threshold; charged to search's allowance. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only. */
+  "admin.search.check_index": { input: AdminSearchCheckIndexInput; output: AdminSearchCheckIndexOutput };
+  /** Rebuild a small full-text index of search's from its projections. Fyrden: rebuilds a full-text index (`documents`, `repositories`, or `both`, in that order) from the projections it is built from, at once, and marks every live projection indexed: for small deployments only (at most 256 live projections and 1 MiB of their text an index; refused, 409 `index_rebuild_too_large`, past either: ask for a backfill instead, which reconciles each repository within the day's allowance). Refused (409 `index_reconcile_required`) while a live issue or pull request has no repository number yet (its repository's reconciliation gives it one), and (409 `index_rebuild_refused`) when search's allowance or the database's size admits no rebuild. Both indexes are looked at before either is rebuilt; one refused at its rebuild leaves the one before it rebuilt. It repairs the index, not the projections: no repository becomes known whole by it. `ok` is true for each index rebuilt. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only. */
+  "admin.search.rebuild_index": { input: AdminSearchRebuildIndexInput; output: AdminSearchRebuildIndexOutput };
   /** Pause the read model's writers. Fyrden: one step of pausing the org read model's writers: the barrier moves to the next generation (no lease is taken from then on, and no batch of an older generation is admitted), and is `paused` once no lease of an older generation is live (`live` of them, the latest deadline `until`). Call again until `phase` is `paused`; a resume that came between leaves `running`. Allowed while the deployment's read model maintenance holds other writes back. Refused (409 `read_model_recovering`) while the barrier is recovering. Instance administrators only. */
   "admin.read_model.pause": { input: AdminReadModelPauseInput; output: AdminReadModelPauseOutput };
   /** Resume the read model's writers. Fyrden: lets the org read model's writers write again, at the latest generation either barrier holds (a generation never goes down); a newer pause that came between stands. With `generation`, only the pause at that generation is resumed (another, newer, stands). Nothing while it runs already or is recovering. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */

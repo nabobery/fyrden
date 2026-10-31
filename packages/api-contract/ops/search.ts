@@ -109,3 +109,40 @@ export const getSearchStatus = defineOperation({
   idempotency: "none",
   mcp: false,
 });
+
+const SearchIndex = z.enum(["documents", "repositories", "both"]);
+const IndexResults = z.object({
+  indexes: z.array(z.object({ index: z.enum(["documents", "repositories"]), ok: z.boolean() })),
+});
+
+export const checkSearchIndex = defineOperation({
+  id: "admin.search.check_index",
+  method: "POST",
+  path: "/admin/search/indexes/check",
+  summary: "Check search's full-text indexes against their projections",
+  description:
+    "Fyrden: checks a full-text index (`documents`: issues' and pull requests' titles and bodies; `repositories`: names and descriptions; `both`, in that order) against the projections it is built from, each on its own: `ok` false when the index is damaged or does not match them, which it also does while some live projections are not in it yet (projected before the index existed, or their growth refused): ask for a backfill (`POST /admin/search/backfill`), or rebuild a small index (`POST /admin/search/indexes/rebuild`). Allowed at the size threshold; charged to search's allowance. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only.",
+  input: z.object({ index: SearchIndex }),
+  output: IndexResults,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: false,
+});
+
+export const rebuildSearchIndex = defineOperation({
+  id: "admin.search.rebuild_index",
+  method: "POST",
+  path: "/admin/search/indexes/rebuild",
+  summary: "Rebuild a small full-text index of search's from its projections",
+  description:
+    "Fyrden: rebuilds a full-text index (`documents`, `repositories`, or `both`, in that order) from the projections it is built from, at once, and marks every live projection indexed: for small deployments only (at most 256 live projections and 1 MiB of their text an index; refused, 409 `index_rebuild_too_large`, past either: ask for a backfill instead, which reconciles each repository within the day's allowance). Refused (409 `index_reconcile_required`) while a live issue or pull request has no repository number yet (its repository's reconciliation gives it one), and (409 `index_rebuild_refused`) when search's allowance or the database's size admits no rebuild. Both indexes are looked at before either is rebuilt; one refused at its rebuild leaves the one before it rebuilt. It repairs the index, not the projections: no repository becomes known whole by it. `ok` is true for each index rebuilt. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only.",
+  input: z.object({ index: SearchIndex }),
+  output: IndexResults,
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "expensive",
+  idempotency: "key",
+  mcp: false,
+});
