@@ -165,6 +165,12 @@
       "name": "RATE_LIMIT_EMAIL_EVENTS_IP",
       "namespace_id": "1007",
       "simple": { "limit": 120, "period": 60 }
+    },
+    // Searches, per principal (its tokens, and delegated ones acting for it, share it).
+    {
+      "name": "RATE_LIMIT_SEARCH",
+      "namespace_id": "1008",
+      "simple": { "limit": 10, "period": 60 }
     }
   ],
 
