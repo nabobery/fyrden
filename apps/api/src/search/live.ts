@@ -62,7 +62,14 @@ export function liveSearch(
   db: D1Database,
   repoId: string,
   snapshots: readonly Snapshot[],
-  options: { epochGen: number; now: number; missing: boolean; token?: string },
+  options: {
+    epochGen: number;
+    now: number;
+    missing: boolean;
+    token?: string;
+    /** Snapshots of the envelope are left for a continuation: a reconciliation covers them too. */
+    continued?: boolean;
+  },
 ): LiveSearch {
   const { epochGen, now } = options;
   const token = options.token ?? crypto.randomUUID();
@@ -118,6 +125,7 @@ export function liveSearch(
         ]
       : []),
     ...(options.missing ? [repairStatement(db, repoId, "payload_missing", now)] : []),
+    ...(options.continued ? [repairStatement(db, repoId, "search_continuation", now)] : []),
     ...(malformed ? [repairStatement(db, repoId, "malformed_row", now)] : []),
   ];
   const writes = [...projections, ...requests];

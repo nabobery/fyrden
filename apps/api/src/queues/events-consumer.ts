@@ -1,6 +1,5 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
-  compareVersion,
   type DomainEvent,
   type EntitySnapshot,
   eventKey,
@@ -71,6 +70,36 @@ export interface WaitingMessage {
   readonly waitingSince: number;
   readonly envelope: unknown;
 }
+
+/**
+ * The rest of an envelope's searched snapshots, for search alone (a
+ * message of its own, sent before the envelope's is acknowledged): as they
+ * travelled (stored ones without their rows), never planning or journaling
+ * effects (the envelope's own message did).
+ */
+export interface SearchContinuation {
+  readonly type: "search.continue";
+  readonly sourceId: string;
+  readonly events: readonly Snapshot[];
+}
+
+export function isContinuation(body: unknown): body is SearchContinuation {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    (body as SearchContinuation).type === "search.continue" &&
+    typeof (body as SearchContinuation).sourceId === "string" &&
+    Array.isArray((body as SearchContinuation).events)
+  );
+}
+
+/**
+ * What one batch projects for search at most: the text it indexes (titles
+ * and bodies, names and descriptions, UTF-8) and the snapshots it looks at
+ * (deletions and gone payloads included). The rest goes on in a
+ * continuation. A snapshot alone is always taken.
+ */
+export const SEARCH_CHUNK = { bytes: 1_048_576, snapshots: 200 };
 
 export function isWaiting(body: unknown): body is WaitingMessage {
   return (
@@ -203,7 +232,9 @@ async function consumeWith(
       const waiting = isWaiting(message.body) ? message.body : undefined;
       const envelope = envelopes[i];
       if (options.calls) options.calls.reserved = needs.slice(i + 1).reduce((a, b) => a + b, 0);
-      const outcome = await applyEnvelope(env, envelope, options);
+      const outcome = isContinuation(envelope)
+        ? await applyContinuation(env, envelope, options)
+        : await applyEnvelope(env, envelope, options);
       if (outcome === "deferred") {
         // A new message, not a retry: waiting for budget is no failure.
         await env.EVENTS.send(message.body, { contentType: "json", delaySeconds: 1 });
@@ -396,8 +427,13 @@ export async function applyEnvelope(
     ? { resolved: [], missing: false }
     : await resolveStored(payloads, newestSnapshots(events, REPO_TYPES));
   const snapshots = repos.resolved;
+  // The repository's own indexed text is the batch's too.
   const searched = indexing
-    ? await resolveStored(payloads, newestSnapshots(events, SEARCHED_TYPES))
+    ? await resolveChunk(
+        payloads,
+        newestSnapshots(events, SEARCHED_TYPES),
+        snapshots.reduce((n, e) => n + indexedBytes(e.entity.row), 0),
+      )
     : undefined;
   const db =
     shard === DEFAULT_ORG_SHARD && options.readModel ? options.readModel : readModelFor(env, shard);
@@ -420,6 +456,7 @@ export async function applyEnvelope(
       epochGen,
       now,
       missing: repos.missing || searched.missing,
+      continued: searched.remaining.length > 0,
     });
   const repoRows = snapshots.flatMap((event) => repoStatements(db, sourceId, event, now, indexing));
   const statements = [
@@ -504,6 +541,86 @@ export async function applyEnvelope(
     append(model.sending, row.sink, row.effect_id);
   }
   if (!options.dispatching) await dispatchEffects(env, dispatching, options);
+  if (searched) await continueSearch(env, sourceId, searched.remaining, options);
+  return "applied";
+}
+
+/**
+ * Sends the rest of an envelope's searched snapshots on, for search alone,
+ * before the message they came in is acknowledged (a failure retries it,
+ * and its writes stand: their guards make them once).
+ */
+async function continueSearch(
+  env: Env,
+  sourceId: string,
+  remaining: readonly Snapshot[],
+  options: ConsumerOptions,
+): Promise<void> {
+  if (remaining.length === 0) return;
+  const body: SearchContinuation = { type: "search.continue", sourceId, events: remaining };
+  await env.EVENTS.send(body, { contentType: "json" });
+  options.metrics?.count("queue.send", { queue: "events" });
+}
+
+/**
+ * Applies a continuation: the next chunk of its snapshots projected for
+ * search, while the repository is active and search indexes (else dropped:
+ * a reconciliation covers what it carried, asked for when it was sent);
+ * the rest sent on.
+ */
+export async function applyContinuation(
+  env: Env,
+  body: SearchContinuation,
+  options: ConsumerOptions = {},
+): Promise<ApplyOutcome> {
+  const { sourceId, events } = body;
+  if (!isId(sourceId, "rep") || events.some((e) => e.id?.sourceId !== sourceId))
+    throw new Error("malformed search continuation");
+  const now = options.now?.() ?? Date.now();
+  const calls = options.calls ?? { left: consumerCalls(env), reserved: 0, applied: false };
+  const applying = messageCalls(body);
+  if (calls.applied && applying > calls.left - calls.reserved) return "deferred";
+  calls.left -= applying;
+  options.metrics?.count("d1.query", { db: "directory", op: "events_route" });
+  const listed = await env.DIRECTORY.prepare(
+    `SELECT state, org_shard,
+       (SELECT value FROM deployment_settings WHERE name = 'search_indexing') AS search
+     FROM repos WHERE id = ?`,
+  )
+    .bind(sourceId)
+    .first<{ state: string; org_shard: string; search: string | null }>();
+  if (!listed || listed.state !== "active" || listed.search !== "on") return "dropped";
+  const db =
+    listed.org_shard === DEFAULT_ORG_SHARD && options.readModel
+      ? options.readModel
+      : readModelFor(env, listed.org_shard);
+  const chunk = await resolveChunk(storedPayloads(env, sourceId), events);
+  const live = liveSearch(db, sourceId, chunk.resolved, {
+    epochGen: Math.max(...events.map((e) => e.id.epochGen)),
+    now,
+    missing: chunk.missing,
+    continued: chunk.remaining.length > 0,
+  });
+  const statements = [...live.before, ...live.after];
+  calls.applied = true;
+  options.metrics?.count("d1.query", { db: "org", op: "events_apply" }, statements.length);
+  const results = await db.batch(statements);
+  const settle = (admitted: boolean) =>
+    live.settlement(
+      results.slice(0, live.before.length),
+      results.slice(live.before.length),
+      results.at(-1),
+      admitted,
+    );
+  if (options.settling) options.settling.add(db, settle);
+  else {
+    const settlement = settle(true);
+    if (settlement.length > 0) {
+      options.metrics?.count("d1.query", { db: "org", op: "search_settle" });
+      await db.batch(settlement);
+    }
+  }
+  await continueSearch(env, sourceId, chunk.remaining, options);
   return "applied";
 }
 
@@ -591,9 +708,15 @@ function newestSnapshots(events: readonly DomainEvent[], types: ReadonlySet<stri
     if (!entity || !types.has(entity.type)) continue;
     const key = `${entity.type}:${entity.id}`;
     const seen = newest.get(key);
-    const position = (e: Snapshot) => ({ epochGen: e.id.epochGen, version: e.entity.version });
-    if (!seen || compareVersion(position(event as Snapshot), position(seen)) > 0)
-      newest.set(key, event as Snapshot);
+    // As the projections' guards order them: by epoch, then ownership (a transfer at one version
+    // moves an entity on), then version.
+    const later = (a: Snapshot, b: Snapshot) =>
+      a.id.epochGen !== b.id.epochGen
+        ? a.id.epochGen > b.id.epochGen
+        : a.ownerGen !== b.ownerGen
+          ? a.ownerGen > b.ownerGen
+          : a.entity.version > b.entity.version;
+    if (!seen || later(event as Snapshot, seen)) newest.set(key, event as Snapshot);
   }
   return [...newest.values()];
 }
@@ -617,6 +740,57 @@ function storedPayloads(env: Env, sourceId: string): Payloads {
     }
     return payload;
   };
+}
+
+/**
+ * The first chunk of `snapshots` (see `SEARCH_CHUNK`) with stored ones'
+ * rows filled in, as `resolveStored` fills them, and the rest as they
+ * travelled.
+ */
+async function resolveChunk(
+  payloads: Payloads,
+  snapshots: readonly Snapshot[],
+  /** Text the batch indexes already (its repository's). */
+  used = 0,
+): Promise<{ resolved: Snapshot[]; missing: boolean; remaining: Snapshot[] }> {
+  const resolved: Snapshot[] = [];
+  let missing = false;
+  let bytes = used;
+  let taken = 0;
+  for (const event of snapshots) {
+    if (taken >= SEARCH_CHUNK.snapshots) break;
+    let whole = event;
+    if (event.stored && !event.entity.deleted) {
+      const payload = await payloads(event);
+      if (payload === null) {
+        missing = true;
+        taken++;
+        continue;
+      }
+      whole = {
+        ...event,
+        entity: { ...event.entity, row: payload.row as Record<string, unknown> },
+      };
+    }
+    const text = indexedBytes(whole.entity.row);
+    // Past the chunk's text: the rest goes on (a snapshot alone is always taken).
+    if (taken > 0 && bytes + text > SEARCH_CHUNK.bytes) break;
+    bytes += text;
+    taken++;
+    resolved.push(whole);
+  }
+  return { resolved, missing, remaining: snapshots.slice(taken) };
+}
+
+const textEncoder = new TextEncoder();
+
+/** The bytes of the text a projected row indexes or holds (its title, body, name, description). */
+function indexedBytes(row: Record<string, unknown> | null): number {
+  if (!row) return 0;
+  let bytes = 0;
+  for (const field of ["title", "body", "name", "description"])
+    if (typeof row[field] === "string") bytes += textEncoder.encode(row[field] as string).length;
+  return bytes;
 }
 
 /**

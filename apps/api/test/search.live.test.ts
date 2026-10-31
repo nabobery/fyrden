@@ -21,7 +21,14 @@ import {
 } from "@fyrden/domain";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
+import type { EffectSink } from "../src/effects/journal.js";
+import {
+  applyEnvelope,
+  consumeEvents,
+  EVENTS_QUEUE,
+  SEARCH_CHUNK,
+  type SearchContinuation,
+} from "../src/queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
 import { ADMISSION, growthOf } from "../src/search/admission.js";
 import { liveSearch } from "../src/search/live.js";
@@ -245,6 +252,22 @@ describe("search's live projection", () => {
       { sourceId: repoId, events: [issueEvent(repoId, 1, issue(1), { stored: true })] },
     ]);
     expect(await docs(repoId)).toMatchObject([{ number: 1, body: "kept by its repository" }]);
+  });
+
+  it("projects an entity's snapshot of its newest ownership when two share an epoch and version", async () => {
+    const repoId = await listedRepo();
+    await db
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+      .bind(repoId)
+      .run();
+    // Before and after a transfer: one version, two ownerships.
+    const before = issueEvent(repoId, 1, issue(1, { title: "Before" }), { version: 3 });
+    const after = {
+      ...issueEvent(repoId, 2, issue(1, { title: "After" }), { version: 3 }),
+      ownerGen: 2,
+    };
+    await deliver([{ sourceId: repoId, events: [before, after] }]);
+    expect(await docs(repoId)).toMatchObject([{ number: 1, title: "After" }]);
   });
 
   it("asks for a reconciliation when a stored snapshot's payload is gone", async () => {
@@ -632,5 +655,128 @@ describe("search's live projection, admitted", () => {
     const off = await run(false);
     const on = await run(true);
     expect(on).toBe(off + 1);
+  });
+});
+
+describe("search's live projection of a large envelope", () => {
+  /** Queues' limit on a message (bytes of its JSON body). */
+  const MESSAGE_BYTES = 128_000;
+  const counts = { fetched: 0, planned: 0 };
+  const sent: unknown[] = [];
+  /**
+   * `env` whose events queue keeps what is sent to it within the queue's limit (or refuses it,
+   * `refuse`), and whose repository objects' payloads are counted as they are fetched.
+   */
+  const counted = (refuse = false) =>
+    ({
+      ...env,
+      EVENTS: {
+        send: async (body: unknown) => {
+          if (refuse) throw new Error("queue unavailable");
+          if (new TextEncoder().encode(JSON.stringify(body)).length > MESSAGE_BYTES)
+            throw new Error("message too large");
+          sent.push(body);
+        },
+      },
+      REPO: {
+        getByName: (name: string) => {
+          const real = env.REPO.getByName(name);
+          return {
+            eventPayload: (key: string) => {
+              counts.fetched++;
+              return real.eventPayload(key);
+            },
+          };
+        },
+      },
+    }) as unknown as Env;
+  // A sink that plans nothing, counting what it is asked to plan.
+  const sink = {
+    name: "test_counting",
+    plan: () => {
+      counts.planned++;
+      return [];
+    },
+    deliver: async () => {},
+  } as unknown as EffectSink;
+  const consume = async (bodies: unknown[], on: Env) => {
+    const batch = createMessageBatch(
+      EVENTS_QUEUE,
+      bodies.map((body, i) => ({ id: `m${i}`, timestamp: new Date(), attempts: 1, body })),
+    );
+    const ctx = createExecutionContext();
+    await consumeEvents(batch, on, { sinks: [sink] });
+    return getQueueResult(batch, ctx);
+  };
+  /** Twenty issues of 60,000 characters each, kept by their repository: more than a batch indexes. */
+  async function large(repoId: string): Promise<DomainEvent[]> {
+    const rows = Array.from({ length: 20 }, (_, i) =>
+      issue(i + 1, { body: `${i} ${"é".repeat(30_000)}` }),
+    );
+    await runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) => {
+      for (const [i, row] of rows.entries())
+        state.storage.sql.exec(
+          "INSERT INTO event_payloads (event_key, payload, created_at) VALUES (?, ?, 0)",
+          `${repoId}:1:${i + 1}`,
+          JSON.stringify({ row }),
+        );
+    });
+    return rows.map((row, i) => issueEvent(repoId, i + 1, row, { stored: true }));
+  }
+
+  beforeEach(() => {
+    counts.fetched = 0;
+    counts.planned = 0;
+    sent.length = 0;
+  });
+
+  it("projects a chunk a batch, sends the rest on for search alone, and asks for a reconciliation", async () => {
+    const repoId = await listedRepo();
+    const events = await large(repoId);
+    // Each body: 60,003 bytes of UTF-8 (two a character), its title a few more.
+    const perIssue = 2 + 2 * 30_000 + new TextEncoder().encode("Issue 10").length;
+    const fits = Math.floor(SEARCH_CHUNK.bytes / perIssue);
+    expect((await consume([{ sourceId: repoId, events }], counted())).explicitAcks).toEqual(["m0"]);
+    expect((await docs(repoId)).length).toBe(fits);
+    // Every payload once (the sinks see every event whole; the chunk takes what they fetched),
+    // and planning for every event.
+    expect(counts).toEqual({ fetched: 20, planned: 20 });
+    expect(sent).toHaveLength(1);
+    const continuation = sent[0] as SearchContinuation;
+    // The rest as they travelled: stored, without their rows.
+    expect(continuation).toMatchObject({ type: "search.continue", sourceId: repoId });
+    expect(continuation.events.map((e) => [e.entity.id, e.stored, e.entity.row])).toEqual(
+      Array.from({ length: 20 - fits }, (_, i) => [`${repoId}#${fits + i + 1}`, true, null]),
+    );
+    expect(await repair(repoId)).toMatchObject({ reason: "search_continuation" });
+    // The continuation: the rest projected, nothing sent on, and no effect planned.
+    counts.fetched = 0;
+    counts.planned = 0;
+    sent.length = 0;
+    expect((await consume([continuation], counted())).explicitAcks).toEqual(["m0"]);
+    expect((await docs(repoId)).map((d) => d.number)).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 1),
+    );
+    expect([counts, sent]).toEqual([{ fetched: 20 - fits, planned: 0 }, []]);
+    // Delivered again: nothing changes, nothing is counted twice.
+    const indexed = await db
+      .prepare("SELECT live_docs FROM search_index_state WHERE id = 1")
+      .first();
+    await consume([continuation], counted());
+    expect(
+      await db.prepare("SELECT live_docs FROM search_index_state WHERE id = 1").first(),
+    ).toEqual(indexed);
+    // Still not covered: only a reconciliation covers what continuations carried.
+    expect(await repair(repoId)).toMatchObject({ covered: 0 });
+  });
+
+  it("does not acknowledge an envelope whose continuation could not be sent", async () => {
+    const repoId = await listedRepo();
+    const result = await consume(
+      [{ sourceId: repoId, events: await large(repoId) }],
+      counted(true),
+    );
+    expect(result.explicitAcks).toEqual([]);
+    expect(result.retryMessages.map((m) => m.msgId)).toEqual(["m0"]);
   });
 });
