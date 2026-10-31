@@ -69,6 +69,14 @@ export interface OperationDef<
    * `If-None-Match` matches gets 304 Not Modified.
    */
   etag?: boolean;
+  /**
+   * A GET that must see a revoked or narrowed credential at once, as a
+   * write does: re-verified on the directory's primary before its
+   * permission is checked.
+   */
+  freshAuth?: boolean;
+  /** Its REST answers, refusals too, are kept by no cache (`Cache-Control: private, no-store`). */
+  noStore?: boolean;
   mcp:
     | false
     | {

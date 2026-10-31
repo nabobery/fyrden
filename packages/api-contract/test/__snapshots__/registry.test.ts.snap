@@ -37247,6 +37247,571 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/search/issues": {
+      "get": {
+        "description": "Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. The text is required for now. A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
+        "operationId": "search.issues",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "The query, 256 characters at most: free text (words, \`"quoted phrases"\`, a last word ending in \`*\` for a prefix of at least three letters) and qualifiers. A scope is required: \`repo:owner/name\`, \`org:handle\` or \`user:handle\` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (\`unsupported_search_text\`). It names 4 different repositories at most.",
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Results a page, 1-100. A page whose items would pass 1 MiB as JSON is refused whole (\`page_too_large\`): ask for fewer.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "incomplete_results": {
+                      "description": "Whether matches may be missing: search does not index now, a repository of the scope is not yet known whole to search, more matched than are counted, or the ranking's candidates were all a search takes.",
+                      "type": "boolean",
+                    },
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "active_lock_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "off-topic",
+                                  "too heated",
+                                  "resolved",
+                                  "spam",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "assignees": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                },
+                                "login": {
+                                  "description": "Its handle now; \`ghost\` for one deleted.",
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "id",
+                                "login",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                          "body": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "closed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Unix time in milliseconds.",
+                          },
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "draft": {
+                            "description": "Pull requests only.",
+                            "type": "boolean",
+                          },
+                          "id": {
+                            "description": "Fyrden: the number again (issues have no separate id space).",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "labels": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "color": {
+                                  "type": "string",
+                                },
+                                "description": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "id": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                "name": {
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "id",
+                                "name",
+                                "color",
+                                "description",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                          "locked": {
+                            "type": "boolean",
+                          },
+                          "milestone": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "closed_at": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                  },
+                                  "description": {
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "due_on": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                  },
+                                  "number": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  "state": {
+                                    "enum": [
+                                      "open",
+                                      "closed",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "number",
+                                  "title",
+                                  "state",
+                                  "description",
+                                  "due_on",
+                                  "closed_at",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "number": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "pull_request": {
+                            "additionalProperties": false,
+                            "description": "Present when this is a pull request.",
+                            "properties": {
+                              "merged_at": {
+                                "anyOf": [
+                                  {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  {
+                                    "type": "null",
+                                  },
+                                ],
+                              },
+                            },
+                            "required": [
+                              "merged_at",
+                            ],
+                            "type": "object",
+                          },
+                          "repository": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "full_name": {
+                                "type": "string",
+                              },
+                              "id": {
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                              "owner": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "login": {
+                                    "type": "string",
+                                  },
+                                },
+                                "required": [
+                                  "login",
+                                ],
+                                "type": "object",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "owner",
+                              "name",
+                              "full_name",
+                            ],
+                            "type": "object",
+                          },
+                          "state": {
+                            "description": "A merged pull request is \`closed\`.",
+                            "enum": [
+                              "open",
+                              "closed",
+                            ],
+                            "type": "string",
+                          },
+                          "state_reason": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "completed",
+                                  "not_planned",
+                                  "duplicate",
+                                  "reopened",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "title": {
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "user": {
+                            "additionalProperties": false,
+                            "description": "Who opened it.",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                              "login": {
+                                "description": "Its handle now; \`ghost\` for one deleted.",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "login",
+                            ],
+                            "type": "object",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "number",
+                          "title",
+                          "body",
+                          "state",
+                          "state_reason",
+                          "user",
+                          "assignees",
+                          "labels",
+                          "milestone",
+                          "locked",
+                          "active_lock_reason",
+                          "created_at",
+                          "updated_at",
+                          "closed_at",
+                          "repository",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "description": "The matches, counted to 1000 at most.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "incomplete_results",
+                    "items",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Search issues and pull requests",
+        "x-fyrden-permission": "authenticated",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/search/repositories": {
+      "get": {
+        "description": "Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now. A query with no scope is refused (\`search_scope_required\`), as is one whose owner holds more than 1,000 repositories the caller may read (\`search_scope_too_broad\`: name a repository), a prefix standing for more than 1,000 words (\`prefix_too_broad\`), and a query matching too much of the index to rank (\`query_too_broad\`); a named repository the caller cannot read is not found (\`repo_not_found\`). Searches are limited to 10 a minute a principal (\`search_rate_limited\`) and to an allowance of reads a day (\`search_budget\`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.",
+        "operationId": "search.repositories",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "The query, 256 characters at most: free text (words, \`"quoted phrases"\`, a last word ending in \`*\` for a prefix of at least three letters) and qualifiers. A scope is required: \`repo:owner/name\`, \`org:handle\` or \`user:handle\` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (\`unsupported_search_text\`). It names 4 different repositories at most.",
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Results a page, 1-100. A page whose items would pass 1 MiB as JSON is refused whole (\`page_too_large\`): ask for fewer.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "incomplete_results": {
+                      "description": "Whether matches may be missing: search does not index now, a repository of the scope is not yet known whole to search, more matched than are counted, or the ranking's candidates were all a search takes.",
+                      "type": "boolean",
+                    },
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "default_branch": {
+                            "type": "string",
+                          },
+                          "description": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "full_name": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "owner": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                              "login": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                              "login",
+                            ],
+                            "type": "object",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "owner",
+                          "name",
+                          "full_name",
+                          "visibility",
+                          "description",
+                          "default_branch",
+                          "created_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "description": "The matches, counted to 1000 at most.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "incomplete_results",
+                    "items",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Search repositories",
+        "x-fyrden-permission": "metadata:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/user": {
       "get": {
         "description": "Returns the principal and token that authenticated this request, and for a delegated token the agents acting for the principal.",

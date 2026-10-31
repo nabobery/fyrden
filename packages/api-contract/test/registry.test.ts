@@ -132,7 +132,8 @@ describe("generated artifacts", () => {
   });
 
   it("names a permission from the table for every other operation", () => {
-    // Facts about the caller or the instance, and the caller's own feed, for any authenticated caller.
+    // Facts about the caller or the instance, the caller's own feed, and issue search (each
+    // repository's issues and pull requests by their own permissions), for any authenticated caller.
     const anyCaller = new Set([
       "meta.whoami",
       "meta.signing_keys.list",
@@ -140,6 +141,7 @@ describe("generated artifacts", () => {
       "feed.sync",
       "feed.ack",
       "feed.digest",
+      "search.issues",
     ]);
     for (const op of registry) {
       if (anyCaller.has(op.id)) continue;

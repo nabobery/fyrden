@@ -22,8 +22,17 @@ import type { ParsedQuery } from "./parser.js";
  * refusal, never a smaller scope.
  */
 
-/** The repositories one search's scope may hold at most (an owner's, past which it is refused). */
-export const SEARCH_SCOPE = { repositories: 1_000 } as const;
+export const SEARCH_SCOPE = {
+  /** The repositories one search's scope may hold at most (an owner's, past which it is refused). */
+  repositories: 1_000,
+  /** The different repositories a query may name (each looked up and decided). */
+  named: 4,
+} as const;
+
+/** `values` once each, by `key`. */
+const distinct = <T>(values: readonly T[], key: (value: T) => string): T[] => [
+  ...new Map(values.map((v) => [key(v), v])).values(),
+];
 
 /** A repository of a search's scope, and what the caller may read of it. */
 export interface ScopedRepo {
@@ -71,17 +80,32 @@ export async function authorizeScope(ctx: OpContext, parsed: ParsedQuery): Promi
       "search_scope_required",
       "A search needs a scope: repo:owner/name, org:handle or user:handle.",
     );
+  // Each named once (handles ignore case); a few repositories at most.
+  const lower = (h: string) => h.toLowerCase();
+  const orgs = distinct(parsed.orgs, lower);
+  const users = distinct(parsed.users, lower);
+  const named = distinct(parsed.repos, (r) => `${lower(r.owner)}/${lower(r.name)}`);
+  if (named.length > SEARCH_SCOPE.named)
+    throw new OperationError(
+      422,
+      "invalid_search_query",
+      `A search names at most ${SEARCH_SCOPE.named} different repositories.`,
+    );
   return unavailableUnless(async () => {
-    // The owners named: they all must be the one owner (scopes intersect).
+    // The owners named: they all must be the one owner (scopes intersect). Two different handles
+    // never name one owner: nothing to look up.
     const owners = new Set<string | null>();
-    for (const handle of parsed.orgs) owners.add(await ownerOf(ctx, handle, "org"));
-    for (const handle of parsed.users) owners.add(await ownerOf(ctx, handle, "user"));
-    if (parsed.repos.length > 0) {
+    if (new Set([...orgs, ...users].map(lower)).size > 1) owners.add(null);
+    else {
+      for (const handle of orgs) owners.add(await ownerOf(ctx, handle, "org"));
+      for (const handle of users) owners.add(await ownerOf(ctx, handle, "user"));
+    }
+    if (named.length > 0) {
       // Each named repository, as the directory's primary has it now, decided before anything is
       // intersected: one the caller may read nothing of is not found, as one missing is (an
       // empty intersection would tell them it exists).
       const found = new Map<string, RepoEntry>();
-      for (const { owner: handle, name } of parsed.repos) {
+      for (const { owner: handle, name } of named) {
         const entry = await resolveRepo(ctx.env, handle, name, {
           consistency: "primary",
           metrics: ctx.metrics,
@@ -89,14 +113,14 @@ export async function authorizeScope(ctx: OpContext, parsed: ParsedQuery): Promi
         if (!entry) throw notFound(`${handle}/${name}`);
         found.set(entry.id, entry);
       }
-      const named = await decided(ctx, [...found.values()]);
+      const readable = await decided(ctx, [...found.values()]);
       for (const entry of found.values())
-        if (!named.some((r) => r.entry.id === entry.id))
-          throw notFound(parsed.repos.map((r) => `${r.owner}/${r.name}`).join(", "));
+        if (!readable.some((r) => r.entry.id === entry.id))
+          throw notFound(named.map((r) => `${r.owner}/${r.name}`).join(", "));
       // Then the scopes intersect: one repository, of the one owner named (if any).
       if (found.size > 1 || owners.has(null) || owners.size > 1) return [];
       const [owner] = [...owners];
-      return named.filter((r) => owner === undefined || r.entry.ownerId === owner);
+      return readable.filter((r) => owner === undefined || r.entry.ownerId === owner);
     }
     if (owners.has(null) || owners.size > 1) return [];
     const [owner] = [...owners] as string[];

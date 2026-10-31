@@ -1,5 +1,6 @@
+import { ISSUE_STATE_REASONS, LOCK_REASONS } from "@fyrden/domain";
 import { z } from "zod";
-import { defineOperation, INSTANCE_ADMIN, INSTANCE_READ } from "../src/op.js";
+import { AUTHENTICATED, defineOperation, INSTANCE_ADMIN, INSTANCE_READ } from "../src/op.js";
 
 export const backfillSearch = defineOperation({
   id: "admin.search.backfill",
@@ -163,4 +164,160 @@ export const rebuildSearchIndex = defineOperation({
   rateLimit: "expensive",
   idempotency: "key",
   mcp: false,
+});
+
+const SEARCH_DEPTH = 1_000;
+
+const SearchQuery = z
+  .string()
+  .min(1)
+  // 256 characters (code points) at most, which the search itself counts.
+  .max(512)
+  .describe(
+    'The query, 256 characters at most: free text (words, `"quoted phrases"`, a last word ending in `*` for a prefix of at least three letters) and qualifiers. A scope is required: `repo:owner/name`, `org:handle` or `user:handle` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (`unsupported_search_text`). It names 4 different repositories at most.',
+  );
+
+const SearchPage = {
+  per_page: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(30)
+    .describe(
+      "Results a page, 1-100. A page whose items would pass 1 MiB as JSON is refused whole (`page_too_large`): ask for fewer.",
+    ),
+  page: z.coerce.number().int().min(1).default(1).describe("The page, from 1."),
+};
+
+/** A page past the matches a search counts is refused. */
+const withinDepth = (input: { page: number; per_page: number }) =>
+  (input.page - 1) * input.per_page < SEARCH_DEPTH;
+const DEPTH_MESSAGE = `Only the first ${SEARCH_DEPTH} results can be paged through.`;
+
+const SearchPrincipal = z.object({
+  id: z.string(),
+  login: z.string().describe("Its handle now; `ghost` for one deleted."),
+});
+
+const SearchRepositoryRef = z.object({
+  id: z.string(),
+  owner: z.object({ login: z.string() }),
+  name: z.string(),
+  full_name: z.string(),
+});
+
+export const SearchIssue = z.object({
+  id: z.number().int().describe("Fyrden: the number again (issues have no separate id space)."),
+  number: z.number().int(),
+  title: z.string(),
+  body: z.string().nullable(),
+  state: z.enum(["open", "closed"]).describe("A merged pull request is `closed`."),
+  state_reason: z.enum(ISSUE_STATE_REASONS).nullable(),
+  user: SearchPrincipal.describe("Who opened it."),
+  assignees: z.array(SearchPrincipal),
+  labels: z.array(
+    z.object({
+      id: z.number().int(),
+      name: z.string(),
+      color: z.string(),
+      description: z.string().nullable(),
+    }),
+  ),
+  milestone: z
+    .object({
+      number: z.number().int(),
+      title: z.string(),
+      state: z.enum(["open", "closed"]),
+      description: z.string().nullable(),
+      due_on: z.number().int().nullable(),
+      closed_at: z.number().int().nullable(),
+    })
+    .nullable(),
+  locked: z.boolean(),
+  active_lock_reason: z.enum(LOCK_REASONS).nullable(),
+  created_at: z.number().int().describe("Unix time in milliseconds."),
+  updated_at: z.number().int().describe("Unix time in milliseconds."),
+  closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
+  draft: z.boolean().optional().describe("Pull requests only."),
+  pull_request: z
+    .object({ merged_at: z.number().int().nullable() })
+    .optional()
+    .describe("Present when this is a pull request."),
+  repository: SearchRepositoryRef,
+});
+
+export const SearchRepository = z.object({
+  id: z.string(),
+  owner: z.object({ id: z.string(), login: z.string() }),
+  name: z.string(),
+  full_name: z.string(),
+  visibility: z.enum(["public", "internal", "private"]),
+  description: z.string().nullable(),
+  default_branch: z.string(),
+  created_at: z.number().int().describe("Unix time in milliseconds."),
+});
+
+const searchResults = <T extends z.ZodType>(item: T) =>
+  z.object({
+    total_count: z.number().int().describe(`The matches, counted to ${SEARCH_DEPTH} at most.`),
+    incomplete_results: z
+      .boolean()
+      .describe(
+        "Whether matches may be missing: search does not index now, a repository of the scope is not yet known whole to search, more matched than are counted, or the ranking's candidates were all a search takes.",
+      ),
+    items: z.array(item),
+  });
+
+const SEARCH_ERRORS =
+  "A query with no scope is refused (`search_scope_required`), as is one whose owner holds more than 1,000 repositories the caller may read (`search_scope_too_broad`: name a repository), a prefix standing for more than 1,000 words (`prefix_too_broad`), and a query matching too much of the index to rank (`query_too_broad`); a named repository the caller cannot read is not found (`repo_not_found`). Searches are limited to 10 a minute a principal (`search_rate_limited`) and to an allowance of reads a day (`search_budget`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results.";
+
+export const searchIssues = defineOperation({
+  id: "search.issues",
+  method: "GET",
+  path: "/search/issues",
+  summary: "Search issues and pull requests",
+  description: `Issues and pull requests (marked with \`pull_request\`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with \`issues:read\`, pull requests with \`pull_requests:read\`, each repository's as the caller's role there allows now. Qualifiers: \`is:issue\`, \`is:pr\`, \`is:open\`, \`is:closed\` (merged pull requests too), \`is:merged\`, \`label:name\` (\`label:#id\`), \`milestone:title\` (or its number), \`author:handle\`, \`assignee:handle\`, \`in:title\`, \`in:body\`. The text is required for now. ${SEARCH_ERRORS}`,
+  input: z
+    .object({ q: SearchQuery, ...SearchPage })
+    .refine(withinDepth, { message: DEPTH_MESSAGE }),
+  output: searchResults(SearchIssue),
+  permission: AUTHENTICATED,
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  freshAuth: true,
+  noStore: true,
+  mcp: {
+    tool: "search_issues",
+    title: "Search issues and pull requests",
+    description:
+      "Searches issues and pull requests by text within a scope (repo:owner/name, org:handle or user:handle), with qualifiers such as is:open, label:, author:.",
+    readOnly: true,
+  },
+});
+
+export const searchRepositories = defineOperation({
+  id: "search.repositories",
+  method: "GET",
+  path: "/search/repositories",
+  summary: "Search repositories",
+  description: `Repositories whose name or description match the query's text (\`in:name\`, \`in:description\` to choose), among those of its scope whose metadata the caller may read now. ${SEARCH_ERRORS}`,
+  input: z
+    .object({ q: SearchQuery, ...SearchPage })
+    .refine(withinDepth, { message: DEPTH_MESSAGE }),
+  output: searchResults(SearchRepository),
+  permission: "metadata:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  freshAuth: true,
+  noStore: true,
+  mcp: {
+    tool: "search_repositories",
+    title: "Search repositories",
+    description:
+      "Searches repositories by name and description within a scope (org:handle or user:handle, or repo:owner/name).",
+    readOnly: true,
+  },
 });

@@ -62,7 +62,7 @@ export interface People {
 }
 
 /** SQL true while `row` is live and not older than its source's (`repo`) epoch and ownership. */
-const fenced = (row: string, repo: string) => `${row}.deleted = 0
+export const fenced = (row: string, repo: string) => `${row}.deleted = 0
   AND ${row}.epoch_gen >= coalesce((SELECT e.epoch_gen FROM consumer_epochs e
     WHERE e.source_id = ${repo}), 0)
   AND ${row}.owner_gen >= coalesce((SELECT o.owner_gen FROM source_owner o

@@ -17,6 +17,7 @@ import { type OpContext, OperationError } from "../src/ops/execute.js";
 import { authorizeScope, SEARCH_SCOPE } from "../src/search/authorization.js";
 import { parseSearchQuery } from "../src/search/parser.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { countingD1 } from "./helpers/d1.js";
 import { scopedToken } from "./helpers/principals.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -216,6 +217,30 @@ describe("a search's scope", () => {
     const other = await user();
     expect(await scope(owner.token, `repo:${a.full_name} user:${other.handle}`)).toEqual([]);
     expect(await scope(owner.token, `user:${owner.handle} user:${other.handle}`)).toEqual([]);
+  });
+
+  it("looks each named owner and repository up once, a few repositories at most", async () => {
+    const owner = await user();
+    const repo = await repoOf(owner);
+    const count = { queries: 0 };
+    const counting = new Proxy(env, {
+      get: (t, p) => (p === "DIRECTORY" ? countingD1(env.DIRECTORY, count) : Reflect.get(t, p)),
+    });
+    const q = `${`user:${owner.handle.toUpperCase()} `.repeat(2)}repo:${repo.full_name} repo:${repo.full_name.toUpperCase()}`;
+    expect(await scope(owner.token, q, counting)).toHaveLength(1);
+    // The owner once, the repository once, and the repository's decision.
+    expect(count.queries).toBeLessThanOrEqual(4);
+    // Different owners never intersect: none looked up.
+    count.queries = 0;
+    expect(await scope(owner.token, `user:${owner.handle} org:${uniqueId("x")}`, counting)).toEqual(
+      [],
+    );
+    expect(count.queries).toBe(0);
+    const five = Array.from(
+      { length: SEARCH_SCOPE.named + 1 },
+      (_, i) => `repo:${owner.handle}/r${i}`,
+    );
+    expect(await refusal(scope(owner.token, five.join(" ")))).toBe("invalid_search_query");
   });
 
   it("tells no one of a repository they may not read through an intersection", async () => {

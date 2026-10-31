@@ -215,6 +215,8 @@ import {
   checkSearchIndex,
   getSearchStatus,
   rebuildSearchIndex,
+  searchIssues,
+  searchRepositories,
   setSearchIndexing,
 } from "../ops/search.js";
 import {
@@ -301,6 +303,8 @@ export const registry = defineRegistry([
   getSearchStatus,
   checkSearchIndex,
   rebuildSearchIndex,
+  searchIssues,
+  searchRepositories,
   pauseReadModel,
   resumeReadModel,
   handshakeReadModel,

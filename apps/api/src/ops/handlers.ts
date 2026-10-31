@@ -263,6 +263,7 @@ import {
   checkSearchIndexOperation,
   rebuildSearchIndexOperation,
 } from "../search/index-operations.js";
+import { searchIssuesOperation, searchRepositoriesOperation } from "../search/operations.js";
 import { getSearchStatusOperation } from "../search/status.js";
 import { clock, newId } from "../services.js";
 import { platformKeys } from "../signing/platform-key.js";
@@ -637,6 +638,8 @@ export const handlers: Handlers = {
   "admin.search.backfill": backfillSearchOperation,
   "admin.search.indexing": setSearchIndexingOperation,
   "admin.search.status": getSearchStatusOperation,
+  "search.issues": searchIssuesOperation,
+  "search.repositories": searchRepositoriesOperation,
   "admin.search.check_index": checkSearchIndexOperation,
   "admin.search.rebuild_index": rebuildSearchIndexOperation,
 

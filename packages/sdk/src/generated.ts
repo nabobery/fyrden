@@ -1853,6 +1853,113 @@ export type AdminSearchRebuildIndexOutput = {
   })[];
 };
 
+/** Input of `search.issues`: Search issues and pull requests. */
+export type SearchIssuesInput = {
+  /** The query, 256 characters at most: free text (words, `"quoted phrases"`, a last word ending in `*` for a prefix of at least three letters) and qualifiers. A scope is required: `repo:owner/name`, `org:handle` or `user:handle` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (`unsupported_search_text`). It names 4 different repositories at most. */
+  q: string;
+  /** Results a page, 1-100. A page whose items would pass 1 MiB as JSON is refused whole (`page_too_large`): ask for fewer. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `search.issues`. */
+export type SearchIssuesOutput = {
+  /** The matches, counted to 1000 at most. */
+  total_count: number;
+  /** Whether matches may be missing: search does not index now, a repository of the scope is not yet known whole to search, more matched than are counted, or the ranking's candidates were all a search takes. */
+  incomplete_results: boolean;
+  items: ({
+    /** Fyrden: the number again (issues have no separate id space). */
+    id: number;
+    number: number;
+    title: string;
+    body: string | null;
+    /** A merged pull request is `closed`. */
+    state: "open" | "closed";
+    state_reason: "completed" | "not_planned" | "duplicate" | "reopened" | null;
+    /** Who opened it. */
+    user: {
+      id: string;
+      /** Its handle now; `ghost` for one deleted. */
+      login: string;
+    };
+    assignees: {
+      id: string;
+      /** Its handle now; `ghost` for one deleted. */
+      login: string;
+    }[];
+    labels: ({
+      id: number;
+      name: string;
+      color: string;
+      description: string | null;
+    })[];
+    milestone: {
+      number: number;
+      title: string;
+      state: "open" | "closed";
+      description: string | null;
+      due_on: number | null;
+      closed_at: number | null;
+    } | null;
+    locked: boolean;
+    active_lock_reason: "off-topic" | "too heated" | "resolved" | "spam" | null;
+    /** Unix time in milliseconds. */
+    created_at: number;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+    /** Unix time in milliseconds. */
+    closed_at: number | null;
+    /** Pull requests only. */
+    draft?: boolean;
+    /** Present when this is a pull request. */
+    pull_request?: {
+      merged_at: number | null;
+    };
+    repository: {
+      id: string;
+      owner: {
+        login: string;
+      };
+      name: string;
+      full_name: string;
+    };
+  })[];
+};
+
+/** Input of `search.repositories`: Search repositories. */
+export type SearchRepositoriesInput = {
+  /** The query, 256 characters at most: free text (words, `"quoted phrases"`, a last word ending in `*` for a prefix of at least three letters) and qualifiers. A scope is required: `repo:owner/name`, `org:handle` or `user:handle` (repeated, they intersect). Text is matched in letters and digits up to U+024F (Latin, its accents folded); anything else is refused (`unsupported_search_text`). It names 4 different repositories at most. */
+  q: string;
+  /** Results a page, 1-100. A page whose items would pass 1 MiB as JSON is refused whole (`page_too_large`): ask for fewer. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `search.repositories`. */
+export type SearchRepositoriesOutput = {
+  /** The matches, counted to 1000 at most. */
+  total_count: number;
+  /** Whether matches may be missing: search does not index now, a repository of the scope is not yet known whole to search, more matched than are counted, or the ranking's candidates were all a search takes. */
+  incomplete_results: boolean;
+  items: ({
+    id: string;
+    owner: {
+      id: string;
+      login: string;
+    };
+    name: string;
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+    description: string | null;
+    default_branch: string;
+    /** Unix time in milliseconds. */
+    created_at: number;
+  })[];
+};
+
 /** Input of `admin.read_model.pause`: Pause the read model's writers. */
 export type AdminReadModelPauseInput = Record<string, never>;
 
@@ -7856,6 +7963,8 @@ export const OPERATIONS = {
   "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
   "admin.search.check_index": { method: "POST", path: "/admin/search/indexes/check", pathParams: [], idempotent: true },
   "admin.search.rebuild_index": { method: "POST", path: "/admin/search/indexes/rebuild", pathParams: [], idempotent: true },
+  "search.issues": { method: "GET", path: "/search/issues", pathParams: [], idempotent: false },
+  "search.repositories": { method: "GET", path: "/search/repositories", pathParams: [], idempotent: false },
   "admin.read_model.pause": { method: "POST", path: "/admin/read-model/pause", pathParams: [], idempotent: true },
   "admin.read_model.resume": { method: "POST", path: "/admin/read-model/resume", pathParams: [], idempotent: true },
   "admin.read_model.handshake": { method: "POST", path: "/admin/read-model/handshake", pathParams: [], idempotent: true },
@@ -8131,6 +8240,10 @@ export interface Operations {
   "admin.search.check_index": { input: AdminSearchCheckIndexInput; output: AdminSearchCheckIndexOutput };
   /** Rebuild a small full-text index of search's from its projections. Fyrden: rebuilds a full-text index (`documents`, `repositories`, or `both`, in that order) from the projections it is built from, at once, and marks every live projection indexed: for small deployments only (at most 256 live projections and 1 MiB of their text an index; refused, 409 `index_rebuild_too_large`, past either: ask for a backfill instead, which reconciles each repository within the day's allowance). Refused (409 `index_reconcile_required`) while a live issue or pull request has no repository number yet (its repository's reconciliation gives it one), and (409 `index_rebuild_refused`) when search's allowance or the database's size admits no rebuild. Both indexes are looked at before either is rebuilt; one refused at its rebuild leaves the one before it rebuilt. It repairs the index, not the projections: no repository becomes known whole by it. `ok` is true for each index rebuilt. Refused (503 `read_model_maintenance`) while the read model is under maintenance. Instance administrators only. */
   "admin.search.rebuild_index": { input: AdminSearchRebuildIndexInput; output: AdminSearchRebuildIndexOutput };
+  /** Search issues and pull requests. Issues and pull requests (marked with `pull_request`) whose title or body match the query's text, in the repositories of its scope the caller may read: issues with `issues:read`, pull requests with `pull_requests:read`, each repository's as the caller's role there allows now. Qualifiers: `is:issue`, `is:pr`, `is:open`, `is:closed` (merged pull requests too), `is:merged`, `label:name` (`label:#id`), `milestone:title` (or its number), `author:handle`, `assignee:handle`, `in:title`, `in:body`. The text is required for now. A query with no scope is refused (`search_scope_required`), as is one whose owner holds more than 1,000 repositories the caller may read (`search_scope_too_broad`: name a repository), a prefix standing for more than 1,000 words (`prefix_too_broad`), and a query matching too much of the index to rank (`query_too_broad`); a named repository the caller cannot read is not found (`repo_not_found`). Searches are limited to 10 a minute a principal (`search_rate_limited`) and to an allowance of reads a day (`search_budget`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results. */
+  "search.issues": { input: SearchIssuesInput; output: SearchIssuesOutput };
+  /** Search repositories. Repositories whose name or description match the query's text (`in:name`, `in:description` to choose), among those of its scope whose metadata the caller may read now. A query with no scope is refused (`search_scope_required`), as is one whose owner holds more than 1,000 repositories the caller may read (`search_scope_too_broad`: name a repository), a prefix standing for more than 1,000 words (`prefix_too_broad`), and a query matching too much of the index to rank (`query_too_broad`); a named repository the caller cannot read is not found (`repo_not_found`). Searches are limited to 10 a minute a principal (`search_rate_limited`) and to an allowance of reads a day (`search_budget`, until the next UTC day). Results are counted to 1,000 and ranked by relevance; writes between pages can repeat or omit results. */
+  "search.repositories": { input: SearchRepositoriesInput; output: SearchRepositoriesOutput };
   /** Pause the read model's writers. Fyrden: one step of pausing the org read model's writers: the barrier moves to the next generation (no lease is taken from then on, and no batch of an older generation is admitted), and is `paused` once no lease of an older generation is live (`live` of them, the latest deadline `until`). Call again until `phase` is `paused`; a resume that came between leaves `running`. Allowed while the deployment's read model maintenance holds other writes back. Refused (409 `read_model_recovering`) while the barrier is recovering. Instance administrators only. */
   "admin.read_model.pause": { input: AdminReadModelPauseInput; output: AdminReadModelPauseOutput };
   /** Resume the read model's writers. Fyrden: lets the org read model's writers write again, at the latest generation either barrier holds (a generation never goes down); a newer pause that came between stands. With `generation`, only the pause at that generation is resumed (another, newer, stands). Nothing while it runs already or is recovering. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */

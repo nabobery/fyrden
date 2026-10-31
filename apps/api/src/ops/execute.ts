@@ -185,12 +185,12 @@ export async function executeOperation(
     return fail(ctx, 429, "rate_limited", "Too many requests for this token.");
   }
 
-  // A write must see revocation immediately, even if the request was
-  // verified from the read cache (MCP verifies every call in read mode).
+  // A write (and a read that asks for it) must see revocation immediately, even if the request
+  // was verified from the read cache (MCP verifies every call in read mode).
   // From here on, everything uses the record the primary returned.
   let auth = ctx.auth;
   let authState = ctx.authState;
-  if (op.method !== "GET") {
+  if (op.method !== "GET" || op.freshAuth) {
     const fresh = await reverified(ctx);
     if (!fresh.ok) return fail(ctx, 401, fresh.code, fresh.detail);
     auth = fresh.record;
