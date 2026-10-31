@@ -109,8 +109,34 @@ Restoring `fyrden-org` with Time Travel rolls back everything in it,
 including what must not go back: effects already delivered, webhook
 deliveries and their attempts, the sources' fences and the spending of
 search's and the discretionary allowances. A recovery keeps those across
-the restore, and readies search for what it brings back. With an instance
-administrator's token, against the API:
+the restore, and readies search for what it brings back. The CLI drives it,
+from where the deployment says it stands (run it again after an
+interruption):
+
+```sh
+FYRDEN_TOKEN=<an instance administrator's token> \
+  node packages/cli/src/index.ts read-model recover \
+  --url https://fyrden-api.<account>.workers.dev --id <a new recovery id>
+```
+
+It pauses the writers, starts the recovery, preserves its rows and stops at
+the restore, saying how to make it; it never restores the database itself.
+From the repository's root:
+
+```sh
+wrangler d1 time-travel restore fyrden-org --bookmark=<bookmark> \
+  --config apps/api/wrangler.deploy.jsonc
+wrangler d1 migrations apply fyrden-org --remote --config apps/api/wrangler.deploy.jsonc
+```
+
+Keep the bookmark the restore says undoes it, and run the command again
+with `--restore-bookmark <bookmark> --undo-bookmark <bookmark>`: it
+reports the restore and steps on until the recovery is complete. Each step
+is one call within the API's write rate limit (a rate-limited call is asked
+again after a wait), and an import writes a few rows a step: a large read
+model takes hours, and a run stops after 100,000 steps; run it again to go
+on. What it does, step by
+step, with an instance administrator's token against the API:
 
 1. Pause the writers (`POST /api/admin/read-model/pause` until `paused`),
    and start a recovery with an id of your choosing, never used before:

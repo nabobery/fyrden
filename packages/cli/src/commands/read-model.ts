@@ -14,7 +14,16 @@ import { ApiError, type ApiTarget, apiTarget, callApi } from "../api.ts";
  */
 
 export const READ_MODEL_USAGE = `fyrden read-model export --url <API URL> --out <directory> [--keep-paused]
-       fyrden read-model handshake --url <API URL>`;
+       fyrden read-model handshake --url <API URL>
+       fyrden read-model recover --url <API URL> --id <recovery id>
+                                 [--restore-bookmark <bookmark> --undo-bookmark <bookmark>]`;
+
+export interface RecoverArgs extends ApiTarget {
+  readonly command: "recover";
+  readonly id: string;
+  /** The restore its operator made: the bookmark restored to, and the one that undoes it. */
+  readonly restore?: { readonly bookmark: string; readonly undoBookmark: string };
+}
 
 export interface HandshakeArgs extends ApiTarget {
   readonly command: "handshake";
@@ -32,8 +41,36 @@ export interface ExportArgs extends ApiTarget {
 export function parseReadModelArgs(
   args: readonly string[],
   env: Record<string, string | undefined>,
-): ExportArgs | HandshakeArgs | { error: string } {
+): ExportArgs | HandshakeArgs | RecoverArgs | { error: string } {
   const [sub, ...rest] = args;
+  if (sub === "recover") {
+    const given = new Map<string, string | undefined>();
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i] ?? "";
+      if (!["--url", "--id", "--restore-bookmark", "--undo-bookmark"].includes(arg))
+        return { error: `unknown argument ${arg}\nusage: ${READ_MODEL_USAGE}` };
+      given.set(arg, rest[++i]);
+    }
+    const id = given.get("--id");
+    if (!id || !/^[A-Za-z0-9_-]{1,64}$/.test(id))
+      return { error: `--id must be 1 to 64 letters, digits, _ or -\nusage: ${READ_MODEL_USAGE}` };
+    const [bookmark, undoBookmark] = [
+      given.get("--restore-bookmark"),
+      given.get("--undo-bookmark"),
+    ];
+    if (!bookmark !== !undoBookmark)
+      return {
+        error: `--restore-bookmark and --undo-bookmark go together\nusage: ${READ_MODEL_USAGE}`,
+      };
+    const target = apiTarget(given.get("--url"), env, READ_MODEL_USAGE);
+    if ("error" in target) return target;
+    return {
+      command: "recover",
+      ...target,
+      id,
+      ...(bookmark && undoBookmark && { restore: { bookmark, undoBookmark } }),
+    };
+  }
   if (sub === "handshake") {
     let url: string | undefined;
     for (let i = 0; i < rest.length; i++) {
@@ -61,7 +98,16 @@ export function parseReadModelArgs(
   return { command: "export", ...target, out, keepPaused };
 }
 
-export interface ExportDeps {
+/** What a command that drives the API step by step needs. */
+interface Driving {
+  readonly args: ApiTarget;
+  readonly fetch: typeof fetch;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+  readonly log: (line: string) => void;
+}
+
+export interface ExportDeps extends Driving {
   readonly args: ExportArgs;
   readonly fetch: typeof fetch;
   readonly sleep: (ms: number) => Promise<void>;
@@ -195,14 +241,11 @@ async function resumed(deps: ExportDeps, generation: number | undefined): Promis
  * Pauses the writers, step by step until no older lease is live; the
  * generation, kept in `pause` from the first step that names it.
  */
-async function paused(deps: ExportDeps, pause: { generation?: number }): Promise<number> {
+async function paused(deps: Driving, pause: { generation?: number }): Promise<number> {
   const deadline = deps.now() + PAUSE_WAIT_MS;
   for (;;) {
-    const progress = await callApi<Progress>(
-      deps.fetch,
-      deps.args,
-      "POST",
-      "/admin/read-model/pause",
+    const progress = await limited(deps, () =>
+      callApi<Progress>(deps.fetch, deps.args, "POST", "/admin/read-model/pause"),
     );
     if (progress.phase === "paused" || progress.phase === "pausing")
       pause.generation = progress.generation;
@@ -220,7 +263,7 @@ async function paused(deps: ExportDeps, pause: { generation?: number }): Promise
 }
 
 /** `call`, asked again after a wait while the API rate limits it. */
-async function limited<T>(deps: ExportDeps, call: () => Promise<T>): Promise<T> {
+async function limited<T>(deps: Driving, call: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries++) {
     try {
       return await call();
@@ -244,4 +287,85 @@ export async function handshakeReadModel(deps: {
 }): Promise<void> {
   await callApi(deps.fetch, deps.args, "POST", "/admin/read-model/handshake");
   deps.log("ok   read model restore token matched");
+}
+
+interface Recovery {
+  readonly recovery_id: string;
+  readonly generation: number;
+  readonly stage: string;
+}
+
+/** The deployment's Wrangler configuration, from the repository's root (what `fyrden deploy` uses). */
+const DEPLOY_CONFIG = "apps/api/wrangler.deploy.jsonc";
+
+/** Steps a recovery takes at most a run (a step is bounded; a large read model takes many). */
+const RECOVERY_STEPS = 100_000;
+
+/**
+ * `read-model recover`: drives the read model's recovery `args.id` from
+ * where the deployment says it stands. Started (the writers paused first)
+ * when none is under way; stepped until it awaits its restore, where it
+ * stops and says how to restore, unless the restore is given (`--restore-
+ * bookmark`, `--undo-bookmark`: it reports it and steps on until complete).
+ * It never restores the database itself, nor retries a restore. Run again
+ * after an interruption: it goes on from the deployment's state.
+ */
+export async function recoverReadModel(
+  deps: Driving & { readonly args: RecoverArgs },
+): Promise<Recovery> {
+  const { args, log } = deps;
+  const call = <T>(method: "GET" | "POST", path: string, body?: unknown) =>
+    limited(deps, () => callApi<T>(deps.fetch, args, method, path, body));
+  let state = await call<Recovery>("GET", "/admin/read-model/recovery").catch((error: unknown) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
+  if (state && state.recovery_id !== args.id && state.stage !== "complete")
+    throw new Error(
+      `the read model's recovery ${state.recovery_id} is under way (${state.stage}): finish it first`,
+    );
+  if (!state || state.recovery_id !== args.id) {
+    const generation = await paused(deps, {});
+    log(`paused the read model's writers at generation ${generation}`);
+    state = await call<Recovery>("POST", "/admin/read-model/recovery", { recovery_id: args.id });
+    log(`started recovery ${args.id} at generation ${state.generation}`);
+  } else if (state.stage === "preserving")
+    // Its start asked again: one interrupted is finished (and one finished changes nothing).
+    state = await call<Recovery>("POST", "/admin/read-model/recovery", { recovery_id: args.id });
+  let reported = false;
+  for (let n = 0; n < RECOVERY_STEPS; n++) {
+    if (state.stage === "complete") {
+      log(`recovery ${args.id} complete: the read model's writers are running again`);
+      return state;
+    }
+    if (state.stage === "awaiting_restore" && !reported) {
+      if (!args.restore) {
+        log(`recovery ${args.id} awaits its restore. Its operational rows are preserved; now:`);
+        log("  1. restore the org read model to the bookmark you chose (after the restore floor):");
+        log(
+          `       wrangler d1 time-travel restore fyrden-org --bookmark=<bookmark> --config ${DEPLOY_CONFIG}`,
+        );
+        log("     and keep the bookmark it says undoes it;");
+        log("  2. apply the migrations it lacks:");
+        log(`       wrangler d1 migrations apply fyrden-org --remote --config ${DEPLOY_CONFIG}`);
+        log(
+          `  3. run this again with --restore-bookmark <bookmark> --undo-bookmark <undo bookmark>.`,
+        );
+        return state;
+      }
+      state = await call<Recovery>("POST", "/admin/read-model/recovery/step", {
+        recovery_id: args.id,
+        restore: { bookmark: args.restore.bookmark, undo_bookmark: args.restore.undoBookmark },
+      });
+      reported = true;
+      log(`reported the restore to ${args.restore.bookmark}`);
+      continue;
+    }
+    const before = state.stage;
+    state = await call<Recovery>("POST", "/admin/read-model/recovery/step", {
+      recovery_id: args.id,
+    });
+    if (state.stage !== before) log(`recovery ${args.id}: ${before} done, ${state.stage}`);
+  }
+  throw new Error(`recovery ${args.id} took more than ${RECOVERY_STEPS} steps: run again`);
 }

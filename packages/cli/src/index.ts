@@ -16,6 +16,7 @@ import {
   handshakeReadModel,
   parseReadModelArgs,
   READ_MODEL_USAGE,
+  recoverReadModel,
 } from "./commands/read-model.ts";
 import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
@@ -362,6 +363,16 @@ export async function main(argv: string[]): Promise<number> {
     }
     if (parsed.command === "handshake") {
       await handshakeReadModel({ args: parsed, fetch, log });
+      return 0;
+    }
+    if (parsed.command === "recover") {
+      await recoverReadModel({
+        args: parsed,
+        fetch,
+        sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+        now: Date.now,
+        log,
+      });
       return 0;
     }
     await exportReadModel({
