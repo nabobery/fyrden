@@ -182,9 +182,12 @@ describe("a notification email", () => {
     attempts: await env.DIRECTORY.prepare(
       "SELECT coalesce(sum(used), 0) AS n FROM email_attempts",
     ).first(),
-    spend: await env.DIRECTORY.prepare(
-      "SELECT scope, period, used FROM email_spend ORDER BY scope, period",
-    ).all(),
+    // Its rows (the result's metadata, timings among them, changes between any two reads).
+    spend: (
+      await env.DIRECTORY.prepare(
+        "SELECT scope, period, used FROM email_spend ORDER BY scope, period",
+      ).all()
+    ).results,
   });
 
   it("waits, as it was, while the alarm's budget cannot admit it whole, and is sent at once after", async () => {
