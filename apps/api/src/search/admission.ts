@@ -25,9 +25,15 @@ export const ADMISSION = {
  * How much a batch's projections may grow the database, reserved before
  * they are written: `factor` times their rows' bytes (their JSON, a bound
  * on the text indexed), and `entity` bytes more each (its rows, keys and
- * index entries). Provisional, until measured: generous on purpose.
+ * index entries, and the index's merges a write may set off). Measured
+ * (test/search.growth.test.ts, which pins it): a batch grew the database by
+ * at most two thirds of what this reserves (a body of distinct terms about
+ * three times its JSON; a small edit after an index of large documents up to
+ * seven pages, by the order before it), over short, repetitive, distinct-term, three- and four-byte and
+ * combining text, the longest titles, a hundred labels, inserts,
+ * replacements, deletions, batches of ten and small edits.
  */
-export const GROWTH = { factor: 4, entity: 8_192 };
+export const GROWTH = { factor: 4, entity: 65_536 };
 
 /** The bytes `rows` (projected entities' rows; a deletion's null) may grow the database by. */
 export function growthOf(rows: readonly (Record<string, unknown> | null)[]): number {
@@ -67,8 +73,11 @@ export const ADMITTED = (n: number) =>
  */
 export const STATEMENT_ROWS = 16;
 
-/** Rows one projected entity's statements read, reserved (an issue's group: 26, measured). */
-export const STATEMENT_READS = 40;
+/**
+ * Rows one projected entity's statements read, reserved (40 at most,
+ * measured with its growth's admission: test/search.growth.test.ts).
+ */
+export const STATEMENT_READS = 48;
 
 export interface Reservation {
   readonly day: number;

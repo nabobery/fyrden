@@ -858,7 +858,8 @@ const REPO_RESERVED = 1;
  * Rows a repository's index entry reserves of the day's repository index
  * allowance (20 measured for one first indexed, its admission, receipt and
  * settlement included; settled at what it wrote),
- * and repositories the index holds at most (provisional, until measured).
+ * and repositories the index holds at most (provisional, until search's
+ * ranking is measured over it).
  */
 export const REPO_INDEX = { rows: 24, capacity: 20_000 };
 
