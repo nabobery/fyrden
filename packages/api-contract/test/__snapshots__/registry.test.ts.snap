@@ -968,7 +968,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/admin/search/status": {
       "get": {
-        "description": "Fyrden: the org read model's write protocol and search's state, for operators. \`protocol\`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (\`compatibility\`) or refused (\`enforced\`). \`barrier\`: the directory's and the read model's barriers (null where a row is missing, and then not \`consistent\`). \`admission\`: whether a write is under way, writes made outside the executor while they were only counted (\`stray\`), and the read model's write sequence. \`writers\`: leases live and expired, and the earliest deadline. \`export\`: whether a coherent export of the read model can be made (not before a restore floor is recorded: \`no_restore_floor\`). \`search\`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only.",
+        "description": "Fyrden: the org read model's write protocol and search's state, for operators. \`protocol\`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (\`compatibility\`) or refused (\`enforced\`). \`barrier\`: the directory's and the read model's barriers (null where a row is missing, and then not \`consistent\`). \`admission\`: whether a write is under way, writes made outside the executor while they were only counted (\`stray\`), and the read model's write sequence. \`writers\`: leases live and expired, and the earliest deadline. \`export\`: whether a coherent export of the read model can be made (not before a restore floor is recorded: \`no_restore_floor\`). \`search\`: today's spending of its allowance and of the repository index's, with the limits (\`limits\`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (\`live_docs\`) and the repositories (\`indexed_repos\`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (\`next_parked\`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (\`first_uncovered\`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only.",
         "operationId": "admin.search.status",
         "responses": {
           "200": {
@@ -1182,10 +1182,98 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "minimum": -9007199254740991,
                           "type": "integer",
                         },
+                        "bytes_reserved": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
                         "day": {
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer",
+                        },
+                        "first_uncovered": {
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "indexed_repos": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "limits": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "daily_reads": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "daily_rows": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "max_bytes": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "repository_capacity": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                            "repository_daily_rows": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                          },
+                          "required": [
+                            "daily_rows",
+                            "daily_reads",
+                            "max_bytes",
+                            "repository_daily_rows",
+                            "repository_capacity",
+                          ],
+                          "type": "object",
+                        },
+                        "live_docs": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "next_parked": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": false,
+                              "properties": {
+                                "reason": {
+                                  "type": "string",
+                                },
+                                "repo_id": {
+                                  "type": "string",
+                                },
+                                "retry_at": {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                              },
+                              "required": [
+                                "repo_id",
+                                "reason",
+                                "retry_at",
+                              ],
+                              "type": "object",
+                            },
+                            {
+                              "type": "null",
+                            },
+                          ],
                         },
                         "next_repair_since": {
                           "anyOf": [
@@ -1212,6 +1300,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repair_pending": {
                           "type": "boolean",
                         },
+                        "repo_rows": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
                         "rows": {
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
@@ -1222,10 +1315,17 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "day",
                         "rows",
                         "reads",
+                        "repo_rows",
                         "bytes",
+                        "bytes_reserved",
                         "observed_sequence",
+                        "live_docs",
+                        "indexed_repos",
+                        "limits",
                         "repair_pending",
                         "next_repair_since",
+                        "next_parked",
+                        "first_uncovered",
                       ],
                       "type": "object",
                     },
