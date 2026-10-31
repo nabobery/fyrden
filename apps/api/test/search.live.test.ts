@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { applyEnvelope, consumeEvents, EVENTS_QUEUE } from "../src/queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../src/read-model/executor.js";
-import { ADMISSION } from "../src/search/admission.js";
+import { ADMISSION, growthOf } from "../src/search/admission.js";
 import { liveSearch } from "../src/search/live.js";
 import { admitted } from "./helpers/read-model.js";
 
@@ -297,17 +297,18 @@ describe("search's live projection, admitted", () => {
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
     const first = await spent();
     // A document's insert (its indexes, its repository's number, the counters and its full-text
-    // entry included) and the bookkeeping (15 as measured), with the admissions of its batch and
-    // of the settlement's, less than the 24 reserved (16 for the document, 8 for bookkeeping)
-    // and the settlement's charge.
+    // entry included) and the bookkeeping, its growth's receipt made and released included (21
+    // as measured), with the admissions of its batch and of the settlement's, less than the 30
+    // reserved (16 for the document, 14 for bookkeeping) and the settlement's charge.
     const admissions = 2 * READ_MODEL_ADMISSION.rows;
-    expect(first).toBe(15 + admissions);
-    // A duplicate writes no projection row: only the bookkeeping is charged (2 as measured).
+    expect(first).toBe(21 + admissions);
+    // A duplicate writes no projection row: only the bookkeeping is charged, its growth's receipt
+    // included (admitted before anything can tell it changes nothing: 8 as measured).
     await deliver([{ sourceId: repoId, events: [issueEvent(repoId, 1, issue(1))] }]);
-    expect((await spent()) - first).toBe(2 + admissions);
+    expect((await spent()) - first).toBe(8 + admissions);
   });
 
-  it("charges the day what a repository's own index entry writes", async () => {
+  it("charges the day's repository index allowance what a repository's own entry writes", async () => {
     const repoId = await listedRepo();
     const before = await spent();
     const repository: DomainEvent = {
@@ -342,10 +343,67 @@ describe("search's live projection, admitted", () => {
         .bind(repoId)
         .first(),
     ).toEqual({ indexed: 1 });
-    // Its numbers (its repository's and its owner's, each with two keys), the counters past them,
-    // the count, its membership and its entry (11, measured; the repository's row is the read
-    // model's, not search's), the spending's own row and the admission of its batch.
-    expect((await spent()) - before).toBe(11 + 1 + READ_MODEL_ADMISSION.rows);
+    // Charged with the repository index's own allowance: its admission and receipt, its numbers
+    // (its repository's and its owner's, each with two keys), the counters past them, the count,
+    // its membership and its entry (the repository's row is the read model's, not search's), its
+    // receipt's release later, and the settlement's own row: 20, measured; and the admissions of
+    // the batch and of the settlement's, its alone. None with the projection rows.
+    expect((await spent()) - before).toBe(0);
+    expect(
+      await db
+        .prepare(
+          "SELECT repo_rows FROM search_budget WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
+        )
+        .first(),
+    ).toEqual({ repo_rows: 20 + 2 * READ_MODEL_ADMISSION.rows });
+    // Renamed while search does not index: its entry taken out, and that charged too.
+    await indexing(false);
+    const renamed = {
+      ...repository,
+      id: { ...repository.id, sourceSeq: 2 },
+      entity: {
+        ...repository.entity,
+        version: 2,
+        row: { ...(repository.entity?.row ?? {}), name: `renamed-${repoId}` },
+      },
+    } as DomainEvent;
+    await deliver([{ sourceId: repoId, events: [renamed] }]);
+    expect(
+      await db
+        .prepare("SELECT indexed FROM search_repo_nums WHERE repo_id = ?")
+        .bind(repoId)
+        .first(),
+    ).toEqual({ indexed: 0 });
+    const after = await db
+      .prepare(
+        "SELECT repo_rows FROM search_budget WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
+      )
+      .first<{ repo_rows: number }>();
+    expect(after?.repo_rows).toBeGreaterThan(20 + 2 * READ_MODEL_ADMISSION.rows);
+  });
+
+  it("admits growth only within the threshold, counting what other batches of the invocation reserved", async () => {
+    const [a, b] = [await listedRepo(), await listedRepo()];
+    const grows = growthOf([issue(1) as unknown as Record<string, unknown>]);
+    // Room for one batch's growth exactly (the size held, as if observed, and nothing reserved).
+    await db
+      .prepare("UPDATE search_size SET bytes = ? WHERE id = 1")
+      .bind(ADMISSION.maxBytes - grows)
+      .run();
+    // Two messages of one invocation: the first's receipt still held when the second admits.
+    await deliver([
+      { sourceId: a, events: [issueEvent(a, 1, issue(1))] },
+      { sourceId: b, events: [issueEvent(b, 1, issue(1))] },
+    ]);
+    expect([await docs(a), await docs(b)]).toMatchObject([[{ number: 1 }], []]);
+    expect(await repair(b)).toMatchObject({ reason: "admission" });
+    // The invocation's observation released what it covered: nothing stays reserved.
+    expect(await db.prepare("SELECT bytes_reserved FROM search_size WHERE id = 1").first()).toEqual(
+      { bytes_reserved: 0 },
+    );
+    expect(await db.prepare("SELECT count(*) AS n FROM search_byte_reservations").first()).toEqual({
+      n: 0,
+    });
   });
 
   it("charges the admission of an invocation's settlements once", async () => {
@@ -358,7 +416,7 @@ describe("search's live projection, admitted", () => {
     // Each message's as one alone (today's row made by the first only), but one settlement
     // batch: its admission charged once.
     expect((await spent()) - before).toBe(
-      2 * (15 + READ_MODEL_ADMISSION.rows) - 1 + READ_MODEL_ADMISSION.rows,
+      2 * (21 + READ_MODEL_ADMISSION.rows) - 1 + READ_MODEL_ADMISSION.rows,
     );
   });
 
@@ -501,7 +559,7 @@ describe("search's live projection, admitted", () => {
         sinks: [],
       },
     );
-    expect(await spent()).toBe(15 + 2 * READ_MODEL_ADMISSION.rows);
+    expect(await spent()).toBe(21 + 2 * READ_MODEL_ADMISSION.rows);
     expect(await docs(repoId)).toMatchObject([{ number: 1 }]);
   });
 

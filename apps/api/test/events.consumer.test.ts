@@ -442,9 +442,9 @@ describe("events consumer", () => {
     // the 1,000 internal-service calls (measured on Workers Free, 2026-10-10).
     // And the invocation's writer's lease in the directory, taken and released, and each
     // batch's admission (its opening and closing) around the message's statements (its epoch,
-    // and its repository's row with its index entry: nine); then the size the invocation left,
-    // recorded once (its own admitted batch).
-    expect(calls).toEqual({ directory: 5 + 2, batches: [12, 12, 12, 12, 12, 3] });
+    // and its repository's row with its index entry: fourteen); then the size the invocation left,
+    // recorded once with the growth it covers released (its own admitted batch).
+    expect(calls).toEqual({ directory: 5 + 2, batches: [17, 17, 17, 17, 17, 5] });
     expect(result.explicitAcks).toHaveLength(5);
     for (const repoId of repos) expect(await readRow(repoId)).toMatchObject({ version: 2 });
   });

@@ -317,6 +317,10 @@ describe("search's allowance", () => {
     await env.DIRECTORY.prepare(
       "INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', 'on', 0)",
     ).run();
+    // Growth other tests' writers reserved, released now: its release was charged with them.
+    await withReadModel(env, "default", (readModel) =>
+      readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1").run(),
+    );
     const seen = { calls: 0, written: 0, read: 0 };
     // One page: the pass is not done, and the source goes to the back.
     await runSearchRepairs(clocked(Number.POSITIVE_INFINITY, seen), { pages: 1 });
@@ -456,13 +460,23 @@ describe("search's allowance", () => {
       await reconcileSource(clocked(Number.POSITIVE_INFINITY, seen), { repoId, shard: "default" }),
     ).toBe("done");
     const charged = await budget();
+    // Its repository's index entry with the repository index's own allowance.
+    const indexed = await db
+      .prepare("SELECT repo_rows FROM search_budget WHERE day = ?")
+      .bind(await today())
+      .first<{ repo_rows: number }>();
+    const rows = (charged?.rows ?? 0) + (indexed?.repo_rows ?? 0);
     // At least what was written and read; at most a few rows of each settling's allowance more.
-    expect(charged?.rows ?? 0).toBeGreaterThanOrEqual(seen.written);
-    expect(charged?.rows ?? 0).toBeLessThanOrEqual(seen.written + 2 * 5);
+    expect(rows).toBeGreaterThanOrEqual(seen.written);
+    expect(rows).toBeLessThanOrEqual(seen.written + 2 * 5);
     expect(charged?.reads ?? 0).toBeGreaterThanOrEqual(seen.read);
   });
 
   it("looks at the size again when the one held is at the threshold, so a database that shrank is let through", async () => {
+    // Growth other tests' writers reserved, released now (its release was charged with them).
+    await withReadModel(env, "default", (readModel) =>
+      readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1").run(),
+    );
     await db
       .prepare("UPDATE search_size SET bytes = ? WHERE id = 1")
       .bind(ADMISSION.maxBytes)

@@ -12,6 +12,8 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import type { ExportPage, ExportPageRequest } from "../src/do/repo/export.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
 import { epochStatement } from "../src/queues/events-consumer.js";
+import { withReadModel } from "../src/read-model/executor.js";
+import { ADMISSION } from "../src/search/admission.js";
 import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
 import { repairStatement } from "../src/search/repairs.js";
 import { docStatements, labelStatement } from "../src/search/statements.js";
@@ -211,9 +213,9 @@ describe("search reconciliation", () => {
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
     // Each kind's page: its checkpoint alone; then the repository's own row (its epoch and its
-    // nine statements, its index entry with it) with the last checkpoint and the revision
+    // fourteen statements, its index entry with it) with the last checkpoint and the revision
     // covered; each batch between the executor's opening and closing of admission.
-    expect(batches).toEqual([1, 1, 1, 12].map((n) => n + 2));
+    expect(batches).toEqual([1, 1, 1, 17].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -493,6 +495,39 @@ describe("search reconciliation", () => {
     ).run();
     expect(late.meta.changes).toBe(0);
     expect((await docs())[0]?.deleted).toBe(1);
+  });
+
+  it("leaves the pass partial when a deletion's new row is refused its growth", async () => {
+    await repairStatement(db, repo.id, "backfill", 1).run();
+    expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+    // Made and deleted after the export's position: its page needs the deletion's own row.
+    await call("POST", "/issues", { title: "Fleeting" });
+    await call("DELETE", "/issues/1");
+    // Room for reserving the step's rows, not for its growth (what earlier steps reserved released
+    // first, by an observation).
+    await withReadModel(env, "default", (readModel) =>
+      readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1").run(),
+    );
+    await db
+      .prepare("UPDATE search_size SET bytes = ? WHERE id = 1")
+      .bind(ADMISSION.maxBytes - 1)
+      .run();
+    try {
+      // The page that needed it: no row written, and the pass partial from then on (its revision
+      // not covered, so a whole pass follows and nothing it did not write can come back unnoticed).
+      expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+      expect(await docs()).toEqual([]);
+      expect(
+        await db
+          .prepare("SELECT kind, partial FROM search_reconciles WHERE repo_id = ?")
+          .bind(repo.id)
+          .first(),
+      ).toEqual({ kind: "labels", partial: 1 });
+      expect(await reconcileSource(env, target())).toBe("done");
+    } finally {
+      await db.prepare("UPDATE search_size SET bytes = 0 WHERE id = 1").run();
+    }
+    expect(await repairStateOf(repo.id)).toMatchObject({ covered: 0 });
   });
 
   it("marks a label the export lacks deleted where it found it gone, and an earlier change cannot bring it back", async () => {

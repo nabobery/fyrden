@@ -3,12 +3,11 @@ import type { RepoExport } from "../do/repo/events.js";
 import {
   type Admission,
   epochStatement,
-  indexRows,
+  repoIndexStatement,
+  repoIndexUse,
   repoStatements,
   type Snapshot,
 } from "../queues/events-consumer.js";
-import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
-import { spentStatement } from "../search/admission.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 
 /**
@@ -76,14 +75,11 @@ export async function applyExport(
   const statements = exportStatements(db, exported, now, indexing);
   options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
   const results = await db.batch(statements);
-  // What its index entry wrote, charged with search's spending (a write of its own).
-  const indexed = indexRows(results.slice(1), true);
-  if (indexed > 0) {
+  // What its index entry used of the repository index allowance, settled (a write of its own).
+  const settled = repoIndexStatement(db, repoIndexUse(results.slice(1), true));
+  if (settled.length > 0) {
     options.metrics?.count("d1.query", { db: "org", op: "search_spent" });
-    await spentStatement(db, {
-      rows: indexed + READ_MODEL_LONE_WRITE.rows,
-      reads: READ_MODEL_LONE_WRITE.reads,
-    }).run();
+    await db.batch(settled);
   }
 }
 

@@ -50,13 +50,38 @@ export const READ_MODEL_LONE_WRITE = {
 
 /**
  * What recording a writer's size observation costs (its one row and the
- * reads of its update, its guard's included, measured; and the write's
- * admission): once a piece of work.
+ * reads of its update, its guard's included, and of the look for growth it
+ * releases, measured with none to release; and the write's admission):
+ * once a piece of work. A release's own rows are charged with the batches
+ * whose growth it releases (`RECEIPT_RELEASE_ROWS`).
  */
 export const READ_MODEL_OBSERVATION = {
   rows: 1 + READ_MODEL_ADMISSION.rows,
-  reads: 5 + READ_MODEL_ADMISSION.reads,
+  reads: 9 + READ_MODEL_ADMISSION.reads,
 } as const;
+
+/** Receipts one observation releases at most (the oldest first). */
+export const RELEASE_LIMIT = 100;
+
+/**
+ * Releases the growth reserved by batches an observation of the database's
+ * size now covers (their sequences at or before the one held): their bytes
+ * are in the size observed. In the observation's own write, after it; the
+ * oldest `RELEASE_LIMIT` at most (the next observation releases more).
+ */
+export function releaseStatements(db: D1Database): D1PreparedStatement[] {
+  const covered = `SELECT token FROM search_byte_reservations
+    WHERE sequence <= (SELECT observed FROM search_size WHERE id = 1)
+    ORDER BY sequence, token LIMIT ${RELEASE_LIMIT}`;
+  return [
+    db.prepare(
+      `UPDATE search_size SET bytes_reserved = bytes_reserved - (
+         SELECT sum(bytes) FROM search_byte_reservations WHERE token IN (${covered}))
+       WHERE id = 1 AND EXISTS (${covered})`,
+    ),
+    db.prepare(`DELETE FROM search_byte_reservations WHERE token IN (${covered})`),
+  ];
+}
 
 /** A lease's life; a writer renews it once less than half is left. */
 export const READ_MODEL_LEASE_MS = 900_000;
@@ -299,6 +324,8 @@ export class ReadModelWriter {
             "UPDATE search_size SET observed = ?1, bytes = ?2 WHERE id = 1 AND observed < ?1",
           )
           .bind(observed.sequence, observed.bytes),
+        // The growth search reserved that this observation (or a later one held) covers.
+        ...releaseStatements(this.#org),
       ],
       { observe: false },
     );

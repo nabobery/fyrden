@@ -15,8 +15,14 @@ import {
 } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
-import { epochStatement, repoStatements, type Snapshot } from "../src/queues/events-consumer.js";
+import {
+  epochStatement,
+  REPO_INDEX,
+  repoStatements,
+  type Snapshot,
+} from "../src/queues/events-consumer.js";
 import { REPO_CLEANUPS } from "../src/repos/cleanups.js";
+import { ADMISSION } from "../src/search/admission.js";
 import { docStatements, type SearchPosition } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -356,6 +362,70 @@ describe("a repository's full-text entry", () => {
     await writeRepo(repoSnapshot(repo, 2, null));
     expect(await repoMatching(`"gone-${repo}"`)).toEqual([]);
     expect(await membership(repo)).toMatchObject({ indexed: 0 });
+    await consistent();
+  });
+});
+
+describe("a repository's entry, refused", () => {
+  const repairOf = (repoId: string) =>
+    db
+      .prepare("SELECT reason FROM search_repairs WHERE repo_id = ? AND dirty > covered")
+      .bind(repoId)
+      .first<{ reason: string }>();
+
+  it("is not made while the index is full, its row still written and a repair asked for; a full index still takes a change of one it holds", async () => {
+    const held = await source();
+    await writeRepo(repoSnapshot(held, 1, repoRow({ name: `held-${held}` })));
+    const capacity = REPO_INDEX.capacity;
+    REPO_INDEX.capacity = (await state())?.indexed_repos ?? 0;
+    try {
+      const repo = await source();
+      await writeRepo(repoSnapshot(repo, 1, repoRow({ name: `full-${repo}` })));
+      expect(await repoMatching(`"full-${repo}"`)).toEqual([]);
+      expect(await membership(repo)).toBeNull();
+      expect(
+        await db.prepare("SELECT name FROM repos WHERE repo_id = ?").bind(repo).first(),
+      ).toEqual({ name: `full-${repo}` });
+      expect(await repairOf(repo)).toEqual({ reason: "repository_index_refused" });
+      // One it holds, renamed: the index grows by none.
+      await writeRepo(repoSnapshot(held, 2, repoRow({ name: `renamed-${held}` })));
+      expect(await repoMatching(`"renamed-${held}"`)).toEqual([held]);
+    } finally {
+      REPO_INDEX.capacity = capacity;
+    }
+    await consistent();
+  });
+
+  it("is taken out when its change does not fit the day's repository index allowance, its row still current", async () => {
+    const repo = await source();
+    await writeRepo(repoSnapshot(repo, 1, repoRow({ name: `budgeted-${repo}` })));
+    const counted = (await state())?.indexed_repos ?? 0;
+    await db
+      .prepare(
+        `INSERT INTO search_budget (day, repo_rows) VALUES (CAST(unixepoch() / 86400 AS INTEGER), ?1)
+         ON CONFLICT (day) DO UPDATE SET repo_rows = ?1`,
+      )
+      .bind(ADMISSION.repoDailyRows)
+      .run();
+    try {
+      await writeRepo(repoSnapshot(repo, 2, repoRow({ name: `spent-${repo}` })));
+    } finally {
+      await db
+        .prepare(
+          "UPDATE search_budget SET repo_rows = 0 WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
+        )
+        .run();
+    }
+    expect([
+      await repoMatching(`"budgeted-${repo}"`),
+      await repoMatching(`"spent-${repo}"`),
+    ]).toEqual([[], []]);
+    expect(await membership(repo)).toMatchObject({ indexed: 0, fts_token: null });
+    expect((await state())?.indexed_repos).toBe(counted - 1);
+    expect(await db.prepare("SELECT name FROM repos WHERE repo_id = ?").bind(repo).first()).toEqual(
+      { name: `spent-${repo}` },
+    );
+    expect(await repairOf(repo)).toEqual({ reason: "repository_index_refused" });
     await consistent();
   });
 });

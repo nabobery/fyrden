@@ -14,6 +14,7 @@ import {
   READ_MODEL_LEASE,
   READ_MODEL_LEASE_MS,
   READ_MODEL_OBSERVATION,
+  RELEASE_LIMIT,
   ReadModelRefused,
   ReadModelWriter,
   withReadModel,
@@ -410,6 +411,61 @@ describe("a read model writer", () => {
     expect(await writer.flushObservation()).toBeNull();
     expect((await admission())?.seq).toBe(sequence);
     await writer.release();
+  });
+
+  it("releases the growth reserved that its observation covers, the oldest first, a bounded number at once", async () => {
+    // Receipts of batches before the observation (made by a writer that recorded none), and one
+    // of a later batch.
+    const reserving = new ReadModelWriter(env, "default");
+    const statements = (count: number, ahead = 0) => [
+      org
+        .prepare(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+           INSERT INTO search_byte_reservations (token, day, sequence, bytes)
+           SELECT ?2 || '-' || i, 1, (SELECT seq FROM read_model_write WHERE id = 1) + ?3, 10 FROM n`,
+        )
+        .bind(count, uniqueId("receipt"), ahead),
+      org
+        .prepare("UPDATE search_size SET bytes_reserved = bytes_reserved + 10 * ?1 WHERE id = 1")
+        .bind(count),
+    ];
+    await reserving.write(statements(RELEASE_LIMIT + 1));
+    await reserving.write(statements(1, 1_000_000));
+    await reserving.release();
+    const held = () =>
+      org
+        .prepare(
+          `SELECT (SELECT count(*) FROM search_byte_reservations) AS receipts,
+             (SELECT bytes_reserved FROM search_size WHERE id = 1) AS bytes`,
+        )
+        .first<{ receipts: number; bytes: number }>();
+    const before = await held();
+    const observe = async () => {
+      const writer = new ReadModelWriter(env, "default");
+      await writer.write([epochRow(uniqueId("observed"), 1)]);
+      await writer.flushObservation();
+      await writer.release();
+    };
+    await observe();
+    expect(await held()).toEqual({
+      receipts: (before?.receipts ?? 0) - RELEASE_LIMIT,
+      bytes: (before?.bytes ?? 0) - 10 * RELEASE_LIMIT,
+    });
+    // The next releases the rest it covers; the later batch's stays reserved.
+    await observe();
+    const left = await org
+      .prepare(
+        "SELECT sequence > (SELECT observed FROM search_size WHERE id = 1) AS later FROM search_byte_reservations",
+      )
+      .all<{ later: number }>();
+    expect(left.results).toEqual([{ later: 1 }]);
+    expect((await held())?.bytes).toBe(10);
+    const cleaning = new ReadModelWriter(env, "default");
+    await cleaning.write([
+      org.prepare("DELETE FROM search_byte_reservations"),
+      org.prepare("UPDATE search_size SET bytes_reserved = 0 WHERE id = 1"),
+    ]);
+    await cleaning.release();
   });
 
   it("records the size a piece of work left as it ends", async () => {

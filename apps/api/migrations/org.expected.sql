@@ -117,7 +117,11 @@ CREATE TABLE search_budget (
   rows INTEGER NOT NULL DEFAULT 0,
   -- Rows reconciliations read.
   reads INTEGER NOT NULL DEFAULT 0
-, admitted TEXT) STRICT;
+, admitted TEXT, repo_rows INTEGER NOT NULL DEFAULT 0
+  CHECK (repo_rows >= 0), interactive_reads INTEGER NOT NULL DEFAULT 0
+  CHECK (interactive_reads >= 0), recovery_rows INTEGER NOT NULL DEFAULT 0
+  CHECK (recovery_rows >= 0), recovery_reads INTEGER NOT NULL DEFAULT 0
+  CHECK (recovery_reads >= 0)) STRICT;
 
 -- table search_byte_reservations
 CREATE TABLE search_byte_reservations (
@@ -406,6 +410,10 @@ CREATE INDEX events_failed_source ON events_failed (source_id) WHERE source_id I
 
 -- index repos_owner
 CREATE INDEX repos_owner ON repos (owner_id, name) WHERE deleted = 0;
+
+-- index search_byte_reservations_sequence
+CREATE INDEX search_byte_reservations_sequence
+  ON search_byte_reservations (sequence, token);
 
 -- index search_docs_deleted
 CREATE INDEX search_docs_deleted ON search_docs (repo_id, deleted_epoch, deleted_seq)

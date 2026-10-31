@@ -9,12 +9,21 @@ import type {
 import { EXPORT_PAGE } from "../do/repo/export.js";
 import { readModelFor } from "../events/read-model.js";
 import { exportStatements } from "../events/rebuild.js";
-import { epochStatement } from "../queues/events-consumer.js";
+import {
+  epochStatement,
+  repoIndexStatement,
+  repoIndexUse,
+  repoRowsOf,
+} from "../queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import { clock } from "../services.js";
 import {
+  ADMITTED,
   type CallBudget,
   counted,
+  growthOf,
+  growthStatements,
+  RECEIPT_RELEASE,
   type Reservation,
   reserve,
   SAME_DAY,
@@ -178,6 +187,9 @@ export async function reconcileSource(
     let next: Pass["kind"];
     let nextAfter: number;
     let read = 0;
+    let grows = false;
+    // The repository's group, on the finishing step: its index's own allowance.
+    let group = 0;
     // At the size threshold a step makes removals only, and leaves the pass partial (its
     // repair revision not covered: a whole pass follows).
     const removalsOnly = reservation.removalsOnly;
@@ -209,6 +221,8 @@ export async function reconcileSource(
               params: [reservation.day, pass.gen, kind, after, pass.epochGen, pass.ownerGen],
             },
           );
+      // Its epoch's statement, then its group.
+      group = statements.length - 1;
       next = "done";
       nextAfter = 0;
     } else {
@@ -224,6 +238,7 @@ export async function reconcileSource(
       );
       statements = found.statements;
       read = found.read;
+      grows = found.grows;
       // Past the last kind, the pass finishes with the repository's own row.
       next = !found.ended ? kind : kind === "milestones" ? "milestones" : NEXT_KIND[kind];
       nextAfter = !found.ended ? found.upTo : kind === "milestones" ? FINISHING : 0;
@@ -270,7 +285,25 @@ export async function reconcileSource(
       );
     metrics?.count("d1.query", { db: "org", op: "reconcile_page" });
     const results = await db.batch(statements);
-    await account(db, reservation, results, read, metrics, lookups);
+    // A receipt made (its growth admitted) is released later, by an observation: charged now.
+    const receipted = grows && (results[1]?.meta.rows_written ?? 0) > 0;
+    // The repository's entry's rows are charged with the repository index's allowance (its row's
+    // and every read with the step's).
+    const indexed = results.slice(1, 1 + group);
+    const entry = usedBy(indexed).rows - usedBy(repoRowsOf(indexed)).rows;
+    await account(
+      db,
+      reservation,
+      results,
+      read,
+      metrics,
+      lookups,
+      {
+        rows: (receipted ? RECEIPT_RELEASE.rows : 0) - entry,
+        reads: receipted ? RECEIPT_RELEASE.reads : 0,
+      },
+      group > 0 ? repoIndexStatement(db, repoIndexUse(indexed, false), false) : [],
+    );
     // By the row it returned (a statement's changes, after an index's, count its work too).
     if ((results[checkpoint]?.results.length ?? 0) === 0) {
       const reloaded = await current(db, repoId, lookups, metrics);
@@ -334,12 +367,23 @@ async function account(
   read: number,
   metrics: Metrics | undefined,
   lookups?: { reads: number },
+  /**
+   * Work it causes later, charged with it (its growth's receipt's release),
+   * less what another allowance is charged with (negative rows).
+   */
+  later: { rows: number; reads: number } = { rows: 0, reads: 0 },
+  /** Settlements of other allowances, in its batch. */
+  others: readonly D1PreparedStatement[] = [],
 ): Promise<void> {
   const used = usedBy(results);
   read += lookups?.reads ?? 0;
   if (lookups) lookups.reads = 0;
   const statements = [
-    settleStatement(db, reservation, { rows: used.rows, reads: used.reads + read }),
+    settleStatement(db, reservation, {
+      rows: used.rows + later.rows,
+      reads: used.reads + read + later.reads,
+    }),
+    ...others,
   ];
   metrics?.count("d1.query", { db: "org", op: "search_settle" }, statements.length);
   await db.batch(statements);
@@ -464,7 +508,14 @@ async function differences(
   day: number,
   removalsOnly: boolean,
   metrics: Metrics | undefined,
-): Promise<{ statements: D1PreparedStatement[]; upTo: number; ended: boolean; read: number }> {
+): Promise<{
+  statements: D1PreparedStatement[];
+  upTo: number;
+  ended: boolean;
+  read: number;
+  /** Whether its growth is admitted in its batch (its receipt the batch's second result). */
+  grows: boolean;
+}> {
   const { table, key } = TABLES[kind];
   const cap = RECONCILE_POLICY.rowsPerPage;
   let upTo = page.next ?? NO_KEY;
@@ -489,6 +540,9 @@ async function differences(
     sourceSeq: pass.watermark,
   };
   const writer: SearchWriter = { by: "reconcile", gen: pass.gen, kind, after: pass.after, day };
+  // What the page adds or changes is admitted with its growth, in its batch, as an event's.
+  const token = crypto.randomUUID();
+  const grown: (Record<string, unknown> | null)[] = [];
   const statements: D1PreparedStatement[] = [];
   const exported = new Set<number>();
   for (const entity of page.entities) {
@@ -504,7 +558,10 @@ async function differences(
     if (row && !newer(position, entity.version, row)) continue;
     // Only removals while the database is at its size threshold.
     if (removalsOnly && !entity.deleted) continue;
-    statements.push(...(searchStatements(db, position, entity, writer) ?? []));
+    const admitted = { ...writer, admission: { token, removal: entity.deleted } };
+    const group = searchStatements(db, position, entity, admitted) ?? [];
+    statements.push(...group);
+    if (group.length > 0) grown.push(entity.deleted ? null : entity.row);
   }
   // Where the rows the export lacks were found gone: this page's reading. A row this page
   // lacks that an event up to it wrote is gone (deleted before the page was read, after the
@@ -519,7 +576,26 @@ async function differences(
       continue;
     statements.push(...absentStatements(db, table, key, position, seen, row.key, writer));
   }
-  return { statements, upTo, ended: !cut && page.next === null, read: meta.rows_read ?? 0 };
+  if (grown.length > 0) {
+    statements.unshift(...growthStatements(db, token, day, growthOf(grown)));
+    // Writes its growth was refused for (an addition, or a deletion's new row) leave the pass
+    // partial (its revision not covered), as removals alone at the size threshold do.
+    statements.push(
+      db
+        .prepare(
+          `UPDATE search_reconciles SET partial = 1
+             WHERE repo_id = ?1 AND gen = ?2 AND NOT ${ADMITTED(3)}`,
+        )
+        .bind(repoId, pass.gen, token),
+    );
+  }
+  return {
+    statements,
+    upTo,
+    ended: !cut && page.next === null,
+    read: meta.rows_read ?? 0,
+    grows: grown.length > 0,
+  };
 }
 
 /** Whether a deletion's position is after the pass's (unknown: before every recorded one). */

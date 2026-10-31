@@ -59,6 +59,8 @@ export type SearchWriter =
       readonly after: number;
       /** The day its reservation was taken from (its writes stand only within it). */
       readonly day: number;
+      /** Its page's growth, admitted in its batch (`token`), as an event's. */
+      readonly admission?: { readonly token: string; readonly removal: boolean };
     };
 export const EVENT_WRITER: SearchWriter = { by: "event" };
 
@@ -92,8 +94,10 @@ export function eligible(writer: SearchWriter, at: number): string {
 
 /** The writer's own parameters, bound after a statement's others (see `eligible`). */
 export function writerParams(writer: SearchWriter): (string | number)[] {
-  if (writer.by === "reconcile") return [writer.gen, writer.kind, writer.after, writer.day];
-  return writer.admission === undefined ? [] : [writer.admission.token];
+  const token = writer.admission === undefined ? [] : [writer.admission.token];
+  if (writer.by === "reconcile")
+    return [writer.gen, writer.kind, writer.after, writer.day, ...token];
+  return token;
 }
 
 /** What `search_docs.kind` and `state` hold. */
@@ -144,16 +148,17 @@ function rowValues(
 }
 
 /**
- * The writer's admission, for an event's write with one (its token at
- * `?<at>`): admitted, or a removal emptying a row already there (keyed
- * `?5`).
+ * The writer's admission, for a write with one (its token after the
+ * writer's other parameters, from `?<at>`): admitted, or a removal emptying
+ * a row already there (keyed `?5`).
  */
 function admitted(writer: SearchWriter, table: string, column: string, at: number): string {
-  if (writer.by !== "event" || writer.admission === undefined) return "";
+  if (writer.admission === undefined) return "";
+  const token = writer.by === "reconcile" ? at + 4 : at;
   return writer.admission.removal
-    ? ` AND (${ADMITTED(at)} OR EXISTS (SELECT 1 FROM ${table}
+    ? ` AND (${ADMITTED(token)} OR EXISTS (SELECT 1 FROM ${table}
         WHERE repo_id = ?1 AND ${column} = ?5))`
-    : ` AND ${ADMITTED(at)}`;
+    : ` AND ${ADMITTED(token)}`;
 }
 
 /**

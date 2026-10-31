@@ -62,22 +62,31 @@ export function repairStatement(
   when?: { readonly where: string; readonly value: string | number },
 ): D1PreparedStatement {
   return db
-    .prepare(
-      `INSERT INTO search_repairs (repo_id, dirty, covered, reason, since, next_at)
-       SELECT ?1, 1, 0, ?2, ?3, ?3
-       -- Never for a deleted repository (its projections are being purged).
-       WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 1)
-         ${when ? `AND ${when.where}` : ""}
-       ON CONFLICT (repo_id) DO UPDATE SET
-         dirty = coalesce(search_repairs.active, search_repairs.covered) + 1,
-         reason = excluded.reason,
-         since = CASE WHEN search_repairs.dirty > search_repairs.covered THEN search_repairs.since
-           ELSE excluded.since END,
-         next_at = CASE WHEN search_repairs.dirty > search_repairs.covered
-           THEN search_repairs.next_at ELSE excluded.next_at END
-       WHERE search_repairs.dirty <= coalesce(search_repairs.active, search_repairs.covered)`,
-    )
+    .prepare(repairSql({ repo: "?1", reason: "?2", now: "?3" }, when?.where))
     .bind(repoId, reason, now, ...(when ? [when.value] : []));
+}
+
+/**
+ * The SQL of a request for a source's reconciliation (see
+ * `repairStatement`), over the parameters `at` names, while `where` holds.
+ */
+export function repairSql(
+  at: { readonly repo: string; readonly reason: string; readonly now: string },
+  where?: string,
+): string {
+  return `INSERT INTO search_repairs (repo_id, dirty, covered, reason, since, next_at)
+    SELECT ${at.repo}, 1, 0, ${at.reason}, ${at.now}, ${at.now}
+    -- Never for a deleted repository (its projections are being purged).
+    WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ${at.repo} AND deleted = 1)
+      ${where ? `AND ${where}` : ""}
+    ON CONFLICT (repo_id) DO UPDATE SET
+      dirty = coalesce(search_repairs.active, search_repairs.covered) + 1,
+      reason = excluded.reason,
+      since = CASE WHEN search_repairs.dirty > search_repairs.covered THEN search_repairs.since
+        ELSE excluded.since END,
+      next_at = CASE WHEN search_repairs.dirty > search_repairs.covered
+        THEN search_repairs.next_at ELSE excluded.next_at END
+    WHERE search_repairs.dirty <= coalesce(search_repairs.active, search_repairs.covered)`;
 }
 
 /**

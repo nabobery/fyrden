@@ -31,7 +31,16 @@ import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { feedSink } from "../feed/sink.js";
 import { consumerCalls } from "../invocation-calls.js";
 import { READ_MODEL_ADMISSION, withReadModel } from "../read-model/executor.js";
+import {
+  ADMISSION,
+  ADMITTED,
+  growthOf,
+  RECEIPT_RELEASE,
+  receiptStatements,
+  TODAY,
+} from "../search/admission.js";
 import { liveSearch, Settling } from "../search/live.js";
+import { repairSql } from "../search/repairs.js";
 import { bound } from "../search/statements.js";
 
 /** The queue repository outboxes send to. */
@@ -425,17 +434,23 @@ export async function applyEnvelope(
   const results = await db.batch<{ effect_id?: string; sink?: string; admitted?: string }>(
     statements,
   );
-  if (live) {
-    const start = live.before.length + 1 + repoRows.length;
-    const groups = results.slice(live.before.length + 1, start);
-    const settle = (admitted: boolean) =>
-      live.settlement(
-        results.slice(0, live.before.length),
-        results.slice(start, start + live.after.length),
-        results.at(-1),
-        admitted,
-        indexRows(groups, start === results.length),
-      );
+  // Search's settlement, and the repository index's (whether or not search indexes: an entry
+  // taken out meanwhile is charged too), the batch they are applied in charged with one of them.
+  const before = live?.before.length ?? 0;
+  const start = before + 1 + repoRows.length;
+  const indexed = repoIndexUse(results.slice(before + 1, start), start === results.length);
+  const settle = (admitted: boolean) => {
+    const search = live
+      ? live.settlement(
+          results.slice(0, before),
+          results.slice(start, start + live.after.length),
+          results.at(-1),
+          admitted,
+        )
+      : [];
+    return [...search, ...repoIndexStatement(db, indexed, admitted && search.length === 0)];
+  };
+  if (live || indexed.rows > 0 || indexed.reserved > 0) {
     const settlement = options.settling ? [] : settle(true);
     if (options.settling) options.settling.add(db, settle);
     else if (settlement.length > 0) {
@@ -660,21 +675,76 @@ async function hydrate(payloads: Payloads, events: readonly DomainEvent[]): Prom
 }
 
 /** Statements a repository snapshot writes in (see `repoStatements`), and where its row's is. */
-export const REPO_STATEMENTS = 9;
-const REPO_ROW = 7;
+export const REPO_STATEMENTS = 14;
+const REPO_ROW = 12;
+/** Where its index's reservation is (`RETURNING day` when made). */
+const REPO_RESERVED = 1;
 
 /**
- * Rows repository snapshots' groups (`results`, theirs in order) wrote for
- * search's index, all but their rows' own (the read model's), charged with
- * search's spending; less the batch's admission, which the executor counts
- * with the batch's last result, when they end the batch.
+ * Rows a repository's index entry reserves of the day's repository index
+ * allowance (20 measured for one first indexed, its admission, receipt and
+ * settlement included; settled at what it wrote),
+ * and repositories the index holds at most (provisional, until measured).
  */
-export function indexRows(results: readonly D1Result[], last: boolean): number {
-  const rows = results.reduce(
-    (n, r, i) => n + (i % REPO_STATEMENTS === REPO_ROW ? 0 : (r.meta.rows_written ?? 0)),
-    0,
-  );
-  return Math.max(0, rows - (last && results.length > 0 ? READ_MODEL_ADMISSION.rows : 0));
+export const REPO_INDEX = { rows: 24, capacity: 20_000 };
+
+/**
+ * What repository snapshots' groups (`results`, theirs in order) used of
+ * the repository index allowance: the rows they wrote for it, all but their
+ * rows' own (the read model's; the batch's admission with them when they
+ * end the batch, `last`, which the executor counts with its last result, if
+ * they wrote any), and what their entries reserved, with its day.
+ */
+export function repoIndexUse(
+  results: readonly D1Result[],
+  last: boolean,
+): { rows: number; reserved: number; day: number | null } {
+  let rows = 0;
+  let reserved = 0;
+  let day: number | null = null;
+  results.forEach((r, i) => {
+    if (i % REPO_STATEMENTS !== REPO_ROW) rows += r.meta.rows_written ?? 0;
+    const made = i % REPO_STATEMENTS === REPO_RESERVED && r.results[0];
+    if (made) {
+      reserved += REPO_INDEX.rows;
+      // Its receipt's release too, written later by an observation.
+      rows += RECEIPT_RELEASE.rows;
+      day = (r.results[0] as { day: number }).day;
+    }
+  });
+  // Nothing of their own written: the batch's admission is not theirs either.
+  const admission = last && results.length > 0 ? READ_MODEL_ADMISSION.rows : 0;
+  if (rows - admission <= 0 && reserved === 0) return { rows: 0, reserved, day };
+  return { rows, reserved, day };
+}
+
+/** Repository snapshots' groups' results (theirs, in order) of their rows alone. */
+export function repoRowsOf(results: readonly D1Result[]): D1Result[] {
+  return results.filter((_, i) => i % REPO_STATEMENTS === REPO_ROW);
+}
+
+/**
+ * Settles what repository groups used of the repository index allowance
+ * (see `repoIndexUse`): what they reserved goes back, what they wrote is
+ * charged (more than reserved too), with this statement's own row and,
+ * when `admitted`, the admission of the batch it is applied in; on the
+ * reservation's day, or today. None when they used nothing.
+ */
+export function repoIndexStatement(
+  db: D1Database,
+  use: { rows: number; reserved: number; day: number | null },
+  admitted = true,
+): D1PreparedStatement[] {
+  if (use.rows === 0 && use.reserved === 0) return [];
+  const rows = use.rows + 1 + (admitted ? READ_MODEL_ADMISSION.rows : 0);
+  return [
+    db
+      .prepare(
+        `INSERT INTO search_budget (day, repo_rows) VALUES (coalesce(?1, ${TODAY}), ?2)
+         ON CONFLICT (day) DO UPDATE SET repo_rows = max(0, repo_rows - ?3 + ?2)`,
+      )
+      .bind(use.day, rows, use.reserved),
+  ];
 }
 
 /**
@@ -686,16 +756,20 @@ export function indexRows(results: readonly D1Result[], last: boolean): number {
  * owner) with it. Every statement takes that decision over the row as it
  * was:
  *
- * 1. the repository's and its owner's numbers, allocated when a live tuple
+ * 1. its entry's admission, when its live tuple changes while search
+ *    indexes: rows of the day's repository index allowance, room in the
+ *    index (`REPO_INDEX`) and the growth it may make, its receipt with them
+ *    (the receipt is what lets it in); refused, a reconciliation asked for;
+ * 2. the repository's and its owner's numbers, allocated when a live tuple
  *    is to be indexed and they have none, and the counters moved past them;
- * 2. the count of indexed repositories, by what the write changes;
- * 3. the old indexed tuple deleted from the index while the row still has
+ * 3. the count of indexed repositories, by what the write changes;
+ * 4. the old indexed tuple deleted from the index while the row still has
  *    it, when the row is deleted or its tuple changes;
- * 4. its membership: indexed (marked with this group's token) when its
- *    tuple changes while search indexes (`indexing`), kept as it was when
- *    only other fields change, cleared otherwise;
- * 5. the row upserted;
- * 6. the tuple marked with the token indexed.
+ * 5. its membership: indexed (marked with this group's token) when its
+ *    tuple changes and its entry was admitted, kept as it was when only
+ *    other fields change, cleared otherwise;
+ * 6. the row upserted;
+ * 7. the tuple marked with the token indexed.
  *
  * The row is written whether or not search indexes: it is the read model's.
  */
@@ -750,10 +824,40 @@ export function repoStatements(
     AND r.deleted IS ?8 AND (?8 = 1 OR ?15 = 1 OR (r.name IS ?3 AND r.description IS ?14
       AND r.owner_id IS ?2)))`;
   const member = "coalesce((SELECT indexed FROM search_repo_nums WHERE repo_id = ?1), 0)";
-  const insert = `(?8 = 0 AND ?17 = 1 AND ?2 IS NOT NULL AND ${changes})`;
+  // Its entry is wanted: a live tuple that changes, while search indexes.
+  const wanted = `(?8 = 0 AND ?17 = 1 AND ?2 IS NOT NULL AND ${changes} AND ${taken})`;
+  const insert = `(?8 = 0 AND ?2 IS NOT NULL AND ${changes} AND ${ADMITTED(16)})`;
+  const bytes = growthOf([row ?? null]);
   const remove = `(${member} = 1 AND (?8 = 1 OR ${changes}))`;
   const after = `(CASE WHEN ${insert} THEN 1 WHEN ${remove} THEN 0 ELSE ${member} END)`;
   return [
+    bound(
+      db,
+      `INSERT INTO search_budget (day) SELECT ${TODAY} WHERE ${wanted}
+       ON CONFLICT (day) DO NOTHING`,
+      params,
+    ),
+    bound(
+      db,
+      `UPDATE search_budget SET repo_rows = repo_rows + ${REPO_INDEX.rows}, admitted = ?16
+       WHERE day = ${TODAY} AND ${wanted}
+         AND repo_rows + ${REPO_INDEX.rows} <= ${ADMISSION.repoDailyRows}
+         AND EXISTS (SELECT 1 FROM search_size
+           WHERE id = 1 AND bytes + bytes_reserved + ${bytes} <= ${ADMISSION.maxBytes})
+         AND (SELECT indexed_repos FROM search_index_state WHERE id = 1) + 1 - ${member}
+           <= ${REPO_INDEX.capacity}
+       RETURNING day`,
+      params,
+    ),
+    ...receiptStatements(db, params[15] as string, bytes),
+    bound(
+      db,
+      repairSql(
+        { repo: "?1", reason: "'repository_index_refused'", now: "?13" },
+        `${wanted} AND NOT ${ADMITTED(16)}`,
+      ),
+      params,
+    ),
     bound(
       db,
       `INSERT INTO search_repo_nums (repo_id, num)

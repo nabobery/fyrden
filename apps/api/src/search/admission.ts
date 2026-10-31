@@ -1,4 +1,4 @@
-import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
+import { READ_MODEL_ADMISSION, releaseStatements } from "../read-model/executor.js";
 /*
  * What search may spend of the org database: each UTC day's allowance of
  * projection rows written and of rows its maintenance reads, and room under
@@ -17,20 +17,46 @@ export const ADMISSION = {
   dailyReads: 1_000_000,
   /** The database size above which search writes nothing more (Free's limit is 500 MB). */
   maxBytes: 350 * 1024 * 1024,
+  /** Rows search's repository index may write a day (its own allowance). */
+  repoDailyRows: 2_000,
 };
+
+/**
+ * How much a batch's projections may grow the database, reserved before
+ * they are written: `factor` times their rows' bytes (their JSON, a bound
+ * on the text indexed), and `entity` bytes more each (its rows, keys and
+ * index entries). Provisional, until measured: generous on purpose.
+ */
+export const GROWTH = { factor: 4, entity: 8_192 };
+
+/** The bytes `rows` (projected entities' rows; a deletion's null) may grow the database by. */
+export function growthOf(rows: readonly (Record<string, unknown> | null)[]): number {
+  let bytes = 0;
+  for (const row of rows)
+    bytes += GROWTH.entity + (row ? GROWTH.factor * utf8(JSON.stringify(row)) : 0);
+  return bytes;
+}
+
+const encoder = new TextEncoder();
+const utf8 = (text: string) => encoder.encode(text).byteLength;
 
 /**
  * The database's own UTC day, as days since the Unix epoch: reservations and
  * the statements they admit both read the same clock.
  */
-const TODAY = "CAST(unixepoch() / 86400 AS INTEGER)";
+export const TODAY = "CAST(unixepoch() / 86400 AS INTEGER)";
 
 /** SQL true while the database's day is still `?<n>` (a reservation's). */
 export const SAME_DAY = (n: number) => `${TODAY} = ?${n}`;
 
-/** SQL true when the batch whose token is `?<n>` was admitted today (see `admitStatements`). */
+/**
+ * SQL true when the batch whose token is `?<n>` was admitted today, in this
+ * batch (its receipt carries the batch's executor sequence; see
+ * `admitStatements`).
+ */
 export const ADMITTED = (n: number) =>
-  `EXISTS (SELECT 1 FROM search_budget WHERE day = ${TODAY} AND admitted = ?${n})`;
+  `EXISTS (SELECT 1 FROM search_byte_reservations r JOIN read_model_write w ON w.id = 1
+    WHERE r.token = ?${n} AND r.day = ${TODAY} AND r.sequence = w.seq AND w.open = 1)`;
 
 /**
  * Rows one projected entity's statements write, reserved: an issue first
@@ -117,7 +143,7 @@ export async function reserve(
         )
         .bind(wanted.rows, wanted.reads, ADMISSION.dailyRows, ADMISSION.dailyReads),
       db
-        .prepare(`SELECT bytes >= ?1 AS full FROM search_size WHERE id = 1`)
+        .prepare(`SELECT bytes + bytes_reserved >= ?1 AS full FROM search_size WHERE id = 1`)
         .bind(ADMISSION.maxBytes),
     ]);
     add(results);
@@ -131,8 +157,17 @@ export async function reserve(
       const tick = (ticked[0]?.results[0] as { clock?: number } | undefined)?.clock;
       const bytes = ticked[0]?.meta.size_after;
       if (tick !== undefined && bytes !== undefined) {
-        add([await sizeStatement(db, tick, bytes).run()]);
-        full = bytes >= ADMISSION.maxBytes;
+        // Recorded, with the growth it covers released: what is still reserved counts too.
+        const refreshed = await db.batch([
+          sizeStatement(db, tick, bytes),
+          ...releaseStatements(db),
+          db
+            .prepare("SELECT bytes + bytes_reserved >= ?1 AS full FROM search_size WHERE id = 1")
+            .bind(ADMISSION.maxBytes),
+        ]);
+        // The releases were charged with the batches whose growth they release.
+        add([refreshed[0], refreshed.at(-1)].filter((r) => r !== undefined));
+        full = (refreshed.at(-1)?.results[0] as { full?: number } | undefined)?.full === 1;
       }
     }
     return { day, ...wanted, overhead: { ...cost }, removalsOnly: full };
@@ -184,18 +219,21 @@ export function spentStatement(
 }
 
 /**
- * The statements a batch reserves `rows` of the day's allowance with, in
- * the batch itself (no call of their own): today's row, then the
- * reservation, made only when it fits and the size held is under the
- * threshold, marking the row with the batch's `token` (`RETURNING day` when
- * made). The batch's guarded writes check the token (`ADMITTED`): batches
- * run one at a time, so the row carries this one's token only if this one's
- * reservation was made.
+ * The statements a batch reserves `rows` of the day's allowance and
+ * `bytes` of growth with, in the batch itself (no call of their own):
+ * today's row; the reservation, made only when the rows fit the day's
+ * allowance and the size held, with every growth reserved and not yet
+ * observed, and this batch's, stays within the threshold (`RETURNING day`
+ * when made); then its receipt (`token`, the day, the batch's executor
+ * sequence and its bytes), and the bytes held reserved until an observation
+ * of the database's size covers that sequence (`releaseStatements`). The
+ * batch's guarded writes check the receipt (`ADMITTED`).
  */
 export function admitStatements(
   db: D1Database,
   token: string,
   rows: number,
+  bytes: number,
 ): D1PreparedStatement[] {
   return [
     db.prepare(`INSERT INTO search_budget (day) VALUES (${TODAY}) ON CONFLICT (day) DO NOTHING`),
@@ -203,10 +241,73 @@ export function admitStatements(
       .prepare(
         `UPDATE search_budget SET rows = rows + ?1, admitted = ?2
          WHERE day = ${TODAY} AND rows + ?1 <= ?3
-           AND (SELECT bytes FROM search_size WHERE id = 1) < ?4
+           AND EXISTS (SELECT 1 FROM search_size
+             WHERE id = 1 AND bytes + bytes_reserved + ?5 <= ?4)
          RETURNING day`,
       )
-      .bind(rows, token, ADMISSION.dailyRows, ADMISSION.maxBytes),
+      .bind(rows, token, ADMISSION.dailyRows, ADMISSION.maxBytes, bytes),
+    ...receiptStatements(db, token, bytes),
+  ];
+}
+
+/**
+ * The statements a batch whose rows were reserved before (`day`, a
+ * reconciliation's) admits its growth with: made only while it is still
+ * that day and the size held, with every growth reserved and not yet
+ * observed, and this batch's, stays within the threshold; then its receipt.
+ */
+export function growthStatements(
+  db: D1Database,
+  token: string,
+  day: number,
+  bytes: number,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE search_budget SET admitted = ?1
+         WHERE day = ?2 AND day = ${TODAY}
+           AND EXISTS (SELECT 1 FROM search_size
+             WHERE id = 1 AND bytes + bytes_reserved + ?3 <= ?4)`,
+      )
+      .bind(token, day, bytes, ADMISSION.maxBytes),
+    ...receiptStatements(db, token, bytes),
+  ];
+}
+
+/** Statements `admitStatements` makes (its results come first in the batch). */
+export const ADMIT_STATEMENTS = 4;
+
+/**
+ * What a receipt's release costs later (its row deleted, the bytes it held
+ * released, in an observation's write; measured): charged with the batch
+ * that made it.
+ */
+export const RECEIPT_RELEASE = { rows: 2, reads: 16 };
+
+/**
+ * The receipt of a reservation this batch made (its row marked `token`):
+ * its day, the batch's executor sequence and its `bytes`, held reserved.
+ */
+export function receiptStatements(
+  db: D1Database,
+  token: string,
+  bytes: number,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `INSERT INTO search_byte_reservations (token, day, sequence, bytes)
+         SELECT ?1, b.day, w.seq, ?2 FROM search_budget b JOIN read_model_write w ON w.id = 1
+         WHERE b.day = ${TODAY} AND b.admitted = ?1 AND w.open = 1`,
+      )
+      .bind(token, bytes),
+    db
+      .prepare(
+        `UPDATE search_size SET bytes_reserved = bytes_reserved + ?2
+         WHERE id = 1 AND ${ADMITTED(1)}`,
+      )
+      .bind(token, bytes),
   ];
 }
 

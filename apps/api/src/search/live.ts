@@ -3,8 +3,11 @@ import { eventKey } from "@fyrden/domain";
 import type { Snapshot } from "../queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import {
+  ADMIT_STATEMENTS,
   ADMITTED,
   admitStatements,
+  growthOf,
+  RECEIPT_RELEASE,
   STATEMENT_ROWS,
   settleStatement,
   spentStatement,
@@ -28,10 +31,11 @@ import { searchStatements } from "./statements.js";
 
 /**
  * Rows a batch reserves for its bookkeeping besides its statements': up to
- * three requests for a reconciliation (two rows each), and its admission.
- * (The size it leaves is its writer's observation, recorded once an invocation.)
+ * three requests for a reconciliation (two rows each), its admission, and
+ * its growth's receipt (made, and released later). (The size it leaves is
+ * its writer's observation, recorded once an invocation.)
  */
-const BOOKKEEPING_ROWS = 6 + READ_MODEL_ADMISSION.rows;
+const BOOKKEEPING_ROWS = 6 + READ_MODEL_ADMISSION.rows + 4 + RECEIPT_RELEASE.rows;
 
 /** One message's search statements, around the consumer's own in its batch. */
 export interface LiveSearch {
@@ -42,8 +46,7 @@ export interface LiveSearch {
   /**
    * What settles the batch's reservation (or counts what it wrote, when it
    * reserved nothing or was refused), from the results of `before` and
-   * `after` and the batch's last, with the rows the repository's index entry
-   * wrote in the batch (`indexed`); charged with the admission of the batch
+   * `after` and the batch's last; charged with the admission of the batch
    * they are applied in unless `admitted` is false (another in that batch
    * is charged with it).
    */
@@ -52,7 +55,6 @@ export interface LiveSearch {
     after: readonly D1Result[],
     last: D1Result | undefined,
     admitted?: boolean,
-    indexed?: number,
   ): D1PreparedStatement[];
 }
 
@@ -66,6 +68,8 @@ export function liveSearch(
   const token = options.token ?? crypto.randomUUID();
   const projections: D1PreparedStatement[] = [];
   let projected = 0;
+  // What those projected hold, for the growth they may make.
+  const rows: (Record<string, unknown> | null)[] = [];
   let malformed = false;
   for (const event of snapshots) {
     const { entity } = event;
@@ -85,6 +89,7 @@ export function liveSearch(
       if (statements) {
         projections.push(...statements);
         projected++;
+        rows.push(entity.deleted ? null : entity.row);
       }
     } catch (error) {
       // Skipped: the rest of the envelope applies, and the reconciliation reads it again.
@@ -119,12 +124,12 @@ export function liveSearch(
   const after =
     writes.length === 0
       ? []
-      : [...(admitting ? admitStatements(db, token, reserved) : []), ...writes];
+      : [...(admitting ? admitStatements(db, token, reserved, growthOf(rows)) : []), ...writes];
   return {
     before,
     after,
-    settlement(beforeResults, results, last, admitted = true, indexed = 0) {
-      const admission = admitting ? results.slice(0, 2) : [];
+    settlement(beforeResults, results, last, admitted = true) {
+      const admission = admitting ? results.slice(0, ADMIT_STATEMENTS) : [];
       const day = (admission[1]?.results[0] as { day?: number } | undefined)?.day;
       const overhead = usedBy(admission);
       // The epoch's request too (written before the reservation, charged with it), and, when
@@ -134,7 +139,7 @@ export function liveSearch(
       const after = usedBy([...beforeResults, ...results.slice(admission.length)]);
       const othersLast = results.length > 0 && last !== undefined && last !== results.at(-1);
       const used = {
-        rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0) + indexed,
+        rows: after.rows + (othersLast ? READ_MODEL_ADMISSION.rows : 0),
         reads: after.reads,
       };
       if (day !== undefined)
@@ -149,7 +154,8 @@ export function liveSearch(
               overhead: { rows: overhead.rows, reads: 0 },
               removalsOnly: false,
             },
-            { rows: used.rows, reads: 0 },
+            // Its receipt's release too, written later by an observation.
+            { rows: used.rows + RECEIPT_RELEASE.rows, reads: 0 },
             admitted,
           ),
         ];
