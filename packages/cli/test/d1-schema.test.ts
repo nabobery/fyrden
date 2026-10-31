@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { readModelUsedSql } from "../src/commands/deploy.ts";
 import {
   diffSchema,
   normaliseSql,
@@ -208,10 +209,27 @@ describe("diffSchema", () => {
   const org = parseExpectedSchema(readFileSync(resolve(migrations, "org.expected.sql"), "utf8"));
   const effects = org.find((o) => o.name === "effects") ?? { type: "table", name: "", sql: "" };
 
+  const virtuals = org.filter((o) => /^CREATE VIRTUAL TABLE/i.test(o.sql)).map((o) => o.name);
+  const shadows = new Set(
+    org
+      .filter((o) =>
+        virtuals.some(
+          (v) =>
+            /^(config|data|docsize|idx)$/.test(o.name.slice(v.length + 1)) &&
+            o.name.startsWith(`${v}_`),
+        ),
+      )
+      .map((o) => o.name),
+  );
+
   /** The committed `fyrden-org` schema with `effects` rebuilt by renaming a new table into place. */
   function rebuiltOrg(definition: string): SchemaObject[] {
     const db = new DatabaseSync(":memory:");
-    for (const object of org) db.exec(object.sql);
+    // Its triggers last: they refuse any write without the executor's admission, and this
+    // fixture writes with none.
+    // (A full-text index's shadow tables are made with it.)
+    for (const object of org)
+      if (object.type !== "trigger" && !shadows.has(object.name)) db.exec(object.sql);
     db.exec(
       "INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at) VALUES ('e1', 's', 't', '{}', 1, 1)",
     );
@@ -223,9 +241,11 @@ describe("diffSchema", () => {
     db.exec(`INSERT INTO effects_new (${columns}) SELECT ${columns} FROM effects`);
     db.exec("DROP TABLE effects");
     db.exec("ALTER TABLE effects_new RENAME TO effects");
+    // Dropping the old table dropped its indexes: a rebuild makes them again.
     for (const object of org)
       if (object.type === "index" && object.sql.includes(" ON effects ")) db.exec(object.sql);
     expect(db.prepare("SELECT count(*) AS n FROM effects").get()).toEqual({ n: 1 });
+    for (const object of org) if (object.type === "trigger") db.exec(object.sql);
     return schemaOf(db);
   }
 
@@ -238,7 +258,8 @@ describe("diffSchema", () => {
 
   it("still reports a rebuilt table whose definition is not the expected one", () => {
     const retyped = effects.sql.replace("attempts INTEGER", "attempts TEXT");
-    const withoutColumn = effects.sql.replace(/\n {2}last_error TEXT,/, "");
+    // A column no index reads, so the rebuilt table takes the committed indexes.
+    const withoutColumn = effects.sql.replace(/\n {2}lease_token TEXT,/, "");
     const relabelled = effects.sql.replace("'failed'))", "'dead'))");
     for (const definition of [retyped, withoutColumn, relabelled]) {
       expect(definition).not.toBe(effects.sql);
@@ -296,8 +317,9 @@ describe("diffSchema", () => {
   }
 
   const columns = "id, type, handle, display_name, owner_id, is_instance_admin, created_at";
+  // Its indexes and triggers, which dropping it drops.
   const indexes = directory
-    .filter((o) => o.type === "index" && o.sql.includes(" ON principals "))
+    .filter((o) => (o.type === "index" || o.type === "trigger") && / ON principals\b/.test(o.sql))
     .map((o) => o.sql);
 
   it("rebuilds a table other tables reference by the repair steps docs/operations/d1-schema.md gives", () => {
@@ -336,5 +358,43 @@ describe("diffSchema", () => {
     // Both rolled back: the drifted table and its rows are as they were.
     expect(diffSchema(directory, schemaOf(db))).toEqual(["principals (table) differs"]);
     expect(db.prepare("SELECT count(*) AS n FROM principals").get()).toEqual({ n: 2 });
+  });
+});
+
+describe("whether a read model from before enforcement holds data", () => {
+  /** fyrden-org as its migrations before 0018 leave it, and its read model's tables. */
+  function beforeEnforcement(): { db: DatabaseSync; tables: string[] } {
+    const db = new DatabaseSync(":memory:");
+    for (const file of readdirSync(resolve(migrations, "org"))
+      .filter((f) => f.endsWith(".sql") && f < "0018")
+      .sort())
+      db.exec(readFileSync(resolve(migrations, "org", file), "utf8"));
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'read_model_%'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    return { db, tables };
+  }
+  const used = (db: DatabaseSync, tables: string[]) =>
+    (db.prepare(readModelUsedSql(tables)).get() as { used: number }).used;
+
+  it("says no for one as its migrations left it, rows they seed included", () => {
+    const { db, tables } = beforeEnforcement();
+    expect(tables).toContain("search_size");
+    expect(used(db, tables)).toBe(0);
+  });
+
+  it("says yes once work wrote any of it, its seeded rows changed included", () => {
+    const { db, tables } = beforeEnforcement();
+    db.exec("UPDATE search_size SET bytes = 4096 WHERE id = 1");
+    expect(used(db, tables)).toBe(1);
+    const other = beforeEnforcement();
+    other.db.exec(
+      "INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES ('rep_1', 1, 0)",
+    );
+    expect(used(other.db, other.tables)).toBe(1);
   });
 });

@@ -61,7 +61,11 @@ jobs:
   check:
     name: Lint, typecheck, test, dry-run
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # About 16 minutes as a rule; room for the browser's install to recover (up to 14) and for
+    # the pinned git to build when its cache misses (about 4).
+    timeout-minutes: 36
+    env:
+      GIT_VERSION: "2.53.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,15 +82,61 @@ jobs:
         run: pnpm lint:ci
       - name: Typecheck (and generated Worker types are current)
         run: pnpm turbo run typecheck
+      # Tests that ask git itself (git fsck as an oracle, fixtures) use the
+      # pinned git, not the runner image's, which changes under them: the
+      # interop job's build, from the same cache.
+      - name: Runner image (part of the git build's cache key)
+        id: image
+        run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+      - name: Cached git build
+        id: git-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-git/${{ env.GIT_VERSION }}
+          key: git-${{ env.GIT_VERSION }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/interop/git-versions.txt', 'tools/ci/interop/build-git.sh') }}
+      - name: Build git from its checked release tarball
+        if: steps.git-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev
+          tools/ci/interop/build-git.sh "$GIT_VERSION" "$HOME/.cache/fyrden-git/$GIT_VERSION"
+      - name: The pinned git for the tests
+        run: |
+          echo "FYRDEN_GIT_BINARY=$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" >> "$GITHUB_ENV"
+          "$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" --version
       # Every package runs to the end, so one run reports every failure.
       - name: Unit and workerd integration tests with Istanbul coverage
         run: pnpm turbo run test:coverage --continue=dependencies-successful
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
       # The web UI's end-to-end test drives Chromium: the headless shell of
-      # the pinned Playwright, with the system libraries it needs.
+      # the pinned Playwright, with the system libraries it needs. A stalled
+      # mirror or download once held this job to its timeout: apt gets its own
+      # network timeouts and retries (its package transaction is never cut
+      # short), and the browser, cached by the lockfile, is downloaded again
+      # when an attempt stalls.
+      - name: Playwright's browser cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Chromium's system libraries
+        timeout-minutes: 6
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+            | sudo tee /etc/apt/apt.conf.d/80-ci-network > /dev/null
+          pnpm --filter @fyrden/ci-tools exec playwright install-deps chromium-headless-shell
       - name: Playwright's Chromium
-        run: pnpm --filter @fyrden/ci-tools exec playwright install --with-deps --only-shell chromium
+        timeout-minutes: 8
+        run: |
+          for attempt in 1 2 3; do
+            if timeout --kill-after=10 120 pnpm --filter @fyrden/ci-tools exec playwright install --only-shell chromium; then
+              exit 0
+            fi
+            echo "::warning::Playwright's Chromium: attempt $attempt failed or stalled"
+            sleep 5
+          done
+          exit 1
       - name: Both Workers together locally, through the service binding
         run: pnpm turbo run test:e2e
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -139,11 +189,19 @@ jobs:
 
   # The workerd suites again in random file and test order, several seeds:
   # an order-dependent test fails here, with its seed, instead of flaking
-  # later. Its own job: three full passes outgrow the check job's budget.
-  shuffle:
-    name: Shuffle guard (order-dependent workerd tests)
+  # later. One seed a job, the jobs side by side: one full pass of the API's
+  # suite takes about 11 minutes on a runner, so passes in one job outgrew
+  # any budget kept for it as the suite grew.
+  shuffle-run:
+    name: Shuffle guard, seed ${{ matrix.run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        run: [1, 2, 3]
+    env:
+      SHUFFLE_RUNS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,6 +213,22 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run test:shuffle --continue=dependencies-successful
+
+  # The check the main branch's ruleset requires, by this name: passed only
+  # when every seed's job passed (one cancelled or skipped fails it too).
+  shuffle:
+    name: Shuffle guard (order-dependent workerd tests)
+    needs: [shuffle-run]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every seed passed
+        env:
+          RESULT: ${{ needs.shuffle-run.result }}
+        run: |
+          echo "shuffle seeds: $RESULT"
+          test "$RESULT" = success
 
   # The API's contracts, against fyrden-api under wrangler dev: the MCP
   # conformance suite (pinned, with its baseline of known failures) and

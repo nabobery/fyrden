@@ -24,6 +24,7 @@ import {
 } from "../src/queues/events-consumer.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
@@ -110,9 +111,8 @@ async function storePayload(repoId: string, version: number, payload: string) {
 }
 
 async function readRow(repoId: string) {
-  return env.ORG_READ.prepare(
-    "SELECT name, pushed_at, deleted, epoch_gen, version FROM repos WHERE repo_id = ?",
-  )
+  return admitted()
+    .prepare("SELECT name, pushed_at, deleted, epoch_gen, version FROM repos WHERE repo_id = ?")
     .bind(repoId)
     .first<{
       name: string | null;
@@ -173,7 +173,8 @@ describe("events consumer", () => {
     const repoId = await listedRepo();
     const description = async () =>
       (
-        await env.ORG_READ.prepare("SELECT description FROM repos WHERE repo_id = ?")
+        await admitted()
+          .prepare("SELECT description FROM repos WHERE repo_id = ?")
           .bind(repoId)
           .first<{ description: string | null }>()
       )?.description;
@@ -242,13 +243,44 @@ describe("events consumer", () => {
 
   it("drops events with an older ownership generation", async () => {
     const repoId = await listedRepo();
-    await env.ORG_READ.prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+    await admitted()
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
       .bind(repoId)
       .run();
     await deliver([envelope(repoId, [snapshot(repoId, 1, { ownerGen: 1 })])]);
     expect(await readRow(repoId)).toBeNull();
     await deliver([envelope(repoId, [snapshot(repoId, 2, { ownerGen: 2 })])]);
     expect(await readRow(repoId)).toMatchObject({ version: 2 });
+  });
+
+  it("keeps references' effects of an older ownership generation: they hold across a transfer", async () => {
+    const repoId = await listedRepo();
+    await admitted()
+      .prepare("INSERT INTO source_owner (source_id, owner_gen) VALUES (?, 2)")
+      .bind(repoId)
+      .run();
+    const event: DomainEvent = {
+      id: { sourceId: repoId, epochGen: 1, sourceSeq: 1 },
+      type: "reference.sync",
+      at: Date.now(),
+      actor: OWNER,
+      actChain: [],
+      ownerGen: 1,
+      entity: null,
+      data: {
+        source_number: 1,
+        source_comment: 0,
+        source_kind: "issue",
+        repos: [{ repo_id: newId("rep"), numbers: [2] }],
+      },
+      stored: false,
+    };
+    await deliver([envelope(repoId, [event])]);
+    const journaled = await admitted()
+      .prepare("SELECT sink FROM effects WHERE effect_id LIKE ? || '%'")
+      .bind(repoId)
+      .all<{ sink: string }>();
+    expect(journaled.results.map((r) => r.sink)).toEqual(["references"]);
   });
 
   it("applies only the newest snapshot of an entity within one message", async () => {
@@ -355,9 +387,8 @@ describe("events consumer", () => {
     const result = await deliver([envelope(repoId, [storedSnapshot(repoId, 1, 3)])]);
     expect(result.explicitAcks).toEqual(["m0"]);
     expect(await readRow(repoId)).toBeNull();
-    const epoch = await env.ORG_READ.prepare(
-      "SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?",
-    )
+    const epoch = await admitted()
+      .prepare("SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?")
       .bind(repoId)
       .first<{ epoch_gen: number }>();
     expect(epoch?.epoch_gen).toBe(3);
@@ -409,7 +440,11 @@ describe("events consumer", () => {
     );
     // A D1 batch counts as one call against the per-invocation limit, on Free
     // the 1,000 internal-service calls (measured on Workers Free, 2026-10-10).
-    expect(calls).toEqual({ directory: 5, batches: [2, 2, 2, 2, 2] });
+    // And the invocation's writer's lease in the directory, taken and released, and each
+    // batch's admission (its opening and closing) around the message's statements (its epoch,
+    // and its repository's row with its index entry: fourteen); then the size the invocation left,
+    // recorded once with the growth it covers released (its own admitted batch).
+    expect(calls).toEqual({ directory: 5 + 2, batches: [17, 17, 17, 17, 17, 5] });
     expect(result.explicitAcks).toHaveLength(5);
     for (const repoId of repos) expect(await readRow(repoId)).toMatchObject({ version: 2 });
   });
@@ -439,9 +474,8 @@ describe("events consumer", () => {
     const result = await deliver(sent);
     expect(result.explicitAcks).toHaveLength(sent.length);
     expect(
-      await env.ORG_READ.prepare(
-        "SELECT owner_id, name, visibility, version FROM repos WHERE repo_id = ?",
-      )
+      await admitted()
+        .prepare("SELECT owner_id, name, visibility, version FROM repos WHERE repo_id = ?")
         .bind(id)
         .first(),
     ).toEqual({ owner_id: owner.principalId, name, visibility: "private", version: 1 });

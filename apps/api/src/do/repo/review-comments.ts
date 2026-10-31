@@ -1,7 +1,10 @@
 import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { type CommentSide, decideComment, decideResolution } from "@fyrden/domain";
+import { reviewCommentOutput } from "../../repos/shapes.js";
+import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller, RepoPulls } from "./pulls.js";
+import type { ReactionCounts } from "./reactions.js";
 
 /** The entity type review comment snapshots travel as in events. */
 export const REVIEW_COMMENT_ENTITY = "pull_request_review_comment";
@@ -77,7 +80,9 @@ export type ReviewCommentFailure =
   | "not_found"
   | "comment_not_found"
   | "thread_not_found"
-  | "forbidden";
+  | "forbidden"
+  /** The pull request's conversation is locked: only write access and above. */
+  | "locked";
 
 type CommentRow = {
   comment_id: number;
@@ -133,6 +138,10 @@ export class RepoReviewComments {
       readonly events: RepoEvents;
       readonly pulls: RepoPulls;
       readonly repoId: () => string;
+      /** In a diff comment's deletion: its reactions go with it. */
+      readonly forgetReactions: (id: number) => void;
+      /** A diff comment's reactions counted, as they stand (for webhook captures). */
+      readonly reactionsOf: (id: number) => ReactionCounts;
     },
   ) {}
 
@@ -196,9 +205,16 @@ export class RepoReviewComments {
     anchor: ThreadAnchor,
     body: string,
     caller: PullCaller,
+    comparison?: Comparison | null,
   ): { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure } {
-    if (!this.deps.pulls.get(number)) return { ok: false, code: "not_found" };
-    const decision = decideComment("create", { isCommentAuthor: true, role: caller.role });
+    const pull = this.deps.pulls.get(number);
+    if (!pull) return { ok: false, code: "not_found" };
+    // Read here, after anything the caller prepared: the lock as it is when the comment is written.
+    const decision = decideComment("create", {
+      isCommentAuthor: true,
+      role: caller.role,
+      locked: pull.locked,
+    });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     const comment = this.deps.git.context.storage.transactionSync(() => {
       const [thread] = this.deps.git.context.storage.sql
@@ -215,7 +231,14 @@ export class RepoReviewComments {
           anchor.startLine,
         )
         .toArray();
-      return this.#insert(number, (thread as { thread_id: number }).thread_id, null, body, caller);
+      return this.#insert(
+        number,
+        (thread as { thread_id: number }).thread_id,
+        null,
+        body,
+        caller,
+        comparison,
+      );
     });
     return { ok: true, comment };
   }
@@ -226,14 +249,20 @@ export class RepoReviewComments {
     to: number,
     body: string,
     caller: PullCaller,
+    comparison?: Comparison | null,
   ): { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure } {
-    if (!this.deps.pulls.get(number)) return { ok: false, code: "not_found" };
+    const pull = this.deps.pulls.get(number);
+    if (!pull) return { ok: false, code: "not_found" };
     const parent = this.get(to);
     if (parent?.number !== number) return { ok: false, code: "comment_not_found" };
-    const decision = decideComment("create", { isCommentAuthor: true, role: caller.role });
+    const decision = decideComment("create", {
+      isCommentAuthor: true,
+      role: caller.role,
+      locked: pull.locked,
+    });
     if (!decision.ok) return { ok: false, code: decision.refusal };
     const comment = this.deps.git.context.storage.transactionSync(() =>
-      this.#insert(number, parent.threadId, to, body, caller),
+      this.#insert(number, parent.threadId, to, body, caller, comparison),
     );
     return { ok: true, comment };
   }
@@ -242,6 +271,7 @@ export class RepoReviewComments {
     id: number,
     body: string,
     caller: PullCaller,
+    comparison?: Comparison | null,
   ): { ok: true; comment: ReviewCommentRecord } | { ok: false; code: ReviewCommentFailure } {
     const current = this.#changeable(id, "edit", caller);
     if (!current.ok) return current;
@@ -254,9 +284,14 @@ export class RepoReviewComments {
         id,
       );
       const edited = this.get(id) as ReviewCommentRecord;
-      this.#emit("edited", edited, caller.actor, false, {
-        changes: { body: { from: current.comment.body } },
-      });
+      this.#emit(
+        "edited",
+        edited,
+        caller.actor,
+        false,
+        { changes: { body: { from: current.comment.body } } },
+        { comparison },
+      );
       this.deps.events.auditChange("pull_request_review_comment.edit", caller.actor, {
         number: edited.number,
         comment: id,
@@ -272,6 +307,9 @@ export class RepoReviewComments {
     if (!current.ok) return current;
     const { comment } = current;
     this.deps.git.context.storage.transactionSync(() => {
+      // What its deletion's webhook tells of it, read before they go.
+      const reactions = this.deps.reactionsOf(id);
+      this.deps.forgetReactions(id);
       this.#run("DELETE FROM review_comments WHERE comment_id = ?", id);
       this.#run(
         `DELETE FROM review_threads WHERE thread_id = ?
@@ -280,10 +318,14 @@ export class RepoReviewComments {
         comment.threadId,
       );
       // Gone, its snapshot carries no row: what it was on, for those told of it.
-      this.#emit("deleted", { ...comment, version: comment.version + 1 }, caller.actor, true, {
-        number: comment.number,
-        comment_id: id,
-      });
+      this.#emit(
+        "deleted",
+        { ...comment, version: comment.version + 1 },
+        caller.actor,
+        true,
+        { number: comment.number, comment_id: id },
+        { reactions },
+      );
       this.deps.events.auditChange("pull_request_review_comment.delete", caller.actor, {
         number: comment.number,
         comment: id,
@@ -338,6 +380,7 @@ export class RepoReviewComments {
     inReplyTo: number | null,
     body: string,
     caller: PullCaller,
+    comparison: Comparison | null | undefined,
   ): ReviewCommentRecord {
     const { actor } = caller;
     const now = this.deps.git.context.now();
@@ -359,7 +402,7 @@ export class RepoReviewComments {
       .toArray();
     this.#count(1);
     const created = this.get((row as { comment_id: number }).comment_id) as ReviewCommentRecord;
-    this.#emit("created", created, actor, false);
+    this.#emit("created", created, actor, false, null, { comparison });
     this.deps.events.auditChange("pull_request_review_comment.create", actor, {
       number,
       comment: created.id,
@@ -377,17 +420,30 @@ export class RepoReviewComments {
     const decision = decideComment(action, {
       isCommentAuthor: caller.root === comment.authorRoot,
       role: caller.role,
+      locked: this.deps.pulls.get(comment.number)?.locked ?? false,
     });
     return decision.ok ? { ok: true, comment } : { ok: false, code: decision.refusal };
   }
 
+  /**
+   * Emits the diff comment's event; its webhook capture is the comment as
+   * the API shows it (with its reactions, read before a deletion), judged
+   * outdated against `comparison` (what the API answers the change with;
+   * without one, its pull request's head now with the merge base unknown,
+   * as the API judges it then), the pull request, and an edit's changes.
+   */
   #emit(
     event: string,
     comment: ReviewCommentRecord,
     actor: RefActor,
     deleted: boolean,
     data: Record<string, unknown> | null = null,
+    capture: {
+      readonly reactions?: ReactionCounts;
+      readonly comparison?: Comparison | null | undefined;
+    } = {},
   ): void {
+    const { reactions, comparison } = capture;
     const { version, ...row } = comment;
     this.deps.events.emitEntity(
       `pull_request_review_comment.${event}`,
@@ -400,6 +456,27 @@ export class RepoReviewComments {
       },
       data,
       deleted,
+      () => {
+        const pull = this.deps.pulls.get(comment.number);
+        const outdated = isOutdated(
+          comment.anchor,
+          comparison !== undefined
+            ? comparison
+            : pull
+              ? { headSha: pull.headSha, mergeBaseSha: null }
+              : null,
+        );
+        return {
+          comment: capturable(
+            reviewCommentOutput(
+              { ...comment, reactions: reactions ?? this.deps.reactionsOf(comment.id) },
+              outdated,
+            ),
+          ),
+          pull_request: pull ? this.deps.pulls.captured(pull) : null,
+          ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+        };
+      },
     );
   }
 

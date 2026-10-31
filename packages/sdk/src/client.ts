@@ -41,6 +41,8 @@ export class FyrdenError extends Error {
     readonly missingPermission: string | undefined,
     /** Where to start over, for `cursor_expired` (a REST path). */
     readonly resync?: string,
+    /** For `stale` (Fyrden's): the version it is at now. */
+    readonly currentVersion?: number,
   ) {
     super(`${code}: ${detail}`);
   }
@@ -144,8 +146,11 @@ export class FyrdenClient {
         typeof problem.request_id === "string" ? problem.request_id : undefined,
         typeof problem.missing_permission === "string" ? problem.missing_permission : undefined,
         typeof problem.resync === "string" ? problem.resync : undefined,
+        typeof problem.current_version === "number" ? problem.current_version : undefined,
       );
     }
+    // An operation that answers nothing (204, 205) gives null, as its output type says.
+    if (response.status === 204 || response.status === 205) return null as unknown as OutputOf<K>;
     return (text ? JSON.parse(text) : {}) as OutputOf<K>;
   }
 
@@ -162,9 +167,12 @@ export class FyrdenClient {
     const field = (OPERATIONS[id] as { readonly items: string }).items;
     let cursor: string | null | undefined;
     do {
+      // Once a page answered, its cursor carries on from where `after` (a start given by id)
+      // began: the two are never sent together.
+      const { after: _after, ...rest } = input as Record<string, unknown>;
       const page = (await this.call(
         id,
-        { ...input, ...(cursor ? { cursor } : {}) } as InputOf<K>,
+        (cursor ? { ...rest, cursor } : input) as InputOf<K>,
         options,
       )) as Record<string, unknown>;
       for (const item of (page[field] as ItemOf<K>[] | undefined) ?? []) yield item;

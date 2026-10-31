@@ -1,12 +1,15 @@
 import { env } from "cloudflare:workers";
-import type { DomainEvent } from "@fyrden/domain";
+import { type DomainEvent, eventKey } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { RepoDO } from "../../src/do/RepoDO.js";
+import { deliverEffects, invocationBudget } from "../../src/effects/dispatcher.js";
 import { applyEnvelope } from "../../src/queues/events-consumer.js";
 import type { DeliveryDeps } from "../../src/webhooks/deliver.js";
-import { webhookSink } from "../../src/webhooks/sink.js";
+import { bodyKeyOf, createWebhookSink } from "../../src/webhooks/sink.js";
 import { api, json, user, type Who } from "./api.js";
+import { recordingPublish } from "./effects.js";
+import { admitted } from "./read-model.js";
 import { inRepo } from "./repo-git.js";
 
 /*
@@ -130,11 +133,15 @@ export class WebhookTest {
     );
   }
 
-  /** The environment with the stand-in queue. */
+  /** The environment with the stand-in queue (and effects queues that keep nothing). */
   testEnv(): Env {
     const sent = this.#sent;
+    const kept = { send: async () => {}, sendBatch: async () => {} };
     return {
       ...env,
+      EFFECTS_WEBHOOKS: kept,
+      EFFECTS_FEED: kept,
+      EFFECTS_REFERENCES: kept,
       WEBHOOKS: {
         send: async (body: { delivery: string }, options?: { delaySeconds?: number }) => {
           sent.push({
@@ -142,29 +149,71 @@ export class WebhookTest {
             ...(options?.delaySeconds !== undefined && { delaySeconds: options.delaySeconds }),
           });
         },
-        sendBatch: async (messages: { body: { delivery: string } }[]) => {
-          for (const m of messages) sent.push(m.body);
+        sendBatch: async (messages: { body: { delivery: string }; delaySeconds?: number }[]) => {
+          for (const m of messages)
+            sent.push({
+              ...m.body,
+              ...(m.delaySeconds !== undefined && { delaySeconds: m.delaySeconds }),
+            });
         },
       },
     } as unknown as Env;
   }
 
-  /** Makes the deliveries `events` call for (as the events consumer would). */
-  async materialize(events: DomainEvent[]): Promise<void> {
+  /**
+   * Makes the deliveries `events` call for, as the events consumer and the
+   * webhook effects' queue would: the consumer journals the effects and
+   * sends their ids, and the queue's consumer delivers them. The sink makes
+   * `firstAttempts` first attempts per event itself (none unless said: a
+   * test makes them, as the webhooks queue's consumer would).
+   */
+  async materialize(events: DomainEvent[], firstAttempts = 0): Promise<void> {
+    const { publish, sent } = recordingPublish();
+    const sink = createWebhookSink({
+      firstAttempts,
+      resolver: () => async () => ["93.184.216.34"],
+    });
     await applyEnvelope(
       this.testEnv(),
       { sourceId: this.repo.id, events },
-      { sinks: [webhookSink] },
+      { sinks: [sink], publish },
+    );
+    for (let next = sent.shift(); next; next = sent.shift()) {
+      const now = Date.now();
+      await deliverEffects(
+        { db: admitted(), env: this.testEnv(), sinks: [sink], now: () => now, publish },
+        next.sink,
+        next.ids,
+        invocationBudget(now),
+      );
+    }
+  }
+
+  /** The outbox's events with webhooks (pings aside), in order. */
+  async routed(): Promise<DomainEvent[]> {
+    return (await this.outbox()).filter((e) => e.webhooks && e.type !== "webhook.ping");
+  }
+
+  /** Makes `events`' deliveries now, and the bodies they were made with, in order. */
+  async bodies(events: DomainEvent[]): Promise<Record<string, unknown>[]> {
+    await this.materialize(events);
+    return Promise.all(
+      events.map(async (e) => {
+        const object = await env.ASSETS.get(await bodyKeyOf(this.repo.id, eventKey(e.id)));
+        if (!object) throw new Error(`no body for ${e.type}`);
+        return (await object.json()) as Record<string, unknown>;
+      }),
     );
   }
 
   /** This repository's deliveries, oldest first. */
   async deliveries(): Promise<DeliveryRow[]> {
     return (
-      await env.ORG_READ.prepare(
-        `SELECT delivery_id, hook_id, event, state, reason, attempts, last_status, private
+      await admitted()
+        .prepare(
+          `SELECT delivery_id, hook_id, event, state, reason, attempts, last_status, private
          FROM webhook_deliveries WHERE repo_id = ? ORDER BY created_at, delivery_id`,
-      )
+        )
         .bind(this.repo.id)
         .all<DeliveryRow>()
     ).results;
@@ -174,7 +223,7 @@ export class WebhookTest {
   deps(now = Date.now()): DeliveryDeps {
     return {
       env: this.testEnv(),
-      db: env.ORG_READ,
+      db: admitted(),
       now: () => now,
       resolver: () => async () => ["93.184.216.34"],
     };

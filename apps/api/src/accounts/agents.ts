@@ -1,3 +1,4 @@
+import { issuerHolds } from "@fyrden/adapters-cloudflare/auth";
 import type {
   createAgent,
   createAgentToken,
@@ -9,12 +10,14 @@ import type {
   Output,
   revokeAgentToken,
 } from "@fyrden/api-contract";
-import { isPermission, scopesAllow } from "@fyrden/domain";
+import { isScope, scopesAllow } from "@fyrden/domain";
 import { decodeSeekCursor, encodeSeekCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import { clock, newId, tokenStore } from "../services.js";
+import { clock, newId } from "../services.js";
 import { type Account, canUseAccount, orgFor } from "./account.js";
-import { listTokensOf, revokeTokenOf } from "./tokens.js";
+import { handleFree } from "./handles.js";
+import { issuerRefused } from "./lifecycle.js";
+import { listTokensOf, mintAs, revokeTokenOf } from "./tokens.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -104,19 +107,34 @@ export async function createAgentOperation(
     disabled_at: null,
   };
   const db = ctx.env.DIRECTORY;
-  ctx.metrics.count("d1.query", { db: "directory", op: "agent_create" }, 2);
+  ctx.metrics.count("d1.query", { db: "directory", op: "agent_create" }, 3);
+  let seen: D1Result | undefined;
+  let made: D1Result | undefined;
   try {
-    await db.batch([
+    [seen, made] = await db.batch([
+      // What the insert below sees, for why it held back.
+      db.prepare(`SELECT ${handleFree("?1", "?2")} AS free`).bind(row.handle, row.created_at),
+      // Only while the caller holds (see `issuerHolds`) and no deletion holds the handle.
       db
         .prepare(
           `INSERT INTO principals (id, type, handle, display_name, owner_id, created_at)
-           VALUES (?, 'agent', ?, ?, ?, ?)`,
+           SELECT ?1, 'agent', ?2, ?3, ?4, ?5
+           WHERE ${issuerHolds("?6", "?7")} AND ${handleFree("?2", "?5")}`,
         )
-        .bind(row.id, row.handle, row.display_name, row.owner_id, row.created_at),
+        .bind(
+          row.id,
+          row.handle,
+          row.display_name,
+          row.owner_id,
+          row.created_at,
+          ctx.auth.principalId,
+          ctx.auth.lifecycleGen,
+        ),
       db
         .prepare(
           `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-           VALUES (?, ?, 'agent.create', ?, json_object('handle', ?, 'owner', ?), ?)`,
+           SELECT ?1, ?2, 'agent.create', ?3, json_object('handle', ?4, 'owner', ?5), ?6
+           WHERE EXISTS (SELECT 1 FROM principals WHERE id = ?3)`,
         )
         .bind(
           row.created_at,
@@ -131,6 +149,11 @@ export async function createAgentOperation(
     if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message))
       throw new OperationError(409, "handle_taken", `The handle ${input.handle} is taken.`);
     throw error;
+  }
+  if ((made?.meta.changes ?? 0) === 0) {
+    if ((seen?.results[0] as { free: number } | undefined)?.free !== 1)
+      throw new OperationError(409, "handle_taken", `The handle ${input.handle} is taken.`);
+    throw issuerRefused();
   }
   return output(row);
 }
@@ -205,19 +228,23 @@ export async function createAgentTokenOperation(
   // Never wider than the token minting it: a narrow token hands out no more than it holds.
   const own = ctx.auth.scopes;
   const scopes = input.scopes.length === 0 ? own : input.scopes;
-  if (!scopes.every((scope) => isPermission(scope) && scopesAllow(own, scope)))
+  if (!scopes.every((scope) => isScope(scope) && scopesAllow(own, scope)))
     throw new OperationError(403, "scope_exceeds_token", "The scopes exceed your token's.");
-  const minted = await tokenStore(ctx.env, { metrics: ctx.metrics }).mint({
-    principalId: agent.id,
-    type: input.type,
-    scopes,
-    repoIds: ctx.auth.repoIds,
-    ttlMs: input.expires_in_days * DAY_MS,
-    audit: {
-      actorId: ctx.auth.principalId,
-      ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+  const minted = await mintAs(
+    ctx,
+    {
+      principalId: agent.id,
+      type: input.type,
+      scopes,
+      repoIds: ctx.auth.repoIds,
+      ttlMs: input.expires_in_days * DAY_MS,
+      audit: {
+        actorId: ctx.auth.principalId,
+        ...(ctx.requestId !== undefined && { requestId: ctx.requestId }),
+      },
     },
-  });
+    () => new OperationError(409, "agent_disabled", `The agent ${agent.handle} is disabled.`),
+  );
   return {
     id: minted.id,
     token: minted.token,

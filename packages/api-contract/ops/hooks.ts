@@ -19,8 +19,13 @@ const HookEvent = z.enum([
   "pull_request_review",
   "pull_request_review_comment",
   "issue_comment",
+  "issues",
+  "label",
+  "milestone",
   "*",
 ]);
+/** A list of events names each at most once: no longer than the events there are. */
+const MAX_EVENTS = HookEvent.options.length;
 const Url = z
   .string()
   .max(2048)
@@ -62,7 +67,8 @@ export const listHooks = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/hooks",
   summary: "List repository webhooks",
-  description: "The repository's webhooks. Administrators only.",
+  description:
+    "The repository's webhooks. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object(RepoInput),
   output: z.array(Hook),
   permission: "repository_hooks:read",
@@ -72,7 +78,8 @@ export const listHooks = defineOperation({
   mcp: {
     tool: "list_webhooks",
     title: "List repository webhooks",
-    description: "List the webhooks of a repository you administer.",
+    description:
+      "List the webhooks of a repository you administer. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: true,
   },
 });
@@ -82,7 +89,8 @@ export const getHook = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/hooks/{hook_id}",
   summary: "Get a repository webhook",
-  description: "One webhook. Administrators only.",
+  description:
+    "One webhook. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({ ...RepoInput, hook_id: HookId }),
   output: Hook,
   permission: "repository_hooks:read",
@@ -92,7 +100,8 @@ export const getHook = defineOperation({
   mcp: {
     tool: "get_webhook",
     title: "Get a repository webhook",
-    description: "Get one webhook of a repository you administer.",
+    description:
+      "Get one webhook of a repository you administer. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: true,
   },
 });
@@ -103,7 +112,7 @@ export const createHook = defineOperation({
   path: "/repos/{owner}/{repo}/hooks",
   summary: "Create a repository webhook",
   description:
-    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, or `*`. Administrators only.",
+    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     name: z.literal("web").optional(),
@@ -111,7 +120,7 @@ export const createHook = defineOperation({
       url: Url,
       content_type: z.literal("json").optional(),
     }),
-    events: z.array(HookEvent).min(1).max(6).default(["push"]),
+    events: z.array(HookEvent).min(1).max(MAX_EVENTS).default(["push"]),
     active: z.boolean().default(true),
   }),
   output: Hook.extend({ secret: Secret }),
@@ -131,16 +140,16 @@ export const updateHook = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}",
   summary: "Update a repository webhook",
   description:
-    "Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only.",
+    "Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,
     config: z
       .object({ url: Url.optional(), content_type: z.literal("json").optional() })
       .optional(),
-    events: z.array(HookEvent).min(1).max(6).optional(),
-    add_events: z.array(HookEvent).max(6).optional(),
-    remove_events: z.array(HookEvent).max(6).optional(),
+    events: z.array(HookEvent).min(1).max(MAX_EVENTS).optional(),
+    add_events: z.array(HookEvent).max(MAX_EVENTS).optional(),
+    remove_events: z.array(HookEvent).max(MAX_EVENTS).optional(),
     active: z.boolean().optional(),
   }),
   output: Hook,
@@ -156,7 +165,8 @@ export const deleteHook = defineOperation({
   method: "DELETE",
   path: "/repos/{owner}/{repo}/hooks/{hook_id}",
   summary: "Delete a repository webhook",
-  description: "Removes a webhook; its waiting deliveries are cancelled. Administrators only.",
+  description:
+    "Removes a webhook; its waiting deliveries are cancelled. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({ ...RepoInput, hook_id: HookId }),
   output: z.object({ id: z.number().int(), state: z.literal("deleted") }),
   permission: "repository_hooks:write",
@@ -171,7 +181,8 @@ export const pingHook = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/pings",
   summary: "Ping a repository webhook",
-  description: "Sends the webhook a `ping` delivery. Administrators only.",
+  description:
+    "Sends the webhook a `ping` delivery. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({ ...RepoInput, hook_id: HookId }),
   output: z.object({ id: z.number().int(), state: z.literal("pinged") }),
   permission: "repository_hooks:write",
@@ -181,7 +192,8 @@ export const pingHook = defineOperation({
   mcp: {
     tool: "ping_webhook",
     title: "Ping a repository webhook",
-    description: "Send a webhook of a repository you administer a ping delivery.",
+    description:
+      "Send a webhook of a repository you administer a ping delivery. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: false,
   },
 });
@@ -192,7 +204,7 @@ export const rotateHookSecret = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret",
   summary: "Rotate a webhook's secret",
   description:
-    "Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only.",
+    "Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({ ...RepoInput, hook_id: HookId }),
   output: z.object({ id: z.number().int(), secret: Secret }),
   permission: "repository_hooks:write",
@@ -209,7 +221,7 @@ export const dropPreviousHookSecret = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous",
   summary: "Drop a webhook's previous secret",
   description:
-    "Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only.",
+    "Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({ ...RepoInput, hook_id: HookId }),
   output: z.object({ id: z.number().int(), secrets: z.number().int() }),
   permission: "repository_hooks:write",
@@ -238,7 +250,8 @@ export const listHookDeliveries = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries",
   summary: "List deliveries for a repository webhook",
-  description: "The webhook's deliveries of the last 30 days, newest first. Administrators only.",
+  description:
+    "The webhook's deliveries of the last 30 days, newest first. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,
@@ -256,7 +269,8 @@ export const listHookDeliveries = defineOperation({
   mcp: {
     tool: "list_webhook_deliveries",
     title: "List webhook deliveries",
-    description: "List the recent deliveries of a webhook of a repository you administer.",
+    description:
+      "List the recent deliveries of a webhook of a repository you administer. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: true,
   },
 });
@@ -267,7 +281,7 @@ export const getHookDelivery = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}",
   summary: "Get a delivery for a repository webhook",
   description:
-    "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only.",
+    "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,
@@ -310,7 +324,8 @@ export const getHookDelivery = defineOperation({
   mcp: {
     tool: "get_webhook_delivery",
     title: "Get a webhook delivery",
-    description: "Get one delivery of a webhook, with its body and its attempts, newest first.",
+    description:
+      "Get one delivery of a webhook, with its body and its attempts, newest first. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: true,
   },
 });
@@ -321,7 +336,7 @@ export const redeliverHookDelivery = defineOperation({
   path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts",
   summary: "Redeliver a delivery for a repository webhook",
   description:
-    "Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only.",
+    "Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents).",
   input: z.object({
     ...RepoInput,
     hook_id: HookId,
@@ -336,7 +351,8 @@ export const redeliverHookDelivery = defineOperation({
   mcp: {
     tool: "redeliver_webhook_delivery",
     title: "Redeliver a webhook delivery",
-    description: "Send a finished webhook delivery once more, with its original body.",
+    description:
+      "Send a finished webhook delivery once more, with its original body. Needs issues:read and pull_requests:read besides the webhook permission.",
     readOnly: false,
   },
 });

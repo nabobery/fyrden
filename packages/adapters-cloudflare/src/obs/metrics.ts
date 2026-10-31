@@ -68,11 +68,52 @@ export const METRICS = {
   "git.repo.packs": ["repo", "group"],
   "git.repo.bytes": ["repo", "group"],
   // The effects pipeline, one point per run by outcome = ok | error: the
-  // effects cron's sweep and its webhook reconciliation, and a consumer
-  // message's inline delivery of the effects it journaled.
-  "effects.sweep": ["outcome"],
+  // effects cron's recovery of overdue effects and its webhook
+  // reconciliation, an events consumer message's sending and inline
+  // delivery of the effects it journaled, and an effects queue message.
+  "effects.recover": ["outcome"],
   "webhooks.reconcile": ["outcome"],
   "effects.dispatch": ["outcome"],
+  "effects.consume": ["sink", "outcome"],
+  // Effects by sink (the value is the amount): sent again by the cron as
+  // overdue; ended because their source was deleted, restored or
+  // transferred since; failed for good (attempts spent, or no such sink).
+  "effects.recovered": ["sink"],
+  "effects.invalidated": ["sink"],
+  "effects.failed": ["sink"],
+  // Retried past its attempts at the longest back-off, until its sink's horizon.
+  "effects.parked": ["sink"],
+  // Discretionary effects (watched entries) the day's allowance did not admit: never journaled.
+  "effects.refused": ["sink"],
+  // Envelopes the events consumer gave up on, stored from its dead-letter queue, by the
+  // source's kind = repository | account | malformed.
+  "events.failed": ["kind"],
+  // Activity feeds (the value is the amount): recipients an event named
+  // past what it carries, and joins a thread refused at its cap of
+  // participants.
+  "feed.audience_dropped": [],
+  "feed.participants_overflow": [],
+  // Events whose preference audience (`kind` = watchers or subscribers) had more than it may
+  // tell, after a repository restore (counted once an event).
+  "feed.preference_overflow": ["kind"],
+  "code_owners.request_skipped": ["reason"],
+  // Emails handed to the provider (`kind` = confirmation | notification), and those not sent or
+  // not accepted (`status`: a confirmation's allowance | suppressed | gone, held back before the
+  // call; a notification's expired | off | no_unsubscribe_key | attempts (the day's spent) |
+  // denied | unknown (access) | forgotten | delivered (sent already) | ineligible; either's
+  // refused | unknown, the provider's answer).
+  "email.send": ["kind"],
+  "email.not_sent": ["kind", "status"],
+  // The provider's callbacks applied (`type` = suppression.added | suppression.removed, or
+  // ignored), and suppression rechecks (`status` = found | absent | invalid | failed).
+  "email.event": ["type"],
+  "email.suppression_check": ["status"],
+  "d1.invocation_statements": ["where", "op"],
+  // Wall time of one stage of making webhook deliveries, in ms: an event's
+  // rows, body, claim and hooks once per event; post and record once per
+  // attempt the event's effect makes. The clock advances only on I/O.
+  "webhooks.stage_ms": ["stage"],
+  "feed.stage_ms": ["stage"],
   // Calls one invocation made against one subrequest budget, written once
   // when it ends: where = worker | do; budget = internal (R2, D1, Durable
   // Object calls) | external (outbound fetch and Cache API); op = the route
@@ -105,8 +146,11 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "git.repo.bytes": "last",
   subrequests: "each",
   "do.active_ms": "each",
+  "webhooks.stage_ms": "each",
+  "feed.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
+  "d1.invocation_statements": "each",
   "worker.wall_ms": "each",
   "metrics.dropped": "each",
 };
@@ -143,6 +187,8 @@ export function createMetrics(dataset: AnalyticsEngineDataset): Metrics {
       if (invocation === undefined) writeOutsideInvocation(dataset, point);
       else invocation.record(dataset, point, METRIC_AGGREGATION[name] ?? "sum");
       const budget = SUBREQUEST_BUDGETS[name];
+      // D1's calls are counted by the bindings themselves where they count them.
+      if (name === "d1.query" && invocation?.d1Counting === "binding") return;
       if (budget !== undefined) countSubrequests(budget, value);
     },
   };

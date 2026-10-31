@@ -1,9 +1,20 @@
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { API_DEPLOY_CONFIG, type DeployDeps, deploy } from "../src/commands/deploy.ts";
 import { doctor } from "../src/commands/doctor.ts";
+import { parseExpectedSchema } from "../src/d1-schema.ts";
 import { parseJsonc } from "../src/jsonc.ts";
 import type { WranglerRunner } from "../src/wrangler.ts";
 import { fakeWrangler } from "./fake-wrangler.ts";
@@ -35,6 +46,8 @@ function deps(runner: WranglerRunner, overrides: Partial<DeployDeps> = {}) {
     randomSecret: () => "s3cret-value",
     onSecretGenerated: (s) => generated.push(s),
     log: (l) => lines.push(l),
+    // The deployed API, asked which read model protocol it serves.
+    fetch: async () => Response.json({ readModel: { protocol: 1 } }),
     ...overrides,
   };
   return { d, generated, lines };
@@ -60,6 +73,9 @@ describe("fyrden deploy", () => {
     ]);
     expect([...fake.state.queues].sort()).toEqual([
       "fyrden-ci-dispatch",
+      "fyrden-effects-feed",
+      "fyrden-effects-references",
+      "fyrden-effects-webhooks",
       "fyrden-events",
       "fyrden-events-dlq",
       "fyrden-indexing",
@@ -67,7 +83,7 @@ describe("fyrden deploy", () => {
     ]);
     expect([...fake.state.d1.keys()].sort()).toEqual(["fyrden-directory", "fyrden-org"]);
     expect([...fake.state.kv.values()]).toEqual(["fyrden-api-cache"]);
-    expect(result.created).toHaveLength(12);
+    expect(result.created).toHaveLength(15);
   });
 
   it("uploads the required secret with the first API deploy and reports a generated one", async () => {
@@ -92,6 +108,28 @@ describe("fyrden deploy", () => {
     expect(lines.join("\n")).not.toContain(key);
     await deploy(deps(fake.runner).d);
     expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(key);
+  });
+
+  it("makes the unsubscribe links' key once (base64url), never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("EMAIL_KEY") as string;
+    expect(key).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Buffer.from(key, "base64url")).toHaveLength(32);
+    expect(lines.join("\n")).not.toContain(key);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("EMAIL_KEY")).toBe(key);
+  });
+
+  it("adds the unsubscribe links' key to a deployment made without it", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    fake.state.secrets.delete("EMAIL_KEY");
+    const webhooks = fake.state.secrets.get("WEBHOOKS_KEY");
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("EMAIL_KEY")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(webhooks);
   });
 
   it("makes a commit signing key once, never shown, and keeps it", async () => {
@@ -220,12 +258,293 @@ describe("fyrden deploy", () => {
     expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
   });
 
+  it("sets a Paid deployment's internal calls, raising its subrequest limit past the default", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated).not.toHaveProperty("limits");
+    await deploy(deps(fake.runner, { internalCalls: 5_000 }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "paid", FYRDEN_INTERNAL_CALLS: "5000" });
+    expect(generated).not.toHaveProperty("limits");
+    await deploy(deps(fake.runner, { internalCalls: 50_000 }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "50000" });
+    expect(generated.limits).toEqual({ subrequests: 50_000 });
+    // Left out again: back to 1,000, not whatever the last deploy set.
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated).not.toHaveProperty("limits");
+  });
+
+  it("pauses the events queue's delivery around the API's deploy, resuming it after, failed or not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const steps = fake.calls
+      .map((call) => call.args.slice(0, 3).join(" "))
+      .filter((step) => /^(queues (pause|resume)-delivery|deploy -c)/.test(step));
+    // (The first Paid deploy's second one, attaching the Tail Worker, is the same version.)
+    expect(steps.slice(0, 3)).toEqual([
+      "queues pause-delivery fyrden-events",
+      `deploy -c ${steps[1]?.split(" ")[2]}`,
+      "queues resume-delivery fyrden-events",
+    ]);
+    expect(fake.state.paused.size).toBe(0);
+    // A failed deploy resumes it too.
+    fake.state.failApiDeploy = true;
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
+    expect(fake.state.paused.size).toBe(0);
+  });
+
+  it("deletes the secrets it wrote and resumes delivery when pausing the queue fails, deploying nothing", async () => {
+    const fake = fakeWrangler();
+    // A temporary directory of its own, so no other test's secrets show.
+    const own = await mkdtemp(join(tmpdir(), "fyrden-deploy-tmp-"));
+    const previous = process.env.TMPDIR;
+    process.env.TMPDIR = own;
+    try {
+      for (const when of ["before", "after"] as const) {
+        fake.state.failPause = when;
+        await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
+        expect(fake.state.deployed).toEqual([]);
+        expect(await readdir(own)).toEqual([]);
+        // A pause whose answer was lost is resumed too.
+        expect(fake.state.paused.size, when).toBe(0);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+      await rm(own, { recursive: true, force: true });
+    }
+  });
+
+  it("sets the discretionary allowance when given, and leaves it unset (the plan's default) when not", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { discretionary: "do_rows_written=5000" }).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_DISCRETIONARY_DAILY: "do_rows_written=5000" });
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_DISCRETIONARY_DAILY");
+  });
+
+  it("configures the email provider when given, uploading its key each time, and leaves email off when not", async () => {
+    const fake = fakeWrangler();
+    const email = {
+      provider: "resend" as const,
+      from: "Fyrden <n@notify.example>",
+      apiKey: "re_first0001",
+    };
+    await deploy(deps(fake.runner, { email }).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({
+      FYRDEN_EMAIL_PROVIDER: "resend",
+      FYRDEN_EMAIL_FROM: "Fyrden <n@notify.example>",
+    });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_SENDING");
+    expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_first0001");
+    // A new key rotates it.
+    await deploy(deps(fake.runner, { email: { ...email, apiKey: "re_second002" } }).d);
+    expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_second002");
+    // Left out: no provider (the key stays, unused).
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_PROVIDER");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_FROM");
+    // Sending, with its webhook's secret and limits of its own; each deploy says so again.
+    await deploy(
+      deps(fake.runner, {
+        email: {
+          ...email,
+          webhookSecret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+          sending: true,
+          limits: { daily: 500, reserve: 20 },
+        },
+      }).d,
+    );
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({
+      FYRDEN_EMAIL_SENDING: "on",
+      FYRDEN_EMAIL_DAILY_LIMIT: "500",
+      FYRDEN_EMAIL_RESERVE: "20",
+    });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_MONTHLY_LIMIT");
+    expect(fake.state.secrets.get("RESEND_WEBHOOK_SECRET")).toBe(
+      "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+    );
+    await deploy(deps(fake.runner, { email }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_SENDING");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_DAILY_LIMIT");
+  });
+
+  it("points notification emails at the web Worker once it is deployed, or at the origin given", async () => {
+    const email = {
+      provider: "resend" as const,
+      from: "Fyrden <n@notify.example>",
+      apiKey: "re_first0001",
+      webhookSecret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+      sending: true,
+    };
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { email }).d);
+    // The API first without it, then again with the web Worker's URL.
+    const origins = () => fake.state.apiVersions.map((v) => v.vars.FYRDEN_PUBLIC_ORIGIN);
+    expect(origins()).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
+    // Every deploy sending does so again (its configuration is rebuilt from the committed file).
+    await deploy(deps(fake.runner, { email }).d);
+    expect(origins().slice(2)).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
+    // A custom origin: set with the first API deploy, no second one.
+    await deploy(deps(fake.runner, { email: { ...email, publicOrigin: "https://git.example" } }).d);
+    expect(origins().slice(4)).toEqual(["https://git.example"]);
+    // Not sending: none, and no second deploy.
+    await deploy(deps(fake.runner, { email: { ...email, sending: false } }).d);
+    expect(origins().slice(5)).toEqual([undefined]);
+  });
+
+  it("adds watchers to audiences when given, and stops when a later deploy leaves it out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { watchAudiences: true }).d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_WATCH_AUDIENCES: "on" });
+    await deploy(deps(fake.runner).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_WATCH_AUDIENCES");
+  });
+
+  it("records the read model protocol the deployed API serves, only when it says", async () => {
+    const fake = fakeWrangler();
+    const recorded: string[] = [];
+    let barriers = [{ shard: "default" }];
+    fake.state.d1Query = (db, sql) => {
+      if (!sql.includes("SET executor_version")) return undefined;
+      recorded.push(`${db}: ${sql.replace(/\s+/g, " ")}`);
+      return barriers;
+    };
+    const asked: string[] = [];
+    const answered = deps(fake.runner, {
+      fetch: async (url) => {
+        asked.push(String(url));
+        return Response.json(
+          { ok: false, error: "rate_limited", readModel: { protocol: 1 } },
+          {
+            status: 429,
+          },
+        );
+      },
+    });
+    await deploy(answered.d);
+    expect(asked).toEqual(["https://fyrden-api.acct.workers.dev/healthz"]);
+    // Its own shard's barrier only.
+    expect(recorded).toEqual([
+      "fyrden-directory: UPDATE read_model_barriers SET executor_version = 1 WHERE shard = 'default' RETURNING shard",
+    ]);
+    expect(answered.lines).toContain("ok   fyrden-api serves read model protocol 1 (recorded)");
+    // No barrier row to record it in: not said to be recorded.
+    barriers = [];
+    const missing = deps(fake.runner, {
+      fetch: async () => Response.json({ readModel: { protocol: 1 } }),
+    });
+    await deploy(missing.d);
+    expect(missing.lines).not.toContain("ok   fyrden-api serves read model protocol 1 (recorded)");
+    expect(missing.lines).toContain(
+      "WARN the read model protocol the API serves is not verified: the directory has no barrier for its read model",
+    );
+    barriers = [{ shard: "default" }];
+    // An API that does not answer, or names no protocol: nothing recorded, and said so.
+    for (const fetch of [
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      async () => Response.json({ ok: true }),
+    ]) {
+      recorded.length = 0;
+      const silent = deps(fake.runner, { fetch });
+      await deploy(silent.d);
+      expect(recorded).toEqual([]);
+      expect(silent.lines.some((l) => l.startsWith("WARN the read model protocol"))).toBe(true);
+    }
+  });
+
+  it("holds the read model's work back when given, and lets it go when a later deploy leaves it out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { readModelMaintenance: true }).d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_READ_MODEL_MAINTENANCE: "on" });
+    await deploy(deps(fake.runner).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_READ_MODEL_MAINTENANCE");
+  });
+
+  it("never keeps a switch it owns from the committed configuration's variables", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    const owned = {
+      FYRDEN_WATCH_AUDIENCES: "on",
+      FYRDEN_LIVE: "on",
+      FYRDEN_LIVE_SOCKETS: "9",
+      FYRDEN_EMAIL_SENDING: "on",
+      FYRDEN_EMAIL_PROVIDER: "resend",
+      FYRDEN_DISCRETIONARY_DAILY: "queue_ops=1",
+    };
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...committed,
+        vars: { ...(committed.vars as object), ...owned, KEEP: "1" },
+      }),
+    );
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const vars = (await generatedConfig()).vars as Record<string, string>;
+    for (const name of Object.keys(owned)) expect(vars, name).not.toHaveProperty(name);
+    expect(vars.KEEP).toBe("1");
+  });
+
+  it("turns live hints on when given, and off again when a later deploy leaves them out", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    let generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE");
+    await deploy(deps(fake.runner, { live: { sockets: 200 } }).d);
+    generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_LIVE: "on", FYRDEN_LIVE_SOCKETS: "200" });
+    await deploy(deps(fake.runner).d);
+    generated = await generatedConfig();
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE");
+    expect(generated.vars).not.toHaveProperty("FYRDEN_LIVE_SOCKETS");
+  });
+
+  it("raises a committed subrequest limit below the internal calls asked, keeping its other limits", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    await writeFile(
+      path,
+      JSON.stringify({ ...committed, limits: { cpu_ms: 60_000, subrequests: 2_000 } }),
+    );
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { internalCalls: 5_000 }).d);
+    expect((await generatedConfig()).limits).toEqual({ cpu_ms: 60_000, subrequests: 5_000 });
+    await deploy(deps(fake.runner, { internalCalls: 1_500 }).d);
+    expect((await generatedConfig()).limits).toEqual({ cpu_ms: 60_000, subrequests: 2_000 });
+  });
+
+  it("raises a committed subrequest limit below the default 1,000 internal calls", async () => {
+    const path = join(repoRoot, "apps/api/wrangler.jsonc");
+    const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));
+    await writeFile(path, JSON.stringify({ ...committed, limits: { subrequests: 500 } }));
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const generated = await generatedConfig();
+    expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
+    expect(generated.limits).toEqual({ subrequests: 1_000 });
+  });
+
   it("drops Paid-only features (Tail Workers) in Free mode", async () => {
     const fake = fakeWrangler();
     await deploy(deps(fake.runner, { plan: "free" }).d);
     expect(fake.state.deployed).toEqual(["fyrden-api", "fyrden-web"]);
     const generated = await generatedConfig();
     expect(generated.vars).toMatchObject({ FYRDEN_PLAN: "free" });
+    expect(generated.vars).not.toHaveProperty("FYRDEN_INTERNAL_CALLS");
     expect(generated).not.toHaveProperty("tail_consumers");
   });
 
@@ -240,12 +559,73 @@ describe("fyrden deploy", () => {
     expect(migrateIndex).toBeLessThan(deployIndex);
   });
 
+  it("records the read model's restore floor once enforcement is installed, once", async () => {
+    const fake = fakeWrangler();
+    const first = deps(fake.runner);
+    await deploy(first.d);
+    expect(fake.state.floor).toBe(fake.state.bookmark);
+    expect(first.lines).toContain(
+      `ok   read model restore floor ${fake.state.bookmark} (recorded)`,
+    );
+    // The bookmark is taken after the read model is seen enforced, and after its migrations.
+    const lookedAt = fake.calls.findIndex((c) =>
+      c.args.join(" ").includes("FROM read_model_barrier b"),
+    );
+    const bookmarked = fake.calls.findIndex((c) => c.args[1] === "time-travel");
+    const migrated = fake.calls.findLastIndex((c) => c.args.join(" ").includes("migrations apply"));
+    expect(migrated).toBeLessThan(lookedAt);
+    expect(lookedAt).toBeLessThan(bookmarked);
+    // A later deploy keeps it: never another, never an earlier one.
+    fake.state.bookmark = "00000099-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683";
+    const again = deps(fake.runner);
+    await deploy(again.d);
+    expect(fake.state.floor).toBe("00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683");
+    expect(fake.calls.filter((c) => c.args[1] === "time-travel")).toHaveLength(1);
+  });
+
+  it("records no restore floor while the read model does not refuse writes outside its executor", async () => {
+    const fake = fakeWrangler();
+    fake.state.readModel = { protocol: 1, open: 0 };
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/no restore floor recorded/);
+    expect(fake.state.floor).toBeNull();
+    expect(fake.calls.some((c) => c.args[1] === "time-travel")).toBe(false);
+    // An interrupted recording (enforced, but no floor yet) is made by the next deploy.
+    fake.state.readModel = { protocol: 2, open: 0 };
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.floor).toBe(fake.state.bookmark);
+  });
+
+  it("installs enforcement over a read model with data only once told the deployment is quiesced", async () => {
+    const fake = fakeWrangler();
+    // A deployment from before enforcement, with data.
+    fake.state.d1.set("fyrden-org", "org-id");
+    fake.state.d1Migrations.set("fyrden-org", ["0017_read_model_executor.sql"]);
+    const committed = parseExpectedSchema(
+      await readFile(join(repoRoot, "apps/api/migrations/org.expected.sql"), "utf8"),
+    );
+    fake.state.d1Schema.set(
+      "fyrden-org",
+      committed.filter((o) => o.name === "effects"),
+    );
+    fake.state.orgInUse = true;
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/--quiesced on/);
+    expect(fake.calls.some((c) => c.args.join(" ").includes("migrations apply"))).toBe(false);
+    await deploy(deps(fake.runner, { quiesced: true }).d);
+    expect(fake.calls.some((c) => c.args.join(" ").includes("migrations apply"))).toBe(true);
+  });
+
   it("checks each D1 schema against the repository once it is migrated", async () => {
     const fake = fakeWrangler();
     const { d, lines } = deps(fake.runner);
     await deploy(d);
     const applied = fake.calls.findIndex((c) => c.args.join(" ").includes("migrations apply"));
-    const checks = fake.calls.filter((c) => c.args[1] === "execute");
+    const checks = fake.calls.filter(
+      (c) =>
+        c.args[1] === "execute" &&
+        c.args.join(" ").includes("sqlite_schema") &&
+        // Not the look before migrating, for the read model's tables.
+        !c.args.join(" ").includes("type = 'table'"),
+    );
     expect(checks.map((c) => [c.args[2], c.args.at(-1)])).toEqual([
       ["fyrden-directory", API_DEPLOY_CONFIG],
       ["fyrden-org", API_DEPLOY_CONFIG],
@@ -540,17 +920,20 @@ describe("fyrden doctor", () => {
     // A deployment from before the checkout's latest org migration: as that migration found it.
     const applied = fake.state.d1Migrations.get("fyrden-org") ?? [];
     const latest = applied.at(-1) ?? "";
-    expect(latest).toBe("0006_effects_due_order.sql");
+    expect(latest).toMatch(/^\d{4}_\w+\.sql$/);
     fake.state.d1Migrations.set("fyrden-org", applied.slice(0, -1));
+    // Without what that migration creates or alters (a schema that differs from the expected one,
+    // as the one before it does).
+    const created = new Set(
+      [
+        ...(await readFile(join(realRoot, "apps/api/migrations/org", latest), "utf8")).matchAll(
+          /(?:CREATE\s+(?:TABLE|(?:UNIQUE\s+)?INDEX|VIEW|TRIGGER)|ALTER\s+TABLE)\s+(\w+)/gi,
+        ),
+      ].map((m) => m[1]),
+    );
+    expect(created.size).toBeGreaterThan(0);
     const org = fake.state.d1Schema.get("fyrden-org") ?? [];
-    fake.state.d1Schema.set("fyrden-org", [
-      ...org.filter((o) => o.name !== "effects_due_order"),
-      {
-        type: "index",
-        name: "effects_due",
-        sql: "CREATE INDEX effects_due ON effects (next_attempt_at) WHERE state = 'pending'",
-      },
-    ]);
+    fake.state.d1Schema.set("fyrden-org", [...org.filter((o) => !created.has(o.name))]);
     let { report, lines } = await doctorLines(fake);
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
@@ -561,11 +944,11 @@ describe("fyrden doctor", () => {
     );
 
     // A deployment from a later checkout than this one.
-    fake.state.d1Migrations.set("fyrden-org", [...applied, "0007_later.sql"]);
+    fake.state.d1Migrations.set("fyrden-org", [...applied, "9999_later.sql"]);
     ({ report, lines } = await doctorLines(fake));
     expect(report.schemaDrift).toEqual([]);
     expect(lines).toContain(
-      "WARN fyrden-org schema not compared: applied but not in this checkout: 0007_later.sql (check out the commit it runs)",
+      "WARN fyrden-org schema not compared: applied but not in this checkout: 9999_later.sql (check out the commit it runs)",
     );
 
     // A database no migration has been applied to yet.

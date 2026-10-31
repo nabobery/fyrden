@@ -77,12 +77,14 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       ...base,
       pull: null,
       viewer: null,
+      viewerKnown: false,
       conflicts: null,
       failure: "The pull request could not be read; try again.",
     };
   }
-  const { pull, viewer } = loaded;
-  if (pull.state !== "open") return { ...base, pull, viewer, conflicts: null, failure: null };
+  const { pull, viewer, viewerKnown } = loaded;
+  if (pull.state !== "open")
+    return { ...base, pull, viewer, viewerKnown, conflicts: null, failure: null };
   let read: Awaited<ReturnType<typeof apiCall<Conflicts>>>;
   try {
     read = await apiCall<Conflicts>(context, request, "GET", `${pullApiOf(params)}/conflicts`);
@@ -91,6 +93,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       ...base,
       pull,
       viewer,
+      viewerKnown,
       conflicts: null,
       failure: "The conflicts could not be read; try again.",
     };
@@ -101,6 +104,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       ...base,
       pull,
       viewer,
+      viewerKnown,
       conflicts: null,
       failure: problemDetail(read.body, "The conflicts could not be read; try again."),
     };
@@ -108,6 +112,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     ...base,
     pull,
     viewer,
+    viewerKnown,
     conflicts: {
       ...read.body,
       files: read.body.files.map((f) => ({
@@ -140,6 +145,11 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   if (session.state === "unknown")
     return { error: "Your session could not be checked, so nothing was sent: try again." };
   const form = await readForm(request, CONFLICTS_FORM_MAX_BYTES);
+  // Made for one viewer: another signed in since (another tab) commits nothing as them.
+  if (session.state === "signed-in" && session.user.id !== field(form, "viewer"))
+    return {
+      error: "You are signed in as someone else now, so nothing was sent: reload the page.",
+    };
   const snapshot = field(form, "conflict_snapshot");
   if (!/^[0-9a-f]{80}$/.test(snapshot)) return { error: "Read the conflicts again.", stale: true };
   const count = Number(field(form, "count"));
@@ -239,7 +249,12 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
   const { owner, repo, number, conflicts, failure } = loaderData;
   // The pull request as last read: a read that failed (no pull request) keeps the page as it was.
   const known = useRef({ pull: loaderData.pull, viewer: loaderData.viewer });
-  if (loaderData.pull) known.current = { pull: loaderData.pull, viewer: loaderData.viewer };
+  // The viewer as last known: a session that could not be checked keeps it.
+  if (loaderData.pull)
+    known.current = {
+      pull: loaderData.pull,
+      viewer: loaderData.viewerKnown ? loaderData.viewer : known.current.viewer,
+    };
   const { pull, viewer } = known.current;
   const page = pullPage(owner, repo, number);
   const read = (generation: number): Editing | null =>
@@ -403,13 +418,34 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
               )}
             </section>
           )}
-          {editable.length > 0 && (
+          {editable.length > 0 && viewer === null && (
+            <>
+              <p className="muted" role="status">
+                {loaderData.viewerKnown
+                  ? "Sign in to resolve the conflicts here."
+                  : "Your session could not be checked just now: reload the page to resolve the conflicts here."}
+              </p>
+              {/* What conflicts, to read: the editors come once a viewer is known. */}
+              {editable.map((f) => (
+                <section key={f.path} className="panel" aria-label={f.path}>
+                  <h3 className="file-name">
+                    <code>{f.path}</code>
+                  </h3>
+                  <pre>{f.content}</pre>
+                </section>
+              ))}
+            </>
+          )}
+          {/* Editors only for a viewer known to be signed in: one written before the viewer is
+              known would be drawn anew (and lost) once it is. */}
+          {editable.length > 0 && viewer !== null && (
             <Form
               method="post"
               // Multipart: content goes as its bytes, not URL-encoded (three times the size).
               encType="multipart/form-data"
               ref={form}
-              key={`${editing.conflicts.conflict_snapshot}:${editing.generation}`}
+              // Drawn anew for another viewer: one account's resolution is never sent as another's.
+              key={`${editing.conflicts.conflict_snapshot}:${editing.generation}:${viewer ?? ""}`}
             >
               <input
                 type="hidden"
@@ -417,6 +453,7 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
                 value={editing.conflicts.conflict_snapshot}
               />
               <input type="hidden" name="count" value={editable.length} />
+              <input type="hidden" name="viewer" value={viewer ?? ""} />
               {editable.map((f, i) => (
                 <div key={f.path}>
                   <input type="hidden" name={`eol:${i}`} value={f.ending} />

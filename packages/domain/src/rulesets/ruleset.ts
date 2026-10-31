@@ -40,8 +40,11 @@ export interface PullRequestParameters {
   readonly require_last_push_approval: boolean;
   /** Every review thread must be resolved. */
   readonly required_review_thread_resolution: boolean;
-  /** Code owners are not supported yet: always false. */
-  readonly require_code_owner_review: false;
+  /**
+   * A changed path with designated owners needs an approval from one of
+   * them (its CODEOWNERS rule's users, agents or teams).
+   */
+  readonly require_code_owner_review: boolean;
   readonly allowed_merge_methods: readonly MergeMethod[];
   /** Fyrden: reviews submitted by agents count toward approvals; by default only people's do. */
   readonly allow_agent_approvals: boolean;
@@ -65,11 +68,7 @@ export interface Rule {
 
 /** A `pull_request` rule's parameters with every default filled in. */
 export function pullRequestParameters(rule: Rule): PullRequestParameters {
-  return {
-    ...DEFAULT_PULL_REQUEST_PARAMETERS,
-    ...rule.parameters,
-    require_code_owner_review: false,
-  };
+  return { ...DEFAULT_PULL_REQUEST_PARAMETERS, ...rule.parameters };
 }
 
 /** A ruleset's own state: `active` blocks, `evaluate` only reports, `disabled` does nothing. */

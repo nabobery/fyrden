@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   isRouteErrorResponse,
   Link,
@@ -14,6 +15,7 @@ import "./app.css";
 import { type SessionUser, signedInUser } from "./lib/api.server.js";
 import { api } from "./lib/cloudflare.server.js";
 import { logServerError } from "./lib/log-error.server.js";
+import { LiveHints } from "./lib/use-live.js";
 
 /**
  * Who is signed in and the API's version, for the header and footer. A
@@ -68,8 +70,10 @@ function SiteHeader() {
         {user && (
           <>
             <Link to="/">Repositories</Link>
+            <Link to="/notifications">Inbox</Link>
             <Link to="/settings/tokens">Tokens</Link>
             <Link to="/settings/agents">Agents</Link>
+            <Link to="/settings/notifications">Notifications</Link>
           </>
         )}
       </nav>
@@ -86,6 +90,16 @@ function SiteHeader() {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  // Marks the page once React has taken it over (its forms send through the app from then on):
+  // what a test waits for before it acts as a person with the page's scripts would.
+  useEffect(() => {
+    document.documentElement.dataset.hydrated = "";
+  }, []);
+  // The last viewer known: a session check that failed reads as no one, and signing in or out
+  // loads a whole page, so the tab's live hints outlast a failed check (and an error page).
+  const data = useRouteLoaderData("root") as { user: SessionUser | null } | undefined;
+  const viewer = useRef<string | null>(null);
+  if (data?.user) viewer.current = data.user.id;
   return (
     <html lang="en">
       <head>
@@ -96,7 +110,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <SiteHeader />
-        {children}
+        <LiveHints viewer={viewer.current}>{children}</LiveHints>
         <SiteFooter />
         <ScrollRestoration />
         <Scripts />

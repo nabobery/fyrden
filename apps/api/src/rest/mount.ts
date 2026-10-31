@@ -1,11 +1,17 @@
-import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
+import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
 import type { Context, Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { NO_STORE, notModified } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
+import {
+  executeOperation,
+  type OpContext,
+  type OpHandler,
+  type OpResult,
+  sessionRefusal,
+} from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
 import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
@@ -24,6 +30,7 @@ export function opContext(c: AppContext): OpContext {
     requestId: c.get("requestId"),
     requestHost: new URL(c.req.url).hostname,
     requestOrigin: new URL(c.req.url).origin,
+    receivedAt: c.get("receivedAt"),
     waitUntil: (p) => c.executionCtx.waitUntil(p),
   };
 }
@@ -118,6 +125,8 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
     return problemResponse(c, result.problem, { ...retry, ...replayed });
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
+  // Nothing to answer: no body (a replay of it too).
+  if (answersNothing(op)) return c.body(null, op.successStatus === 205 ? 205 : 204, replayed);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
@@ -155,6 +164,9 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     const path =
       API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
     app.on(op.method, path, requireAuth("by-method", "api", gitTransport(op)), async (c) => {
+      // Before the body or its key are looked at (as the executor would, after them).
+      const refused = sessionRefusal(op, c.get("auth"));
+      if (refused) return problem(c, 403, refused.code, refused.detail);
       const read = await readInput(c, op);
       if (!read.ok) return problem(c, read.status, read.code, read.detail);
       const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;

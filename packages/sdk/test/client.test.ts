@@ -13,6 +13,9 @@ function fake(responses: { status?: number; body: unknown }[]) {
       ...(init?.body !== undefined && { body: String(init.body) }),
     });
     const next = responses.shift() ?? { body: {} };
+    // A 204 or 205 has no body.
+    if (next.status === 204 || next.status === 205)
+      return new Response(null, { status: next.status });
     return new Response(JSON.stringify(next.body), { status: next.status ?? 200 });
   }) as unknown as typeof fetch;
   return { sent, fetchFn };
@@ -26,6 +29,26 @@ describe("FyrdenClient", () => {
     expect(
       () => new FyrdenClient({ baseUrl: `https://f.test/${"/".repeat(200_000)}x`, fetch: fetchFn }),
     ).not.toThrow();
+  });
+
+  it("gives null for an operation that answers nothing", async () => {
+    const { sent, fetchFn } = fake([{ status: 204, body: null }]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", token: "t", fetch: fetchFn });
+    expect(await client.call("admin.users.suspend", { username: "someone" })).toBeNull();
+    expect(sent[0]).toMatchObject({
+      method: "PUT",
+      url: "https://f.test/api/users/someone/suspended",
+    });
+  });
+
+  it("gives null for an operation that answers 205 (Reset Content)", async () => {
+    const { sent, fetchFn } = fake([{ status: 205, body: null }]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", token: "t", fetch: fetchFn });
+    expect(await client.call("notifications.thread_read", { thread_id: "abc" })).toBeNull();
+    expect(sent[0]).toMatchObject({
+      method: "PATCH",
+      url: "https://f.test/api/notifications/threads/abc",
+    });
   });
 
   it("sends path parameters in the path, the rest in the body, with a token and an idempotency key", async () => {
@@ -125,6 +148,19 @@ describe("FyrdenClient", () => {
     expect(error).toMatchObject({ status: 410, code: "cursor_expired", resync: "/api/feed/sync" });
   });
 
+  it("carries a stale refusal's current version, and none when it has none", async () => {
+    const { fetchFn } = fake([
+      { status: 409, body: { status: 409, code: "stale", detail: "d", current_version: 7 } },
+      { status: 409, body: { status: 409, code: "stale", detail: "d" } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const input = { owner: "me", repo: "r", issue_number: 1, body: "x", expected_version: 1 };
+    const first = await client.call("issues.update", input).catch((e: unknown) => e);
+    expect(first).toMatchObject({ status: 409, code: "stale", currentVersion: 7 });
+    const second = await client.call("issues.update", input).catch((e: unknown) => e);
+    expect(second).toMatchObject({ code: "stale", currentVersion: undefined });
+  });
+
   it("iterates every item of a paginated operation, following next_cursor", async () => {
     const { sent, fetchFn } = fake([
       { body: { repos: [{ name: "a" }, { name: "b" }], next_cursor: "c1" } },
@@ -137,6 +173,28 @@ describe("FyrdenClient", () => {
     expect(sent.map((s) => new URL(s.url).search)).toEqual([
       "?per_page=2",
       "?per_page=2&cursor=c1",
+    ]);
+  });
+
+  it("starts a paginated stream after an id, then follows next_cursor alone", async () => {
+    const { sent, fetchFn } = fake([
+      { body: { comments: [{ id: 3 }], next_cursor: "c1" } },
+      { body: { comments: [{ id: 4 }], next_cursor: null } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const ids: number[] = [];
+    for await (const c of client.paginate("issues.comments.list", {
+      owner: "me",
+      repo: "r",
+      issue_number: 1,
+      after: 2,
+      per_page: 1,
+    }))
+      ids.push(c.id);
+    expect(ids).toEqual([3, 4]);
+    expect(sent.map((s) => new URL(s.url).search)).toEqual([
+      "?after=2&per_page=1",
+      "?per_page=1&cursor=c1",
     ]);
   });
 

@@ -183,7 +183,9 @@ describe("memberships", () => {
     const gone = await who();
     const org = await newOrg(owner);
     expect((await setRole(org.login, gone, "member", owner.token)).status).toBe(200);
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(gone.principalId)
       .run();
     // Not addable again, but removable.

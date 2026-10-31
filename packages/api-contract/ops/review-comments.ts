@@ -2,7 +2,9 @@ import { HANDLE_SHAPE, MAX_COMMENT_BODY_LENGTH, MAX_HANDLE_LENGTH } from "@fyrde
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
+import { AfterId, BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { ReactionRollup } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -60,6 +62,7 @@ export const ReviewComment = z.object({
   resolved: z.boolean().describe("Fyrden: its thread is resolved."),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  reactions: ReactionRollup,
 });
 
 export const ReviewThread = z.object({
@@ -81,12 +84,17 @@ export const listReviewComments = defineOperation({
   path: "/repos/{owner}/{repo}/pulls/{pull_number}/comments",
   summary: "List review comments",
   description: "The comments on a pull request's diff, oldest first.",
-  input: z.object({
-    ...RepoInput,
-    pull_number: PullNumber,
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
-    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
-  }),
+  input: z
+    .object({
+      ...RepoInput,
+      pull_number: PullNumber,
+      per_page: BoundedPerPage,
+      cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+      after: AfterId,
+    })
+    .refine((input) => input.cursor === undefined || input.after === undefined, {
+      message: "Pass cursor or after, not both.",
+    }),
   output: z.object({ comments: z.array(ReviewComment), next_cursor: NextCursor }),
   permission: "pull_requests:read",
   principals: ["user", "agent"],

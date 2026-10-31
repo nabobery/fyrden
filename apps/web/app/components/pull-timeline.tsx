@@ -1,5 +1,8 @@
+import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
+import { Reactions, type Rollup } from "./reactions.js";
 
 /** One event of a pull request's conversation, with its Markdown source. */
 export type TimelineItem =
@@ -11,6 +14,7 @@ export type TimelineItem =
       agents: string[];
       body: string;
       edited: boolean;
+      reactions: Rollup;
     }
   | {
       kind: "review";
@@ -55,7 +59,22 @@ function Byline({
 }
 
 /** A pull request's conversation: its comments, reviews, and when it was closed or merged. */
-export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: string | null }) {
+export function Timeline({
+  items,
+  viewer,
+  react,
+  linked = null,
+  hidden,
+}: {
+  items: TimelineItem[];
+  viewer: string | null;
+  /** Fields every form sends (the viewer it was made for). */
+  hidden?: ReactNode;
+  /** Whether the viewer may react to its comments, and whether a form is being sent. */
+  react: { canReact: boolean; busy: boolean };
+  /** The comment a permalink names, marked. */
+  linked?: number | null;
+}) {
   if (items.length === 0) return <p className="muted">No comments or reviews yet.</p>;
   return (
     <ol className="timeline" aria-label="Conversation">
@@ -63,13 +82,26 @@ export function Timeline({ items, viewer }: { items: TimelineItem[]; viewer: str
         if (item.kind === "comment")
           return (
             <li key={`c${item.id}`} id={`comment-${item.id}`}>
-              <article className="panel" aria-label={`Comment by ${who(item.author, viewer)}`}>
+              <article
+                className={linked === item.id ? "panel linked" : "panel"}
+                aria-label={`Comment by ${who(item.author, viewer)}`}
+              >
                 <header className="muted">
                   <Byline author={item.author} agents={item.agents} viewer={viewer} /> commented{" "}
-                  <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
+                  {/* Its permalink: the page of comments that starts with it. */}
+                  <Link to={`?comment=${item.id}#comment-${item.id}`}>
+                    <time dateTime={new Date(item.at).toISOString()}>{when(item.at)}</time>
+                  </Link>
                   {item.edited && " (edited)"}
                 </header>
                 <Markdown source={item.body} />
+                <Reactions
+                  rollup={item.reactions}
+                  target={item.id}
+                  canReact={react.canReact}
+                  busy={react.busy}
+                  hidden={hidden}
+                />
               </article>
             </li>
           );

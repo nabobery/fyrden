@@ -29,6 +29,7 @@ import {
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { putChunks } from "../../git/put-chunks.js";
+import { FREE_INTERNAL_CALLS } from "../../invocation-calls.js";
 import { type Browsed, fail } from "./browse.js";
 
 /*
@@ -76,6 +77,11 @@ export interface ArchivePolicy {
   /** A zip's central directory at most, read whole when the zip is finished. */
   readonly maxZipDirectoryBytes: number;
   /**
+   * A row of a zip's records waiting for the last slice holds this many
+   * bytes of them at most (one record, however large, at least).
+   */
+  readonly zipChunkBytes: number;
+  /**
    * A build's cursor at most, kept in one row (SQLite's limit is 2 MB):
    * directories that nest deeper fail the build.
    */
@@ -109,14 +115,14 @@ export const ARCHIVE_POLICY: ArchivePolicy = {
   heldTreeBytes: 8 * 1024 * 1024,
   maxSegments: 300,
   maxZipDirectoryBytes: 16 * 1024 * 1024,
+  zipChunkBytes: 1024 * 1024,
   maxCursorBytes: 1024 * 1024,
   retentionMs: 7 * 24 * 60 * 60 * 1000,
   pruneBatch: 3,
   leaseMs: 60 * 60 * 1000,
 };
 
-/** Calls to R2, D1 and Durable Objects one Free invocation allows, and room kept for a slice's own writes. */
-const INVOCATION_CALLS = 1_000;
+/** Room kept, of an invocation's calls, for a slice's own writes. */
 const CALLS_HEADROOM = 100;
 /** Fewest reads a slice starts with; fewer, and it waits for the next invocation. */
 const MIN_SLICE_READS = 20;
@@ -124,6 +130,8 @@ const MIN_SLICE_READS = 20;
 const PREFETCH_BATCH = 500;
 /** A build that has not moved for this long is stale, and may be pruned once expired. */
 const STALE_BUILD_MS = 60 * 60 * 1000;
+/** A record code from before chunks cannot decode (its name is not base64): see `#publish`. */
+const LEGACY_RECORDS_MARKER = JSON.stringify({ name: "!" });
 /** The lock one slice holds, so slices (and their memory) never overlap in one object. */
 const SLICE_LOCK = "archive-slice";
 const SLICE_LOCK_MS = 120_000;
@@ -189,6 +197,8 @@ export interface ArchiveDeps {
   readonly memoryBlocks: BlockCache;
   /** Replaces limits of `ARCHIVE_POLICY` (tests). */
   readonly policy?: Partial<ArchivePolicy>;
+  /** Calls to R2, D1 and Durable Objects one invocation allows (default: Free's). */
+  readonly invocationCalls?: number;
 }
 
 const encoder = new TextEncoder();
@@ -351,7 +361,8 @@ export class RepoArchives {
     const { git } = this.deps;
     const policy = this.#policy;
     const spent = currentInvocation()?.tally.internal ?? 0;
-    const maxReads = Math.min(2 * policy.sliceReads, INVOCATION_CALLS - CALLS_HEADROOM - spent);
+    const limit = this.deps.invocationCalls ?? FREE_INTERNAL_CALLS;
+    const maxReads = Math.min(2 * policy.sliceReads, limit - CALLS_HEADROOM - spent);
     if (maxReads < MIN_SLICE_READS) return "wait";
     const counts = { reads: 0 };
     const reader = await openLiveReader(this.deps, {
@@ -636,17 +647,32 @@ export class RepoArchives {
         slice.key,
         slice.segmentBytes,
       );
-      if (slice.finished)
-        storage.sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", runId);
-      else
-        slice.records.forEach((r, i) => {
+      if (slice.finished) this.#forgetRecords(runId);
+      else {
+        // Records an earlier run of a slice from here (or past it) kept are replaced: they may
+        // have been cut elsewhere.
+        storage.sql.exec(
+          "DELETE FROM archive_zip_chunks WHERE run_id = ? AND seq >= ?",
+          runId,
+          cursor.entries,
+        );
+        for (const chunk of this.#chunks(slice.records))
           storage.sql.exec(
-            "INSERT OR REPLACE INTO archive_zip_records (run_id, seq, record) VALUES (?, ?, ?)",
+            "INSERT INTO archive_zip_chunks (run_id, seq, records) VALUES (?, ?, ?)",
             runId,
-            cursor.entries + i,
-            JSON.stringify({ ...r, name: toBase64(r.name) }),
+            cursor.entries + chunk.first,
+            chunk.json,
           );
-        });
+        // Code from before chunks reads `archive_zip_records` only: should it finish this build
+        // (a rollback), this record it cannot decode fails the build rather than leave out of
+        // the zip the entries recorded in chunks. Dropped with the table by the contract step.
+        if (cursor.format === "zip")
+          storage.sql.exec(
+            "INSERT OR IGNORE INTO archive_zip_records (run_id, seq, record) VALUES (?, -1, ?)",
+            runId,
+            LEGACY_RECORDS_MARKER,
+          );
+      }
       storage.sql.exec(
         `UPDATE archives SET segments = ?, bytes = ?, state = ?, updated_at = ?
          WHERE run_id = ? AND state = 'building'`,
@@ -672,19 +698,55 @@ export class RepoArchives {
     );
   }
 
+  /** A build's zip records, in chunks and as code from before chunks kept them. */
+  #forgetRecords(runId: string): void {
+    const { sql } = this.deps.git.context.storage;
+    sql.exec("DELETE FROM archive_zip_chunks WHERE run_id = ?", runId);
+    sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", runId);
+  }
+
+  /**
+   * A slice's zip records as rows of at most `zipChunkBytes` of JSON each,
+   * with the index of each row's first record: a few rows a slice, not one
+   * an entry (rows written are what Workers Free counts a day).
+   */
+  #chunks(records: readonly ZipRecord[]): { first: number; json: string }[] {
+    const chunks: { first: number; json: string }[] = [];
+    let first = 0;
+    let pending: string[] = [];
+    // The array's brackets, then each record and the comma before all but the first (ASCII).
+    let bytes = 2;
+    const flush = () => {
+      if (pending.length > 0) chunks.push({ first, json: `[${pending.join(",")}]` });
+      first += pending.length;
+      pending = [];
+      bytes = 2;
+    };
+    for (const r of records) {
+      const json = JSON.stringify({ ...r, name: toBase64(r.name) });
+      if (pending.length > 0 && bytes + 1 + json.length > this.#policy.zipChunkBytes) flush();
+      bytes += (pending.length > 0 ? 1 : 0) + json.length;
+      pending.push(json);
+    }
+    flush();
+    return chunks;
+  }
+
   /** The zip records of the entries before `before`, as the slices that wrote them recorded them. */
   #records(runId: string, before: number): ZipRecord[] {
     return this.deps.git.context.storage.sql
-      .exec<{ record: string }>(
-        "SELECT record FROM archive_zip_records WHERE run_id = ? AND seq < ? ORDER BY seq",
+      .exec<{ records: string }>(
+        "SELECT records FROM archive_zip_chunks WHERE run_id = ? AND seq < ? ORDER BY seq",
         runId,
         before,
       )
       .toArray()
-      .map((r) => {
-        const record = JSON.parse(r.record) as Omit<ZipRecord, "name"> & { name: string };
-        return { ...record, name: fromBase64(record.name) };
-      });
+      .flatMap((r) =>
+        (JSON.parse(r.records) as (Omit<ZipRecord, "name"> & { name: string })[]).map((record) => ({
+          ...record,
+          name: fromBase64(record.name),
+        })),
+      );
   }
 
   #row(key: { commit: string; format: ArchiveFormat; prefix: string }): Row | undefined {
@@ -717,7 +779,7 @@ export class RepoArchives {
         this.deps.git.context.now(),
         runId,
       );
-      storage.sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", runId);
+      this.#forgetRecords(runId);
     });
   }
 
@@ -745,7 +807,7 @@ export class RepoArchives {
         }
         if (!page.truncated) break;
       }
-      sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", runId);
+      this.#forgetRecords(runId);
       sql.exec("DELETE FROM archive_segments WHERE run_id = ?", runId);
       sql.exec("DELETE FROM archives WHERE run_id = ?", runId);
       sql.exec("DELETE FROM jobs WHERE job_id = ?", archiveJobId(runId));

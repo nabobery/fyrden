@@ -30,6 +30,15 @@ export const JOB_KINDS = [
   "view_compact",
   "pull_refollow",
   "network_reclaim",
+  "feed_pages_prune",
+  "webhook_blobs_prune",
+  "review_teams",
+  "code_owners",
+  "code_owner_requests",
+  "preference_recovery",
+  "preference_cleanup",
+  "digest_seal",
+  "digest_credit",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
@@ -47,8 +56,23 @@ export type RunJobState = "done" | "queued" | "failed" | "busy" | "missing";
 
 /** What one slice of a job did. */
 export type SliceResult =
-  | { readonly done: true }
-  | { readonly done: false; readonly cursor: Uint8Array | null; readonly runAfterMs?: number };
+  | {
+      readonly done: true;
+      /** As below: no other slice runs in this invocation (the alarm goes on in a new one). */
+      readonly endInvocation?: boolean;
+    }
+  | {
+      readonly done: false;
+      readonly cursor: Uint8Array | null;
+      readonly runAfterMs?: number;
+      /**
+       * The slice used about what an invocation's CPU allows: no other slice
+       * runs in this invocation (the alarm goes on in a new one). The clock
+       * cannot tell: in Workers it does not move while code runs without I/O,
+       * so a run's deadline alone does not bound its CPU.
+       */
+      readonly endInvocation?: boolean;
+    };
 
 export interface JobHandler {
   /** Bytes to reserve from the operation pool for one slice (0 or absent: none). */
@@ -326,7 +350,9 @@ export class JobQueue {
         reservation?.release();
         continue;
       }
-      if ((await this.#runClaimed(job, handler, reservation)) === "ran") slices++;
+      const ran = await this.#runClaimed(job, handler, reservation);
+      if (ran === "ran" || ran === "ran-ending") slices++;
+      if (ran === "ran-ending" || ran === "taken-over-ending") break;
     }
     this.rearm();
     return slices;
@@ -367,14 +393,20 @@ export class JobQueue {
           break;
         }
         const ran = await this.#runClaimed(job, handler, reservation);
-        if (ran === "taken-over") {
+        if (ran === "taken-over" || ran === "taken-over-ending") {
           state = "busy";
           break;
         }
         slices++;
         state = this.#stateOf(jobId);
-        // A slice that asked to go on later is not run again now.
-        if (state !== "queued" || this.#outOfBudget(deadline) || this.#later(jobId)) break;
+        // A slice that asked to go on later, or in another invocation, is not run again now.
+        if (
+          ran === "ran-ending" ||
+          state !== "queued" ||
+          this.#outOfBudget(deadline) ||
+          this.#later(jobId)
+        )
+          break;
       }
     } finally {
       this.rearm();
@@ -401,16 +433,20 @@ export class JobQueue {
   /**
    * Runs one slice of a claimed job, its memory already reserved, and
    * records the result: "taken-over" when another run claimed the job
-   * meanwhile (nothing of this slice is recorded).
+   * meanwhile (nothing of this slice is recorded); "-ending" when the slice
+   * asked to end the invocation (what it spent is the invocation's whoever
+   * holds the job now).
    */
   async #runClaimed(
     job: Job,
     handler: JobHandler,
     reservation: MemoryReservation | undefined,
-  ): Promise<"ran" | "taken-over"> {
+  ): Promise<"ran" | "ran-ending" | "taken-over" | "taken-over-ending"> {
     let recorded: boolean;
+    let ending = false;
     try {
       const result = await handler.runSlice(job);
+      ending = result.endInvocation === true;
       recorded = result.done
         ? this.#finish(job, "done", null)
         : this.#update(job, result.cursor, job.attempts, result.runAfterMs ?? 0, null);
@@ -431,7 +467,8 @@ export class JobQueue {
     } finally {
       reservation?.release();
     }
-    return recorded ? "ran" : "taken-over";
+    if (!recorded) return ending ? "taken-over-ending" : "taken-over";
+    return ending ? "ran-ending" : "ran";
   }
 
   /** The job's state as `runJob` reports it: `busy` while another run holds it. */

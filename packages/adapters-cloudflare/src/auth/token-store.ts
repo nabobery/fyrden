@@ -23,6 +23,12 @@ export interface TokenRecord {
   principalType: PrincipalType;
   principalHandle: string | null;
   isInstanceAdmin: boolean;
+  /**
+   * The principal's lifecycle generation when the token was checked: what
+   * it issues (a session) is admitted only while it is still at it, so a
+   * suspension in between, even one lifted since, stops it.
+   */
+  lifecycleGen: number;
   scopes: string[];
   /** Repos the token is limited to; null means every repo the principal can reach. */
   repoIds: string[] | null;
@@ -128,11 +134,50 @@ export interface MintInput {
   dpopJkt?: string | null;
   /** The token it is minted from by its holder: revoking that one revokes it. */
   sourceId?: string | null;
+  /** Who authorizes it (see `issuerHolds`); absent for a token the deployment issues itself. */
+  issuer?: Issuer;
 }
 
 /** A token would expire before it is issued: the token minting it expired meanwhile. */
 export class TokenExpiredError extends Error {
   override name = "TokenExpiredError";
+}
+
+/**
+ * A token was not stored: its `issuer` moved on (suspended, or suspended
+ * and unsuspended, since it was authenticated), or its principal (or the
+ * owner of that agent) is disabled.
+ */
+export class MintRefusedError extends Error {
+  override name = "MintRefusedError";
+  constructor(readonly who: "issuer" | "principal") {
+    super(`the token's ${who} is no longer active`);
+  }
+}
+
+/**
+ * Who authorizes a write that grants authority (a token, a delegation
+ * grant, a signing key, an agent): the principal a request was
+ * authenticated as, at the lifecycle generation it was authenticated at.
+ */
+export interface Issuer {
+  readonly principalId: string;
+  readonly gen: number;
+}
+
+/**
+ * An SQL condition that holds while an issuer (its principal and
+ * generation bound at the parameters named, as `?3`, `?4`) is still at
+ * that generation, and it and its owner (an agent's) are enabled: what a
+ * write that grants authority is conditioned on, so a request checked
+ * before a suspension grants nothing after it, even once the suspension is
+ * lifted. An agent's generation never moves: its owner's suspension
+ * leaves its credentials in place, so being enabled now is what counts.
+ */
+export function issuerHolds(principal: string, gen: string): string {
+  return `EXISTS (SELECT 1 FROM principals ip LEFT JOIN principals io ON io.id = ip.owner_id
+    WHERE ip.id = ${principal} AND ip.lifecycle_gen = ${gen} AND ip.disabled_at IS NULL
+      AND io.disabled_at IS NULL)`;
 }
 
 export interface AuditContext {
@@ -164,6 +209,7 @@ interface TokenRow {
   principal_type: PrincipalType;
   handle: string | null;
   is_instance_admin: number;
+  lifecycle_gen: number;
   disabled_at: number | null;
   owner_id: string | null;
   owner_disabled_at: number | null;
@@ -234,6 +280,7 @@ function toRecord(
     principalHandle: row.handle,
     // Never delegated.
     isInstanceAdmin: !delegation && row.is_instance_admin === 1,
+    lifecycleGen: row.lifecycle_gen,
     ...restrictions,
     expiresAt: row.expires_at,
     lastUsedAt: row.last_used_at,
@@ -332,8 +379,10 @@ export class D1TokenStore {
   }
 
   /**
-   * Creates a token and its audit row in one batch. The plaintext token is
-   * returned once and never stored.
+   * Creates a token and its audit row in one batch, while its principal
+   * (and that agent's owner) is enabled and its issuer holds (see
+   * `issuerHolds`); throws `MintRefusedError` otherwise. The plaintext
+   * token is returned once and never stored.
    */
   async mint(input: MintInput): Promise<{ token: string; id: string; expiresAt: number }> {
     if (!(input.ttlMs > 0)) throw new RangeError("token TTL must be positive");
@@ -343,13 +392,16 @@ export class D1TokenStore {
     const expiresAt = Math.min(now + input.ttlMs, input.notAfter ?? Number.POSITIVE_INFINITY);
     if (expiresAt <= now) throw new TokenExpiredError("the token would expire before it is issued");
     this.countQuery("token_mint", 2);
-    const { delegation } = input;
-    await this.db.batch([
+    const { delegation, issuer } = input;
+    const [stored] = await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO tokens (id, token_hash, type, principal_id, scopes, repo_ids, expires_at,
              created_at, grant_id, act_chain, audience, dpop_jkt, source_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+           WHERE EXISTS (SELECT 1 FROM principals p LEFT JOIN principals o ON o.id = p.owner_id
+               WHERE p.id = ?4 AND p.disabled_at IS NULL AND o.disabled_at IS NULL)
+             AND (?14 IS NULL OR ${issuerHolds("?14", "?15")})`,
         )
         .bind(
           id,
@@ -365,14 +417,37 @@ export class D1TokenStore {
           input.audience ?? null,
           input.dpopJkt ?? null,
           input.sourceId ?? null,
+          issuer?.principalId ?? null,
+          issuer?.gen ?? null,
         ),
-      auditStatement(this.db, now, input.audit, "token.mint", id, {
-        type: input.type,
-        principalId: input.principalId,
-        ...(delegation && { grantId: delegation.grantId, act: delegation.act }),
-      }),
+      auditStatement(
+        this.db,
+        now,
+        input.audit,
+        "token.mint",
+        id,
+        {
+          type: input.type,
+          principalId: input.principalId,
+          ...(delegation && { grantId: delegation.grantId, act: delegation.act }),
+        },
+        "tokens",
+      ),
     ]);
+    if ((stored?.meta.changes ?? 0) === 0) throw new MintRefusedError(await this.refusedBy(issuer));
     return { token, id, expiresAt };
+  }
+
+  /** Which of a refused mint's conditions failed: the issuer's, else the principal's. */
+  private async refusedBy(issuer: Issuer | undefined): Promise<"issuer" | "principal"> {
+    if (!issuer) return "principal";
+    this.countQuery("token_issuer");
+    const row = await this.db
+      .withSession("first-primary")
+      .prepare(`SELECT ${issuerHolds("?1", "?2")} AS holds`)
+      .bind(issuer.principalId, issuer.gen)
+      .first<{ holds: number }>();
+    return row?.holds === 1 ? "principal" : "issuer";
   }
 
   async verify(token: string, mode: VerifyMode): Promise<VerifyResult> {
@@ -395,7 +470,7 @@ export class D1TokenStore {
     const row = await source
       .prepare(
         `SELECT t.id, t.type, t.principal_id, p.type AS principal_type, p.handle, p.is_instance_admin,
-                p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
+                p.lifecycle_gen, p.disabled_at, p.owner_id, o.disabled_at AS owner_disabled_at,
                 o.require_dpop AS owner_require_dpop, t.scopes,
                 t.repo_ids, t.expires_at, t.last_used_at,
                 coalesce(t.revoked_at, s.revoked_at, f.revoked_at) AS revoked_at, t.grant_id,
@@ -507,10 +582,15 @@ export function auditStatement(
   action: string,
   targetId: string | null,
   details: Record<string, unknown> | null,
+  /** Written only if the `targetId` row of this table is stored (by a statement before it in the batch). */
+  ifStored?: "tokens" | "principals",
 ): D1PreparedStatement {
   return db
     .prepare(
-      "INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+       WHERE ?8 IS NULL OR (?8 = 'tokens' AND EXISTS (SELECT 1 FROM tokens WHERE id = ?5))
+         OR (?8 = 'principals' AND EXISTS (SELECT 1 FROM principals WHERE id = ?5))`,
     )
     .bind(
       at,
@@ -520,5 +600,6 @@ export function auditStatement(
       targetId,
       details ? JSON.stringify(details) : null,
       audit.requestId ?? null,
+      ifStored ?? null,
     );
 }

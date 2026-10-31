@@ -15,6 +15,11 @@ interface PermissionBase {
   implies: readonly string[];
   /** Granting it lets the holder change state, so checks for it read the primary. */
   writes: boolean;
+  /**
+   * Held only through a web session (the user's account security): no
+   * token scope may name it, and its operations refuse other credentials.
+   */
+  sessionOnly?: true;
 }
 
 /** Who holds a permission depends on the resource it is checked against. */
@@ -36,8 +41,15 @@ export const PERMISSIONS = {
     resource: "instance",
     summary: "Administer this instance: create users and mint their tokens.",
     principals: ["user"],
-    implies: [],
+    implies: ["instance:read"],
     writes: true,
+  },
+  "instance:read": {
+    resource: "instance",
+    summary: "See this instance's operational state.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
   },
   "repos:create": {
     resource: "account",
@@ -80,6 +92,38 @@ export const PERMISSIONS = {
     implies: ["starring:read"],
     writes: true,
   },
+  "watching:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the repositories the user (or an agent, itself) watches or ignores.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "watching:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Watch, ignore and stop watching repositories as the user (or an agent, itself).",
+    principals: ["user", "agent"],
+    implies: ["watching:read"],
+    writes: true,
+  },
+  "notifications:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the user's (or an agent's own) notification threads.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "notifications:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Mark the user's (or an agent's own) notification threads read or done.",
+    principals: ["user", "agent"],
+    implies: ["notifications:read"],
+    writes: true,
+  },
   "ssh_signing_keys:read": {
     resource: "account",
     minAccountRole: "owner",
@@ -111,6 +155,25 @@ export const PERMISSIONS = {
     principals: ["user"],
     implies: ["tokens:read"],
     writes: true,
+  },
+  "emails:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See the user's own notification email addresses (web sessions only).",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+    sessionOnly: true,
+  },
+  "emails:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary:
+      "Add, confirm and remove the user's own notification email addresses (web sessions only).",
+    principals: ["user"],
+    implies: ["emails:read"],
+    writes: true,
+    sessionOnly: true,
   },
   "agents:read": {
     resource: "account",
@@ -188,6 +251,24 @@ export const PERMISSIONS = {
     implies: ["pull_requests:read"],
     writes: true,
   },
+  "issues:read": {
+    resource: "repo",
+    minRole: "read",
+    summary: "Read issues.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "issues:write": {
+    resource: "repo",
+    // Anyone who reads a repository may open issues; what it may do to
+    // someone else's depends on its role (the issue matrix).
+    minRole: "read",
+    summary: "Open issues, and edit, close and reopen your own (others' as your role allows).",
+    principals: PRINCIPAL_TYPES,
+    implies: ["issues:read"],
+    writes: true,
+  },
   "administration:write": {
     resource: "repo",
     minRole: "admin",
@@ -223,8 +304,18 @@ export type RepoPermission = {
 
 export const PERMISSION_NAMES = Object.keys(PERMISSIONS) as Permission[];
 
+/** The permissions a token may carry as scopes (every one but a web session's only). */
+export const SCOPE_NAMES = PERMISSION_NAMES.filter(
+  (name) => (PERMISSIONS[name] as PermissionDef).sessionOnly !== true,
+) as [Permission, ...Permission[]];
+
 export function isPermission(name: string): name is Permission {
   return Object.hasOwn(PERMISSIONS, name);
+}
+
+/** Whether a token may carry `name` as a scope: a permission, and not a session's only. */
+export function isScope(name: string): name is Permission {
+  return isPermission(name) && permissionDef(name).sessionOnly !== true;
 }
 
 /** The definition, typed as the union so callers can narrow on `resource`. */

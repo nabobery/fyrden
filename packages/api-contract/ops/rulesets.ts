@@ -54,9 +54,11 @@ const PullRequestParameters = z
       .default(false)
       .describe("Every review thread must be resolved."),
     require_code_owner_review: z
-      .literal(false)
+      .boolean()
       .default(false)
-      .describe("Code owners are not supported yet: must be false."),
+      .describe(
+        "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+      ),
     allowed_merge_methods: z
       .array(z.enum(MERGE_METHODS))
       .min(1)

@@ -31,7 +31,7 @@ describe("evaluate: roles", () => {
     const allowed = (r: RepoRole | null) =>
       PERMISSION_NAMES.filter((p) => request(p, role(r)).allow);
     expect(allowed(null)).toEqual([]);
-    const pulls = ["pull_requests:read", "pull_requests:write"];
+    const pulls = ["issues:read", "issues:write", "pull_requests:read", "pull_requests:write"];
     const reads = ["contents:read", "metadata:read", ...pulls].sort();
     const writes = ["contents:read", "contents:write", "metadata:read", ...pulls].sort();
     expect(allowed("read").sort()).toEqual(reads);

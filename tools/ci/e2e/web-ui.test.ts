@@ -8,6 +8,7 @@
 // a post from another origin and no page's data is cached. Every
 // page it visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm
 // --filter @fyrden/web build` first (turbo does it).
+import { createHmac, randomBytes } from "node:crypto";
 import { mentionsToken } from "@fyrden/domain";
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -209,6 +210,7 @@ describe("the web UI", () => {
       ["/?index", { name: "evil" }],
       ["/settings/tokens", { type: "git", days: "30" }],
       ["/settings/agents", { intent: "create-agent", handle: "evil-bot" }],
+      ["/settings/notifications", { intent: "settings", watching: "on" }],
       ["/ada/demo/settings", { intent: "delete", confirm: "demo" }],
       ["/ada/demo/edit/main/README.md", { intent: "save", content: "pwned" }],
     ] as const) {
@@ -267,7 +269,53 @@ describe("the web UI", () => {
     await accessible("agents");
   });
 
+  it("sets what notification email is sent, and says the deployment sends none yet", async () => {
+    await page.goto(`${origin}/settings/notifications`);
+    await see(page.getByText("No address yet")).toBeVisible();
+    await page.getByLabel("Threads you take part in").check();
+    await page.getByRole("button", { name: "Save" }).click();
+    await see(page.getByRole("status")).toContainText("saved");
+    // Kept: read back from the API.
+    await page.goto(`${origin}/settings/notifications`);
+    await see(page.getByLabel("Threads you take part in")).toBeChecked();
+    await see(page.getByLabel("Repositories you watch")).not.toBeChecked();
+    // This stack sends no email: adding an address is refused, and the page says why.
+    await page.getByLabel("Add an address").fill("ada@example.com");
+    await page.getByRole("button", { name: "Add address" }).click();
+    await see(page.getByRole("alert")).toContainText("sends no email");
+    await accessible("notifications");
+  });
+
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack?.refused).toEqual([]);
+  });
+  it("serves unsubscribe links on the public origin, with no credential", async () => {
+    // A link as an email carries it (signed with the deployment's key), for an address it never
+    // had: answered as any, nothing written.
+    const id = `eml_${randomBytes(16)
+      .toString("hex")
+      .toUpperCase()
+      .replace(/[ILOU]/g, "0")
+      .slice(0, 26)}`;
+    const payload = `v1.${id}.watching`;
+    const mac = createHmac("sha256", Buffer.from((stack as WebStack).emailKey, "base64url"))
+      .update(payload)
+      .digest("base64url");
+    const link = `${origin}/unsubscribe?t=${encodeURIComponent(`${payload}.${mac}`)}`;
+    const opened = await fetch(link);
+    expect(opened.status).toBe(200);
+    expect(await opened.text()).toContain('method="post"');
+    const head = await fetch(link, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    const oneClick = await fetch(link, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "List-Unsubscribe=One-Click",
+      redirect: "manual",
+    });
+    expect(oneClick.status).toBe(200);
+    const forged = await fetch(`${origin}/unsubscribe?t=v1.forged`, { method: "POST" });
+    // On a wrong answer, what the Workers logged says why.
+    expect(forged.status, `${await forged.text()}\n${stack?.output().slice(-6000)}`).toBe(400);
   });
 });

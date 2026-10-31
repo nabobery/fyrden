@@ -9,7 +9,14 @@ import {
   setTeamMembership,
   setTeamRepo,
 } from "../ops/access.js";
-import { createToken, createUser } from "../ops/admin.js";
+import {
+  createToken,
+  createUser,
+  deleteUser,
+  repairEffects,
+  suspendUser,
+  unsuspendUser,
+} from "../ops/admin.js";
 import {
   createAgent,
   createAgentToken,
@@ -35,8 +42,23 @@ import {
   listComments,
   updateComment,
 } from "../ops/comments.js";
-import { getContents, getReadme, getRootContents, getTree } from "../ops/contents.js";
-import { ackFeedItem, getFeed, syncFeed } from "../ops/feed.js";
+import {
+  getCodeOwnersErrors,
+  getContents,
+  getReadme,
+  getRootContents,
+  getTree,
+} from "../ops/contents.js";
+import {
+  addUserEmails,
+  confirmUserEmail,
+  deleteUserEmails,
+  getNotificationSettings,
+  listUserEmails,
+  requestUserEmailConfirmation,
+  setNotificationSettings,
+} from "../ops/emails.js";
+import { ackFeedItem, getFeed, getFeedDigest, syncFeed } from "../ops/feed.js";
 import { createFileCommit, deleteContents, putContents } from "../ops/file-writes.js";
 import { createGrant, listGrants, revokeGrant } from "../ops/grants.js";
 import {
@@ -54,8 +76,62 @@ import {
   updateHook,
 } from "../ops/hooks.js";
 import { createImport, getImport } from "../ops/imports.js";
+import {
+  createIssue,
+  deleteIssue,
+  getIssue,
+  listIssueReferences,
+  listIssues,
+  lockIssue,
+  unlockIssue,
+  updateIssue,
+} from "../ops/issues.js";
+import {
+  addAssignees,
+  addIssueLabels,
+  clearIssueLabels,
+  copyDefaultLabels,
+  createLabel,
+  deleteLabel,
+  getDefaultLabels,
+  getLabel,
+  listIssueLabels,
+  listLabels,
+  removeAssignees,
+  removeIssueLabel,
+  setDefaultLabels,
+  setIssueLabels,
+  updateLabel,
+} from "../ops/labels.js";
 import { listSigningKeys, whoami } from "../ops/meta.js";
-import { createOrg, listMembers, removeMembership, setMembership, updateOrg } from "../ops/orgs.js";
+import {
+  createMilestone,
+  deleteMilestone,
+  getMilestone,
+  listMilestones,
+  updateMilestone,
+} from "../ops/milestones.js";
+import {
+  deleteNotificationThreadSubscription,
+  getNotificationThread,
+  getNotificationThreadSubscription,
+  issueLiveTicket,
+  listNotifications,
+  listRepoNotifications,
+  markNotificationsRead,
+  markNotificationThreadDone,
+  markNotificationThreadRead,
+  markRepoNotificationsRead,
+  setNotificationThreadSubscription,
+} from "../ops/notifications.js";
+import {
+  addOrgOwner,
+  createOrg,
+  listMembers,
+  removeMembership,
+  setMembership,
+  updateOrg,
+} from "../ops/orgs.js";
 import {
   createPull,
   getPull,
@@ -69,6 +145,27 @@ import {
   updatePullBranch,
 } from "../ops/pulls.js";
 import { getOrgQuota, getUserQuota, setQuota } from "../ops/quotas.js";
+import {
+  createCommentReaction,
+  createIssueReaction,
+  createReviewCommentReaction,
+  deleteCommentReaction,
+  deleteIssueReaction,
+  deleteReviewCommentReaction,
+  listCommentReactions,
+  listIssueReactions,
+  listReviewCommentReactions,
+} from "../ops/reactions.js";
+import {
+  beginReadModelRecovery,
+  getReadModelExport,
+  getReadModelExportPage,
+  getReadModelRecovery,
+  handshakeReadModel,
+  pauseReadModel,
+  resumeReadModel,
+  stepReadModelRecovery,
+} from "../ops/read-model.js";
 import {
   createOrgRepo,
   createRepo,
@@ -97,11 +194,13 @@ import {
 import {
   createReview,
   dismissReview,
+  getPullCodeOwners,
   getReview,
   listRequestedReviewers,
   listReviews,
   removeRequestedReviewers,
   requestReviewers,
+  requestTeamReviewers,
 } from "../ops/reviews.js";
 import {
   createRuleset,
@@ -112,6 +211,13 @@ import {
   updateRuleset,
 } from "../ops/rulesets.js";
 import {
+  backfillSearch,
+  checkSearchIndex,
+  getSearchStatus,
+  rebuildSearchIndex,
+  setSearchIndexing,
+} from "../ops/search.js";
+import {
   createSshSigningKey,
   deleteSshSigningKey,
   getSshSigningKey,
@@ -120,6 +226,15 @@ import {
 import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
 import { createGitToken, createUserToken, listUserTokens, revokeUserToken } from "../ops/tokens.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
+import {
+  deleteRepoSubscription,
+  deleteThreadSubscription,
+  getRepoSubscription,
+  getThreadSubscription,
+  listSubscriptions,
+  setRepoSubscription,
+  setThreadSubscription,
+} from "../ops/watching.js";
 import { defineRegistry } from "./op.js";
 
 /** Every operation Fyrden exposes. Order is the order in OpenAPI and MCP listings. */
@@ -136,6 +251,9 @@ export const registry = defineRegistry([
   createGitToken,
   createUser,
   createToken,
+  suspendUser,
+  unsuspendUser,
+  deleteUser,
   createAgent,
   listAgents,
   getAgent,
@@ -177,6 +295,20 @@ export const registry = defineRegistry([
   getHookDelivery,
   redeliverHookDelivery,
   resealHookSecrets,
+  repairEffects,
+  backfillSearch,
+  setSearchIndexing,
+  getSearchStatus,
+  checkSearchIndex,
+  rebuildSearchIndex,
+  pauseReadModel,
+  resumeReadModel,
+  handshakeReadModel,
+  beginReadModelRecovery,
+  getReadModelRecovery,
+  stepReadModelRecovery,
+  getReadModelExport,
+  getReadModelExportPage,
   listPulls,
   createPull,
   getPull,
@@ -202,18 +334,83 @@ export const registry = defineRegistry([
   dismissReview,
   listRequestedReviewers,
   requestReviewers,
+  requestTeamReviewers,
   removeRequestedReviewers,
+  getPullCodeOwners,
+  listIssues,
+  createIssue,
+  getIssue,
+  updateIssue,
+  deleteIssue,
+  lockIssue,
+  unlockIssue,
+  listIssueReferences,
+  listLabels,
+  getLabel,
+  createLabel,
+  updateLabel,
+  deleteLabel,
+  copyDefaultLabels,
+  listIssueLabels,
+  addIssueLabels,
+  setIssueLabels,
+  removeIssueLabel,
+  clearIssueLabels,
+  addAssignees,
+  removeAssignees,
+  getDefaultLabels,
+  setDefaultLabels,
+  listMilestones,
+  getMilestone,
+  createMilestone,
+  updateMilestone,
+  deleteMilestone,
   listComments,
   createComment,
   getComment,
   updateComment,
   deleteComment,
+  listIssueReactions,
+  createIssueReaction,
+  deleteIssueReaction,
+  listCommentReactions,
+  createCommentReaction,
+  deleteCommentReaction,
+  listReviewCommentReactions,
+  createReviewCommentReaction,
+  deleteReviewCommentReaction,
   starRepo,
   unstarRepo,
   listStarred,
+  getRepoSubscription,
+  setRepoSubscription,
+  deleteRepoSubscription,
+  listSubscriptions,
+  getThreadSubscription,
+  setThreadSubscription,
+  deleteThreadSubscription,
+  listNotifications,
+  listRepoNotifications,
+  getNotificationThread,
+  markNotificationThreadRead,
+  markNotificationThreadDone,
+  markNotificationsRead,
+  issueLiveTicket,
+  markRepoNotificationsRead,
+  getNotificationThreadSubscription,
+  setNotificationThreadSubscription,
+  deleteNotificationThreadSubscription,
   getFeed,
   syncFeed,
   ackFeedItem,
+  getFeedDigest,
+  listUserEmails,
+  addUserEmails,
+  deleteUserEmails,
+  confirmUserEmail,
+  requestUserEmailConfirmation,
+  getNotificationSettings,
+  setNotificationSettings,
   getUserQuota,
   getOrgQuota,
   setQuota,
@@ -226,6 +423,7 @@ export const registry = defineRegistry([
   getRootContents,
   getContents,
   getReadme,
+  getCodeOwnersErrors,
   getTree,
   getArchive,
   putContents,
@@ -233,6 +431,7 @@ export const registry = defineRegistry([
   createFileCommit,
   setMembership,
   removeMembership,
+  addOrgOwner,
   listMembers,
   createOrgRepo,
   listOrgRepos,

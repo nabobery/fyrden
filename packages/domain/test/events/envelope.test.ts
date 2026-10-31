@@ -4,10 +4,13 @@ import {
   compareVersion,
   type DomainEvent,
   type Envelope,
+  EnvelopeSchema,
   envelopeBytes,
   eventKey,
+  MAX_ENVELOPE_EVENTS,
   parseEnvelope,
   parseEventKey,
+  safeParseEnvelope,
 } from "../../src/events/envelope.js";
 
 const REPO = "rep_01K742SG0021RA8PP539MVRVBJ";
@@ -140,6 +143,39 @@ describe("parseEnvelope", () => {
     ["an oversized actor", envelope([event({ actor: "u".repeat(257) })])],
   ])("rejects %s", (_, value) => {
     expect(parseEnvelope(value)).toMatchObject({ ok: false });
+  });
+
+  it("refuses more events than an envelope carries without reading them", () => {
+    const parsed = EnvelopeSchema.safeParse({
+      sourceId: REPO,
+      events: Array.from({ length: MAX_ENVELOPE_EVENTS + 1 }, () => ({})),
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((issue) => issue.code)).toEqual(["too_big"]);
+  });
+
+  it("stops at the first invalid event, whatever the rest hold", () => {
+    // Each event's audience within its limit, the whole within the event cap: hundreds of
+    // thousands of issues validated at once.
+    const crowded = {
+      sourceId: REPO,
+      events: [
+        event(),
+        ...Array.from({ length: 380 }, () => ({
+          feed: { audience: Array.from({ length: 100 }, () => ({})) },
+        })),
+      ],
+    };
+    const parsed = safeParseEnvelope(crowded);
+    expect(parsed.success).toBe(false);
+    // The second event's issues only, where they are.
+    expect(parsed.error?.issues.length).toBeLessThan(1_000);
+    expect(
+      parsed.error?.issues.every((issue) => issue.path[0] === "events" && issue.path[1] === 1),
+    ).toBe(true);
+    // As the schema judges an envelope otherwise.
+    expect(safeParseEnvelope(envelope([event()])).success).toBe(true);
+    expect(parseEnvelope(crowded)).toMatchObject({ ok: false });
   });
 });
 

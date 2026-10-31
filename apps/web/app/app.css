@@ -160,6 +160,59 @@ button.danger {
   padding: 0 0.5rem;
   font-size: 12px;
 }
+/* A label by name only (its colour comes with the labels page, contrast checked). */
+.label-chip {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 0.5rem;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+/* Text shown as written: its line breaks kept, long words broken. */
+.pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* A form that is one button, inline with what it acts on. */
+.inline-form {
+  display: inline;
+}
+/* The comment a permalink names. */
+.panel.linked {
+  border-color: var(--accent);
+}
+/* Highlighted code: each token's colour for the scheme in use (lib/highlight-palette.ts). */
+pre.highlights span {
+  color: var(--hls-light, var(--fg));
+}
+@media (prefers-color-scheme: dark) {
+  pre.highlights span {
+    color: var(--hls-dark, var(--fg));
+  }
+}
+ul.label-list {
+  list-style: none;
+  padding: 0;
+}
+/* A subject's or comment's reactions: counts, and toggles for who may react. */
+ul.reactions {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+.reaction button,
+li.reaction {
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 0.5rem;
+}
+.reaction button[aria-pressed="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.reaction-picker ul.reactions {
+  margin-top: 0.25rem;
+}
 .badge.verified {
   color: var(--ok);
   border-color: var(--ok);

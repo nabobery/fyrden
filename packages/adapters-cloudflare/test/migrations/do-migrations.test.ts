@@ -45,6 +45,17 @@ describe("applyDoMigrations", () => {
     expect(await stub.migrate([v1, v2])).toEqual({ ok: true, from: 2, to: 2 });
   });
 
+  it("only reads when it wakes with nothing to migrate", async () => {
+    // Over its account's daily rows written (Workers Free), a Durable Object refuses every
+    // statement that writes, even one changing nothing; its reads must still work.
+    const stub = probe();
+    await stub.migrate([v1, v2]);
+    await evictDurableObject(stub);
+    const woke = await stub.migrateRecording([v1, v2]);
+    expect(woke).toMatchObject({ ok: true, from: 2, to: 2 });
+    expect(woke.statements.every((s) => /^SELECT\b/i.test(s))).toBe(true);
+  });
+
   it("refuses code older than the stored schema", async () => {
     const stub = probe();
     await stub.migrate([v1, v2]);

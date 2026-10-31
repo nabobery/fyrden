@@ -24,8 +24,20 @@ export function fakeWrangler() {
     d1Migrations: new Map<string, string[]>(),
     /** What fyrden-org answers to the effects summary, one row per state. */
     effects: [] as { state: string; count: number; oldest: number }[],
+    /** Answers other queries of a database (a test's own SQLite), before the cases above. */
+    d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
+    /** The read model protocol a deploy recorded as served (fyrden-directory). */
+    executorVersion: 0,
+    /** Whether fyrden-org's read model holds data (rows in any of its tables). */
+    orgInUse: false,
+    /** fyrden-org's read model protocol and whether its admission is open, once migrated. */
+    readModel: { protocol: 2, open: 0 },
+    /** The read model's restore floor recorded in fyrden-directory. */
+    floor: null as string | null,
+    /** fyrden-org's current Time Travel bookmark. */
+    bookmark: "00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683",
     r2: new Set<string>(),
     /** Object counts of buckets that are not empty. */
     r2Objects: new Map<string, number>(),
@@ -34,6 +46,8 @@ export function fakeWrangler() {
     /** Lifecycle rules per bucket: name to its flags. */
     r2Lifecycle: new Map<string, Map<string, string[]>>(),
     queues: new Set<string>(),
+    /** Queues whose delivery is paused. */
+    paused: new Set<string>(),
     /** Queue name to the Workers consuming it. */
     consumers: new Map<string, Set<string>>(),
     /**
@@ -45,6 +59,10 @@ export function fakeWrangler() {
     deployed: [] as string[],
     migrated: [] as string[],
     tailAttached: false,
+    /** The next deploy of fyrden-api fails (once). */
+    failApiDeploy: false,
+    /** The next pause of a queue's delivery fails (once), before it applies or after. */
+    failPause: false as false | "before" | "after",
     loggedIn: true,
     accounts: [{ id: "acct-1", name: "Test account" }] as { id: string; name: string }[],
   };
@@ -104,6 +122,18 @@ export function fakeWrangler() {
         return state.queues.has(args[2] as string)
           ? ok()
           : fail(`Queue "${args[2]}" does not exist. [code: 11000]`);
+      }
+      if (args[0] === "queues" && (args[1] === "pause-delivery" || args[1] === "resume-delivery")) {
+        if (!state.queues.has(args[2] as string))
+          return fail(`Queue "${args[2]}" does not exist. [code: 11000]`);
+        if (args[1] === "pause-delivery" && state.failPause) {
+          if (state.failPause === "after") state.paused.add(args[2] as string);
+          state.failPause = false;
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
+        }
+        if (args[1] === "pause-delivery") state.paused.add(args[2] as string);
+        else state.paused.delete(args[2] as string);
+        return ok();
       }
       if (args[0] === "queues" && args[1] === "create") {
         state.queues.add(args[2] as string);
@@ -181,6 +211,11 @@ export function fakeWrangler() {
         ]);
         return ok();
       }
+      if (args[0] === "d1" && args[1] === "time-travel" && args[2] === "info") {
+        if (!state.d1.has(args[3] as string))
+          return fail(`Couldn't find DB with name '${args[3]}'`);
+        return ok(JSON.stringify({ bookmark: state.bookmark }));
+      }
       if (args[0] === "d1" && args[1] === "execute") {
         const db = args[2] as string;
         const sql = args[args.indexOf("--command") + 1] as string;
@@ -188,11 +223,26 @@ export function fakeWrangler() {
         const schema = state.d1Schema.get(db) ?? [];
         const migrations = state.d1Migrations.get(db);
         let results: unknown[];
-        if (sql.includes("FROM d1_migrations")) {
+        const answered = state.d1Query?.(db, sql);
+        if (answered) results = answered;
+        else if (sql.includes("FROM d1_migrations")) {
           if (!migrations) return fail("no such table: d1_migrations: SQLITE_ERROR [code: 7500]");
           results = migrations.map((name) => ({ name }));
-        } else if (sql.includes("FROM sqlite_schema")) results = schema;
-        else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
+        } else if (sql.includes("FROM sqlite_schema") && sql.includes("type = 'table'"))
+          results = schema.filter((o) => o.type === "table" && sql.includes(`'${o.name}'`));
+        else if (sql.includes("FROM sqlite_schema")) results = schema;
+        else if (sql.includes(" AS used")) results = [{ used: state.orgInUse ? 1 : 0 }];
+        else if (sql.includes("read_model_protocol_since AS floor FROM"))
+          results = [{ floor: state.floor }];
+        else if (sql.startsWith("UPDATE read_model_barriers SET read_model_protocol_since")) {
+          const bookmark = /read_model_protocol_since = '([^']+)'/.exec(sql)?.[1] ?? null;
+          results = state.floor === null ? [{ floor: bookmark }] : [];
+          state.floor ??= bookmark;
+        } else if (sql.includes("FROM read_model_barrier b")) results = [state.readModel];
+        else if (sql.startsWith("UPDATE read_model_barriers SET executor_version")) {
+          state.executorVersion = Number(/executor_version = (\d+)/.exec(sql)?.[1]);
+          results = [{ shard: "default" }];
+        } else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
           results = state.effects;
         else return fail("no such table: effects: SQLITE_ERROR [code: 7500]");
         return ok(JSON.stringify([{ results, success: true, meta: {} }]));
@@ -229,6 +279,10 @@ export function fakeWrangler() {
             string
           >;
           for (const [k, v] of Object.entries(secrets)) state.secrets.set(k, v);
+        }
+        if (worker === "fyrden-api" && state.failApiDeploy) {
+          state.failApiDeploy = false;
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
         }
         if (worker === "fyrden-api" && !state.secrets.has("BOOTSTRAP_SECRET")) {
           return fail("The following required secrets have not been set: BOOTSTRAP_SECRET");

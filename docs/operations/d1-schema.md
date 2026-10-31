@@ -52,7 +52,11 @@ npx wrangler d1 execute fyrden-org --remote --json \
 
 ## Repairing
 
-Back up first: `npx wrangler d1 export <database> --remote --output backup.sql`.
+Back up first: `npx wrangler d1 export fyrden-directory --remote --output backup.sql`
+for the directory; `fyrden-org` holds full-text indexes (virtual tables, from
+migration 0019), which `wrangler d1 export` cannot export
+([D1 docs](https://developers.cloudflare.com/d1/best-practices/import-export-data/#known-limitations)):
+export it with `fyrden read-model export` (backup.md).
 Never edit `d1_migrations` and never edit a released migration file. Then
 either:
 
@@ -76,6 +80,7 @@ either:
   not, so on a table others reference (`principals`, for one) that order
   fails the migration, and so does a rebuild that loses a referenced row.
   A table that no other table references and that was rebuilt by renaming
+  (its indexes and triggers made again: dropping the old table dropped them)
   still passes `fyrden doctor` (see Detecting). Update the expected
   file (`pnpm --filter @fyrden/api exec vitest run test/d1-schema.test.ts -u`),
   review the diff, and deploy.
@@ -85,5 +90,13 @@ either:
   them against the expected file, and run them with
   `npx wrangler d1 execute <database> --remote --file repair.sql`. A rebuilt
   table keeps its rows only if the statements copy them.
+
+On `fyrden-org`, from migration 0018 on, the read model's tables refuse any
+write made outside its executor's admission (`read_model_admission_required`),
+a migration's or a repair's too. A rebuild as above still works, as long as
+its triggers are made again last, after its rows are back (dropping the table
+dropped them). Any other statement that changes a read model table's rows
+is refused: a migration that needs one has to wait for the administrative
+executor that admits migrations.
 
 Run `fyrden doctor` again until every database prints `ok`, then deploy.

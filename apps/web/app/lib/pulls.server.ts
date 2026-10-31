@@ -1,5 +1,5 @@
 import type { RouterContextProvider } from "react-router";
-import { apiCall, apiGet, signedInUser } from "./api.server.js";
+import { apiCall, apiGet, checkSession } from "./api.server.js";
 import {
   field,
   type PullRequest,
@@ -21,17 +21,40 @@ export async function loadPull(
   context: Readonly<RouterContextProvider>,
   request: Request,
   params: PullParams,
-): Promise<{ number: number; pull: PullRequest; viewer: string | null }> {
+): Promise<{
+  number: number;
+  pull: PullRequest;
+  viewer: string | null;
+  /** Whether the session could be checked: when not, `viewer` is null but nothing is known. */
+  viewerKnown: boolean;
+}> {
   const number = pullNumber(params.number);
-  const [pull, user] = await Promise.all([
+  const [pull, session] = await Promise.all([
     apiGet<PullRequest>(context, request, pullApiPath(params.owner, params.repo, number)),
-    signedInUser(context, request),
+    checkSession(context, request),
   ]);
-  return { number, pull, viewer: user?.id ?? null };
+  return {
+    number,
+    pull,
+    viewer: session.state === "signed-in" ? session.user.id : null,
+    viewerKnown: session.state !== "unknown",
+  };
 }
 
 /** An action's answer: what was done, or why not. */
-export type ActionResult = { ok: string; error?: undefined } | { error: string; ok?: undefined };
+export type ActionResult =
+  | {
+      ok: string;
+      error?: undefined;
+      /** The version an edit's save made. */
+      version?: number | undefined;
+    }
+  | {
+      error: string;
+      ok?: undefined;
+      /** An edit's text that was not saved, and the version it was written from. */
+      kept?: { title: string; body: string; version: number | undefined; viewer: string };
+    };
 
 /**
  * Sends a change to a pull request and answers `ok` (naming `intent`) when

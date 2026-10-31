@@ -13,8 +13,31 @@ import { describe, expect, it } from "vitest";
 import { userSchema } from "../src/do/schema/user.js";
 import userV0 from "./fixtures/do-schemas/UserDO/v0.sql?raw";
 import userV2 from "./fixtures/do-schemas/UserDO/v2.sql?raw";
+import userV3 from "./fixtures/do-schemas/UserDO/v3.sql?raw";
+import userV4 from "./fixtures/do-schemas/UserDO/v4.sql?raw";
+import userV5 from "./fixtures/do-schemas/UserDO/v5.sql?raw";
+import userV6 from "./fixtures/do-schemas/UserDO/v6.sql?raw";
+import userV7 from "./fixtures/do-schemas/UserDO/v7.sql?raw";
+import userV8 from "./fixtures/do-schemas/UserDO/v8.sql?raw";
+import userV9 from "./fixtures/do-schemas/UserDO/v9.sql?raw";
+import userV10 from "./fixtures/do-schemas/UserDO/v10.sql?raw";
+import userV11 from "./fixtures/do-schemas/UserDO/v11.sql?raw";
+import userV12 from "./fixtures/do-schemas/UserDO/v12.sql?raw";
 
-const versions: Record<number, string> = { 0: userV0, 2: userV2 };
+const versions: Record<number, string> = {
+  0: userV0,
+  2: userV2,
+  3: userV3,
+  4: userV4,
+  5: userV5,
+  6: userV6,
+  7: userV7,
+  8: userV8,
+  9: userV9,
+  10: userV10,
+  11: userV11,
+  12: userV12,
+};
 
 describe("UserDO schema", () => {
   it("matches the committed expected schema (no drift)", async () => {

@@ -10,6 +10,7 @@ import { api, json } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted } from "./helpers/read-model.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
@@ -47,6 +48,37 @@ describe("pull request webhooks", () => {
     (await t.outbox())
       .filter((e) => e.webhooks && e.type !== "webhook.ping")
       .map((e) => bodyOf(e) as Record<string, unknown>);
+
+  it("tell of a pull request's labels and lock, the pull request carrying them", async () => {
+    const ok = async (res: Promise<Response>) => {
+      const answer = await res;
+      if (answer.status >= 300) throw new Error(`${answer.status}: ${await answer.text()}`);
+    };
+    await t.createHook({ events: ["pull_request"] });
+    await branchAt("feature", await commitOn("main", "one\n"));
+    await commitOn("feature", "one\ntwo\n");
+    await ok(
+      api("POST", `${t.path}/pulls`, t.owner.token, { title: "A", head: "feature", base: "main" }),
+    );
+    await ok(api("POST", `${t.path}/labels`, t.owner.token, { name: "triage", color: "d73a4a" }));
+    await ok(api("POST", `${t.path}/issues/1/labels`, t.owner.token, { labels: ["triage"] }));
+    await ok(api("PUT", `${t.path}/issues/1/lock`, t.owner.token, {}));
+    const made = await bodies();
+    expect(made.map((b) => `${b.event}.${b.action}`)).toEqual([
+      "pull_request.opened",
+      "pull_request.labeled",
+      "pull_request.locked",
+    ]);
+    const [opened, labeled, locked] = made;
+    expect(opened).toMatchObject({ pull_request: { labels: [], assignees: [], milestone: null } });
+    const label = labeled?.label as { id: number };
+    expect(labeled).toMatchObject({
+      number: 1,
+      label: { name: "triage", color: "d73a4a" },
+      pull_request: { number: 1, labels: [{ id: label.id }] },
+    });
+    expect(locked).toMatchObject({ pull_request: { locked: true } });
+  });
 
   it("tell of pull requests, reviews and comments with their action and snapshot", async () => {
     await t.createHook({
@@ -137,9 +169,10 @@ describe("pull request webhooks", () => {
     // One event per run: a run delivers only a few effects itself (the rest wait for the sweep).
     for (const event of (await t.outbox()).filter((e) => e.webhooks)) await t.materialize([event]);
     const actions = (
-      await env.ORG_READ.prepare(
-        "SELECT event, action FROM webhook_deliveries WHERE repo_id = ? AND event != 'ping'",
-      )
+      await admitted()
+        .prepare(
+          "SELECT event, action FROM webhook_deliveries WHERE repo_id = ? AND event != 'ping'",
+        )
         .bind(t.repo.id)
         .all<{ event: string; action: string }>()
     ).results.map((r) => `${r.event}.${r.action}`);

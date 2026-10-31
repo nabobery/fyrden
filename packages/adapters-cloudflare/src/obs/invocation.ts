@@ -48,7 +48,17 @@ export interface InvocationOptions {
   /** For a Durable Object: its class, to record the invocation's wall time as `do.active_ms`. */
   readonly doClass?: string;
   readonly now?: () => number;
+  /**
+   * How D1 counts against the internal calls: by the `d1.query` metric
+   * (`metrics`, the default), or by the bindings themselves (`binding`: an
+   * invocation whose D1 bindings are all counted, see `countedD1`, each
+   * execution an internal call and a batch one, whatever its metrics say).
+   * One measured inside another takes the outer one's.
+   */
+  readonly d1Counting?: D1Counting;
 }
+
+export type D1Counting = "metrics" | "binding";
 
 const scope = new AsyncLocalStorage<Invocation>();
 
@@ -94,6 +104,13 @@ export class PointBudget {
 export class SubrequestTally {
   internal = 0;
   external = 0;
+  /**
+   * D1 statements run (each of a batch too, though the platform counts a
+   * batch as one call), counted at the binding (see `countedD1`): work that
+   * runs many directory queries checks its room by them. The platform's
+   * limit is the internal calls' (D1 queries among them).
+   */
+  d1 = 0;
 }
 
 /** Points written outside any invocation that the platform refused, reported by the next invocation. */
@@ -131,6 +148,8 @@ export class Invocation {
   readonly pointBudget: PointBudget;
   /** The subrequests of the platform invocation this one runs in. */
   readonly tally: SubrequestTally;
+  /** How its D1 calls are counted (the outermost invocation's). */
+  readonly d1Counting: D1Counting;
   readonly #metrics: Metrics;
   readonly #options: InvocationOptions;
   readonly #now: () => number;
@@ -141,6 +160,8 @@ export class Invocation {
   #samples = 0;
   #holds = 1;
   #reportingDropped = false;
+  /** Whether this is the platform invocation's own (not one measured inside another). */
+  readonly #outermost: boolean;
   /** Work to run once when the invocation ends, by key. */
   readonly #atEnd = new Map<string, () => void>();
 
@@ -152,6 +173,8 @@ export class Invocation {
     const outer = scope.getStore();
     this.pointBudget = outer?.pointBudget ?? new PointBudget();
     this.tally = outer?.tally ?? new SubrequestTally();
+    this.d1Counting = outer?.d1Counting ?? options.d1Counting ?? "metrics";
+    this.#outermost = outer === undefined;
     this.pointBudget.open++;
   }
 
@@ -259,6 +282,9 @@ export class Invocation {
     for (const budget of ["internal", "external"] as const) {
       if (this[budget] > 0) this.#metrics.count("subrequests", { where, budget, op }, this[budget]);
     }
+    // The platform invocation's D1 statements, all of them, once: how near it came to D1's limit.
+    if (this.#outermost && this.tally.d1 > 0)
+      this.#metrics.count("d1.invocation_statements", { where, op }, this.tally.d1);
     if (doClass !== undefined) {
       this.#metrics.count(
         "do.active_ms",
@@ -305,6 +331,23 @@ export function atInvocationEnd(key: string, fn: () => void): void {
 /** The invocation the caller runs in, if any. */
 export function currentInvocation(): Invocation | undefined {
   return scope.getStore();
+}
+
+/** D1 statements the platform invocation the caller runs in has run (0 outside any). */
+export function d1StatementsRun(): number {
+  return scope.getStore()?.tally.d1 ?? 0;
+}
+
+/**
+ * Counts one D1 execution of `n` statements (a batch, or one statement) in
+ * the current invocation (none: not counted): its statements, and, where
+ * the bindings count (`binding`), its internal call.
+ */
+export function countD1Statements(n = 1): void {
+  const invocation = scope.getStore();
+  if (!invocation) return;
+  invocation.tally.d1 += n;
+  if (invocation.d1Counting === "binding") invocation.add("internal", 1);
 }
 
 /** Counts `n` calls against `budget` in the current invocation (none: not counted). */

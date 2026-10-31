@@ -26,6 +26,12 @@ const RepoName = z
 export const Repo = z.object({
   id: z.string().describe("Immutable repository id (rep_ prefix)."),
   owner: z.string().describe("The owner's handle."),
+  owner_type: z
+    .enum(["User", "Organization"])
+    .optional()
+    .describe(
+      "Fyrden (GitHub's `owner.type`): whether a user or an organization owns it (only an organization's repository takes team reviewers). Absent from a repository just created or forked.",
+    ),
   name: z.string(),
   full_name: z.string().describe("owner/name"),
   visibility: z.enum(["public", "internal", "private"]),
@@ -50,6 +56,18 @@ export const Repo = z.object({
       "Only from `GET /repos/{owner}/{repo}`: for a fork, the id of the repository its fork network grew from (GitHub's `source`), when you can see it; null otherwise.",
     ),
   created_at: z.number().int().describe("Unix time in milliseconds."),
+  permissions: z
+    .object({
+      admin: z.boolean(),
+      maintain: z.boolean(),
+      push: z.boolean(),
+      triage: z.boolean(),
+      pull: z.boolean(),
+    })
+    .optional()
+    .describe(
+      "Only from `GET /repos/{owner}/{repo}`: what the caller's role there allows, as GitHub's (an agent's never above its owner's); what its token may do is decided by each operation.",
+    ),
 });
 
 export const createRepo = defineOperation({

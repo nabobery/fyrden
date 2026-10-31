@@ -9,8 +9,9 @@ import {
   type Problem,
   type ProblemInit,
 } from "@fyrden/api-contract";
-import { checkOperation } from "@fyrden/domain";
+import { checkOperation, isPermission, permissionDef } from "@fyrden/domain";
 import type { AuthState } from "../middleware/auth.js";
+import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import {
   type Claim,
   finishIdempotent,
@@ -31,6 +32,8 @@ export interface OpContext {
   requestHost: string;
   /** The origin (scheme, host and port) the request arrived on, for links back to this API. */
   requestOrigin: string;
+  /** When the request arrived, before anything awaited (milliseconds since the epoch). */
+  receivedAt?: number;
   waitUntil(promise: Promise<unknown>): void;
 }
 
@@ -53,11 +56,15 @@ export type OpResult =
 export class OperationError extends Error {
   override name = "OperationError";
   constructor(
-    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422,
+    readonly status: 400 | 401 | 403 | 404 | 405 | 409 | 410 | 422 | 429 | 503,
     readonly code: string,
     detail: string,
     /** Where the client starts over (for an expired cursor). */
     readonly resync?: string,
+    /** For `stale`: the version it is at now. */
+    readonly currentVersion?: number,
+    /** With a 429 or a 503: seconds to wait before trying again. */
+    readonly retryAfter?: number,
   ) {
     super(detail);
   }
@@ -68,11 +75,28 @@ function fail(
   status: number,
   code: string,
   detail: string,
-  extra: Pick<ProblemInit, "missingPermission" | "resync"> = {},
+  extra: Pick<ProblemInit, "missingPermission" | "resync" | "currentVersion" | "retryAfter"> = {},
 ): OpResult {
   return {
     ok: false,
     problem: makeProblem({ status, code, detail, requestId: ctx.requestId, ...extra }),
+  };
+}
+
+/**
+ * Why an operation refuses a credential before anything else: its
+ * permission is a web session's only and the credential is not one.
+ * Undefined when it does not.
+ */
+export function sessionRefusal(
+  op: OperationDef,
+  auth: Pick<TokenRecord, "type">,
+): { code: string; detail: string } | undefined {
+  if (!isPermission(op.permission) || permissionDef(op.permission).sessionOnly !== true) return;
+  if (auth.type === "ses") return;
+  return {
+    code: "session_required",
+    detail: `${op.id} is done from Fyrden's web pages, signed in, with no token.`,
   };
 }
 
@@ -96,6 +120,37 @@ export function hasPermission(permission: OperationDef["permission"], auth: Toke
 }
 
 /**
+ * The request's credential as the directory's primary has it now (the
+ * request's own record when it was verified there): what a write, or a
+ * read that must see revocation at once, goes on. A refusal says why, as a
+ * 401 answers it.
+ */
+export async function reverified(
+  ctx: Pick<OpContext, "auth" | "authState">,
+): Promise<
+  | { readonly ok: true; readonly record: TokenRecord }
+  | { readonly ok: false; readonly code: string; readonly detail: string }
+> {
+  if (ctx.authState.mode !== "read") return { ok: true, record: ctx.auth };
+  const fresh = await ctx.authState.verifyForWrite();
+  if (!fresh.ok)
+    return {
+      ok: false,
+      code: "invalid_token",
+      detail: "The token is invalid, expired or revoked.",
+    };
+  // An owner may have required DPoP since the cached answer (a bound token's proof was
+  // checked); a git token is exempt only where git uses it, never here.
+  if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
+    return {
+      ok: false,
+      code: "invalid_dpop_proof",
+      detail: "This token needs a valid DPoP proof (RFC 9449).",
+    };
+  return { ok: true, record: fresh.record };
+}
+
+/**
  * Runs one operation for any surface (REST or MCP), so they cannot drift:
  * rate limit, write re-verification, principal-type and permission checks,
  * input validation, handler, and output validation.
@@ -110,6 +165,21 @@ export async function executeOperation(
 ): Promise<OpResult> {
   // Limited by token (or its source) id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
+  // A web session's only operation refuses every other credential before anything else.
+  const refused = sessionRefusal(op, ctx.auth);
+  if (refused) return fail(ctx, 403, refused.code, refused.detail);
+
+  // A write may write the read model (directly or through what it starts): none while its
+  // maintenance holds ordinary work back.
+  if (op.method !== "GET" && !op.duringMaintenance && readModelMaintenance(ctx.env))
+    return fail(
+      ctx,
+      503,
+      "read_model_maintenance",
+      "Writes are paused for maintenance. Try again later.",
+      { retryAfter: MAINTENANCE_RETRY_MS / 1000 },
+    );
+
   const limiter = op.rateLimit === "read" ? ctx.env.RATE_LIMIT_READ : ctx.env.RATE_LIMIT_WRITE;
   if (!(await limiter.limit({ key: rateLimitKey(ctx.auth) })).success) {
     return fail(ctx, 429, "rate_limited", "Too many requests for this token.");
@@ -119,20 +189,13 @@ export async function executeOperation(
   // verified from the read cache (MCP verifies every call in read mode).
   // From here on, everything uses the record the primary returned.
   let auth = ctx.auth;
-  if (op.method !== "GET" && ctx.authState.mode === "read") {
-    const fresh = await ctx.authState.verifyForWrite();
-    if (!fresh.ok)
-      return fail(ctx, 401, "invalid_token", "The token is invalid, expired or revoked.");
-    // An owner may have required DPoP since the cached answer (a bound token's proof was
-    // checked); a git token is exempt only where git uses it, never here.
-    if (fresh.record.requiresDpop && fresh.record.dpopJkt === null)
-      return fail(
-        ctx,
-        401,
-        "invalid_dpop_proof",
-        "This token needs a valid DPoP proof (RFC 9449).",
-      );
+  let authState = ctx.authState;
+  if (op.method !== "GET") {
+    const fresh = await reverified(ctx);
+    if (!fresh.ok) return fail(ctx, 401, fresh.code, fresh.detail);
     auth = fresh.record;
+    // Verified on the primary: a handler's own `reverified` takes it as it is.
+    authState = { ...authState, record: auth, mode: "write" };
   }
 
   if (!op.principals.includes(auth.principalType)) {
@@ -180,10 +243,7 @@ export async function executeOperation(
   }
   let result: OpResult;
   try {
-    const output = await handler(
-      { ...ctx, auth, authState: { ...ctx.authState, record: auth } },
-      input.data,
-    );
+    const output = await handler({ ...ctx, auth, authState }, input.data);
     // A handler returning the wrong shape is a server bug, never sent as-is.
     result = { ok: true, output: op.output.parse(output) };
   } catch (error) {
@@ -195,6 +255,8 @@ export async function executeOperation(
     }
     result = fail(ctx, error.status, error.code, error.message, {
       ...(error.resync !== undefined && { resync: error.resync }),
+      ...(error.currentVersion !== undefined && { currentVersion: error.currentVersion }),
+      ...(error.retryAfter !== undefined && { retryAfter: error.retryAfter }),
     });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);

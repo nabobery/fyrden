@@ -1,0 +1,232 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
+import { READ_MODEL_LEASE, READ_MODEL_OBSERVATION, withReadModel } from "../read-model/executor.js";
+import { clock } from "../services.js";
+import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.js";
+
+/**
+ * What a rotation writes and reads at most: the source's row and its due index
+ * entry, and its batch's spending.
+ */
+const ROTATION = { rows: 2 + SPENDING.rows, reads: 6 + SPENDING.reads };
+
+import { mergeIndexes } from "./indexes.js";
+import { reconcileSource, STEP_CALLS, SWEEP_CALLS, sweepTombstones } from "./reconcile.js";
+
+/*
+ * Which sources' search projections need a reconciliation, and the job that
+ * works them. A need is recorded by revision (`search_repairs`): asking
+ * while one is pending writes nothing, so a burst of failures costs one
+ * row; asking during a pass asks for another pass after it. A pass records
+ * the revision it covers when it starts and marks it covered when it ends
+ * (`reconcile.ts`). Nothing runs while the deployment's `search_indexing`
+ * setting is off.
+ */
+
+/** Proposed values. */
+export const REPAIR_POLICY = {
+  /** Export pages the job works through a run, across its sources. */
+  pagesPerRun: 20,
+  /** Pages one source gets a run before the next one's turn. */
+  pagesPerSource: 1,
+  /** Parked sources (a pass ended partial) a run wakes at most, once their wait is over. */
+  wakePerRun: 2,
+  /**
+   * D1 calls a run makes at most (a batch is one): it runs in an invocation
+   * of its own (the maintenance object's `repairSearch`). An application
+   * limit, well within the platform's.
+   */
+  callsPerRun: 40,
+};
+
+/** Whether the deployment writes and repairs search's projections. */
+export async function searchIndexing(env: Pick<Env, "DIRECTORY">): Promise<boolean> {
+  const row = await env.DIRECTORY.prepare(
+    "SELECT value FROM deployment_settings WHERE name = 'search_indexing'",
+  ).first<{ value: string }>();
+  return row?.value === "on";
+}
+
+/**
+ * Rows one request for a reconciliation writes at most: its row and its
+ * index entries, and its source no longer known whole (its row and the
+ * index of sources not known whole).
+ */
+export const REQUEST_ROWS = 5;
+
+/**
+ * The statement that asks for a source's reconciliation: the next
+ * revision past the one covered (or past the pass under way), unless one
+ * is already pending or the repository is deleted. With `when`, only while
+ * its condition holds (SQL over `?1` the repository and `?4` its value),
+ * as the batch it is in finds it.
+ */
+export function repairStatement(
+  db: D1Database,
+  repoId: string,
+  reason: string,
+  now: number,
+  when?: { readonly where: string; readonly value: string | number },
+): D1PreparedStatement {
+  return db
+    .prepare(repairSql({ repo: "?1", reason: "?2", now: "?3" }, when?.where))
+    .bind(repoId, reason, now, ...(when ? [when.value] : []));
+}
+
+/**
+ * The SQL of a request for a source's reconciliation (see
+ * `repairStatement`), over the parameters `at` names, while `where` holds.
+ */
+export function repairSql(
+  at: { readonly repo: string; readonly reason: string; readonly now: string },
+  where?: string,
+): string {
+  return `INSERT INTO search_repairs (repo_id, dirty, covered, reason, since, next_at)
+    SELECT ${at.repo}, 1, 0, ${at.reason}, ${at.now}, ${at.now}
+    -- Never for a deleted repository (its projections are being purged).
+    WHERE NOT EXISTS (SELECT 1 FROM repos WHERE repo_id = ${at.repo} AND deleted = 1)
+      ${where ? `AND ${where}` : ""}
+    ON CONFLICT (repo_id) DO UPDATE SET
+      dirty = coalesce(search_repairs.active, search_repairs.covered) + 1,
+      reason = excluded.reason,
+      since = CASE WHEN search_repairs.dirty > search_repairs.covered THEN search_repairs.since
+        ELSE excluded.since END,
+      next_at = CASE WHEN search_repairs.dirty > search_repairs.covered
+        THEN search_repairs.next_at ELSE excluded.next_at END
+    WHERE search_repairs.dirty <= coalesce(search_repairs.active, search_repairs.covered)`;
+}
+
+/**
+ * Works the sources that need a reconciliation, oldest need first, each
+ * `pagesPerSource` pages before the next one's turn (it goes to the back),
+ * up to `pagesPerRun` pages in all. A source whose pass ended partial is
+ * parked until its wait is over (a run wakes `wakePerRun` of those due).
+ * A source that fails keeps its need and goes to the back too; the others
+ * still get their turns, and the run throws afterwards. The run stops after
+ * a turn search's allowance for the day (or the database's size) left no
+ * room for (sweeping covered deletions once), or before a turn whose calls
+ * would not fit in `callsPerRun`; then it merges the full-text indexes a
+ * little (`mergeIndexes`), with the calls left. Nothing while search
+ * indexing is off.
+ */
+export async function runSearchRepairs(
+  env: Env,
+  options: {
+    metrics?: Metrics;
+    pages?: number;
+    calls?: number;
+    /** The time parked sources' waits are compared with (the clock's). */
+    now?: number;
+  } = {},
+): Promise<{ worked: number; merged: number }> {
+  const { metrics } = options;
+  const calls: CallBudget = { left: options.calls ?? REPAIR_POLICY.callsPerRun };
+  metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+  calls.left--;
+  if (!(await searchIndexing(env))) return { worked: 0, merged: 0 };
+  // One writer for the run: its lease taken and released, never renewed (a run's writes past the
+  // lease's deadline are refused: the run fails, and its needs wait for the next), and the size its
+  // work left recorded as it ends.
+  calls.left -= 3;
+  const failures: unknown[] = [];
+  let worked = 0;
+  let merged = 0;
+  await withReadModel(
+    env,
+    DEFAULT_ORG_SHARD,
+    async (readModel, writer) => {
+      const db = counted(readModel, calls);
+      // Room for the selection and the run's own accounting at least, or nothing is begun.
+      if (calls.left < 2) return;
+      let pages = options.pages ?? REPAIR_POLICY.pagesPerRun;
+      const sources = Math.ceil(pages / REPAIR_POLICY.pagesPerSource);
+      metrics?.count("d1.query", { db: "org", op: "search_repairs_due" });
+      // Parked sources whose wait is over are due again (at their place in the queue), then the
+      // oldest due are selected.
+      const [woken, due] = await db.batch<{ repo_id: string }>([
+        db
+          .prepare(
+            `UPDATE search_repairs SET blocked_reason = NULL, retry_at = 0
+             WHERE repo_id IN (SELECT repo_id FROM search_repairs
+               WHERE dirty > covered AND blocked_reason IS NOT NULL AND retry_at <= ?1
+               ORDER BY retry_at, repo_id LIMIT ?2)`,
+          )
+          .bind(options.now ?? clock(), REPAIR_POLICY.wakePerRun),
+        db
+          .prepare(
+            `SELECT repo_id FROM search_repairs WHERE dirty > covered AND blocked_reason IS NULL
+             ORDER BY next_at, repo_id LIMIT ?`,
+          )
+          .bind(sources),
+      ]);
+      const results = due?.results ?? [];
+      // The selection's reads (and the batch's rows), charged with the first rotation (or on their
+      // own), and the run's lease's rows in the directory, once it has one.
+      let selected = (woken?.meta.rows_read ?? 0) + (due?.meta.rows_read ?? 0);
+      // (The executor's own rows are counted with the batch's last result.)
+      let wake = (woken?.meta.rows_written ?? 0) + (due?.meta.rows_written ?? 0);
+      // (and the size its work leaves, recorded as it ends).
+      let lease = {
+        rows: READ_MODEL_LEASE.rows + READ_MODEL_OBSERVATION.rows,
+        reads: READ_MODEL_OBSERVATION.reads as number,
+      };
+      let blocked = false;
+      for (const { repo_id: repoId } of results) {
+        // A turn needs a step's calls and its rotation's.
+        if (pages <= 0 || calls.left < STEP_CALLS + 1) break;
+        const turn = Math.min(pages, REPAIR_POLICY.pagesPerSource);
+        pages -= turn;
+        worked++;
+        try {
+          const outcome = await reconcileSource(
+            env,
+            { repoId, shard: DEFAULT_ORG_SHARD },
+            { pages: turn, calls, readModel, ...(metrics && { metrics }) },
+          );
+          // The day's allowance (or the database's size) holds every source back: until a later run,
+          // this one still going behind the others.
+          blocked = outcome === "blocked";
+        } catch (error) {
+          // Its need stays; the others still get their turns.
+          failures.push(error);
+        }
+        // Its turn is over: behind every source still waiting (past the last one's place, whatever
+        // the clock says), when it still is (a pass not finished, failed, or asked for again).
+        // Charged with search's spending (the row and its due index entry, read as it is placed).
+        metrics?.count("d1.query", { db: "org", op: "search_repairs_rotate" });
+        await db.batch([
+          db
+            .prepare(
+              `UPDATE search_repairs SET next_at = max(?2,
+             coalesce((SELECT max(next_at) + 1 FROM search_repairs WHERE dirty > covered
+               AND blocked_reason IS NULL), ?2))
+           WHERE repo_id = ?1 AND dirty > covered`,
+            )
+            .bind(repoId, clock()),
+          spentStatement(db, {
+            rows: ROTATION.rows + wake + lease.rows,
+            reads: ROTATION.reads + selected + lease.reads,
+          }),
+        ]);
+        selected = 0;
+        wake = 0;
+        lease = { rows: 0, reads: 0 };
+        if (blocked) break;
+      }
+      // Meanwhile removals, which are made whatever the allowance, of any source (they may be what
+      // makes room again): once, when its calls fit.
+      if (blocked && calls.left >= SWEEP_CALLS + 1) await sweepTombstones(db, metrics);
+      // Then the full-text indexes' merges, with the calls the sources left (and the allowance).
+      else if (!blocked) merged = await mergeIndexes(db, calls, 1, metrics);
+      if (selected > 0 || wake > 0 || (lease.rows > 0 && writer.lease !== null))
+        await spentStatement(db, {
+          rows: SPENDING.rows + wake + lease.rows,
+          reads: selected + SPENDING.reads + lease.reads,
+        }).run();
+    },
+    { renews: false },
+  );
+  if (failures.length > 0)
+    throw new AggregateError(failures, `${failures.length} search repair(s) failed`);
+  return { worked, merged };
+}
