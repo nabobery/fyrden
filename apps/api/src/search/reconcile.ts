@@ -74,6 +74,8 @@ export const RECONCILE_POLICY = {
   rowsPerPage: 200,
   /** Projection tombstones collected a table, once a pass ends. */
   collectPage: 500,
+  /** How long a source whose pass ended partial waits before the next (ms). */
+  parkFor: 300_000,
 };
 
 type WalkedKind = Exclude<ExportKind, "repo">;
@@ -101,6 +103,16 @@ const NEXT_KIND = { subjects: "labels", labels: "milestones", milestones: "done"
  * repository's own row, is still to come (a budgeted step of its own).
  */
 const FINISHING = -1;
+
+/**
+ * A pass marked partial, by the first refusal it met; the database at its
+ * size threshold by that, whatever else its steps were refused (it refuses
+ * their growth too).
+ */
+const PARTIAL = (reason: "size" | "repository_index" | "index" | "growth") =>
+  reason === "size"
+    ? "partial = 1, partial_reason = 'size'"
+    : `partial = 1, partial_reason = coalesce(partial_reason, '${reason}')`;
 
 /** Past every key. */
 const NO_KEY = Number.MAX_SAFE_INTEGER;
@@ -135,8 +147,11 @@ export async function reconcileSource(
   const org = options.readModel ?? readModelFor(env, target.shard);
   const db = calls ? counted(org, calls) : org;
   const repo = env.REPO.getByName(repoId);
-  const exportPage = async (request: ExportPageRequest) =>
-    (await repo.exportPage(request)) as ExportPage | "stale" | null;
+  // An export is a call of the invocation's too (the repository object's).
+  const exportPage = async (request: ExportPageRequest) => {
+    if (calls) calls.left--;
+    return (await repo.exportPage(request)) as ExportPage | "stale" | null;
+  };
   let pages = options.pages ?? RECONCILE_POLICY.pagesPerCall;
   // Reads of the pass's own row, charged with the next step's settling (or on their own).
   const lookups = { reads: 0 };
@@ -250,6 +265,51 @@ export async function reconcileSource(
       next = !found.ended ? kind : kind === "milestones" ? "milestones" : NEXT_KIND[kind];
       nextAfter = !found.ended ? found.upTo : kind === "milestones" ? FINISHING : 0;
     }
+    if (removalsOnly)
+      statements.push(
+        db
+          .prepare(`UPDATE search_reconciles SET ${PARTIAL("size")} WHERE repo_id = ? AND gen = ?`)
+          .bind(repoId, pass.gen),
+      );
+    // Its last step: a live repository whose entry is not in the repository index (refused, or a
+    // newer event's row) leaves the pass partial.
+    if (next === "done")
+      statements.push(
+        db
+          .prepare(
+            `UPDATE search_reconciles SET ${PARTIAL("repository_index")}
+             WHERE repo_id = ?1 AND gen = ?2 AND ?3 = 1
+               AND EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 0)
+               AND NOT EXISTS (SELECT 1 FROM search_repo_nums n WHERE n.repo_id = ?1
+                 AND n.indexed = 1 AND n.fts_token IS NOT NULL AND ${IN_REPO_INDEX()})`,
+          )
+          .bind(repoId, pass.gen, removalsOnly ? 0 : 1),
+      );
+    // A pass that ended partial parks its source: a whole pass follows, once its wait is over (what
+    // it was refused is not given at once again). Only by the caller whose step it still is (the
+    // checkpoint's conditions, before it moves): another's stale finishing parks nothing.
+    if (next === "done")
+      statements.push(
+        db
+          .prepare(
+            `UPDATE search_repairs SET blocked_reason = (SELECT coalesce(c.partial_reason, 'partial')
+                 FROM search_reconciles c WHERE c.repo_id = ?1 AND c.gen = ?4),
+               retry_at = ?7
+             WHERE repo_id = ?1 AND dirty > covered AND ${FENCES} AND ${SAME_DAY(8)}
+               AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1 AND gen = ?4
+                 AND kind = ?5 AND after = ?6 AND partial = 1)`,
+          )
+          .bind(
+            repoId,
+            pass.epochGen,
+            pass.ownerGen,
+            pass.gen,
+            kind,
+            after,
+            clock() + RECONCILE_POLICY.parkFor,
+            reservation.day,
+          ),
+      );
     // The step is done only where its writes could be made: the same fences, and its day.
     statements.push(
       db
@@ -272,32 +332,14 @@ export async function reconcileSource(
         ),
     );
     const checkpoint = statements.length - 1;
-    if (removalsOnly)
-      statements.push(
-        db
-          .prepare("UPDATE search_reconciles SET partial = 1 WHERE repo_id = ? AND gen = ?")
-          .bind(repoId, pass.gen),
-      );
-    // Its last step: a live repository whose entry is not in the repository index (refused, or a
-    // newer event's row) leaves the pass partial; then the repair revision it covered is covered,
-    // and the source known whole, by a whole pass only, nothing asked for since.
+    // Then the repair revision it covered is covered, and the source known whole, by a whole pass
+    // only, nothing asked for since.
     if (next === "done")
       statements.push(
         db
           .prepare(
-            `UPDATE search_reconciles SET partial = 1
-             WHERE repo_id = ?1 AND gen = ?2 AND ?3 = 1
-               AND EXISTS (SELECT 1 FROM repos WHERE repo_id = ?1 AND deleted = 0)
-               AND NOT EXISTS (SELECT 1 FROM search_repo_nums n WHERE n.repo_id = ?1
-                 AND n.indexed = 1 AND n.fts_token IS NOT NULL AND ${IN_REPO_INDEX()})`,
-          )
-          .bind(repoId, pass.gen, removalsOnly ? 0 : 1),
-      );
-    if (next === "done")
-      statements.push(
-        db
-          .prepare(
-            `UPDATE search_repairs SET covered = active, active = NULL
+            `UPDATE search_repairs SET covered = active, active = NULL, blocked_reason = NULL,
+               retry_at = 0
              WHERE repo_id = ?1 AND active IS NOT NULL
                AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1 AND gen = ?2
                  AND kind = 'done' AND partial = 0)`,
@@ -356,11 +398,12 @@ export async function reconcileSource(
 }
 
 /**
- * D1 calls a step makes at most: its reservation (and a size check with a
- * retry), the comparison read, its batch, the settling, a reload of the pass
- * and the collection after the last one.
+ * Calls a step makes at most: its reservation (3, a size observed again
+ * at the threshold), its export page (the repository object's), the
+ * comparison read, its batch, the settling, a reload of the pass, the
+ * collection after the last one (2) and the closing spending.
  */
-export const STEP_CALLS = 10;
+export const STEP_CALLS = 11;
 
 /**
  * Batches a step writes besides its reservation (its work, its settling and
@@ -495,7 +538,7 @@ async function start(
          ON CONFLICT (repo_id) DO UPDATE SET gen = search_reconciles.gen + 1,
            epoch_gen = excluded.epoch_gen, owner_gen = excluded.owner_gen,
            watermark = excluded.watermark, kind = 'subjects', after = 0,
-           started_at = excluded.started_at, partial = 0, coverage = 1
+           started_at = excluded.started_at, partial = 0, partial_reason = NULL, coverage = 1
          RETURNING gen`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now, reservation.day),
@@ -687,7 +730,7 @@ async function differences(
     statements.push(
       db
         .prepare(
-          `UPDATE search_reconciles SET partial = 1
+          `UPDATE search_reconciles SET ${PARTIAL("index")}
            WHERE repo_id = ?1 AND gen = ?2 AND EXISTS (SELECT 1 FROM json_each(?3) k
              JOIN search_docs d ON d.repo_id = ?1 AND d.number = k.value
              WHERE d.deleted = 0 AND (d.fts_token IS NULL OR NOT ${IN_INDEX()}))`,
@@ -701,7 +744,7 @@ async function differences(
     statements.push(
       db
         .prepare(
-          `UPDATE search_reconciles SET partial = 1
+          `UPDATE search_reconciles SET ${PARTIAL("growth")}
              WHERE repo_id = ?1 AND gen = ?2 AND NOT ${ADMITTED(3)}`,
         )
         .bind(repoId, pass.gen, token),
@@ -859,6 +902,9 @@ export async function collectTombstones(
   }).run();
   return removed.reduce((sum, r) => sum + r.meta.changes, 0);
 }
+
+/** D1 calls a sweep makes at most: its cursors, its look, its removals and its spending. */
+export const SWEEP_CALLS = 4;
 
 /** A deletion's place in its table's deletion index. */
 interface SweepKey {

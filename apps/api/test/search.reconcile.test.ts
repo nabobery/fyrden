@@ -212,12 +212,12 @@ describe("search reconciliation", () => {
     expect(await reconcileSource(env, target())).toBe("done");
     const batches: number[] = [];
     expect(await reconcileSource(recording(batches), target())).toBe("done");
-    // Each kind's page: its checkpoint alone (the subjects' with a check that every issue of its
-    // range is in the full-text index); then the repository's own row (its epoch and its
+    // Each kind's page: its checkpoint alone (the subjects' with a check that every issue the page
+    // looked at is in the full-text index); then the repository's own row (its epoch and its
     // fourteen statements, its index entry with it) with the last checkpoint, a check of its
-    // entry, the revision covered and the source known whole; each batch between the executor's
-    // opening and closing of admission.
-    expect(batches).toEqual([2, 1, 1, 19].map((n) => n + 2));
+    // entry, the revision covered (or the source parked, a pass partial) and the source known
+    // whole; each batch between the executor's opening and closing of admission.
+    expect(batches).toEqual([2, 1, 1, 20].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
@@ -681,7 +681,7 @@ describe("search reconciliation", () => {
       expect(await reconcileSource(recording(batches), target(), { pages: 20 })).toBe("done");
       // The subjects in three pages of at most 3 rows, each its rows the export lacks marked
       // deleted (three statements each: the indexed count, the index entry, the row), a check
-      // that its range is in the full-text index, and its checkpoint (issue 1, matching, writes
+      // that the issues it looked at are in the full-text index, and its checkpoint (issue 1, matching, writes
       // nothing), between the executor's opening and closing of admission.
       expect(batches.slice(0, 3)).toEqual([8, 11, 8].map((n) => n + 2));
     } finally {

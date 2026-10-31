@@ -348,7 +348,7 @@ describe("search's allowance", () => {
     expect(size?.bytes).toBeGreaterThan(0);
   });
 
-  it("blocks a reconciliation with no room, writing nothing, and stops the repair job's run", async () => {
+  it("blocks a reconciliation with no room, writing nothing, and stops the repair job's run behind the others", async () => {
     const repoId = await repository();
     await db
       .prepare("INSERT INTO search_budget (day, rows, reads) VALUES (?, ?, 0)")
@@ -369,7 +369,7 @@ describe("search's allowance", () => {
     await env.DIRECTORY.prepare(
       "INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', 'on', 0)",
     ).run();
-    // Blocked at the first source: the run ends there.
+    // Blocked at the first source: the run ends there, that source behind the other.
     expect(await runSearchRepairs(env)).toEqual({ worked: 1 });
     expect(
       await db
@@ -377,6 +377,10 @@ describe("search's allowance", () => {
         .bind(repoId, other)
         .first(),
     ).toEqual({ n: 0 });
+    const placed = await db
+      .prepare("SELECT repo_id FROM search_repairs WHERE dirty > covered ORDER BY next_at")
+      .all<{ repo_id: string }>();
+    expect(placed.results.map((r) => r.repo_id)).toEqual([other, repoId]);
   });
 
   it("refuses a step's writes once its day has ended", async () => {

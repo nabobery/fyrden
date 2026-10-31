@@ -10,7 +10,7 @@ import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.
  */
 const ROTATION = { rows: 2 + SPENDING.rows, reads: 6 + SPENDING.reads };
 
-import { reconcileSource, STEP_CALLS, sweepTombstones } from "./reconcile.js";
+import { reconcileSource, STEP_CALLS, SWEEP_CALLS, sweepTombstones } from "./reconcile.js";
 
 /*
  * Which sources' search projections need a reconciliation, and the job that
@@ -27,7 +27,9 @@ export const REPAIR_POLICY = {
   /** Export pages the job works through a run, across its sources. */
   pagesPerRun: 20,
   /** Pages one source gets a run before the next one's turn. */
-  pagesPerSource: 5,
+  pagesPerSource: 1,
+  /** Parked sources (a pass ended partial) a run wakes at most, once their wait is over. */
+  wakePerRun: 2,
   /**
    * D1 calls a run makes at most (a batch is one): it runs in an invocation
    * of its own (the maintenance object's `repairSearch`). An application
@@ -96,15 +98,23 @@ export function repairSql(
 /**
  * Works the sources that need a reconciliation, oldest need first, each
  * `pagesPerSource` pages before the next one's turn (it goes to the back),
- * up to `pagesPerRun` pages in all. A source that fails keeps its need and
- * goes to the back too; the others still get their turns, and the run
- * throws afterwards. The run stops when search's allowance for the day (or
- * the database's size) leaves no room, or before a turn whose calls would not
- * fit in `callsPerRun`. Nothing while search indexing is off.
+ * up to `pagesPerRun` pages in all. A source whose pass ended partial is
+ * parked until its wait is over (a run wakes `wakePerRun` of those due).
+ * A source that fails keeps its need and goes to the back too; the others
+ * still get their turns, and the run throws afterwards. The run stops after
+ * a turn search's allowance for the day (or the database's size) left no
+ * room for (sweeping covered deletions once), or before a turn whose calls
+ * would not fit in `callsPerRun`. Nothing while search indexing is off.
  */
 export async function runSearchRepairs(
   env: Env,
-  options: { metrics?: Metrics; pages?: number; calls?: number } = {},
+  options: {
+    metrics?: Metrics;
+    pages?: number;
+    calls?: number;
+    /** The time parked sources' waits are compared with (the clock's). */
+    now?: number;
+  } = {},
 ): Promise<{ worked: number }> {
   const { metrics } = options;
   const calls: CallBudget = { left: options.calls ?? REPAIR_POLICY.callsPerRun };
@@ -127,21 +137,36 @@ export async function runSearchRepairs(
       let pages = options.pages ?? REPAIR_POLICY.pagesPerRun;
       const sources = Math.ceil(pages / REPAIR_POLICY.pagesPerSource);
       metrics?.count("d1.query", { db: "org", op: "search_repairs_due" });
-      const { results, meta } = await db
-        .prepare(
-          `SELECT repo_id FROM search_repairs WHERE dirty > covered
-       ORDER BY next_at, repo_id LIMIT ?`,
-        )
-        .bind(sources)
-        .all<{ repo_id: string }>();
-      // The selection's reads, charged with the first rotation (or on their own), and the run's
-      // lease's rows in the directory, once it has one.
-      let selected = meta.rows_read ?? 0;
+      // Parked sources whose wait is over are due again (at their place in the queue), then the
+      // oldest due are selected.
+      const [woken, due] = await db.batch<{ repo_id: string }>([
+        db
+          .prepare(
+            `UPDATE search_repairs SET blocked_reason = NULL, retry_at = 0
+             WHERE repo_id IN (SELECT repo_id FROM search_repairs
+               WHERE dirty > covered AND blocked_reason IS NOT NULL AND retry_at <= ?1
+               ORDER BY retry_at, repo_id LIMIT ?2)`,
+          )
+          .bind(options.now ?? clock(), REPAIR_POLICY.wakePerRun),
+        db
+          .prepare(
+            `SELECT repo_id FROM search_repairs WHERE dirty > covered AND blocked_reason IS NULL
+             ORDER BY next_at, repo_id LIMIT ?`,
+          )
+          .bind(sources),
+      ]);
+      const results = due?.results ?? [];
+      // The selection's reads (and the batch's rows), charged with the first rotation (or on their
+      // own), and the run's lease's rows in the directory, once it has one.
+      let selected = (woken?.meta.rows_read ?? 0) + (due?.meta.rows_read ?? 0);
+      // (The executor's own rows are counted with the batch's last result.)
+      let wake = (woken?.meta.rows_written ?? 0) + (due?.meta.rows_written ?? 0);
       // (and the size its work leaves, recorded as it ends).
       let lease = {
         rows: READ_MODEL_LEASE.rows + READ_MODEL_OBSERVATION.rows,
         reads: READ_MODEL_OBSERVATION.reads as number,
       };
+      let blocked = false;
       for (const { repo_id: repoId } of results) {
         // A turn needs a step's calls and its rotation's.
         if (pages <= 0 || calls.left < STEP_CALLS + 1) break;
@@ -154,13 +179,9 @@ export async function runSearchRepairs(
             { repoId, shard: DEFAULT_ORG_SHARD },
             { pages: turn, calls, readModel, ...(metrics && { metrics }) },
           );
-          // The day's allowance (or the database's size) holds every source back: until a later run.
-          // Meanwhile removals, which are made whatever the allowance, of any source (they may be
-          // what makes room again).
-          if (outcome === "blocked") {
-            await sweepTombstones(db, metrics);
-            break;
-          }
+          // The day's allowance (or the database's size) holds every source back: until a later run,
+          // this one still going behind the others.
+          blocked = outcome === "blocked";
         } catch (error) {
           // Its need stays; the others still get their turns.
           failures.push(error);
@@ -173,21 +194,27 @@ export async function runSearchRepairs(
           db
             .prepare(
               `UPDATE search_repairs SET next_at = max(?2,
-             (SELECT max(next_at) + 1 FROM search_repairs WHERE dirty > covered))
+             coalesce((SELECT max(next_at) + 1 FROM search_repairs WHERE dirty > covered
+               AND blocked_reason IS NULL), ?2))
            WHERE repo_id = ?1 AND dirty > covered`,
             )
             .bind(repoId, clock()),
           spentStatement(db, {
-            rows: ROTATION.rows + lease.rows,
+            rows: ROTATION.rows + wake + lease.rows,
             reads: ROTATION.reads + selected + lease.reads,
           }),
         ]);
         selected = 0;
+        wake = 0;
         lease = { rows: 0, reads: 0 };
+        if (blocked) break;
       }
-      if (selected > 0 || (lease.rows > 0 && writer.lease !== null))
+      // Meanwhile removals, which are made whatever the allowance, of any source (they may be what
+      // makes room again): once, when its calls fit.
+      if (blocked && calls.left >= SWEEP_CALLS + 1) await sweepTombstones(db, metrics);
+      if (selected > 0 || wake > 0 || (lease.rows > 0 && writer.lease !== null))
         await spentStatement(db, {
-          rows: SPENDING.rows + lease.rows,
+          rows: SPENDING.rows + wake + lease.rows,
           reads: selected + SPENDING.reads + lease.reads,
         }).run();
     },

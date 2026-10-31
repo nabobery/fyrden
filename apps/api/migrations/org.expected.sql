@@ -251,7 +251,7 @@ CREATE TABLE search_reconciles (
   started_at INTEGER NOT NULL
 , partial INTEGER NOT NULL DEFAULT 0
   CHECK (partial IN (0, 1)), coverage INTEGER NOT NULL DEFAULT 0
-  CHECK (coverage IN (0, 1))) STRICT;
+  CHECK (coverage IN (0, 1)), partial_reason TEXT) STRICT;
 
 -- table search_repairs
 CREATE TABLE search_repairs (
@@ -263,7 +263,7 @@ CREATE TABLE search_repairs (
   reason TEXT NOT NULL,
   since INTEGER NOT NULL,
   next_at INTEGER NOT NULL
-) STRICT;
+, blocked_reason TEXT, retry_at INTEGER NOT NULL DEFAULT 0) STRICT;
 
 -- table search_repo_nums
 CREATE TABLE search_repo_nums (
@@ -446,7 +446,12 @@ CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_ep
   WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
 
 -- index search_repairs_due
-CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id) WHERE dirty > covered;
+CREATE INDEX search_repairs_due ON search_repairs (next_at, repo_id)
+  WHERE dirty > covered AND blocked_reason IS NULL;
+
+-- index search_repairs_retry
+CREATE INDEX search_repairs_retry ON search_repairs (retry_at, repo_id)
+  WHERE dirty > covered AND blocked_reason IS NOT NULL;
 
 -- index search_sources_uncovered
 CREATE INDEX search_sources_uncovered ON search_sources (repo_id) WHERE index_covered = 0;
