@@ -370,7 +370,7 @@ describe("search's allowance", () => {
       "INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', 'on', 0)",
     ).run();
     // Blocked at the first source: the run ends there, that source behind the other.
-    expect(await runSearchRepairs(env)).toEqual({ worked: 1 });
+    expect(await runSearchRepairs(env)).toMatchObject({ worked: 1 });
     expect(
       await db
         .prepare("SELECT count(*) AS n FROM search_reconciles WHERE repo_id IN (?, ?)")
@@ -522,7 +522,7 @@ describe("search's allowance", () => {
       .prepare("UPDATE search_budget SET rows = ? WHERE day = ?")
       .bind(ADMISSION.dailyRows, await today())
       .run();
-    expect(await runSearchRepairs(env)).toEqual({ worked: 1 });
+    expect(await runSearchRepairs(env)).toMatchObject({ worked: 1 });
     expect(
       await db
         .prepare("SELECT count(*) AS n FROM search_docs WHERE repo_id = ? AND number = 90")

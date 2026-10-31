@@ -10,6 +10,7 @@ import { type CallBudget, counted, SPENDING, spentStatement } from "./admission.
  */
 const ROTATION = { rows: 2 + SPENDING.rows, reads: 6 + SPENDING.reads };
 
+import { mergeIndexes } from "./indexes.js";
 import { reconcileSource, STEP_CALLS, SWEEP_CALLS, sweepTombstones } from "./reconcile.js";
 
 /*
@@ -104,7 +105,9 @@ export function repairSql(
  * still get their turns, and the run throws afterwards. The run stops after
  * a turn search's allowance for the day (or the database's size) left no
  * room for (sweeping covered deletions once), or before a turn whose calls
- * would not fit in `callsPerRun`. Nothing while search indexing is off.
+ * would not fit in `callsPerRun`; then it merges the full-text indexes a
+ * little (`mergeIndexes`), with the calls left. Nothing while search
+ * indexing is off.
  */
 export async function runSearchRepairs(
   env: Env,
@@ -115,18 +118,19 @@ export async function runSearchRepairs(
     /** The time parked sources' waits are compared with (the clock's). */
     now?: number;
   } = {},
-): Promise<{ worked: number }> {
+): Promise<{ worked: number; merged: number }> {
   const { metrics } = options;
   const calls: CallBudget = { left: options.calls ?? REPAIR_POLICY.callsPerRun };
   metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
   calls.left--;
-  if (!(await searchIndexing(env))) return { worked: 0 };
+  if (!(await searchIndexing(env))) return { worked: 0, merged: 0 };
   // One writer for the run: its lease taken and released, never renewed (a run's writes past the
   // lease's deadline are refused: the run fails, and its needs wait for the next), and the size its
   // work left recorded as it ends.
   calls.left -= 3;
   const failures: unknown[] = [];
   let worked = 0;
+  let merged = 0;
   await withReadModel(
     env,
     DEFAULT_ORG_SHARD,
@@ -212,6 +216,8 @@ export async function runSearchRepairs(
       // Meanwhile removals, which are made whatever the allowance, of any source (they may be what
       // makes room again): once, when its calls fit.
       if (blocked && calls.left >= SWEEP_CALLS + 1) await sweepTombstones(db, metrics);
+      // Then the full-text indexes' merges, with the calls the sources left (and the allowance).
+      else if (!blocked) merged = await mergeIndexes(db, calls, 1, metrics);
       if (selected > 0 || wake > 0 || (lease.rows > 0 && writer.lease !== null))
         await spentStatement(db, {
           rows: SPENDING.rows + wake + lease.rows,
@@ -222,5 +228,5 @@ export async function runSearchRepairs(
   );
   if (failures.length > 0)
     throw new AggregateError(failures, `${failures.length} search repair(s) failed`);
-  return { worked };
+  return { worked, merged };
 }

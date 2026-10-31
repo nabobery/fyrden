@@ -276,7 +276,7 @@ describe("the search repair job", () => {
   it("does nothing while search indexing is off", async () => {
     const repoId = await repository();
     await repairStatement(db, repoId, "backfill", 1).run();
-    expect(await runSearchRepairs(env)).toEqual({ worked: 0 });
+    expect(await runSearchRepairs(env)).toEqual({ worked: 0, merged: 0 });
     expect(await repair(repoId)).toMatchObject({ dirty: 1, covered: 0 });
   });
 
@@ -289,7 +289,7 @@ describe("the search repair job", () => {
     await repairStatement(db, second, "backfill", 2).run();
     await indexing(true);
     // A page each (each pass's start), the first then behind the second.
-    expect(await runSearchRepairs(env, { pages: 2 * REPAIR_POLICY.pagesPerSource })).toEqual({
+    expect(await runSearchRepairs(env, { pages: 2 * REPAIR_POLICY.pagesPerSource })).toMatchObject({
       worked: 2,
     });
     const [ahead, behind] = [await repair(first), await repair(second)];
@@ -370,7 +370,7 @@ describe("the search repair job", () => {
     expect(parked).toMatchObject({ covered: 0 });
     expect(parked?.blocked_reason).not.toBeNull();
     // Nothing due while it waits: the run works no source.
-    expect(await runSearchRepairs(env)).toEqual({ worked: 0 });
+    expect(await runSearchRepairs(env)).toMatchObject({ worked: 0 });
   });
 
   it("parks nothing by a finishing step another caller worked first", async () => {
@@ -418,7 +418,8 @@ describe("the search repair job", () => {
     await db.prepare("DELETE FROM search_repairs").run();
     await indexing(true);
     const before = await spentRows();
-    expect(await runSearchRepairs(env)).toEqual({ worked: 0 });
+    // (Its calls too few for the indexes' merges after.)
+    expect(await runSearchRepairs(env, { calls: 6 })).toEqual({ worked: 0, merged: 0 });
     // The selection's batch's admission, the closing spending's (its admission and its own row)
     // and the writer's lease and size observation.
     expect((await spentRows()) - before).toBe(
