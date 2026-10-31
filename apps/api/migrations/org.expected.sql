@@ -251,7 +251,8 @@ CREATE TABLE search_reconciles (
   started_at INTEGER NOT NULL
 , partial INTEGER NOT NULL DEFAULT 0
   CHECK (partial IN (0, 1)), coverage INTEGER NOT NULL DEFAULT 0
-  CHECK (coverage IN (0, 1)), partial_reason TEXT) STRICT;
+  CHECK (coverage IN (0, 1)), partial_reason TEXT, recovery_gen INTEGER NOT NULL DEFAULT 0
+  CHECK (recovery_gen >= 0)) STRICT;
 
 -- table search_repairs
 CREATE TABLE search_repairs (
@@ -314,7 +315,8 @@ CREATE TABLE search_sources (
   cutoff_epoch INTEGER NOT NULL,
   cutoff_seq INTEGER NOT NULL
 , index_covered INTEGER NOT NULL DEFAULT 0
-  CHECK (index_covered IN (0, 1))) STRICT;
+  CHECK (index_covered IN (0, 1)), visible_gen INTEGER NOT NULL DEFAULT 0
+  CHECK (visible_gen >= 0)) STRICT;
 
 -- table search_sweep
 CREATE TABLE search_sweep (

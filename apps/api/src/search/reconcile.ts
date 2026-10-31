@@ -47,6 +47,7 @@ import {
   searchStatements,
   writerParams,
 } from "./statements.js";
+import { RECOVERY_GEN } from "./visibility.js";
 
 /*
  * A source's search projections brought to its repository's own state,
@@ -237,7 +238,8 @@ export async function reconcileSource(
             {
               where: (n) => `${SAME_DAY(n)} AND EXISTS (SELECT 1 FROM search_reconciles
                 WHERE repo_id = ?1 AND gen = ?${n + 1} AND kind = ?${n + 2} AND after = ?${n + 3}
-                  AND epoch_gen = ?${n + 4} AND owner_gen = ?${n + 5})`,
+                  AND epoch_gen = ?${n + 4} AND owner_gen = ?${n + 5}
+                  AND recovery_gen = ${RECOVERY_GEN})`,
               params: [reservation.day, pass.gen, kind, after, pass.epochGen, pass.ownerGen],
             },
             // And its entry in the repository index put back, when missing.
@@ -297,7 +299,7 @@ export async function reconcileSource(
                retry_at = ?7
              WHERE repo_id = ?1 AND dirty > covered AND ${FENCES} AND ${SAME_DAY(8)}
                AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1 AND gen = ?4
-                 AND kind = ?5 AND after = ?6 AND partial = 1)`,
+                 AND kind = ?5 AND after = ?6 AND partial = 1 AND recovery_gen = ${RECOVERY_GEN})`,
           )
           .bind(
             repoId,
@@ -316,7 +318,7 @@ export async function reconcileSource(
         .prepare(
           `UPDATE search_reconciles SET kind = ?7, after = ?8
            WHERE repo_id = ?1 AND gen = ?4 AND kind = ?5 AND after = ?6 AND ${FENCES}
-             AND ${SAME_DAY(9)}
+             AND ${SAME_DAY(9)} AND recovery_gen = ${RECOVERY_GEN}
            RETURNING 1`,
         )
         .bind(
@@ -353,6 +355,16 @@ export async function reconcileSource(
                  AND c.kind = 'done' AND c.partial = 0 AND c.coverage = 1)
                AND NOT EXISTS (SELECT 1 FROM search_repairs r
                  WHERE r.repo_id = ?1 AND r.dirty > r.covered)`,
+          )
+          .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, reservation.day),
+        // And visible, by a whole pass of the current recovery generation (what was restored of
+        // it compared, and replaced, from the repository's own state since).
+        db
+          .prepare(
+            `UPDATE search_sources SET visible_gen = ${RECOVERY_GEN}
+             WHERE repo_id = ?1 AND ${FENCES} AND ${SAME_DAY(5)}
+               AND EXISTS (SELECT 1 FROM search_reconciles c WHERE c.repo_id = ?1 AND c.gen = ?4
+                 AND c.kind = 'done' AND c.partial = 0 AND c.recovery_gen = ${RECOVERY_GEN})`,
           )
           .bind(repoId, pass.epochGen, pass.ownerGen, pass.gen, reservation.day),
       );
@@ -472,8 +484,9 @@ async function current(
   metrics?.count("d1.query", { db: "org", op: "reconcile_pass" });
   const { results, meta } = await db
     .prepare(
-      `SELECT gen, epoch_gen, owner_gen, watermark, kind, after FROM search_reconciles
-       WHERE repo_id = ?`,
+      `SELECT gen, epoch_gen, owner_gen, watermark, kind, after,
+         recovery_gen = ${RECOVERY_GEN} AS current
+       FROM search_reconciles WHERE repo_id = ?`,
     )
     .bind(repoId)
     .all<{
@@ -483,10 +496,12 @@ async function current(
       watermark: number;
       kind: Pass["kind"];
       after: number;
+      current: number;
     }>();
   lookups.reads += meta.rows_read ?? 0;
   const [row] = results;
-  if (!row) return undefined;
+  // A pass of an older recovery generation is over: a new one starts.
+  if (!row || row.current !== 1) return undefined;
   return {
     gen: row.gen,
     epochGen: row.epoch_gen,
@@ -518,8 +533,9 @@ async function start(
     db
       .prepare(
         // Its cutoff moved on (never back), and the source not known whole until this pass ends.
-        `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq) SELECT ?1, ?2, ?4
-         WHERE ${FENCES} AND ${SAME_DAY(5)}
+        // A source new to the read model had nothing restored: visible as it is.
+        `INSERT INTO search_sources (repo_id, cutoff_epoch, cutoff_seq, visible_gen)
+         SELECT ?1, ?2, ?4, ${RECOVERY_GEN} WHERE ${FENCES} AND ${SAME_DAY(5)}
          ON CONFLICT (repo_id) DO UPDATE SET
            cutoff_epoch = CASE WHEN (excluded.cutoff_epoch, excluded.cutoff_seq)
              > (search_sources.cutoff_epoch, search_sources.cutoff_seq)
@@ -533,12 +549,14 @@ async function start(
     db
       .prepare(
         `INSERT INTO search_reconciles (repo_id, gen, epoch_gen, owner_gen, watermark, kind,
-           after, started_at, coverage)
-         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5, 1 WHERE ${FENCES} AND ${SAME_DAY(6)}
+           after, started_at, coverage, recovery_gen)
+         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5, 1, ${RECOVERY_GEN}
+         WHERE ${FENCES} AND ${SAME_DAY(6)}
          ON CONFLICT (repo_id) DO UPDATE SET gen = search_reconciles.gen + 1,
            epoch_gen = excluded.epoch_gen, owner_gen = excluded.owner_gen,
            watermark = excluded.watermark, kind = 'subjects', after = 0,
-           started_at = excluded.started_at, partial = 0, partial_reason = NULL, coverage = 1
+           started_at = excluded.started_at, partial = 0, partial_reason = NULL, coverage = 1,
+           recovery_gen = excluded.recovery_gen
          RETURNING gen`,
       )
       .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now, reservation.day),

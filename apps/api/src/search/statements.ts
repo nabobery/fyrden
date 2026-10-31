@@ -9,6 +9,7 @@ import {
   PullRequestRowSchema,
 } from "@fyrden/domain";
 import { ADMITTED, SAME_DAY } from "./admission.js";
+import { RECOVERY_GEN } from "./visibility.js";
 
 /*
  * The one place search's projections are written from (the events
@@ -89,7 +90,8 @@ export function eligible(writer: SearchWriter, at: number): string {
         WHERE repo_id = ?1 AND (cutoff_epoch, cutoff_seq) >= (?2, ?4))`
     : `${FENCES} AND EXISTS (SELECT 1 FROM search_reconciles WHERE repo_id = ?1
         AND gen = ?${at} AND kind = ?${at + 1} AND after = ?${at + 2}
-        AND epoch_gen = ?2 AND owner_gen = ?3) AND ${SAME_DAY(at + 3)}`;
+        AND epoch_gen = ?2 AND owner_gen = ?3 AND recovery_gen = ${RECOVERY_GEN})
+        AND ${SAME_DAY(at + 3)}`;
 }
 
 /** The writer's own parameters, bound after a statement's others (see `eligible`). */

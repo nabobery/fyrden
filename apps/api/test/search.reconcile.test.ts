@@ -215,9 +215,9 @@ describe("search reconciliation", () => {
     // Each kind's page: its checkpoint alone (the subjects' with a check that every issue the page
     // looked at is in the full-text index); then the repository's own row (its epoch and its
     // fourteen statements, its index entry with it) with the last checkpoint, a check of its
-    // entry, the revision covered (or the source parked, a pass partial) and the source known
-    // whole; each batch between the executor's opening and closing of admission.
-    expect(batches).toEqual([2, 1, 1, 20].map((n) => n + 2));
+    // entry, the revision covered (or the source parked, a pass partial), the source known whole
+    // and visible; each batch between the executor's opening and closing of admission.
+    expect(batches).toEqual([2, 1, 1, 21].map((n) => n + 2));
   });
 
   it("marks deleted what the export lacks, unless an event after it began wrote it", async () => {
