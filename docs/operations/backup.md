@@ -35,6 +35,30 @@ in place only; it cannot copy a point in time into a new database yet).
 and whether an export can be made (`export.available`, with
 `no_restore_floor` until the floor is recorded).
 
+## The restore token
+
+The read model holds a token the directory records
+(`read_model_barriers.token_completed`), so a read model restored behind
+the directory's back, to before the last handshake, is told apart from the
+one it knew. Start it once the floor is recorded, and replace it whenever
+you like (each handshake makes an earlier restore detectable):
+
+```sh
+FYRDEN_TOKEN=<an instance administrator's token> \
+  node packages/cli/src/index.ts read-model handshake \
+  --url https://fyrden-api.<account>.workers.dev
+```
+
+A handshake records its intent in the directory, writes the next token in
+the read model (only over the one it holds) and records it completed; one
+interrupted is finished by the next. The status shows where it stands
+(`protocol.restore_token`): `uninitialized` until the first, `matched`,
+`intent` while one is under way, or `mismatch` when the read model holds a
+token the directory does not know, which a handshake then refuses (409
+`restore_token_mismatch`): recover the read model before anything writes
+it again. It is best effort: a restore to after the last handshake keeps
+its token, and goes unseen.
+
 ## Exporting
 
 As an instance administrator, with the API's URL (its workers.dev URL or

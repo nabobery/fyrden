@@ -1,6 +1,7 @@
 import type {
   getReadModelExport,
   getReadModelExportPage,
+  handshakeReadModel,
   Input,
   Output,
   pauseReadModel,
@@ -22,6 +23,7 @@ import {
   readModelState,
   resumeReadModel as resume,
 } from "./maintenance.js";
+import { handshake } from "./restore-token.js";
 
 /*
  * The read model's maintenance as instance administrators run it through
@@ -51,6 +53,22 @@ export async function resumeReadModelOperation(
 ): Promise<Output<typeof resumeReadModel>> {
   ctx.metrics.count("d1.query", { db: "directory", op: "read_model_resume" });
   return resume(ctx.env, DEFAULT_ORG_SHARD, input.generation);
+}
+
+/** The `admin.read_model.handshake` operation: a handshake of the restore token. */
+export async function handshakeReadModelOperation(
+  ctx: OpContext,
+  _input: Input<typeof handshakeReadModel>,
+): Promise<Output<typeof handshakeReadModel>> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "read_model_handshake" }, 3);
+  ctx.metrics.count("d1.query", { db: "org", op: "read_model_handshake" }, 3);
+  if ((await handshake(ctx.env, DEFAULT_ORG_SHARD)) === "mismatch")
+    throw new OperationError(
+      409,
+      "restore_token_mismatch",
+      "The read model holds a restore token the directory does not know: it was restored, or changed, since the last handshake. Recover it before anything writes it again.",
+    );
+  return { restore_token: "matched" };
 }
 
 /** Refused unless a restore floor is recorded. */

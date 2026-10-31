@@ -113,7 +113,7 @@ async function localBarrier(env: Pick<Env, "ORG_READ">, shard: string): Promise<
  * (the directory's barrier is no longer at it, not running: another step
  * moved it).
  */
-async function admitted(
+export async function admitted(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
   shard: string,
   generation: number,

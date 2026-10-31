@@ -32,6 +32,7 @@ describe("the read model's status", () => {
         required_version: 2,
         mode: "enforced",
         restore_floor: null,
+        restore_token: "uninitialized",
       });
       expect(body.barrier).toMatchObject({
         directory_phase: "running",

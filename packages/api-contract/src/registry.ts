@@ -159,6 +159,7 @@ import {
 import {
   getReadModelExport,
   getReadModelExportPage,
+  handshakeReadModel,
   pauseReadModel,
   resumeReadModel,
 } from "../ops/read-model.js";
@@ -299,6 +300,7 @@ export const registry = defineRegistry([
   rebuildSearchIndex,
   pauseReadModel,
   resumeReadModel,
+  handshakeReadModel,
   getReadModelExport,
   getReadModelExportPage,
   listPulls,

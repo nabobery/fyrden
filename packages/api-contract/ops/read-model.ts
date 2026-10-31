@@ -49,6 +49,23 @@ export const resumeReadModel = defineOperation({
   mcp: false,
 });
 
+export const handshakeReadModel = defineOperation({
+  id: "admin.read_model.handshake",
+  method: "POST",
+  path: "/admin/read-model/handshake",
+  summary: "Replace the read model's restore token",
+  description:
+    "Fyrden: replaces the token the org read model holds and the directory records (a handshake), so that a read model restored behind the directory's back, to before the last handshake, is told apart from the one it knew (`admin.search.status` says `protocol.restore_token`: `mismatch`). The first one, after a deploy recorded the restore floor, starts the token; one interrupted is finished by the next. Best effort: a restore to after the last handshake keeps its token. Refused (409 `restore_token_mismatch`) when the read model holds a token the directory does not know, nothing changed: recover the read model before anything writes it again. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only.",
+  input: z.object({}),
+  output: z.object({ restore_token: z.literal("matched") }),
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  duringMaintenance: true,
+  mcp: false,
+});
+
 const Generation = z.coerce
   .number()
   .int()

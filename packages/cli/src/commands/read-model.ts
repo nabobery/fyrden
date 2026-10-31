@@ -9,13 +9,19 @@ import { ApiError, type ApiTarget, apiTarget, callApi } from "../api.ts";
  * end), every table written in key order a page at a time under the
  * pause's generation, a manifest with each file's rows and digest, and the
  * writers resumed (unless kept paused, for a restore). Available once the
- * deployment has a restore floor (`fyrden deploy` records it).
+ * deployment has a restore floor (`fyrden deploy` records it). And a
+ * handshake of the read model's restore token.
  */
 
-export const READ_MODEL_USAGE =
-  "fyrden read-model export --url <API URL> --out <directory> [--keep-paused]";
+export const READ_MODEL_USAGE = `fyrden read-model export --url <API URL> --out <directory> [--keep-paused]
+       fyrden read-model handshake --url <API URL>`;
+
+export interface HandshakeArgs extends ApiTarget {
+  readonly command: "handshake";
+}
 
 export interface ExportArgs extends ApiTarget {
+  readonly command: "export";
   /** A directory that does not exist yet: the export's files. */
   readonly out: string;
   /** Writers left paused once the export is written. */
@@ -26,8 +32,18 @@ export interface ExportArgs extends ApiTarget {
 export function parseReadModelArgs(
   args: readonly string[],
   env: Record<string, string | undefined>,
-): ExportArgs | { error: string } {
+): ExportArgs | HandshakeArgs | { error: string } {
   const [sub, ...rest] = args;
+  if (sub === "handshake") {
+    let url: string | undefined;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === "--url") url = rest[++i];
+      else return { error: `unknown argument ${rest[i]}\nusage: ${READ_MODEL_USAGE}` };
+    }
+    const target = apiTarget(url, env, READ_MODEL_USAGE);
+    if ("error" in target) return target;
+    return { command: "handshake", ...target };
+  }
   if (sub !== "export") return { error: `usage: ${READ_MODEL_USAGE}` };
   let url: string | undefined;
   let out: string | undefined;
@@ -42,7 +58,7 @@ export function parseReadModelArgs(
   if (!out) return { error: `--out must name a directory\nusage: ${READ_MODEL_USAGE}` };
   const target = apiTarget(url, env, READ_MODEL_USAGE);
   if ("error" in target) return target;
-  return { ...target, out, keepPaused };
+  return { command: "export", ...target, out, keepPaused };
 }
 
 export interface ExportDeps {
@@ -214,4 +230,18 @@ async function limited<T>(deps: ExportDeps, call: () => Promise<T>): Promise<T> 
       await deps.sleep(RATE_LIMIT_WAIT_MS);
     }
   }
+}
+
+/**
+ * `read-model handshake`: replaces the read model's restore token (the first,
+ * after `fyrden deploy` recorded the restore floor, starts it). Refused when
+ * the read model holds a token the deployment does not know.
+ */
+export async function handshakeReadModel(deps: {
+  readonly args: HandshakeArgs;
+  readonly fetch: typeof fetch;
+  readonly log: (line: string) => void;
+}): Promise<void> {
+  await callApi(deps.fetch, deps.args, "POST", "/admin/read-model/handshake");
+  deps.log("ok   read model restore token matched");
 }

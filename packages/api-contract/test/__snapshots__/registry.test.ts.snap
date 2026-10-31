@@ -668,6 +668,55 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/admin/read-model/handshake": {
+      "post": {
+        "description": "Fyrden: replaces the token the org read model holds and the directory records (a handshake), so that a read model restored behind the directory's back, to before the last handshake, is told apart from the one it knew (\`admin.search.status\` says \`protocol.restore_token\`: \`mismatch\`). The first one, after a deploy recorded the restore floor, starts the token; one interrupted is finished by the next. Best effort: a restore to after the last handshake keeps its token. Refused (409 \`restore_token_mismatch\`) when the read model holds a token the directory does not know, nothing changed: recover the read model before anything writes it again. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only.",
+        "operationId": "admin.read_model.handshake",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "restore_token": {
+                      "const": "matched",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "restore_token",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Replace the read model's restore token",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/read-model/pause": {
       "post": {
         "description": "Fyrden: one step of pausing the org read model's writers: the barrier moves to the next generation (no lease is taken from then on, and no batch of an older generation is admitted), and is \`paused\` once no lease of an older generation is live (\`live\` of them, the latest deadline \`until\`). Call again until \`phase\` is \`paused\`; a resume that came between leaves \`running\`. Allowed while the deployment's read model maintenance holds other writes back. Refused (409 \`read_model_recovering\`) while the barrier is recovering. Instance administrators only.",
@@ -1150,7 +1199,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/admin/search/status": {
       "get": {
-        "description": "Fyrden: the org read model's write protocol and search's state, for operators. \`protocol\`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (\`compatibility\`) or refused (\`enforced\`). \`barrier\`: the directory's and the read model's barriers (null where a row is missing, and then not \`consistent\`). \`admission\`: whether a write is under way, writes made outside the executor while they were only counted (\`stray\`), and the read model's write sequence. \`writers\`: leases live and expired, and the earliest deadline. \`export\`: whether a coherent export of the read model can be made (not before a restore floor is recorded: \`no_restore_floor\`). \`search\`: today's spending of its allowance and of the repository index's, with the limits (\`limits\`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (\`live_docs\`) and the repositories (\`indexed_repos\`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (\`next_parked\`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (\`first_uncovered\`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only.",
+        "description": "Fyrden: the org read model's write protocol and search's state, for operators. \`protocol\`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, whether writes outside the executor are only counted (\`compatibility\`) or refused (\`enforced\`), the restore floor, and the restore token (\`restore_token\`: none written yet, \`uninitialized\`, until the first handshake; \`matched\`; a handshake under way, \`intent\`; or \`mismatch\`, the read model restored or changed since the last handshake, best effort). \`barrier\`: the directory's and the read model's barriers (null where a row is missing, and then not \`consistent\`). \`admission\`: whether a write is under way, writes made outside the executor while they were only counted (\`stray\`), and the read model's write sequence. \`writers\`: leases live and expired, and the earliest deadline. \`export\`: whether a coherent export of the read model can be made (not before a restore floor is recorded: \`no_restore_floor\`). \`search\`: today's spending of its allowance and of the repository index's, with the limits (\`limits\`: rows and reads a day, the size at which it admits no more growth (the size observed and the growth reserved since, together; removals are still made), the repository index's rows a day and the repositories it holds at most); the size last observed and the growth reserved since; the issues and pull requests counted in the full-text index (\`live_docs\`) and the repositories (\`indexed_repos\`); whether a reconciliation is due and since when the one due next has waited; the parked one whose wait ends first (\`next_parked\`: a pass ended partial, with why, and when it may be tried again); and a repository whose projections and full-text entries are not known whole (\`first_uncovered\`: each is certified on its own by a whole reconciliation, so none listed does not mean a backfill reached every repository). Instance administrators only.",
         "operationId": "admin.search.status",
         "responses": {
           "200": {
@@ -1341,6 +1390,15 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "null",
                           ],
                         },
+                        "restore_token": {
+                          "enum": [
+                            "uninitialized",
+                            "matched",
+                            "intent",
+                            "mismatch",
+                          ],
+                          "type": "string",
+                        },
                         "serving_version": {
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
@@ -1353,6 +1411,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "required_version",
                         "mode",
                         "restore_floor",
+                        "restore_token",
                       ],
                       "type": "object",
                     },

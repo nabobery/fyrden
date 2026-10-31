@@ -482,7 +482,7 @@ CREATE TABLE read_model_barriers (
   protocol_version INTEGER NOT NULL CHECK (protocol_version >= 1),
   executor_version INTEGER NOT NULL DEFAULT 0 CHECK (executor_version >= 0),
   read_model_protocol_since TEXT
-) STRICT, WITHOUT ROWID;
+, token_previous TEXT, token_next TEXT, token_completed TEXT) STRICT, WITHOUT ROWID;
 
 -- table read_model_writers
 CREATE TABLE read_model_writers (

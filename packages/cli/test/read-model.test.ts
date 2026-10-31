@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { exportReadModel, parseReadModelArgs } from "../src/commands/read-model.ts";
+import {
+  exportReadModel,
+  handshakeReadModel,
+  parseReadModelArgs,
+} from "../src/commands/read-model.ts";
 
 const URL_ = "https://api.fyrden.test";
 let dir = "";
@@ -83,7 +87,7 @@ const run = (fetcher: typeof fetch, keepPaused = false) => {
   const slept: number[] = [];
   const lines: string[] = [];
   const done = exportReadModel({
-    args: { url: URL_, token: "tok", out: join(dir, "export"), keepPaused },
+    args: { command: "export", url: URL_, token: "tok", out: join(dir, "export"), keepPaused },
     fetch: fetcher,
     sleep: async (ms) => {
       slept.push(ms);
@@ -98,6 +102,7 @@ describe("fyrden read-model export", () => {
   it("takes the API's URL and a directory to write, the token from the environment", () => {
     const env = { FYRDEN_TOKEN: "t" };
     expect(parseReadModelArgs(["export", "--url", URL_, "--out", "backup"], env)).toEqual({
+      command: "export",
       url: URL_,
       token: "t",
       out: "backup",
@@ -111,6 +116,38 @@ describe("fyrden read-model export", () => {
       "error",
     );
     expect(parseReadModelArgs(["export", "--url", URL_, "--out", "b"], {})).toHaveProperty("error");
+    expect(parseReadModelArgs(["handshake", "--url", URL_], env)).toEqual({
+      command: "handshake",
+      url: URL_,
+      token: "t",
+    });
+    expect(parseReadModelArgs(["handshake", "--url", URL_, "--out", "b"], env)).toHaveProperty(
+      "error",
+    );
+  });
+
+  it("asks for a handshake of the restore token, and says when it is refused", async () => {
+    const seen: string[] = [];
+    const answer = (status: number, body: unknown) =>
+      (async (input: string | URL | Request, init?: RequestInit) => {
+        seen.push(`${init?.method} ${String(input)}`);
+        return Response.json(body, { status });
+      }) as typeof fetch;
+    const lines: string[] = [];
+    await handshakeReadModel({
+      args: { command: "handshake", url: URL_, token: "tok" },
+      fetch: answer(200, { restore_token: "matched" }),
+      log: (line) => lines.push(line),
+    });
+    expect(seen).toEqual([`POST ${URL_}/api/admin/read-model/handshake`]);
+    expect(lines).toEqual(["ok   read model restore token matched"]);
+    await expect(
+      handshakeReadModel({
+        args: { command: "handshake", url: URL_, token: "tok" },
+        fetch: answer(409, { code: "restore_token_mismatch", detail: "restored" }),
+        log: () => {},
+      }),
+    ).rejects.toThrow(/restore_token_mismatch|restored/);
   });
 
   it("pauses the writers, waits for older leases, writes every table and a manifest of digests, and resumes", async () => {
@@ -190,7 +227,7 @@ describe("fyrden read-model export", () => {
     const slept: number[] = [];
     await expect(
       exportReadModel({
-        args: { url: URL_, token: "tok", out: dir, keepPaused: false },
+        args: { command: "export", url: URL_, token: "tok", out: dir, keepPaused: false },
         fetch: api.fetcher,
         sleep: async (ms) => {
           slept.push(ms);

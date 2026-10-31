@@ -11,7 +11,12 @@ import { doctor } from "./commands/doctor.ts";
 import { parseRepairArgs, REPAIR_USAGE, repairEffects } from "./commands/effects.ts";
 import { PUSH_USAGE, parsePushArgs, push } from "./commands/push.ts";
 import { nodePushDeps } from "./commands/push-node.ts";
-import { exportReadModel, parseReadModelArgs, READ_MODEL_USAGE } from "./commands/read-model.ts";
+import {
+  exportReadModel,
+  handshakeReadModel,
+  parseReadModelArgs,
+  READ_MODEL_USAGE,
+} from "./commands/read-model.ts";
 import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
@@ -354,6 +359,10 @@ export async function main(argv: string[]): Promise<number> {
     if ("error" in parsed) {
       console.error(parsed.error);
       return 2;
+    }
+    if (parsed.command === "handshake") {
+      await handshakeReadModel({ args: parsed, fetch, log });
+      return 0;
     }
     await exportReadModel({
       args: parsed,

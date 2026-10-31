@@ -5,6 +5,7 @@ import { REPO_INDEX } from "../queues/events-consumer.js";
 import { READ_MODEL_PROTOCOL } from "../read-model/executor.js";
 import { exportAvailability } from "../read-model/export.js";
 import { readModelState } from "../read-model/maintenance.js";
+import { restoreTokenState } from "../read-model/restore-token.js";
 import { ADMISSION } from "./admission.js";
 import { searchIndexing } from "./repairs.js";
 
@@ -41,6 +42,9 @@ export async function getSearchStatusOperation(
   metrics.count("d1.query", { db: "directory", op: "read_model_status" }, 2);
   metrics.count("d1.query", { db: "org", op: "read_model_status" }, 2);
   const state = await readModelState(env, DEFAULT_ORG_SHARD);
+  metrics.count("d1.query", { db: "directory", op: "read_model_token" });
+  metrics.count("d1.query", { db: "org", op: "read_model_token" });
+  const token = await restoreTokenState(env, DEFAULT_ORG_SHARD);
   const db = readModelFor(env, DEFAULT_ORG_SHARD);
   metrics.count("d1.query", { db: "org", op: "search_status" });
   const [budget, size, counts, repair, parked, uncovered] = await db.batch([
@@ -80,6 +84,7 @@ export async function getSearchStatusOperation(
       // Refused from protocol 2 on (org migration 0018); only counted before.
       mode: (local?.protocolVersion ?? 0) >= 2 ? "enforced" : "compatibility",
       restore_floor: directory?.floor ?? null,
+      restore_token: token,
     },
     barrier: {
       directory_phase: directory?.phase ?? null,

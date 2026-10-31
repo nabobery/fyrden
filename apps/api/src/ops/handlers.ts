@@ -96,6 +96,7 @@ import {
 import {
   getReadModelExportOperation,
   getReadModelExportPageOperation,
+  handshakeReadModelOperation,
   pauseReadModelOperation,
   resumeReadModelOperation,
 } from "../read-model/operations.js";
@@ -620,6 +621,7 @@ export const handlers: Handlers = {
   // The read model's maintenance: its writers paused and resumed, and its export (read-model).
   "admin.read_model.pause": pauseReadModelOperation,
   "admin.read_model.resume": resumeReadModelOperation,
+  "admin.read_model.handshake": handshakeReadModelOperation,
   "admin.read_model.export": getReadModelExportOperation,
   "admin.read_model.export_page": getReadModelExportPageOperation,
 

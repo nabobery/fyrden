@@ -71,7 +71,11 @@ export const DERIVED_TABLES = [
 ] as const;
 
 /** The tables that hold the protocol's state, not data. */
-export const PROTOCOL_TABLES = ["read_model_barrier", "read_model_write"] as const;
+export const PROTOCOL_TABLES = [
+  "read_model_barrier",
+  "read_model_write",
+  "read_model_restore_token",
+] as const;
 
 type Key = readonly (string | number)[];
 
