@@ -87,4 +87,12 @@ either:
   `npx wrangler d1 execute <database> --remote --file repair.sql`. A rebuilt
   table keeps its rows only if the statements copy them.
 
+On `fyrden-org`, from migration 0018 on, the read model's tables refuse any
+write made outside its executor's admission (`read_model_admission_required`),
+a migration's or a repair's too. A rebuild as above still works, as long as
+its triggers are made again last, after its rows are back (dropping the table
+dropped them). Any other statement that changes a read model table's rows
+is refused: a migration that needs one has to wait for the administrative
+executor that admits migrations.
+
 Run `fyrden doctor` again until every database prints `ok`, then deploy.

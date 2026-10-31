@@ -11,13 +11,14 @@ import { doctor } from "./commands/doctor.ts";
 import { parseRepairArgs, REPAIR_USAGE, repairEffects } from "./commands/effects.ts";
 import { PUSH_USAGE, parsePushArgs, push } from "./commands/push.ts";
 import { nodePushDeps } from "./commands/push-node.ts";
+import { exportReadModel, parseReadModelArgs, READ_MODEL_USAGE } from "./commands/read-model.ts";
 import { readSource } from "./source.ts";
 import { nodeWranglerRunner } from "./wrangler.ts";
 
 const USAGE = `usage:
   fyrden deploy [--plan free|paid] [--internal-calls N] [--discretionary resource=n,...]
                 [--watch-audiences on|off] [--live on|off [--live-sockets N]]
-                [--read-model-maintenance on|off]
+                [--read-model-maintenance on|off] [--quiesced on]
                 [--email resend --email-from ADDRESS --email-secrets-file PATH
                                  [--email-sending on|off] [--email-daily-limit N]
                                  [--email-monthly-limit N] [--email-reserve N]
@@ -40,12 +41,20 @@ const USAGE = `usage:
                                      the web Worker's URL (the API deployed again with it);
                                      --read-model-maintenance on holds back the work that writes
                                      the read model (API writes refused, queue messages put back,
-                                     its crons skipped) until a deploy without it
+                                     its crons skipped) until a deploy without it;
+                                     writes outside the read model's executor refused from
+                                     org migration 0018 on: installed over data only with
+                                     --quiesced on (a test deployment with nothing running);
+                                     the read model's restore floor recorded once it is
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
                                      count effects that failed for good and may still matter; with --yes reopen
                                      them (FYRDEN_TOKEN: an instance administrator's token)
+  ${READ_MODEL_USAGE}
+                                     pause the read model's writers, write every table and a
+                                     manifest of digests to a new directory, then resume them
+                                     (FYRDEN_TOKEN: an instance administrator's token)
   ${PUSH_USAGE}
                                      push, checking the size first; --chunked uploads a large push in parts`;
 
@@ -149,6 +158,7 @@ export function parseDeployArgs(args: readonly string[]):
       live?: LiveArgs;
       watchAudiences?: true;
       readModelMaintenance?: true;
+      quiesced?: true;
     }
   | undefined {
   const given = new Map<string, string>();
@@ -158,6 +168,7 @@ export function parseDeployArgs(args: readonly string[]):
     "--discretionary",
     "--watch-audiences",
     "--read-model-maintenance",
+    "--quiesced",
     "--live",
     "--live-sockets",
     "--email",
@@ -183,6 +194,8 @@ export function parseDeployArgs(args: readonly string[]):
   if (watch !== undefined && watch !== "on" && watch !== "off") return undefined;
   const maintenance = given.get("--read-model-maintenance");
   if (maintenance !== undefined && maintenance !== "on" && maintenance !== "off") return undefined;
+  const quiesced = given.get("--quiesced");
+  if (quiesced !== undefined && quiesced !== "on") return undefined;
   const live = liveArgs(given);
   if (live === null) return undefined;
   const email = emailArgs(given);
@@ -191,6 +204,7 @@ export function parseDeployArgs(args: readonly string[]):
     ...(discretionary !== undefined && { discretionary }),
     ...(watch === "on" && { watchAudiences: true as const }),
     ...(maintenance === "on" && { readModelMaintenance: true as const }),
+    ...(quiesced === "on" && { quiesced: true as const }),
     ...(live !== undefined && { live }),
     ...(email !== undefined && { email }),
   };
@@ -335,6 +349,21 @@ export async function main(argv: string[]): Promise<number> {
     }
     return push(parsed, nodePushDeps());
   }
+  if (command === "read-model") {
+    const parsed = parseReadModelArgs(rest, process.env);
+    if ("error" in parsed) {
+      console.error(parsed.error);
+      return 2;
+    }
+    await exportReadModel({
+      args: parsed,
+      fetch,
+      sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
+      now: Date.now,
+      log,
+    });
+    return 0;
+  }
   if (command === "effects") {
     const [sub, ...args] = rest;
     const parsed =
@@ -374,16 +403,25 @@ export async function main(argv: string[]): Promise<number> {
     });
     return result.complete ? 0 : 1;
   }
-  const { plan, internalCalls, discretionary, email, live, watchAudiences, readModelMaintenance } =
-    parseDeployArgs(rest) as {
-      plan: Plan;
-      internalCalls?: number;
-      discretionary?: string;
-      email?: EmailArgs;
-      live?: LiveArgs;
-      watchAudiences?: true;
-      readModelMaintenance?: true;
-    };
+  const {
+    plan,
+    internalCalls,
+    discretionary,
+    email,
+    live,
+    watchAudiences,
+    readModelMaintenance,
+    quiesced,
+  } = parseDeployArgs(rest) as {
+    plan: Plan;
+    internalCalls?: number;
+    discretionary?: string;
+    email?: EmailArgs;
+    live?: LiveArgs;
+    watchAudiences?: true;
+    readModelMaintenance?: true;
+    quiesced?: true;
+  };
   const result = await deploy({
     repoRoot,
     plan,
@@ -391,6 +429,7 @@ export async function main(argv: string[]): Promise<number> {
     discretionary,
     watchAudiences,
     readModelMaintenance,
+    quiesced,
     live,
     email: email && (await emailDeploy(email)),
     runner,

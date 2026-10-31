@@ -1801,6 +1801,61 @@ export type AdminSearchStatusOutput = {
   };
 };
 
+/** Input of `admin.read_model.pause`: Pause the read model's writers. */
+export type AdminReadModelPauseInput = Record<string, never>;
+
+/** Output of `admin.read_model.pause`. */
+export type AdminReadModelPauseOutput = {
+  phase: "running" | "pausing" | "paused" | "recovering";
+  generation: number;
+  live: number;
+  until: number | null;
+};
+
+/** Input of `admin.read_model.resume`: Resume the read model's writers. */
+export type AdminReadModelResumeInput = {
+  /** Resume only the pause at this generation (its pause's `generation`). */
+  generation?: number;
+};
+
+/** Output of `admin.read_model.resume`. */
+export type AdminReadModelResumeOutput = {
+  phase: "running" | "pausing" | "paused" | "recovering";
+  generation: number;
+};
+
+/** Input of `admin.read_model.export`: Get the read model export's manifest. */
+export type AdminReadModelExportInput = {
+  /** The generation the read model is paused at (`admin.read_model.pause`). */
+  generation: number;
+};
+
+/** Output of `admin.read_model.export`. */
+export type AdminReadModelExportOutput = {
+  generation: number;
+  migrations: string[];
+  tables: {
+    table: string;
+    columns: string[];
+  }[];
+  protocol: Record<string, Record<string, unknown>[]>;
+};
+
+/** Input of `admin.read_model.export_page`: Get a page of the read model export. */
+export type AdminReadModelExportPageInput = {
+  /** The generation the read model is paused at (`admin.read_model.pause`). */
+  generation: number;
+  /** A page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `admin.read_model.export_page`. */
+export type AdminReadModelExportPageOutput = {
+  table: string;
+  rows: Record<string, unknown>[];
+  next_cursor: string | null;
+};
+
 /** Input of `pulls.list`: List pull requests. */
 export type PullsListInput = {
   /** The owner's handle. */
@@ -7698,6 +7753,10 @@ export const OPERATIONS = {
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "admin.search.indexing": { method: "PUT", path: "/admin/search/indexing", pathParams: [], idempotent: true },
   "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
+  "admin.read_model.pause": { method: "POST", path: "/admin/read-model/pause", pathParams: [], idempotent: true },
+  "admin.read_model.resume": { method: "POST", path: "/admin/read-model/resume", pathParams: [], idempotent: true },
+  "admin.read_model.export": { method: "GET", path: "/admin/read-model/export", pathParams: [], idempotent: false },
+  "admin.read_model.export_page": { method: "GET", path: "/admin/read-model/export/pages", pathParams: [], idempotent: false, items: "rows" },
   "pulls.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: false, items: "pull_requests" },
   "pulls.create": { method: "POST", path: "/repos/{owner}/{repo}/pulls", pathParams: ["owner","repo"], idempotent: true },
   "pulls.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: false },
@@ -7961,6 +8020,14 @@ export interface Operations {
   "admin.search.indexing": { input: AdminSearchIndexingInput; output: AdminSearchIndexingOutput };
   /** Get the read model's and search's state. Fyrden: the org read model's write protocol and search's state, for operators. `protocol`: the executor version this deployment serves, the version the last deploy verified as serving (0 until one did), the oldest the read model admits, and whether writes outside the executor are only counted (`compatibility`) or refused (`enforced`). `barrier`: the directory's and the read model's barriers (null where a row is missing, and then not `consistent`). `admission`: whether a write is under way, writes made outside the executor while they were only counted (`stray`), and the read model's write sequence. `writers`: leases live and expired, and the earliest deadline. `export`: whether a coherent export of the read model can be made (not before a restore floor is recorded: `no_restore_floor`). `search`: today's spent allowance, the size last observed, whether reconciliations are waiting, and since when the one due next has. Instance administrators only. */
   "admin.search.status": { input: AdminSearchStatusInput; output: AdminSearchStatusOutput };
+  /** Pause the read model's writers. Fyrden: one step of pausing the org read model's writers: the barrier moves to the next generation (no lease is taken from then on, and no batch of an older generation is admitted), and is `paused` once no lease of an older generation is live (`live` of them, the latest deadline `until`). Call again until `phase` is `paused`; a resume that came between leaves `running`. Allowed while the deployment's read model maintenance holds other writes back. Refused (409 `read_model_recovering`) while the barrier is recovering. Instance administrators only. */
+  "admin.read_model.pause": { input: AdminReadModelPauseInput; output: AdminReadModelPauseOutput };
+  /** Resume the read model's writers. Fyrden: lets the org read model's writers write again, at the latest generation either barrier holds (a generation never goes down); a newer pause that came between stands. With `generation`, only the pause at that generation is resumed (another, newer, stands). Nothing while it runs already or is recovering. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only. */
+  "admin.read_model.resume": { input: AdminReadModelResumeInput; output: AdminReadModelResumeOutput };
+  /** Get the read model export's manifest. Fyrden: the manifest of a coherent export of the org read model, paused at `generation`: its migrations, each table's columns in order, and the protocol tables' state. Refused (409 `no_restore_floor`) until a restore floor is recorded, and (409 `export_fence_lost`) once the read model is no longer paused at `generation`: pause again and start over. Instance administrators only. */
+  "admin.read_model.export": { input: AdminReadModelExportInput; output: AdminReadModelExportOutput };
+  /** Get a page of the read model export. Fyrden: a page of a coherent export of the org read model, paused at `generation`: rows of one table in key order (200 rows or 2 MiB of JSON at most; one larger row is a page of its own), from `cursor` (the first page without one). Call again with `next_cursor` until it is null; every table follows the one before. Refused as the manifest is. Instance administrators only. */
+  "admin.read_model.export_page": { input: AdminReadModelExportPageInput; output: AdminReadModelExportPageOutput };
   /** List pull requests. The repository's pull requests, newest first. */
   "pulls.list": { input: PullsListInput; output: PullsListOutput };
   /** Create a pull request. Proposes merging one branch of the repository into another. Anyone who can read the repository may open one. Refused when the head has no commits the base lacks, or when a pull request between the two branches is already open. While open, `refs/pull/{number}/head` follows the head branch. The head may be a branch of a fork in the same network (`owner:branch`): its revision is imported first, and later pushes to it reach the pull request shortly after. */

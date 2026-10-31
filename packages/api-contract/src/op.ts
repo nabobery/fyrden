@@ -60,6 +60,11 @@ export interface OperationDef<
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   /**
+   * A write the read model's maintenance does not hold back: its own
+   * controller's (pausing and resuming its writers).
+   */
+  duringMaintenance?: boolean;
+  /**
    * A GET whose REST answer carries an ETag of its body: a request whose
    * `If-None-Match` matches gets 304 Not Modified.
    */

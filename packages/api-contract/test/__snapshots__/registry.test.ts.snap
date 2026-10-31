@@ -464,6 +464,361 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/read-model/export": {
+      "get": {
+        "description": "Fyrden: the manifest of a coherent export of the org read model, paused at \`generation\`: its migrations, each table's columns in order, and the protocol tables' state. Refused (409 \`no_restore_floor\`) until a restore floor is recorded, and (409 \`export_fence_lost\`) once the read model is no longer paused at \`generation\`: pause again and start over. Instance administrators only.",
+        "operationId": "admin.read_model.export",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "generation",
+            "required": true,
+            "schema": {
+              "description": "The generation the read model is paused at (\`admin.read_model.pause\`).",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "generation": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "migrations": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "protocol": {
+                      "additionalProperties": {
+                        "items": {
+                          "additionalProperties": {},
+                          "propertyNames": {
+                            "type": "string",
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "propertyNames": {
+                        "type": "string",
+                      },
+                      "type": "object",
+                    },
+                    "tables": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "columns": {
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "table": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "table",
+                          "columns",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "generation",
+                    "migrations",
+                    "tables",
+                    "protocol",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get the read model export's manifest",
+        "x-fyrden-permission": "instance:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
+    "/admin/read-model/export/pages": {
+      "get": {
+        "description": "Fyrden: a page of a coherent export of the org read model, paused at \`generation\`: rows of one table in key order (200 rows or 2 MiB of JSON at most; one larger row is a page of its own), from \`cursor\` (the first page without one). Call again with \`next_cursor\` until it is null; every table follows the one before. Refused as the manifest is. Instance administrators only.",
+        "operationId": "admin.read_model.export_page",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "generation",
+            "required": true,
+            "schema": {
+              "description": "The generation the read model is paused at (\`admin.read_model.pause\`).",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "A page's \`next_cursor\`.",
+              "maxLength": 4096,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "rows": {
+                      "items": {
+                        "additionalProperties": {},
+                        "propertyNames": {
+                          "type": "string",
+                        },
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "table": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "table",
+                    "rows",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a page of the read model export",
+        "x-fyrden-permission": "instance:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
+    "/admin/read-model/pause": {
+      "post": {
+        "description": "Fyrden: one step of pausing the org read model's writers: the barrier moves to the next generation (no lease is taken from then on, and no batch of an older generation is admitted), and is \`paused\` once no lease of an older generation is live (\`live\` of them, the latest deadline \`until\`). Call again until \`phase\` is \`paused\`; a resume that came between leaves \`running\`. Allowed while the deployment's read model maintenance holds other writes back. Refused (409 \`read_model_recovering\`) while the barrier is recovering. Instance administrators only.",
+        "operationId": "admin.read_model.pause",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "generation": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "live": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "phase": {
+                      "enum": [
+                        "running",
+                        "pausing",
+                        "paused",
+                        "recovering",
+                      ],
+                      "type": "string",
+                    },
+                    "until": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                  },
+                  "required": [
+                    "phase",
+                    "generation",
+                    "live",
+                    "until",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Pause the read model's writers",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/admin/read-model/resume": {
+      "post": {
+        "description": "Fyrden: lets the org read model's writers write again, at the latest generation either barrier holds (a generation never goes down); a newer pause that came between stands. With \`generation\`, only the pause at that generation is resumed (another, newer, stands). Nothing while it runs already or is recovering. Allowed while the deployment's read model maintenance holds other writes back. Instance administrators only.",
+        "operationId": "admin.read_model.resume",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "generation": {
+                    "description": "Resume only the pause at this generation (its pause's \`generation\`).",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "generation": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "phase": {
+                      "enum": [
+                        "running",
+                        "pausing",
+                        "paused",
+                        "recovering",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "phase",
+                    "generation",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Resume the read model's writers",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/search/backfill": {
       "post": {
         "description": "Fyrden: asks for a reconciliation of every active repository's search projections, a page of repositories at a time (call again with \`cursor\` until \`next_cursor\` is null); \`requested\` counts the repositories newly asked (one already waiting is not asked again). The reconciliations run in the five-minute maintenance within search's daily allowance. Refused (409) while search indexing is off: run it once indexing is on, after which repositories made meanwhile are projected from their events (or reconciled, when published late). Instance administrators only.",

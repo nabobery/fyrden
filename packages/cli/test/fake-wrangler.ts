@@ -30,6 +30,14 @@ export function fakeWrangler() {
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
     /** The read model protocol a deploy recorded as served (fyrden-directory). */
     executorVersion: 0,
+    /** Whether fyrden-org's read model holds data (rows in any of its tables). */
+    orgInUse: false,
+    /** fyrden-org's read model protocol and whether its admission is open, once migrated. */
+    readModel: { protocol: 2, open: 0 },
+    /** The read model's restore floor recorded in fyrden-directory. */
+    floor: null as string | null,
+    /** fyrden-org's current Time Travel bookmark. */
+    bookmark: "00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683",
     r2: new Set<string>(),
     /** Object counts of buckets that are not empty. */
     r2Objects: new Map<string, number>(),
@@ -203,6 +211,11 @@ export function fakeWrangler() {
         ]);
         return ok();
       }
+      if (args[0] === "d1" && args[1] === "time-travel" && args[2] === "info") {
+        if (!state.d1.has(args[3] as string))
+          return fail(`Couldn't find DB with name '${args[3]}'`);
+        return ok(JSON.stringify({ bookmark: state.bookmark }));
+      }
       if (args[0] === "d1" && args[1] === "execute") {
         const db = args[2] as string;
         const sql = args[args.indexOf("--command") + 1] as string;
@@ -215,7 +228,17 @@ export function fakeWrangler() {
         else if (sql.includes("FROM d1_migrations")) {
           if (!migrations) return fail("no such table: d1_migrations: SQLITE_ERROR [code: 7500]");
           results = migrations.map((name) => ({ name }));
-        } else if (sql.includes("FROM sqlite_schema")) results = schema;
+        } else if (sql.includes("FROM sqlite_schema") && sql.includes("type = 'table'"))
+          results = schema.filter((o) => o.type === "table" && sql.includes(`'${o.name}'`));
+        else if (sql.includes("FROM sqlite_schema")) results = schema;
+        else if (sql.includes(" AS used")) results = [{ used: state.orgInUse ? 1 : 0 }];
+        else if (sql.includes("read_model_protocol_since AS floor FROM"))
+          results = [{ floor: state.floor }];
+        else if (sql.startsWith("UPDATE read_model_barriers SET read_model_protocol_since")) {
+          const bookmark = /read_model_protocol_since = '([^']+)'/.exec(sql)?.[1] ?? null;
+          results = state.floor === null ? [{ floor: bookmark }] : [];
+          state.floor ??= bookmark;
+        } else if (sql.includes("FROM read_model_barrier b")) results = [state.readModel];
         else if (sql.startsWith("UPDATE read_model_barriers SET executor_version")) {
           state.executorVersion = Number(/executor_version = (\d+)/.exec(sql)?.[1]);
           results = [{ shard: "default" }];

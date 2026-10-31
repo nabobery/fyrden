@@ -1,0 +1,217 @@
+import { createHash, type Hash } from "node:crypto";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { ApiError, type ApiTarget, apiTarget, callApi } from "../api.ts";
+
+/*
+ * A coherent export of the read model through the deployment's API, as an
+ * instance administrator: its writers paused (waiting for older leases to
+ * end), every table written in key order a page at a time under the
+ * pause's generation, a manifest with each file's rows and digest, and the
+ * writers resumed (unless kept paused, for a restore). Available once the
+ * deployment has a restore floor (`fyrden deploy` records it).
+ */
+
+export const READ_MODEL_USAGE =
+  "fyrden read-model export --url <API URL> --out <directory> [--keep-paused]";
+
+export interface ExportArgs extends ApiTarget {
+  /** A directory that does not exist yet: the export's files. */
+  readonly out: string;
+  /** Writers left paused once the export is written. */
+  readonly keepPaused: boolean;
+}
+
+/** `read-model export`'s arguments, or why they are not; the token comes from `FYRDEN_TOKEN`. */
+export function parseReadModelArgs(
+  args: readonly string[],
+  env: Record<string, string | undefined>,
+): ExportArgs | { error: string } {
+  const [sub, ...rest] = args;
+  if (sub !== "export") return { error: `usage: ${READ_MODEL_USAGE}` };
+  let url: string | undefined;
+  let out: string | undefined;
+  let keepPaused = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === "--keep-paused") keepPaused = true;
+    else if (arg === "--url") url = rest[++i];
+    else if (arg === "--out") out = rest[++i];
+    else return { error: `unknown argument ${arg}\nusage: ${READ_MODEL_USAGE}` };
+  }
+  if (!out) return { error: `--out must name a directory\nusage: ${READ_MODEL_USAGE}` };
+  const target = apiTarget(url, env, READ_MODEL_USAGE);
+  if ("error" in target) return target;
+  return { ...target, out, keepPaused };
+}
+
+export interface ExportDeps {
+  readonly args: ExportArgs;
+  readonly fetch: typeof fetch;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
+  readonly log: (line: string) => void;
+}
+
+interface Progress {
+  readonly phase: string;
+  readonly generation: number;
+  readonly live: number;
+  readonly until: number | null;
+}
+
+interface Manifest {
+  readonly generation: number;
+  readonly tables: readonly { readonly table: string; readonly columns: readonly string[] }[];
+}
+
+interface Page {
+  readonly table: string;
+  readonly rows: readonly Record<string, unknown>[];
+  readonly next_cursor: string | null;
+}
+
+/** How long a pause waits for older leases at most (a lease lasts 15 minutes). */
+const PAUSE_WAIT_MS = 16 * 60 * 1000;
+/** A look at a pause's progress at least this often. */
+const PAUSE_POLL_MS = 15_000;
+/** A rate-limited page is asked again after this, this many times at most. */
+const RATE_LIMIT_WAIT_MS = 30_000;
+const RATE_LIMIT_TRIES = 10;
+
+/** Exports the read model into `args.out`; the pause's generation and the rows written. */
+export async function exportReadModel(
+  deps: ExportDeps,
+): Promise<{ generation: number; rows: number }> {
+  const { args, log } = deps;
+  // Refused if it exists: an export never mixes with another's files.
+  await mkdir(args.out).catch((error: unknown) => {
+    throw new Error(`${args.out} exists already: name a new directory (${String(error)})`);
+  });
+  // The pause's generation once a step names one: what the cleanup resumes (that pause only).
+  const pause: { generation?: number } = {};
+  try {
+    const generation = await paused(deps, pause);
+    log(`paused the read model's writers at generation ${generation}`);
+    const manifest = await callApi<Manifest & Record<string, unknown>>(
+      deps.fetch,
+      args,
+      "GET",
+      `/admin/read-model/export?generation=${generation}`,
+    );
+    const files = new Map<string, { file: string; rows: number; hash: Hash }>();
+    for (const { table } of manifest.tables) {
+      const file = `${table}.jsonl`;
+      await writeFile(join(args.out, file), "");
+      files.set(table, { file, rows: 0, hash: createHash("sha256") });
+    }
+    let cursor: string | null = null;
+    let rows = 0;
+    do {
+      const query: string = `generation=${generation}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
+      const page: Page = await limited(deps, () =>
+        callApi<Page>(deps.fetch, args, "GET", `/admin/read-model/export/pages?${query}`),
+      );
+      const file = files.get(page.table);
+      if (!file) throw new Error(`the export gave a page of ${page.table}, not in its manifest`);
+      const text = page.rows.map((row) => `${JSON.stringify(row)}\n`).join("");
+      await appendFile(join(args.out, file.file), text);
+      file.hash.update(text);
+      file.rows += page.rows.length;
+      rows += page.rows.length;
+      cursor = page.next_cursor;
+    } while (cursor);
+    await writeFile(
+      join(args.out, "manifest.json"),
+      `${JSON.stringify(
+        {
+          ...manifest,
+          exported_at: new Date(deps.now()).toISOString(),
+          files: Object.fromEntries(
+            [...files].map(([table, f]) => [
+              table,
+              { file: f.file, rows: f.rows, sha256: f.hash.digest("hex") },
+            ]),
+          ),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    log(`exported ${rows} row(s) of ${files.size} table(s) to ${args.out}`);
+    return { generation, rows };
+  } finally {
+    await resumed(deps, pause.generation);
+  }
+}
+
+/**
+ * Resumes the pause at `generation` (unless kept paused); a newer pause, or
+ * one this run never started, is left as it is.
+ */
+async function resumed(deps: ExportDeps, generation: number | undefined): Promise<void> {
+  const { args, log } = deps;
+  if (generation === undefined) return;
+  if (args.keepPaused) {
+    log(`the read model's writers stay paused at generation ${generation}: resume them when done`);
+    return;
+  }
+  try {
+    const barrier = await callApi<{ phase: string; generation: number }>(
+      deps.fetch,
+      args,
+      "POST",
+      "/admin/read-model/resume",
+      { generation },
+    );
+    log(
+      barrier.phase === "running"
+        ? "resumed the read model's writers"
+        : `left the read model's writers ${barrier.phase} at generation ${barrier.generation} (another step's)`,
+    );
+  } catch (error) {
+    // What failed before stays the error; this one is said.
+    log(`WARN the read model's writers could not be resumed (${String(error)}): resume them`);
+  }
+}
+
+/**
+ * Pauses the writers, step by step until no older lease is live; the
+ * generation, kept in `pause` from the first step that names it.
+ */
+async function paused(deps: ExportDeps, pause: { generation?: number }): Promise<number> {
+  const deadline = deps.now() + PAUSE_WAIT_MS;
+  for (;;) {
+    const progress = await callApi<Progress>(
+      deps.fetch,
+      deps.args,
+      "POST",
+      "/admin/read-model/pause",
+    );
+    if (progress.phase === "paused" || progress.phase === "pausing")
+      pause.generation = progress.generation;
+    if (progress.phase === "paused") return progress.generation;
+    if (progress.phase !== "pausing")
+      throw new Error(
+        `the read model's writers are ${progress.phase} (resumed meanwhile?): run again`,
+      );
+    if (deps.now() >= deadline)
+      throw new Error(`${progress.live} older lease(s) still live past the pause's wait`);
+    deps.log(`waiting for ${progress.live} older lease(s) to end`);
+    const until = progress.until ?? deps.now();
+    await deps.sleep(Math.min(Math.max(until - deps.now(), 1_000), PAUSE_POLL_MS));
+  }
+}
+
+/** `call`, asked again after a wait while the API rate limits it. */
+async function limited<T>(deps: ExportDeps, call: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await call();
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 429 || tries >= RATE_LIMIT_TRIES)
+        throw error;
+      await deps.sleep(RATE_LIMIT_WAIT_MS);
+    }
+  }
+}

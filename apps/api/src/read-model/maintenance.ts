@@ -66,6 +66,14 @@ function jsonable(body: unknown): boolean {
 
 export type BarrierPhase = "running" | "pausing" | "paused" | "recovering";
 
+/** A pause refused: the barrier is recovering (a restore under way). */
+export class ReadModelRecovering extends Error {
+  constructor() {
+    super("the read model's barrier is recovering");
+    this.name = "ReadModelRecovering";
+  }
+}
+
 export interface PauseProgress {
   readonly phase: BarrierPhase;
   readonly generation: number;
@@ -201,7 +209,7 @@ export async function pauseReadModel(
     .run();
   await barrierHooks.afterPausing?.();
   let directory = await directoryBarrier(env, shard);
-  if (directory.phase === "recovering") throw new Error("the read model's barrier is recovering");
+  if (directory.phase === "recovering") throw new ReadModelRecovering();
   // A resume came between: it stands, and the step says so.
   if (directory.phase === "running") return standing(env, shard, { live: 0, until: null });
   local = await localBarrier(env, shard);
@@ -256,15 +264,19 @@ export async function pauseReadModel(
  * directory's at the same one, from when on leases are taken. Each change
  * is made only from the state it was decided on, so a newer pause that
  * comes between stands; a resume interrupted between the two is finished.
- * Nothing while it is running already or recovering.
+ * Nothing while it is running already or recovering, nor, with `expected`,
+ * unless the pause at that generation is the one standing (a newer stands).
  */
 export async function resumeReadModel(
   env: Pick<Env, "DIRECTORY" | "ORG_READ">,
   shard: string,
+  expected?: number,
 ): Promise<Barrier> {
   let barrier = await directoryBarrier(env, shard);
   if (barrier.phase === "running" || barrier.phase === "recovering") return barrier;
+  if (expected !== undefined && barrier.generation !== expected) return barrier;
   const local = await localBarrier(env, shard);
+  if (expected !== undefined && local.generation > expected) return barrier;
   if (local.generation > barrier.generation) {
     // A read model ahead of the directory (restored): the directory's barrier moves up to it
     // first (still not running), so a maintenance writer can write at it.

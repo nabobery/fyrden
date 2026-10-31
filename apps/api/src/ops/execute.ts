@@ -171,7 +171,7 @@ export async function executeOperation(
 
   // A write may write the read model (directly or through what it starts): none while its
   // maintenance holds ordinary work back.
-  if (op.method !== "GET" && readModelMaintenance(ctx.env))
+  if (op.method !== "GET" && !op.duringMaintenance && readModelMaintenance(ctx.env))
     return fail(
       ctx,
       503,

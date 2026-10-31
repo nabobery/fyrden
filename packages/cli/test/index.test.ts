@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   asksForHelp,
@@ -349,5 +350,19 @@ describe("envDeployOptions", () => {
       "do_rows_written=5,do_rows_written=6",
     ])
       expect(parseDeployArgs(["--discretionary", bad]), bad).toBeUndefined();
+  });
+});
+
+describe("the command", () => {
+  it("runs under Node as it is, as CI runs it (no syntax Node's type stripping lacks)", () => {
+    const run = spawnSync(
+      process.execPath,
+      [resolve(import.meta.dirname, "../src/index.ts"), "--help"],
+      {
+        encoding: "utf8",
+      },
+    );
+    expect(run.stderr).not.toMatch(/ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX/);
+    expect(run.stdout).toMatch(/^usage:/);
   });
 });

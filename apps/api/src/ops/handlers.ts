@@ -94,6 +94,12 @@ import {
   setNotificationThreadSubscriptionOperation,
 } from "../notifications/operations.js";
 import {
+  getReadModelExportOperation,
+  getReadModelExportPageOperation,
+  pauseReadModelOperation,
+  resumeReadModelOperation,
+} from "../read-model/operations.js";
+import {
   compareCommitsOperation,
   getArchiveOperation,
   getBranchOperation,
@@ -606,6 +612,12 @@ export const handlers: Handlers = {
 
   // Effects that failed for good, reopened by an operator (effects/repair).
   "admin.effects.repair": repairEffectsOperation,
+
+  // The read model's maintenance: its writers paused and resumed, and its export (read-model).
+  "admin.read_model.pause": pauseReadModelOperation,
+  "admin.read_model.resume": resumeReadModelOperation,
+  "admin.read_model.export": getReadModelExportOperation,
+  "admin.read_model.export_page": getReadModelExportPageOperation,
 
   // Search's projections, populated by reconciliation (search/backfill).
   "admin.search.backfill": backfillSearchOperation,

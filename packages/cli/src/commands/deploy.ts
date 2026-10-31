@@ -2,7 +2,13 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertConfigAccount, pinAccount, resolveAccount } from "../account.ts";
-import { checkD1Schema, driftMessage, queryRemote, SCHEMA_RUNBOOK } from "../d1-schema.ts";
+import {
+  checkD1Schema,
+  driftMessage,
+  migrationGap,
+  queryRemote,
+  SCHEMA_RUNBOOK,
+} from "../d1-schema.ts";
 import { parseJsonc } from "../jsonc.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { commitLabel, type SourceState } from "../source.ts";
@@ -40,6 +46,12 @@ export interface DeployDeps {
    * variables).
    */
   readModelMaintenance?: true | undefined;
+  /**
+   * The deployment is a test deployment with nothing running against it:
+   * refusing writes outside the read model's executor (org migration 0018)
+   * may be installed over the data it holds. Not needed on a fresh database.
+   */
+  quiesced?: true | undefined;
   /** How the deployed API is asked which read model protocol it serves (default: fetch). */
   fetch?: typeof fetch;
   /**
@@ -263,6 +275,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
     deployConfig.limits = { ...limits, subrequests: internalCalls };
   await writeDeployConfig(apiDir, deployConfig);
 
+  await checkEnforcementInstall(deps, runner, apiDir, plan);
   for (const db of plan.d1) {
     if (db.migrationsDir && (await hasSqlFiles(join(apiDir, db.migrationsDir)))) {
       await wrangler(
@@ -286,6 +299,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       log(`ok   ${db.name} schema matches ${check.expectedFile}`);
     }
   }
+  await recordRestoreFloor(deps, runner, apiDir, plan);
 
   // A Tail Worker must exist before a Worker can name it as a consumer, so on
   // the first Paid deploy the API goes out without it and is redeployed with
@@ -422,6 +436,157 @@ async function verifyReadModelProtocol(
   );
   if (recorded.length !== 1) return unverified("the directory has no barrier for its read model");
   deps.log(`ok   fyrden-api serves read model protocol ${protocol as number} (recorded)`);
+}
+
+/** The org migration from which writes outside the read model's executor are refused. */
+const ENFORCEMENT_MIGRATION = "0018_read_model_enforced.sql";
+
+/** The read model's data tables (apps/api/src/read-model/export.ts): rows in any are data. */
+const READ_MODEL_TABLES = [
+  "consumer_epochs",
+  "discretionary_hours",
+  "discretionary_state",
+  "effects",
+  "events_failed",
+  "repos",
+  "search_budget",
+  "search_docs",
+  "search_labels",
+  "search_milestones",
+  "search_reconciles",
+  "search_repairs",
+  "search_size",
+  "search_sources",
+  "search_sweep",
+  "source_owner",
+  "webhook_attempts",
+  "webhook_deliveries",
+  "webhook_payloads",
+];
+
+/** Rows a migration seeds (none of them data while as seeded): `search_size`'s, at zero. */
+const SEEDED: Readonly<Record<string, string>> = {
+  search_size: "NOT (id = 1 AND clock = 0 AND observed = 0 AND bytes = 0)",
+};
+
+/** Whether any of `tables` holds data (`used` 1): a row other than one a migration seeded. */
+export function readModelUsedSql(tables: readonly string[]): string {
+  const exists = tables.map((name) =>
+    SEEDED[name]
+      ? `EXISTS (SELECT 1 FROM ${name} WHERE ${SEEDED[name]})`
+      : `EXISTS (SELECT 1 FROM ${name})`,
+  );
+  return `SELECT ${exists.join(" OR ")} AS used`;
+}
+
+/**
+ * Refuses to install enforcement (org migration 0018) over a read model
+ * that holds data unless the operator says the deployment is quiesced: a
+ * rolling upgrade with work running is not supported (that work's writes
+ * would be refused mid-flight). Nothing to check on a fresh database or
+ * once it is installed. Before any migration applies.
+ */
+async function checkEnforcementInstall(
+  deps: DeployDeps,
+  runner: WranglerRunner,
+  apiDir: string,
+  plan: ReturnType<typeof resourcePlan>,
+): Promise<void> {
+  const org = plan.d1.find((d) => d.binding === "ORG_READ");
+  if (!org?.migrationsDir || deps.quiesced) return;
+  const db = { name: org.name, migrationsDir: org.migrationsDir };
+  const { pending } = await migrationGap(runner, apiDir, db);
+  if (!pending.includes(ENFORCEMENT_MIGRATION)) return;
+  const present = await queryRemote<{ name: string }>(
+    runner,
+    apiDir,
+    org.name,
+    `SELECT name FROM sqlite_schema WHERE type = 'table'
+     AND name IN (${READ_MODEL_TABLES.map((t) => `'${t}'`).join(", ")})`,
+    ["-c", API_DEPLOY_CONFIG],
+  );
+  if (present.length === 0) return;
+  const [used] = await queryRemote<{ used: number }>(
+    runner,
+    apiDir,
+    org.name,
+    readModelUsedSql(present.map(({ name }) => name)),
+    ["-c", API_DEPLOY_CONFIG],
+  );
+  if (used?.used !== 1) return;
+  throw new Error(
+    `${org.name} holds data, and org migration ${ENFORCEMENT_MIGRATION} (writes outside the read model's executor refused) is not applied yet. ` +
+      "It is installed over data only on a test deployment with nothing running against it: stop its traffic, then deploy again with --quiesced on.",
+  );
+}
+
+/** What a D1 bookmark looks like (hex groups): checked before it goes into SQL. */
+const BOOKMARK = /^[0-9a-f]+(?:-[0-9a-f]+)+$/i;
+
+/**
+ * Records the read model's restore floor (`read_model_barriers.read_model_protocol_since`)
+ * once enforcement is installed: the org database's bookmark taken after
+ * its protocol and closed admission are seen, so every write after it went
+ * through the executor. Once: a floor recorded stays. A deploy interrupted
+ * before it records one records a later one next time; an earlier one is
+ * never guessed.
+ */
+async function recordRestoreFloor(
+  deps: DeployDeps,
+  runner: WranglerRunner,
+  apiDir: string,
+  plan: ReturnType<typeof resourcePlan>,
+): Promise<void> {
+  const directory = plan.d1.find((d) => d.binding === "DIRECTORY")?.name;
+  const org = plan.d1.find((d) => d.binding === "ORG_READ")?.name;
+  if (directory === undefined || org === undefined) return;
+  const config = ["-c", API_DEPLOY_CONFIG];
+  const [barrier] = await queryRemote<{ floor: string | null }>(
+    runner,
+    apiDir,
+    directory,
+    "SELECT read_model_protocol_since AS floor FROM read_model_barriers WHERE shard = 'default'",
+    config,
+  );
+  if (!barrier) throw new Error(`${directory} has no barrier for its read model`);
+  if (barrier.floor !== null) {
+    deps.log(`ok   read model restore floor ${barrier.floor}`);
+    return;
+  }
+  const [state] = await queryRemote<{ protocol: number; open: number }>(
+    runner,
+    apiDir,
+    org,
+    `SELECT b.protocol_version AS protocol, w.open AS open
+     FROM read_model_barrier b JOIN read_model_write w ON w.id = 1 WHERE b.id = 1`,
+    config,
+  );
+  if (!state || state.protocol < 2 || state.open !== 0)
+    throw new Error(
+      `${org} does not refuse writes outside the read model's executor (protocol ${state?.protocol ?? "missing"}, admission ${state?.open === 0 ? "closed" : "not closed"}): no restore floor recorded`,
+    );
+  const info = JSON.parse(
+    await wrangler(runner, ["d1", "time-travel", "info", org, "--json", ...config], {
+      cwd: apiDir,
+    }),
+  ) as { bookmark?: unknown };
+  const bookmark = info.bookmark;
+  if (typeof bookmark !== "string" || !BOOKMARK.test(bookmark))
+    throw new Error(`${org}'s Time Travel answered no bookmark: no restore floor recorded`);
+  const recorded = await queryRemote<{ floor: string }>(
+    runner,
+    apiDir,
+    directory,
+    `UPDATE read_model_barriers SET read_model_protocol_since = '${bookmark}'
+     WHERE shard = 'default' AND read_model_protocol_since IS NULL
+     RETURNING read_model_protocol_since AS floor`,
+    config,
+  );
+  deps.log(
+    recorded.length === 1
+      ? `ok   read model restore floor ${bookmark} (recorded)`
+      : "ok   read model restore floor recorded meanwhile (kept)",
+  );
 }
 
 /** 32 random bytes as unpadded base64url. */

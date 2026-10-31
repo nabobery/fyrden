@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { readModelUsedSql } from "../src/commands/deploy.ts";
 import {
   diffSchema,
   normaliseSql,
@@ -342,5 +343,43 @@ describe("diffSchema", () => {
     // Both rolled back: the drifted table and its rows are as they were.
     expect(diffSchema(directory, schemaOf(db))).toEqual(["principals (table) differs"]);
     expect(db.prepare("SELECT count(*) AS n FROM principals").get()).toEqual({ n: 2 });
+  });
+});
+
+describe("whether a read model from before enforcement holds data", () => {
+  /** fyrden-org as its migrations before 0018 leave it, and its read model's tables. */
+  function beforeEnforcement(): { db: DatabaseSync; tables: string[] } {
+    const db = new DatabaseSync(":memory:");
+    for (const file of readdirSync(resolve(migrations, "org"))
+      .filter((f) => f.endsWith(".sql") && f < "0018")
+      .sort())
+      db.exec(readFileSync(resolve(migrations, "org", file), "utf8"));
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'read_model_%'",
+        )
+        .all() as { name: string }[]
+    ).map((row) => row.name);
+    return { db, tables };
+  }
+  const used = (db: DatabaseSync, tables: string[]) =>
+    (db.prepare(readModelUsedSql(tables)).get() as { used: number }).used;
+
+  it("says no for one as its migrations left it, rows they seed included", () => {
+    const { db, tables } = beforeEnforcement();
+    expect(tables).toContain("search_size");
+    expect(used(db, tables)).toBe(0);
+  });
+
+  it("says yes once work wrote any of it, its seeded rows changed included", () => {
+    const { db, tables } = beforeEnforcement();
+    db.exec("UPDATE search_size SET bytes = 4096 WHERE id = 1");
+    expect(used(db, tables)).toBe(1);
+    const other = beforeEnforcement();
+    other.db.exec(
+      "INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES ('rep_1', 1, 0)",
+    );
+    expect(used(other.db, other.tables)).toBe(1);
   });
 });

@@ -14,6 +14,7 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { API_DEPLOY_CONFIG, type DeployDeps, deploy } from "../src/commands/deploy.ts";
 import { doctor } from "../src/commands/doctor.ts";
+import { parseExpectedSchema } from "../src/d1-schema.ts";
 import { parseJsonc } from "../src/jsonc.ts";
 import type { WranglerRunner } from "../src/wrangler.ts";
 import { fakeWrangler } from "./fake-wrangler.ts";
@@ -416,7 +417,7 @@ describe("fyrden deploy", () => {
     const recorded: string[] = [];
     let barriers = [{ shard: "default" }];
     fake.state.d1Query = (db, sql) => {
-      if (!sql.includes("read_model_barriers")) return undefined;
+      if (!sql.includes("SET executor_version")) return undefined;
       recorded.push(`${db}: ${sql.replace(/\s+/g, " ")}`);
       return barriers;
     };
@@ -558,13 +559,72 @@ describe("fyrden deploy", () => {
     expect(migrateIndex).toBeLessThan(deployIndex);
   });
 
+  it("records the read model's restore floor once enforcement is installed, once", async () => {
+    const fake = fakeWrangler();
+    const first = deps(fake.runner);
+    await deploy(first.d);
+    expect(fake.state.floor).toBe(fake.state.bookmark);
+    expect(first.lines).toContain(
+      `ok   read model restore floor ${fake.state.bookmark} (recorded)`,
+    );
+    // The bookmark is taken after the read model is seen enforced, and after its migrations.
+    const lookedAt = fake.calls.findIndex((c) =>
+      c.args.join(" ").includes("FROM read_model_barrier b"),
+    );
+    const bookmarked = fake.calls.findIndex((c) => c.args[1] === "time-travel");
+    const migrated = fake.calls.findLastIndex((c) => c.args.join(" ").includes("migrations apply"));
+    expect(migrated).toBeLessThan(lookedAt);
+    expect(lookedAt).toBeLessThan(bookmarked);
+    // A later deploy keeps it: never another, never an earlier one.
+    fake.state.bookmark = "00000099-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683";
+    const again = deps(fake.runner);
+    await deploy(again.d);
+    expect(fake.state.floor).toBe("00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683");
+    expect(fake.calls.filter((c) => c.args[1] === "time-travel")).toHaveLength(1);
+  });
+
+  it("records no restore floor while the read model does not refuse writes outside its executor", async () => {
+    const fake = fakeWrangler();
+    fake.state.readModel = { protocol: 1, open: 0 };
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/no restore floor recorded/);
+    expect(fake.state.floor).toBeNull();
+    expect(fake.calls.some((c) => c.args[1] === "time-travel")).toBe(false);
+    // An interrupted recording (enforced, but no floor yet) is made by the next deploy.
+    fake.state.readModel = { protocol: 2, open: 0 };
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.floor).toBe(fake.state.bookmark);
+  });
+
+  it("installs enforcement over a read model with data only once told the deployment is quiesced", async () => {
+    const fake = fakeWrangler();
+    // A deployment from before enforcement, with data.
+    fake.state.d1.set("fyrden-org", "org-id");
+    fake.state.d1Migrations.set("fyrden-org", ["0017_read_model_executor.sql"]);
+    const committed = parseExpectedSchema(
+      await readFile(join(repoRoot, "apps/api/migrations/org.expected.sql"), "utf8"),
+    );
+    fake.state.d1Schema.set(
+      "fyrden-org",
+      committed.filter((o) => o.name === "effects"),
+    );
+    fake.state.orgInUse = true;
+    await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/--quiesced on/);
+    expect(fake.calls.some((c) => c.args.join(" ").includes("migrations apply"))).toBe(false);
+    await deploy(deps(fake.runner, { quiesced: true }).d);
+    expect(fake.calls.some((c) => c.args.join(" ").includes("migrations apply"))).toBe(true);
+  });
+
   it("checks each D1 schema against the repository once it is migrated", async () => {
     const fake = fakeWrangler();
     const { d, lines } = deps(fake.runner);
     await deploy(d);
     const applied = fake.calls.findIndex((c) => c.args.join(" ").includes("migrations apply"));
     const checks = fake.calls.filter(
-      (c) => c.args[1] === "execute" && c.args.join(" ").includes("sqlite_schema"),
+      (c) =>
+        c.args[1] === "execute" &&
+        c.args.join(" ").includes("sqlite_schema") &&
+        // Not the look before migrating, for the read model's tables.
+        !c.args.join(" ").includes("type = 'table'"),
     );
     expect(checks.map((c) => [c.args[2], c.args.at(-1)])).toEqual([
       ["fyrden-directory", API_DEPLOY_CONFIG],

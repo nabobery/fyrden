@@ -1,3 +1,5 @@
+import { type ApiTarget, apiTarget, callApi } from "../api.ts";
+
 /*
  * Repairing effects that failed for good while what they deliver can
  * still matter: an operator reopens them through the deployment's API
@@ -10,11 +12,7 @@
 export const REPAIRABLE_SINKS = ["feed", "webhooks", "references"] as const;
 export type RepairableSink = (typeof REPAIRABLE_SINKS)[number];
 
-export interface RepairArgs {
-  /** The API's origin (its workers.dev URL or custom domain). */
-  readonly url: string;
-  /** An instance administrator's token (`FYRDEN_TOKEN`). */
-  readonly token: string;
+export interface RepairArgs extends ApiTarget {
   readonly sink: RepairableSink;
   /** Effects journaled from then on (milliseconds since the epoch). */
   readonly since: number;
@@ -23,11 +21,6 @@ export interface RepairArgs {
 
 export const REPAIR_USAGE =
   "fyrden effects repair --url <API URL> --sink feed|webhooks|references --since <ISO date> [--yes]";
-
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
-
-/** What a bearer token may hold. */
-const TOKEN_SHAPE = /^[\x21-\x7e]{1,4096}$/;
 
 /** `effects repair`'s arguments, or why they are not; the token comes from `FYRDEN_TOKEN`. */
 export function parseRepairArgs(
@@ -47,17 +40,6 @@ export function parseRepairArgs(
     else if (arg === "--since") since = args[++i];
     else return { error: `unknown argument ${arg}\nusage: ${REPAIR_USAGE}` };
   }
-  let origin: URL | undefined;
-  try {
-    origin = url === undefined ? undefined : new URL(url);
-  } catch {}
-  const secure =
-    origin?.protocol === "https:" ||
-    (origin?.protocol === "http:" && LOCAL_HOSTS.has(origin.hostname));
-  if (!origin || !secure)
-    return {
-      error: `--url must be the API's https URL (http only on localhost)\nusage: ${REPAIR_USAGE}`,
-    };
   if (!sink || !(REPAIRABLE_SINKS as readonly string[]).includes(sink))
     return {
       error: `--sink must be one of ${REPAIRABLE_SINKS.join(", ")}\nusage: ${REPAIR_USAGE}`,
@@ -65,12 +47,9 @@ export function parseRepairArgs(
   const at = since === undefined ? Number.NaN : Date.parse(since);
   if (!Number.isFinite(at)) return { error: `--since must be a date\nusage: ${REPAIR_USAGE}` };
   if (at > now) return { error: "--since is in the future" };
-  const token = env.FYRDEN_TOKEN;
-  if (!token) return { error: "set FYRDEN_TOKEN to an instance administrator's token" };
-  // Checked here, so no header error ever repeats it.
-  if (!TOKEN_SHAPE.test(token))
-    return { error: "FYRDEN_TOKEN is not a token (printable characters, no spaces)" };
-  return { url: origin.origin, token, sink: sink as RepairableSink, since: at, confirmed };
+  const target = apiTarget(url, env, REPAIR_USAGE);
+  if ("error" in target) return target;
+  return { ...target, sink: sink as RepairableSink, since: at, confirmed };
 }
 
 export interface RepairDeps {
@@ -91,32 +70,13 @@ interface Repair {
  */
 export async function repairEffects(deps: RepairDeps): Promise<number> {
   const { args, log } = deps;
-  const origin = new URL(args.url).origin;
-  let response: Response;
-  try {
-    response = await deps.fetch(`${origin}/api/admin/effects/repair`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${args.token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ sink: args.sink, since: args.since, dry_run: !args.confirmed }),
-      signal: AbortSignal.timeout(60_000),
-    });
-  } catch (error) {
-    // Its message, never the token.
-    throw new Error(
-      `could not reach ${origin} (${String(error).replaceAll(args.token, "<token>")})`,
-    );
-  }
-  if (!response.ok) {
-    const problem = (await response.json().catch(() => ({}))) as {
-      code?: string;
-      detail?: string;
-    };
-    throw new Error(
-      `the API answered ${response.status}${problem.code ? ` ${problem.code}` : ""}` +
-        (problem.detail ? `: ${problem.detail}` : ""),
-    );
-  }
-  const { eligible, oldest, reopened } = (await response.json()) as Repair;
+  const { eligible, oldest, reopened } = await callApi<Repair>(
+    deps.fetch,
+    args,
+    "POST",
+    "/admin/effects/repair",
+    { sink: args.sink, since: args.since, dry_run: !args.confirmed },
+  );
   const since = new Date(args.since).toISOString();
   log(
     `${eligible} failed ${args.sink} effect(s) journaled since ${since} can be reopened` +

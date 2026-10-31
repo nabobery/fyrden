@@ -157,6 +157,12 @@ import {
   listReviewCommentReactions,
 } from "../ops/reactions.js";
 import {
+  getReadModelExport,
+  getReadModelExportPage,
+  pauseReadModel,
+  resumeReadModel,
+} from "../ops/read-model.js";
+import {
   createOrgRepo,
   createRepo,
   deleteRepo,
@@ -283,6 +289,10 @@ export const registry = defineRegistry([
   backfillSearch,
   setSearchIndexing,
   getSearchStatus,
+  pauseReadModel,
+  resumeReadModel,
+  getReadModelExport,
+  getReadModelExportPage,
   listPulls,
   createPull,
   getPull,
