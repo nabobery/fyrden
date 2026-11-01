@@ -873,13 +873,15 @@ describe("fyrden doctor", () => {
     );
     expect(lines).toContain("ok   fyrden-org schema matches apps/api/migrations/org.expected.sql");
     const executed = fake.calls.filter((c) => c.args[1] === "execute");
-    // Each database's applied migrations, then its schema; and fyrden-org's effects.
+    // Each database's applied migrations, then its schema; fyrden-org's effects; search's
+    // setting (off: the read model is not read for it).
     expect(executed.map((c) => c.args[2])).toEqual([
       "fyrden-directory",
       "fyrden-directory",
       "fyrden-org",
       "fyrden-org",
       "fyrden-org",
+      "fyrden-directory",
     ]);
     expect(
       executed.every(
@@ -972,6 +974,44 @@ describe("fyrden doctor", () => {
     );
     fake.state.effects = [];
     expect((await doctorLines(fake)).lines).toContain("info fyrden-org effects: none");
+  });
+
+  it("says whether search indexes, at which generation, and a repository not yet whole to it", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    let settings: { name: string; value: string }[] = [];
+    let waiting = { uncovered: null as string | null, stale: null as string | null };
+    const asked: string[] = [];
+    fake.state.d1Query = (db, sql) => {
+      if (sql.includes("FROM deployment_settings")) return settings;
+      if (sql.includes("FROM search_sources")) {
+        asked.push(`${db}: ${sql}`);
+        return [waiting];
+      }
+      return undefined;
+    };
+    const line = async () =>
+      (await doctorLines(fake)).lines.find(
+        (l) => l.includes("search indexing") || l.includes("search's state"),
+      );
+    expect(await line()).toMatch(/^info search indexing is off \(generation 0\)/);
+    // Off, the read model is not read.
+    expect(asked).toEqual([]);
+    settings = [
+      { name: "search_indexing", value: "on" },
+      { name: "search_indexing_generation", value: "3" },
+    ];
+    expect(await line()).toBe(
+      "ok   search indexing is on (generation 3); no repository waits to be known whole",
+    );
+    expect(asked[0]).toMatch(/^fyrden-org: .*indexing_gen < 3/s);
+    waiting = { uncovered: null, stale: "rep_old" };
+    expect(await line()).toMatch(
+      /^WARN search indexing is on \(generation 3\), but rep_old is not yet/,
+    );
+    // A read that fails says so, never that all is well.
+    fake.state.d1Query = () => undefined;
+    expect(await line()).toMatch(/^WARN could not read search's state/);
   });
 
   it("names the commit fyrden-api runs, and warns when it was deployed with uncommitted changes", async () => {
