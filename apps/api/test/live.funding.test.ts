@@ -523,7 +523,8 @@ describe("owned live work", () => {
         },
         { ledger },
       );
-      expect(run).toEqual({ status: "funded", value: "opened" });
+      // Its result stands; its owner, not accounted, is said to be.
+      expect(run).toEqual({ status: "funded", value: "opened", accounted: false });
       expect((await ownerRow(ownerId))?.status).toBe("dispatched");
     }));
 });

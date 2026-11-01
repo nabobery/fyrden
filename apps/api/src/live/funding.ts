@@ -50,7 +50,12 @@ const DAY = 86_400_000;
 export const LIVE_MANIFEST_REVISION = 1;
 
 export type FundedResult<T> =
-  | { readonly status: "funded"; readonly value: T }
+  | {
+      readonly status: "funded";
+      readonly value: T;
+      /** An owned run's owner observed, settled and released (false: left for recovery). */
+      readonly accounted?: boolean;
+    }
   | { readonly status: "refused"; readonly reason: "daily"; readonly retryAt: number }
   | { readonly status: "refused"; readonly reason: "temporary" };
 
@@ -319,6 +324,11 @@ export async function liveTarget(
   readonly ledger: LedgerClock;
   readonly ticketsToday: number;
   readonly tomorrow: number;
+  /**
+   * Whether the feed holds a turn's grant still to run: unsettled, its
+   * owner never released (a turn that ran released it), valid five minutes on.
+   */
+  readonly turnHeld: boolean;
 }> {
   const day = `CAST(${LIVE_NOW} / ${DAY} AS INTEGER)`;
   const sent = clock();
@@ -330,7 +340,14 @@ export async function liveTarget(
          ${LIVE_NOW} AS now,
          coalesce((SELECT issued FROM live_ticket_days WHERE principal_id = ?2 AND day = ${day}), 0)
            AS tickets,
-         (${day} + 1) * ${DAY} AS tomorrow`,
+         (${day} + 1) * ${DAY} AS tomorrow,
+         EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_turn
+           WHERE recipient = ?2 AND kind = 'pump' AND settled_at IS NULL
+             AND valid_until > ${LIVE_NOW} + 300000
+             AND json_array_length(released_owners) = 0
+             AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+             AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
+           AS turn_held`,
     )
     .bind(feedEpochSource(recipient), recipient)
     .first<{
@@ -339,6 +356,7 @@ export async function liveTarget(
       now: number;
       tickets: number;
       tomorrow: number;
+      turn_held: number;
     }>();
   if (!row?.incarnation) throw new Error("the live ledger has no incarnation");
   const at = clock();
@@ -349,6 +367,7 @@ export async function liveTarget(
     ledger: { now: row.now, at, slack: 1_000 + Math.max(0, at - sent) },
     ticketsToday: row.tickets,
     tomorrow: row.tomorrow,
+    turnHeld: row.turn_held === 1,
   };
 }
 
@@ -375,6 +394,11 @@ export interface OwnedRunOptions {
   readonly quantity?: number;
   /** The ledger's clock as sampled: the owner's run is timed on it (its grant's own clock). */
   readonly ledger?: LedgerClock;
+  /**
+   * Told the call's own end (which may come after it was given up on): what
+   * its caller holds for it is held until then.
+   */
+  readonly physical?: (ended: Promise<void>) => void;
 }
 
 /**
@@ -436,17 +460,24 @@ export async function ownedRun<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let value: T;
   try {
-    value = await Promise.race([
-      call(
-        {
-          protocol: 1,
-          revision: LIVE_MANIFEST_REVISION,
-          envelope,
-          quantity: options.quantity ?? 1,
-          ownerId,
-        },
-        deadline.signal,
+    const called = call(
+      {
+        protocol: 1,
+        revision: LIVE_MANIFEST_REVISION,
+        envelope,
+        quantity: options.quantity ?? 1,
+        ownerId,
+      },
+      deadline.signal,
+    );
+    options.physical?.(
+      called.then(
+        () => {},
+        () => {},
       ),
+    );
+    value = await Promise.race([
+      called,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           deadline.abort();
@@ -464,6 +495,7 @@ export async function ownedRun<T>(
   // there); accounted, then released. Its result stands whatever the accounting does: an owner
   // not released keeps its place until recovery accounts for it.
   const finishedAt = startedAt + Math.max(0, clock() - begun) + (options.ledger?.slack ?? 0);
+  let accounted = false;
   try {
     await observeLiveOwner(db, ownerId, {
       startedAt,
@@ -476,7 +508,7 @@ export async function ownedRun<T>(
         break;
       if (settled.status !== "settled") break;
     }
-    await releaseLiveOwner(db, ownerId);
+    accounted = (await releaseLiveOwner(db, ownerId)) === "released";
   } catch {}
-  return { status: "funded", value };
+  return { status: "funded", value, accounted };
 }

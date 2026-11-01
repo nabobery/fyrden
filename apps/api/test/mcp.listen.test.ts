@@ -301,8 +301,8 @@ describe("a listen stream", () => {
     });
     // The socket was there before the acknowledgement: a change right after it is heard.
     expect(await socketsOf(owner)).toEqual({ leases: 1, local: 1 });
-    // Paid for as a ticket's redemption is: its transport, its admission with its end's provisions
-    // and the feed's first blocks granted, the transport's owner released.
+    // Paid for as a ticket's redemption is: its transport, its admission with its end's provisions,
+    // the feed's first blocks and its first turn granted, the transport's owner released.
     expect(
       await env.DIRECTORY.prepare(
         `SELECT json_extract(plan, '$.kind') AS kind FROM live_budget_receipts
@@ -315,6 +315,7 @@ describe("a listen stream", () => {
       { kind: "admission" },
       { kind: "control" },
       { kind: "mark" },
+      { kind: "pump" },
       { kind: "terminal" },
       { kind: "upgrade_transport" },
     ]);

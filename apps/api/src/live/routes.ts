@@ -3,7 +3,12 @@ import type { Input, issueLiveTicket, Output } from "@fyrden/api-contract";
 import { hashToken } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
-import { LIVE_BUDGET, type LiveAdmitted, type LiveBudgetV1 } from "../do/UserDO.js";
+import {
+  LIVE_BUDGET,
+  LIVE_TURN_WANTED,
+  type LiveAdmitted,
+  type LiveBudgetV1,
+} from "../do/UserDO.js";
 import { LIVE_POLICY, ticketHash } from "../do/user/live.js";
 import { randomSecret } from "../oauth/params.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
@@ -71,7 +76,14 @@ type Target = Awaited<ReturnType<typeof liveTarget>>;
 function grantFor(
   target: Target,
   recipient: string,
-  unit: "ticket" | "upgrade_transport" | "admission" | "terminal" | "control_block" | "mark_block",
+  unit:
+    | "ticket"
+    | "upgrade_transport"
+    | "admission"
+    | "terminal"
+    | "control_block"
+    | "mark_block"
+    | "pump",
 ) {
   return makeLiveGrant(
     planFor(
@@ -289,21 +301,29 @@ export async function openLiveSocket(
     return refused(503, "live_unavailable", "This deployment sends no live hints.", undefined);
   // Its grants first: no lease or local obligation before they are paid for. The admission, its
   // end on each day it may live on, and the feed's first blocks of controls and marks, granted
-  // together (one refused refuses the socket; the others' charges stand).
-  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 5);
+  // together, with the feed's first turn when it holds none (one refused refuses the socket; the
+  // others' charges stand).
   const target = await liveTarget(env.DIRECTORY, credential.principalId);
-  const units = ["admission", "terminal", "control_block", "mark_block"] as const;
+  const units = [
+    "admission",
+    "terminal",
+    "control_block",
+    "mark_block",
+    ...(target.turnHeld ? [] : (["pump"] as const)),
+  ] as const;
+  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, units.length + 1);
   const grants = await Promise.all(
     units.map(async (unit) =>
       fund(env.DIRECTORY, await grantFor(target, credential.principalId, unit)),
     ),
   );
-  const [admission, terminal, controls, marks] = grants;
+  const [admission, terminal, controls, marks, turn] = grants;
   if (
     admission?.status !== "funded" ||
     terminal?.status !== "funded" ||
     controls?.status !== "funded" ||
-    marks?.status !== "funded"
+    marks?.status !== "funded" ||
+    (turn !== undefined && turn.status !== "funded")
   ) {
     const spent = grants.find((g) => g.status === "refused" && g.reason === "daily");
     return spent?.status === "refused" && spent.reason === "daily"
@@ -384,6 +404,7 @@ export async function openLiveSocket(
     terminal: funding(terminal.value),
     controls: funding(controls.value, LIVE_BLOCK_UNITS),
     marks: funding(marks.value, LIVE_BLOCK_UNITS),
+    ...(turn?.status === "funded" && { turn: funding(turn.value) }),
   };
   const response = await env.USER.getByName(credential.principalId).fetch(
     new Request("https://user.internal/live", {
@@ -398,7 +419,20 @@ export async function openLiveSocket(
       response.webSocket.close(4412, "try again soon");
       return temporary();
     }
-    return { ok: true, response };
+    // The feed holds no turn to run (its first was never delivered, say): one granted and handed
+    // over now, after the socket (whose opening does not wait on it).
+    if (response.headers.get(LIVE_TURN_WANTED) && turn === undefined)
+      await deliverTurn(env, target, credential.principalId, metrics).catch(() => {});
+    // Given up on while it was handed over: nobody takes the socket, so it is closed at once.
+    if (signal.aborted) {
+      response.webSocket.accept();
+      response.webSocket.close(4412, "try again soon");
+      return temporary();
+    }
+    return {
+      ok: true,
+      response: new Response(null, { status: 101, webSocket: response.webSocket }),
+    };
   }
   // The object released its lease: past a cap, its credential revoked or its feed retired, or
   // its confirmation lost.
@@ -420,6 +454,26 @@ export async function openLiveSocket(
       "temporary",
     ),
   };
+}
+
+/** Grants the feed a turn and hands it to its object to prepare (refused or lost: none). */
+async function deliverTurn(
+  env: Env,
+  target: Target,
+  feed: string,
+  metrics: Metrics | undefined,
+): Promise<void> {
+  metrics?.count("d1.query", { db: "directory", op: "live_grant" });
+  const turn = await fund(env.DIRECTORY, await grantFor(target, feed, "pump"));
+  if (turn.status !== "funded") return;
+  metrics?.count("do.request", { class: "UserDO", method: "liveTurnV1" });
+  await env.USER.getByName(feed).liveTurnV1({
+    protocol: 1,
+    revision: LIVE_MANIFEST_REVISION,
+    envelope: turn.value,
+    quantity: 1,
+    ownerId: null,
+  });
 }
 
 /**

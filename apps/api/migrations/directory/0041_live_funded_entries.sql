@@ -1,7 +1,8 @@
 -- Funded live entries: the duration reserve ordinary owners leave to cleanup set (it was 0, so
 -- nothing was held back; 1,000,000 object-ms, Proposed), and the tickets a principal was issued
 -- a UTC day (at most 60, counted with the transport that records each, in one batch). A day's row
--- is removed once the day is past, by maintenance.
+-- is removed once the day is past, by maintenance. A feed's unsettled turn grants are found by
+-- their recipient (an admission grants a turn only when its feed holds none).
 UPDATE live_budget_state SET duration_reserve_ms = 1000000 WHERE id = 1 AND duration_reserve_ms = 0;
 
 CREATE TABLE live_ticket_days (
@@ -18,3 +19,6 @@ ALTER TABLE live_ticket_transports ADD COLUMN envelope_json TEXT CHECK (
 );
 
 ALTER TABLE live_sockets ADD COLUMN funding_operation_id TEXT;
+
+CREATE INDEX live_budget_receipts_turn ON live_budget_receipts (recipient, valid_until)
+  WHERE kind = 'pump' AND settled_at IS NULL;

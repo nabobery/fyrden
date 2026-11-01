@@ -653,11 +653,13 @@ export const userSchema: readonly DoMigration[] = [
     // phase: prepared, claimed once, then dispatched with its owner and the instance that held
     // it; one at a time, never a queue), stamped by the grant that paid for it as recovery
     // requires; and how far the ledger's clock (D1's) was from this object's when a funding was
-    // last checked, which its credit's times are judged by.
+    // last checked, which its credit's times are judged by; and whether live work goes before
+    // notification email the next time both are due.
     sql: `
       ALTER TABLE live_budget_fence ADD COLUMN ledger_offset_ms INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE live_budget_fence ADD COLUMN ledger_sampled_at INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE live_budget_fence ADD COLUMN ledger_uncertainty_ms INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE live_budget_fence ADD COLUMN alarm_live_first INTEGER NOT NULL DEFAULT 0;
 
       ALTER TABLE live_tickets ADD COLUMN transport_json TEXT CHECK (
         transport_json IS NULL

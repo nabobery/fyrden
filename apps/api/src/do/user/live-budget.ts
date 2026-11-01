@@ -158,6 +158,16 @@ export class LiveBudget {
     return Math.floor((local + high - width) / DAY) === day ? day : null;
   }
 
+  /**
+   * The ledger's time by this object's clock `local`, at the earliest it
+   * may be, in D1's whole seconds (what a grant may start at: never after
+   * D1's own time).
+   */
+  ledgerEarliest(local: number): number {
+    const { high, width } = this.#clock();
+    return Math.floor((local + high - width) / 1_000) * 1_000;
+  }
+
   /** The days the ledger may be on by `local`: the later first (one, away from a midnight). */
   ledgerDays(local: number): number[] {
     const { high, width } = this.#clock();
@@ -311,9 +321,20 @@ export class LiveBudget {
     if (this.#fenced(stamp) || now < plan.validFrom || now >= plan.validUntil) return false;
     return (
       this.sql.exec(
+        // A prepared turn that can no longer run (expired, or fenced since) gives way; one held
+        // otherwise stays.
         `INSERT INTO live_turn (id, operation_id, envelope_json, phase, intended_at,
            budget_epoch, budget_incarnation, budget_seq, budget_valid_until)
-         VALUES (1, ?, ?, 'prepared', ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+         VALUES (1, ?1, ?2, 'prepared', ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (id) DO UPDATE SET operation_id = excluded.operation_id,
+           envelope_json = excluded.envelope_json, intended_at = excluded.intended_at,
+           budget_epoch = excluded.budget_epoch, budget_incarnation = excluded.budget_incarnation,
+           budget_seq = excluded.budget_seq, budget_valid_until = excluded.budget_valid_until,
+           owner_id = NULL, dispatch_instance = NULL
+         WHERE live_turn.phase = 'prepared' AND (live_turn.budget_valid_until <= ?8
+           OR EXISTS (SELECT 1 FROM live_budget_fence f WHERE f.id = 1
+             AND (live_turn.budget_epoch <> f.epoch OR live_turn.budget_incarnation <> f.incarnation
+               OR live_turn.budget_seq <= f.cleanup_through)))`,
         envelope.operationId,
         JSON.stringify(envelope),
         intendedAt,
@@ -321,6 +342,54 @@ export class LiveBudget {
         plan.incarnation,
         envelope.seq,
         plan.validUntil,
+        now,
+      ).rowsWritten > 0
+    );
+  }
+
+  /**
+   * The prepared turn that can run by this object's clock `local` (current,
+   * still valid on the ledger's clock): when it is due, and when it lapses
+   * (on this object's clock); null for none.
+   */
+  runnableTurn(local: number): { intendedAt: number; validUntil: number; seq: number } | null {
+    const turn = this.turn();
+    if (!turn || turn.phase !== "prepared") return null;
+    const plan = turn.envelope.plan;
+    const now = this.ledgerNow(local);
+    if (
+      this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) ||
+      now >= plan.validUntil
+    )
+      return null;
+    return {
+      intendedAt: turn.intendedAt,
+      validUntil: plan.validUntil - (now - local),
+      seq: turn.envelope.seq,
+    };
+  }
+
+  /** Brings the prepared turn's due time to `at` at the latest (whether one is prepared). */
+  bringTurn(at: number): boolean {
+    return (
+      this.sql.exec(
+        "UPDATE live_turn SET intended_at = min(intended_at, ?) WHERE id = 1 AND phase = 'prepared'",
+        at,
+      ).rowsWritten > 0
+    );
+  }
+
+  /**
+   * Puts a claimed turn that never dispatched back as prepared, due at
+   * `intendedAt` (its owner was not admitted: nothing of it ran).
+   */
+  unclaimTurn(operationId: string, intendedAt: number): boolean {
+    return (
+      this.sql.exec(
+        `UPDATE live_turn SET phase = 'prepared', intended_at = ?2, dispatch_instance = NULL
+         WHERE id = 1 AND phase = 'claimed' AND operation_id = ?1`,
+        operationId,
+        intendedAt,
       ).rowsWritten > 0
     );
   }
@@ -330,7 +399,7 @@ export class LiveBudget {
    * current and valid now (else null, the turn left as it was: an expired
    * one pays for nothing, its successor included).
    */
-  claimTurn(now: number): LiveEnvelope | null {
+  claimTurn(now: number, instance = ""): LiveEnvelope | null {
     const turn = this.turn();
     if (!turn || turn.phase !== "prepared") return null;
     const plan = turn.envelope.plan;
@@ -340,9 +409,12 @@ export class LiveBudget {
       now >= plan.validUntil
     )
       return null;
+    // Claimed by this instance: another finding it claimed knows it was not its own.
     const claimed = this.sql.exec(
-      "UPDATE live_turn SET phase = 'claimed' WHERE id = 1 AND phase = 'prepared' AND operation_id = ?",
+      `UPDATE live_turn SET phase = 'claimed', dispatch_instance = ?2
+       WHERE id = 1 AND phase = 'prepared' AND operation_id = ?1`,
       turn.operationId,
+      instance,
     ).rowsWritten;
     return claimed > 0 ? turn.envelope : null;
   }
@@ -613,6 +685,45 @@ export class LiveBudget {
   }
 
   /** Removes the item queued as `kind` with `identity`; whether it was there. */
+  /**
+   * Puts a dispatched installation back as queued, its exact request kept
+   * (its grant's answer was lost: the next attempt sends the same request,
+   * and gets the same grant if it was made).
+   */
+  requeuePending(kind: QueuedKind, identity: string, retryAt: number): boolean {
+    return (
+      this.sql.exec(
+        `UPDATE live_budget_pending SET phase = 'queued', owner_id = NULL, dispatch_instance = NULL,
+           intended_at = ?3
+         WHERE kind = ?1 AND operation_id = ?2 AND phase = 'dispatched'`,
+        kind,
+        identity,
+        retryAt,
+      ).rowsWritten > 0
+    );
+  }
+
+  /** Forgets the turn (one an instance gone left claimed or dispatched, once dealt with). */
+  dropTurn(operationId: string): boolean {
+    return (
+      this.sql.exec("DELETE FROM live_turn WHERE id = 1 AND operation_id = ?", operationId)
+        .rowsWritten > 0
+    );
+  }
+
+  /** Whether live work goes before notification email the next time both are due. */
+  liveFirst(): boolean {
+    return (
+      this.sql
+        .exec<{ f: number }>("SELECT alarm_live_first AS f FROM live_budget_fence WHERE id = 1")
+        .one().f === 1
+    );
+  }
+
+  setLiveFirst(first: boolean): void {
+    this.sql.exec("UPDATE live_budget_fence SET alarm_live_first = ? WHERE id = 1", first ? 1 : 0);
+  }
+
   finishPending(kind: QueuedKind, identity: string): boolean {
     return (
       this.sql.exec(

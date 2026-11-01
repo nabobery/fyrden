@@ -207,7 +207,7 @@ CREATE TABLE live_budget_fence (
         incarnation TEXT NOT NULL,
         authorization_gen INTEGER NOT NULL CHECK (authorization_gen >= 0),
         cleanup_through INTEGER NOT NULL CHECK (cleanup_through >= 0)
-      , ledger_offset_ms INTEGER NOT NULL DEFAULT 0, ledger_sampled_at INTEGER NOT NULL DEFAULT 0, ledger_uncertainty_ms INTEGER NOT NULL DEFAULT 0) STRICT;
+      , ledger_offset_ms INTEGER NOT NULL DEFAULT 0, ledger_sampled_at INTEGER NOT NULL DEFAULT 0, ledger_uncertainty_ms INTEGER NOT NULL DEFAULT 0, alarm_live_first INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE live_budget_pending (
         kind TEXT PRIMARY KEY CHECK (kind IN ('install', 'control_refill', 'mark_refill', 'renewal')),
         operation_id TEXT NOT NULL UNIQUE,

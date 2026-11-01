@@ -366,5 +366,31 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
   });
 }
 
+/**
+ * - `pump`: a feed's execution turn, one alarm's live work, owned: its
+ *   housekeeping (confirmations never finished forgotten, expired and slow
+ *   sockets ended), then one kind of work (up to `LIVE_TURN_RENEWALS`
+ *   queued renewals, one refill's grant and installation, or one pump
+ *   unit: one credential's sockets, one owning account's page), and its
+ *   successor's grant; its owner's whole accounting reserved with it.
+ */
+LIVE_PRICES.pump = estimated(
+  { do_rows_read: 240, do_rows_written: 80, d1_rows_read: 120, d1_rows_written: 40 },
+  {
+    validity: { maxMs: 30 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 30_000,
+    maxQuantity: 1,
+    requests: 8,
+    directoryCleanupDebt: vector({ d1_rows_written: 2 }),
+    localCleanupDebt: vector({ do_rows_written: 2 }),
+    dayCleanupDebt: ZERO,
+    components: LIVE_REQUIRED_COMPONENTS.pump as readonly AlarmUnit[],
+  },
+);
+
+/** Queued renewals one turn runs at most. */
+export const LIVE_TURN_RENEWALS = 2;
+
 LIVE_PRICES.control_block = blockOf(LIVE_PRICES.control as LiveManifestEntry);
 LIVE_PRICES.mark_block = blockOf(LIVE_PRICES.mark as LiveManifestEntry);
