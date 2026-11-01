@@ -121,6 +121,39 @@ describe("a recovery target of another ledger incarnation", () => {
     }));
 });
 
+describe("a feed's recovery target", () => {
+  it("is due only once the last grant it covers has expired, not the first", () =>
+    isolated(async () => {
+      const feed = `usr_${uniqueId("due")}`;
+      const from = await ledgerNow();
+      const grant = async (validMs: number) => {
+        const g = await reserveLive(
+          clockedD1(env.DIRECTORY, { now: from }),
+          await makeLiveGrant(
+            await plan({
+              day: Math.floor(from / DAY),
+              from,
+              validMs,
+              recipient: feed,
+              producesLocal: true,
+            }),
+          ),
+        );
+        if (g.status !== "granted") throw new Error(g.reason);
+        return g.grant;
+      };
+      // A day's provision, then a minute's ticket: recovery waits for the day's.
+      const long = await grant(DAY - 1_000);
+      await grant(60_000);
+      const target = await env.DIRECTORY.prepare(
+        "SELECT next_attempt_at AS due FROM live_recovery_targets WHERE feed = ?",
+      )
+        .bind(feed)
+        .first<{ due: number }>();
+      expect(target?.due).toBe(long.plan.validUntil);
+    }));
+});
+
 describe("a socket's lease", () => {
   const lease = async (id: string, expiresAt: number) => {
     await env.DIRECTORY.prepare(

@@ -1,4 +1,4 @@
-import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
+import { countedD1, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { rearmDeletions } from "./accounts/deletion-runner.js";
 import { app } from "./app-instance.js";
 import { runEffectsCron } from "./cron/effects.js";
@@ -35,7 +35,14 @@ function readModelQueue(env: Env, queue: string): Queue | undefined {
 }
 
 export default {
-  fetch: app.fetch,
+  // Every D1 statement a request runs counted against it (and the rows D1 reports), as the
+  // objects' are.
+  fetch: (request, env, ctx) =>
+    app.fetch(
+      request,
+      { ...env, DIRECTORY: countedD1(env.DIRECTORY), ORG_READ: countedD1(env.ORG_READ) },
+      ctx,
+    ),
   async queue(batch, env) {
     const held = readModelMaintenance(env) ? readModelQueue(env, batch.queue) : undefined;
     if (held) return putBack(batch, held);

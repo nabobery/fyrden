@@ -481,7 +481,9 @@ export async function reserveLive(
   FROM live_budget_receipts WHERE operation_id = ${b(request.operationId)} AND ${G(b)}
   ON CONFLICT (feed) DO UPDATE SET
     through_seq = excluded.through_seq,
-    next_attempt_at = min(live_recovery_targets.next_attempt_at, excluded.next_attempt_at),
+    -- Due once the last grant it covers has expired: recovery cleans through the newest
+    -- sequence, so it waits for all of them (credit valid a day among them).
+    next_attempt_at = max(live_recovery_targets.next_attempt_at, excluded.next_attempt_at),
     local_cleanup_debt = json_object(${R.map(
       (r) =>
         `'${r}', ${v("live_recovery_targets.local_cleanup_debt", r)} + ${v("excluded.local_cleanup_debt", r)}`,
