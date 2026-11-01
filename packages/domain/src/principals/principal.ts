@@ -62,6 +62,7 @@ const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "assets",
   "healthz",
   "notifications",
+  "search",
   "settings",
   "sign-out",
 ]);

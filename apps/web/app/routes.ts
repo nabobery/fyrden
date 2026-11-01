@@ -12,6 +12,7 @@ export default [
   route("notifications/digests", "routes/notifications.digests.tsx"),
   route("notifications/live-ticket", "routes/notifications.live-ticket.ts"),
   route("notifications/digests/:repo/:subject/:window/:epoch", "routes/notifications.digest.tsx"),
+  route("search", "routes/search.tsx"),
   route(":owner/:repo", "routes/repo.tsx"),
   route(":owner/:repo/tree/:ref/*", "routes/repo.tree.tsx"),
   route(":owner/:repo/blob/:ref/*", "routes/repo.blob.tsx"),

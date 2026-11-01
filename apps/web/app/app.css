@@ -370,3 +370,26 @@ fieldset p {
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+header.site .site-search input {
+  width: 16rem;
+  max-width: 40vw;
+}
+.search-options p {
+  margin: 0;
+}
+.notice {
+  border-left: 3px solid var(--border);
+  padding-left: 0.5rem;
+}
+.excerpt {
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+.page-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

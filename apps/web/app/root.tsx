@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
+  Form,
   isRouteErrorResponse,
   Link,
   Links,
@@ -77,6 +78,14 @@ function SiteHeader() {
           </>
         )}
       </nav>
+      {user && (
+        <Form method="get" action="/search" role="search" className="site-search">
+          <label htmlFor="site-search" className="visually-hidden">
+            Search issues, pull requests and repositories
+          </label>
+          <input id="site-search" name="q" type="search" placeholder="Search (repo:owner/name …)" />
+        </Form>
+      )}
       {user ? (
         <form method="post" action="/sign-out" className="row">
           <span className="muted">{user.handle}</span>
