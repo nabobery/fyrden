@@ -7,6 +7,7 @@ import {
 } from "@fyrden/api-contract";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { findReposById, type RepoEntry } from "../repos/directory.js";
 import { principalsByLogin } from "../repos/reviews.js";
 import { authorizeScope } from "./authorization.js";
 import { hydrateIssues, hydrateRepositories } from "./hydrate.js";
@@ -72,7 +73,9 @@ export async function searchIssuesOperation(
       indexing,
       order || (parsed.text.length === 0 ? { sort: "updated", direction: input.order } : undefined),
     );
-    return pageOf(matches, (items) => hydrateIssues(ctx, db, reservation, items, repos));
+    return pageOf(ctx, repos, matches, (items) =>
+      hydrateIssues(ctx, db, reservation, items, repos),
+    );
   });
 }
 
@@ -93,7 +96,9 @@ export async function searchRepositoriesOperation(
       { page: input.page, perPage: input.per_page },
       indexing,
     );
-    return pageOf(matches, (items) => hydrateRepositories(db, reservation, items, repos));
+    return pageOf(ctx, repos, matches, (items) =>
+      hydrateRepositories(db, reservation, items, repos),
+    );
   });
 }
 
@@ -131,6 +136,8 @@ interface Page<T> {
 
 /** A page of `matches`, hydrated; refused when the query was. */
 async function pageOf<M, T>(
+  ctx: OpContext,
+  repos: ReadonlyMap<string, RepoEntry>,
   matches: Matches<M> | null,
   hydrate: (items: readonly M[]) => Promise<{ items: T[]; reads: number }>,
 ): Promise<Page<T>> {
@@ -164,8 +171,25 @@ async function pageOf<M, T>(
     );
   const hydrated = await hydrate(matches.items);
   const reads = matches.reads + hydrated.reads;
+  // The scope's repositories as the directory's primary has them after everything was read: one
+  // gone, or another owner's since the search was authorized, makes the whole answer (its count
+  // and completeness too) one decided for another state of things: refused, to be asked again.
+  const now = new Map(
+    (await findReposById(ctx.env, [...repos.keys()], ctx.metrics)).map((e) => [e.id, e]),
+  );
+  for (const [id, entry] of repos)
+    if (now.get(id)?.ownerId !== entry.ownerId)
+      throw new Refused(
+        reads,
+        new OperationError(
+          503,
+          "search_authorization_unavailable",
+          "A repository searched changed hands or was deleted meanwhile. Try again.",
+        ),
+      );
+  const { items } = hydrated;
   // Refused whole past the bound, never shortened.
-  if (new TextEncoder().encode(JSON.stringify(hydrated.items)).byteLength > MAX_PAGE_BYTES)
+  if (new TextEncoder().encode(JSON.stringify(items)).byteLength > MAX_PAGE_BYTES)
     throw new Refused(
       reads,
       new OperationError(
@@ -178,7 +202,7 @@ async function pageOf<M, T>(
     result: {
       total_count: matches.totalCount,
       incomplete_results: matches.incomplete,
-      items: hydrated.items,
+      items,
     },
     reads,
   };

@@ -514,7 +514,8 @@ describe("search projections' write costs", () => {
       metadata: 5,
       duplicate: 0,
       deletion: 4,
-      label: 2,
+      // Its row, its key and its name in the index of names.
+      label: 3,
       milestone: 2,
     });
   });

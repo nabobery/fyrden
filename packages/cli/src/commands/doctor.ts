@@ -179,7 +179,8 @@ async function searchSummary(
       "SELECT name, value FROM deployment_settings WHERE name IN ('search_indexing', 'search_indexing_generation')",
     );
     const value = (name: string) => settings.find((s) => s.name === name)?.value;
-    const gen = Number.parseInt(value("search_indexing_generation") ?? "0", 10) || 0;
+    // 1 before any change (as the API reads it).
+    const gen = Number.parseInt(value("search_indexing_generation") ?? "1", 10) || 1;
     if (value("search_indexing") !== "on")
       return `info search indexing is off (generation ${gen}): PUT /api/admin/search/indexing turns it on, then POST /api/admin/search/backfill`;
     const [waiting] = await queryRemote<{ uncovered: string | null; stale: string | null }>(

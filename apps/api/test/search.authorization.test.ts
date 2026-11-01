@@ -255,6 +255,20 @@ describe("a search's scope", () => {
       `repo:${mine.full_name} repo:${alice.handle}/missing`,
     ])
       expect(await refusal(scope(bob.token, q)), q).toBe("repo_not_found");
+    // Their refusals say the same, missing or not readable.
+    const message = async (q: string) => {
+      try {
+        await scope(bob.token, q);
+      } catch (error) {
+        // (Each names what the query named.)
+        return (error as OperationError).message
+          .replace(secret.full_name, "<named>")
+          .replace(`${alice.handle}/missing`, "<named>");
+      }
+    };
+    expect(await message(`repo:${mine.full_name} repo:${secret.full_name}`)).toBe(
+      await message(`repo:${mine.full_name} repo:${alice.handle}/missing`),
+    );
     // A token limited to other repositories reads none of a named one.
     const other = await repoOf(alice);
     const limited = await scopedToken(alice.principalId, [], "pat", [other.id]);

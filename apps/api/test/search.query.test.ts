@@ -272,6 +272,34 @@ describe("an issue search's matches", () => {
     expect(await numbers("author:nobody", { authors: [null], assignees: [] })).toEqual([]);
   });
 
+  it("hold a label by name at a bounded cost, however many labels their repository has", async () => {
+    const t = term();
+    const repo = await source(
+      Array.from({ length: 200 }, (_, i) => ({
+        number: i + 1,
+        title: t,
+        issue: { labels: [(i % 3) + 1] },
+      })),
+    );
+    const labels: D1PreparedStatement[] = [];
+    for (let id = 1; id <= 300; id++)
+      labels.push(
+        db
+          .prepare(
+            `INSERT INTO search_labels (repo_id, label_id, name, color, epoch_gen, owner_gen, version,
+               updated_seq) VALUES (?, ?, ?, 'ffffff', 1, 1, 1, 1)`,
+          )
+          .bind(repo, id, `label-${id}`),
+      );
+    await db.batch(labels);
+    const plain = await docs(t, [scoped(repo)]);
+    const missing = await docs(`${t} label:nothing`, [scoped(repo)]);
+    expect(missing.numbers).toEqual([]);
+    // Its labels read once, not each document's repository's labels again (300 each).
+    expect(missing.reads - plain.reads).toBeLessThan(200);
+    expect((await docs(`${t} label:LABEL-2`, [scoped(repo)])).totalCount).toBe(67);
+  });
+
   it("are paged in rank order, counted whole", async () => {
     const t = term();
     const repo = await source(
@@ -488,6 +516,10 @@ describe("an issue search's listing", () => {
     expect((await docs(q("is:open"), [scoped(repo)])).incomplete).toBe(false);
     const pullsOnly = await docs(q("is:open"), [scoped(repo, { issues: false })]);
     expect(pullsOnly).toMatchObject({ incomplete: true, numbers: [] });
+    // Asking only for the kind it may read changes nothing of that.
+    expect((await docs(q("is:open is:pr"), [scoped(repo, { issues: false })])).incomplete).toBe(
+      true,
+    );
     // Its own filter narrows nothing it may not read.
     expect((await docs(q("is:open is:issue"), [scoped(repo)])).incomplete).toBe(false);
   });

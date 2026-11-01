@@ -465,6 +465,9 @@ CREATE INDEX search_docs_state_updated ON search_docs (repo_id, state, updated_a
 CREATE INDEX search_labels_deleted ON search_labels (repo_id, deleted_epoch, deleted_seq)
   WHERE deleted = 1 AND deleted_epoch IS NOT NULL;
 
+-- index search_labels_name
+CREATE INDEX search_labels_name ON search_labels (repo_id, name COLLATE NOCASE) WHERE deleted = 0;
+
 -- index search_milestones_deleted
 CREATE INDEX search_milestones_deleted ON search_milestones (repo_id, deleted_epoch, deleted_seq)
   WHERE deleted = 1 AND deleted_epoch IS NOT NULL;

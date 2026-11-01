@@ -4,6 +4,7 @@ import { FreshAccess } from "../feed/access.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import {
   allowedWithRole,
+  findReposById,
   listOwnedRepos,
   type RepoEntry,
   resolveRepo,
@@ -110,7 +111,8 @@ export async function authorizeScope(ctx: OpContext, parsed: ParsedQuery): Promi
           consistency: "primary",
           metrics: ctx.metrics,
         });
-        if (!entry) throw notFound(`${handle}/${name}`);
+        // Named as every refusal of them is (which one was missing would tell of the others).
+        if (!entry) throw notFound(named.map((r) => `${r.owner}/${r.name}`).join(", "));
         found.set(entry.id, entry);
       }
       const readable = await decided(ctx, [...found.values()]);
@@ -124,13 +126,17 @@ export async function authorizeScope(ctx: OpContext, parsed: ParsedQuery): Promi
     }
     if (owners.has(null) || owners.size > 1) return [];
     const [owner] = [...owners] as string[];
-    // The owner's active repositories (among the token's, when it names some), one past the most.
-    const entries = await listOwnedRepos(
-      ctx.env,
-      owner as string,
-      { after: "", limit: SEARCH_SCOPE.repositories + 1, onlyIds: ctx.auth.repoIds ?? null },
-      ctx.metrics,
-    );
+    // The owner's active repositories, one past the most: a token naming some, those of them alone,
+    // looked up by id (never a walk through the owner's for its few).
+    const only = ctx.auth.repoIds;
+    const entries = only
+      ? (await findReposById(ctx.env, only, ctx.metrics)).filter((e) => e.ownerId === owner)
+      : await listOwnedRepos(
+          ctx.env,
+          owner as string,
+          { after: "", limit: SEARCH_SCOPE.repositories + 1, onlyIds: null },
+          ctx.metrics,
+        );
     if (entries.length > SEARCH_SCOPE.repositories)
       throw new OperationError(
         422,

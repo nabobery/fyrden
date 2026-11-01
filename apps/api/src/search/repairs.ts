@@ -44,7 +44,11 @@ export async function searchIndexing(env: Pick<Env, "DIRECTORY">): Promise<boole
   return (await searchIndexingState(env)).on;
 }
 
-/** The deployment's search indexing: on or off, and its generation (raised at each change; 0 before any). */
+/**
+ * The deployment's search indexing: on or off, and its generation (raised
+ * at each change; 1 before any, so a source certified before generations
+ * were kept, at 0, is not whole to search until it is reconciled again).
+ */
 export interface IndexingState {
   readonly on: boolean;
   readonly gen: number;
@@ -57,7 +61,7 @@ export async function searchIndexingState(env: Pick<Env, "DIRECTORY">): Promise<
        max(CASE WHEN name = 'search_indexing_generation' THEN CAST(value AS INTEGER) END) AS gen
      FROM deployment_settings WHERE name IN ('search_indexing', 'search_indexing_generation')`,
   ).first<{ state: string | null; gen: number | null }>();
-  return { on: row?.state === "on", gen: row?.gen ?? 0 };
+  return { on: row?.state === "on", gen: row?.gen ?? 1 };
 }
 
 /**

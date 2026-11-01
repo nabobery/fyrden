@@ -51,20 +51,22 @@ function count(n: number, what: string): number {
   return n;
 }
 
+const maintenance = () =>
+  new OperationError(
+    503,
+    "read_model_maintenance",
+    "The read model is under maintenance. Try again later.",
+    undefined,
+    undefined,
+    MAINTENANCE_RETRY_MS / 1000,
+  );
+
 /** A write of the ledger's, as the operations answer one the read model refuses. */
 async function written<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    if (error instanceof ReadModelRefused)
-      throw new OperationError(
-        503,
-        "read_model_maintenance",
-        "The read model is under maintenance. Try again later.",
-        undefined,
-        undefined,
-        MAINTENANCE_RETRY_MS / 1000,
-      );
+    if (error instanceof ReadModelRefused) throw maintenance();
     throw error;
   }
 }
@@ -109,7 +111,8 @@ export async function reserveInteractive(
 /**
  * Runs `statements` (reads) in one batch, checked in the batch itself to
  * have begun and ended on `reservation`'s day (so each statement began on
- * it); their results. One that did not is charged to the day it is now, held
+ * it) and while the read model ran ordinary work (else 503
+ * `read_model_maintenance`, its results not used); their results. One that did not is charged to the day it is now, held
  * or not (one batch past the allowance at most), and throws
  * `InteractiveDayEnded`, its results not used.
  */
@@ -118,9 +121,19 @@ export async function readOnDay(
   reservation: InteractiveReservation,
   statements: D1PreparedStatement[],
 ): Promise<D1Result<Record<string, unknown>>[]> {
-  const sameDay = () => db.prepare(`SELECT ${SAME_DAY(1)} AS same`).bind(reservation.day);
+  const sameDay = () =>
+    db
+      .prepare(
+        `SELECT ${SAME_DAY(1)} AS same, coalesce((SELECT phase = 'running'
+           FROM read_model_barrier WHERE id = 1), 0) AS running`,
+      )
+      .bind(reservation.day);
   const done = await db.batch<Record<string, unknown>>([sameDay(), ...statements, sameDay()]);
   const results = done.slice(1, -1);
+  // Read while the read model ran ordinary work, before and after: a maintenance (a recovery's
+  // restore among them) may have begun since the search was admitted, and what it holds is not used.
+  if (done[0]?.results[0]?.running !== 1 || done.at(-1)?.results[0]?.running !== 1)
+    throw maintenance();
   if (done[0]?.results[0]?.same === 1 && done.at(-1)?.results[0]?.same === 1) return results;
   const reads = results.reduce((n, r) => n + (r.meta.rows_read ?? 0), 0);
   await written(() =>

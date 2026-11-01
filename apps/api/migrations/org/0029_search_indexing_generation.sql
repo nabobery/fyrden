@@ -2,6 +2,8 @@
 -- each time indexing is turned on or off) each reconciliation pass started under, and each source
 -- was last known whole under: a source is whole to search only at the current generation, so one
 -- certified before indexing last changed is not (what happened while it was off was not projected).
+-- A deployment's generation is 1 before its first change: a source certified before this migration
+-- (0 here) is whole to search again once reconciled (a backfill asks for every one).
 -- Sources known whole by generation, for the status's oldest (uncovered ones apart: there may be
 -- many while a backfill runs).
 ALTER TABLE search_sources ADD COLUMN indexing_gen INTEGER NOT NULL DEFAULT 0

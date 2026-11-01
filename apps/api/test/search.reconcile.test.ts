@@ -15,7 +15,7 @@ import { epochStatement } from "../src/queues/events-consumer.js";
 import { withReadModel } from "../src/read-model/executor.js";
 import { ADMISSION } from "../src/search/admission.js";
 import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
-import { repairStatement } from "../src/search/repairs.js";
+import { repairStatement, searchIndexingState } from "../src/search/repairs.js";
 import { docStatements, labelStatement } from "../src/search/statements.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -1101,6 +1101,14 @@ describe("a reconciliation, of the full-text indexes", () => {
         .prepare("SELECT index_covered, indexing_gen FROM search_sources WHERE repo_id = ?")
         .bind(repo.id)
         .first<{ index_covered: number; indexing_gen: number }>();
+    // (The setting as it was, absent, put back after.)
+    const restore = () =>
+      env.DIRECTORY.prepare(
+        "DELETE FROM deployment_settings WHERE name = 'search_indexing_generation'",
+      ).run();
+    // Never set, it reads 1: a source certified before generations were kept (0) is not current.
+    await restore();
+    expect((await searchIndexingState(env)).gen).toBe(1);
     await generation(7);
     expect(await reconcileSource(env, target())).toBe("done");
     expect(await source()).toEqual({ index_covered: 1, indexing_gen: 7 });
@@ -1110,6 +1118,6 @@ describe("a reconciliation, of the full-text indexes", () => {
     await generation(9);
     expect(await reconcileSource(env, target())).toBe("done");
     expect(await source()).toEqual({ index_covered: 1, indexing_gen: 8 });
-    await generation(0);
+    await restore();
   });
 });

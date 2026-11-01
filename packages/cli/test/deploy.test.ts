@@ -994,7 +994,7 @@ describe("fyrden doctor", () => {
       (await doctorLines(fake)).lines.find(
         (l) => l.includes("search indexing") || l.includes("search's state"),
       );
-    expect(await line()).toMatch(/^info search indexing is off \(generation 0\)/);
+    expect(await line()).toMatch(/^info search indexing is off \(generation 1\)/);
     // Off, the read model is not read.
     expect(asked).toEqual([]);
     settings = [

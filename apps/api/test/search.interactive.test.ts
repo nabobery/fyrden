@@ -125,12 +125,15 @@ describe("searches' reads", () => {
     }
   });
 
-  it("are neither reserved nor settled while the read model is under maintenance", async () => {
+  it("are neither reserved, read nor settled while the read model is under maintenance", async () => {
     await spent(0);
     const reservation = await reserveInteractive(db, 5_000);
     for (let step = 0; step < 5; step++)
       if ((await pauseReadModel(env, DEFAULT_ORG_SHARD)).phase === "paused") break;
     try {
+      // Nor read through: a search admitted before the maintenance began reads nothing of it.
+      const read = await refusal(readOnDay(db, reservation, [db.prepare("SELECT 1 AS one")]));
+      expect(read.code).toBe("read_model_maintenance");
       for (const work of [reserveInteractive(db, 10), settleInteractive(db, reservation, 0)]) {
         const refused = await refusal(work);
         expect(refused.status).toBe(503);

@@ -92,11 +92,12 @@ export async function setSearchIndexingOperation(
       AND NOT EXISTS (SELECT 1 FROM read_model_recoveries WHERE shard = ?3 AND stage <> 'complete')`;
   }
   ctx.metrics.count("d1.query", { db: "directory", op: "search_indexing_set" });
-  // The generation first, while the setting still holds the state it changes from.
+  // The generation first, while the setting still holds the state it changes from (1 before any
+  // change: the first makes it 2).
   const [, , still] = await env.DIRECTORY.batch([
     env.DIRECTORY.prepare(
       `INSERT INTO deployment_settings (name, value, updated_at)
-       SELECT 'search_indexing_generation', '1', ?2
+       SELECT 'search_indexing_generation', '2', ?2
        WHERE coalesce((SELECT value FROM deployment_settings WHERE name = 'search_indexing'),
          'off') <> ?1 AND ${ready}
        ON CONFLICT (name) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),

@@ -269,7 +269,7 @@ export async function matchDocuments(
   );
   const readable = scoped.flatMap((r) => {
     const kinds = asked.filter((k) => (k === DOC_KIND.issue ? r.issues : r.pulls));
-    return kinds.length > 0 ? [{ id: r.entry.id, kinds }] : [];
+    return kinds.length > 0 ? [{ id: r.entry.id, kinds, everyKind: r.issues && r.pulls }] : [];
   });
   if (readable.length === 0) return none(!indexing.on, 0);
   const ids = readable.map((r) => r.id);
@@ -291,9 +291,9 @@ export async function matchDocuments(
     if (listing && first && state) {
       const examined = await listed(db, reservation, first.id, state, listing);
       reads += examined.reads;
-      // Rows of a kind the caller may not read count against what is examined: whether they
-      // passed it would tell of them, so it is never said complete then.
-      if (examined.more || first.kinds.length < asked.length) incomplete = true;
+      // Rows of a kind the caller may not read count against what is examined (whatever kinds it
+      // asks for): whether they passed it would tell of them, so it is never said complete then.
+      if (examined.more || !first.everyKind) incomplete = true;
       within = examined.ids;
     }
     const ranked =
@@ -332,14 +332,19 @@ export async function matchDocuments(
         ? `d.state = ${DOC_STATE.merged}`
         : `d.open_state = ${state === "open" ? 1 : 2}`,
     );
+  // A label by id: held, and live (its row by key); by name: one of the labels so named in the
+  // scope's repositories (resolved once, through their index of names), held.
   for (const label of parsed.labels)
-    where.push(`EXISTS (SELECT 1 FROM json_each(d.labels) l JOIN search_labels sl
-      ON sl.repo_id = d.repo_id AND sl.label_id = l.value
-      WHERE ${fenced("sl", "d.repo_id")} AND ${
-        "id" in label
-          ? `sl.label_id = ${bind(label.id)}`
-          : `sl.name = ${bind(label.name)} COLLATE NOCASE`
-      })`);
+    where.push(
+      "id" in label
+        ? `EXISTS (SELECT 1 FROM json_each(d.labels) l WHERE l.value = ${bind(label.id)})
+           AND EXISTS (SELECT 1 FROM search_labels sl WHERE sl.repo_id = d.repo_id
+             AND sl.label_id = ${bind(label.id)} AND ${fenced("sl", "d.repo_id")})`
+        : `EXISTS (SELECT 1 FROM json_each(d.labels) l WHERE (d.repo_id, l.value) IN (
+             SELECT sl.repo_id, sl.label_id FROM search_labels sl INDEXED BY search_labels_name
+             WHERE ${among("sl.repo_id", "?4")} AND sl.name = ${bind(label.name)} COLLATE NOCASE
+               AND ${fenced("sl", "sl.repo_id")}))`,
+    );
   for (const milestone of parsed.milestones)
     where.push(`EXISTS (SELECT 1 FROM search_milestones m
       WHERE m.repo_id = d.repo_id AND m.number = d.milestone AND ${fenced("m", "d.repo_id")} AND ${

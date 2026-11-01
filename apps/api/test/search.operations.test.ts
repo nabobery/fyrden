@@ -6,9 +6,13 @@
 // primary for every search; a page past 1 MiB refused whole.
 
 import { env, exports } from "cloudflare:workers";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import { createMetrics } from "@fyrden/adapters-cloudflare/obs";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it } from "vitest";
-import { SEARCH_RESERVE } from "../src/search/operations.js";
+import type { OpContext } from "../src/ops/execute.js";
+import { SEARCH_RESERVE, searchIssuesOperation } from "../src/search/operations.js";
 import { reconcileSource } from "../src/search/reconcile.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -246,6 +250,66 @@ describe("search.issues", () => {
     expect(half.status).toBe(200);
     expect(half.body).toMatchObject({ total_count: 20 });
     expect(half.body.items).toHaveLength(10);
+  });
+});
+
+describe("search.issues, while its repositories change", () => {
+  it("is refused when a repository it searched moved to another owner once it was authorized", async () => {
+    const t = term();
+    const { owner, repo } = await searchable([{ title: t }]);
+    const other = await user();
+    const verified = await new D1TokenStore(env.DIRECTORY, {
+      clock: Date.now,
+      newId: createIdFactory(Date.now, secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    }).verify(owner.token, "write");
+    if (!verified.ok) throw new Error("not verified");
+    // The repository moves just before the page's repositories are looked up again.
+    const moving = new Proxy(env.DIRECTORY, {
+      get(target, prop) {
+        const value = Reflect.get(target, prop);
+        if (prop !== "withSession") return typeof value === "function" ? value.bind(target) : value;
+        return (constraint?: D1SessionConstraint) => {
+          const session = target.withSession(constraint);
+          return new Proxy(session, {
+            get(s, p) {
+              const v = Reflect.get(s, p);
+              if (p !== "prepare") return typeof v === "function" ? v.bind(s) : v;
+              return (sql: string) => {
+                if (!sql.includes("WHERE r.id IN (SELECT value FROM json_each"))
+                  return s.prepare(sql);
+                const prepared = s.prepare(sql);
+                return {
+                  bind: (...values: unknown[]) => ({
+                    all: async () => {
+                      await target
+                        .prepare("UPDATE repos SET owner_id = ? WHERE id = ?")
+                        .bind(other.principalId, repo.id)
+                        .run();
+                      return prepared.bind(...values).all();
+                    },
+                  }),
+                };
+              };
+            },
+          });
+        };
+      },
+    });
+    const ctx = {
+      env: new Proxy(env, { get: (e, p) => (p === "DIRECTORY" ? moving : Reflect.get(e, p)) }),
+      auth: verified.record,
+      metrics: createMetrics(env.METRICS),
+    } as unknown as OpContext;
+    // Refused whole: its count and completeness were decided for the owner it had.
+    await expect(
+      searchIssuesOperation(ctx, {
+        q: `repo:${repo.full_name} ${t}`,
+        order: "desc",
+        page: 1,
+        per_page: 30,
+      }),
+    ).rejects.toMatchObject({ status: 503, code: "search_authorization_unavailable" });
   });
 });
 
