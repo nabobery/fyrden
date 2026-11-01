@@ -31,6 +31,7 @@ import {
   LIVE_LOW_WATER,
   LIVE_PRICES,
   type LiveManifestEntry,
+  liveBlockUnit,
 } from "../src/live/manifest.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
@@ -917,7 +918,7 @@ describe("a feed's live credit", () => {
   /** Sets every control (or mark) balance of the feed to `units` whole units. */
   const leave = (who: Who, kind: "control" | "mark", units: number) =>
     runInDurableObject(feedOf(who), (_: UserDO, state) => {
-      const unit = (LIVE_PRICES[kind] as LiveManifestEntry).resources;
+      const unit = liveBlockUnit(kind);
       const left = Object.fromEntries(
         Object.entries(unit).map(([r, v]) => [r, (v as number) * units]),
       );
@@ -942,11 +943,44 @@ describe("a feed's live credit", () => {
     expect(held.marks).toEqual([LIVE_BLOCK_UNITS]);
     // Its end provided for today, and tomorrow when its life reaches past midnight.
     expect(held.terminal).toBeGreaterThanOrEqual(1);
-    // A second socket brings another block to each pool; a third finds them full.
+    // A second socket brings none: the feed holds its blocks still (refills top them up), nothing
+    // more granted for them.
+    const blockReceipts = () =>
+      env.DIRECTORY.prepare(
+        `SELECT count(*) AS n FROM live_budget_receipts
+         WHERE recipient = ? AND kind IN ('control', 'mark')`,
+      )
+        .bind(owner.principalId)
+        .first<{ n: number }>()
+        .then((r) => r?.n);
+    expect(await blockReceipts()).toBe(2);
     const second = await open(owner.token);
     const third = await open(owner.token);
-    expect((await credit(owner)).controls).toEqual([LIVE_BLOCK_UNITS, LIVE_BLOCK_UNITS]);
+    expect([second.response.status, third.response.status]).toEqual([101, 101]);
+    expect([second.ws !== null, third.ws !== null]).toEqual([true, true]);
+    expect(await blockReceipts()).toBe(2);
+    expect((await credit(owner)).controls).toEqual([LIVE_BLOCK_UNITS]);
+    expect((await credit(owner)).marks).toEqual([LIVE_BLOCK_UNITS]);
     for (const s of [socket, second, third]) s.ws?.close(1000, "done");
+  });
+
+  it("queues refills for pools left empty, the ledger holding blocks the feed never got", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its blocks gone from the feed (an admission refused after they were granted, say).
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_budget_balances"),
+    );
+    first.ws?.close(1000, "done");
+    const second = await open(owner.token);
+    const pending = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql
+        .exec<{ kind: string }>("SELECT kind FROM live_budget_pending ORDER BY kind")
+        .toArray()
+        .map((r) => r.kind),
+    );
+    expect(pending).toEqual(["control_refill", "mark_refill"]);
+    second.ws?.close(1000, "done");
   });
 
   it("pays for each control from the feed's pool, and queues one refill at low water", async () => {
@@ -1135,7 +1169,7 @@ describe("a feed's turn", () => {
     const socket = await open(owner.token);
     // Down to low water: a control queues the refill.
     await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
-      const unit = (LIVE_PRICES.control as LiveManifestEntry).resources;
+      const unit = liveBlockUnit("control");
       const left = Object.fromEntries(
         Object.entries(unit).map(([r, v]) => [r, (v as number) * (LIVE_LOW_WATER + 1)]),
       );

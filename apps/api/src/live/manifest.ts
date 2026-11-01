@@ -209,25 +209,35 @@ export function liveManifestError(
 const ZERO = Object.fromEntries(R.map((r) => [r, 0])) as ResourceVector;
 const vector = (parts: Partial<ResourceVector>): ResourceVector => ({ ...ZERO, ...parts });
 
-/** An entry priced by the rule from `estimate` (an estimate of its fixtures' most, until measured). */
+/** Where an entry's observation was made: the feed's rows locally, D1's on Free. */
+const MEASURED = "objects' rows by the live suite's fixtures; D1's on Workers Free, 2026-11-01";
+
+/** An entry priced by the rule from `observed` (its fixtures' most), named by where it was measured. */
 function estimated(
-  estimate: Partial<ResourceVector>,
+  observedRows: Partial<ResourceVector>,
   entry: Omit<LiveManifestEntry, "resources" | "observed" | "components"> &
     Partial<Pick<LiveManifestEntry, "components">>,
+  fixture: string = MEASURED,
 ): LiveManifestEntry {
-  const observed = vector(estimate);
+  const observed = vector(observedRows);
   return {
     components: [],
     ...entry,
-    observed: { estimate: observed },
+    observed: { [fixture]: observed },
     resources: livePrice([observed], entry.requests, entry.duration, entry.maxQuantity),
   };
 }
 
 /**
- * The prices of the units wired so far (Proposed: estimated, not yet
- * measured; the manifest's literal prices are frozen from measurements
- * once every unit is wired).
+ * The prices of live work's units, from measurements: each unit's rows in
+ * the feed's object by the live suite's fixtures (its most cases among
+ * them: a pump over a full page with a credential's most sockets, a mark
+ * of a stream at its most causes), and D1's rows per invocation on Workers
+ * Free (2026-11-01: an upgrade's whole D1 priced on its transport, the
+ * admission's, terminal's and blocks' grants within it; a turn's on the
+ * pump; maintenance's, its recoveries' within it). A recovery's rows are
+ * its page's bound, its D1 an estimate. The margin and the allowances are
+ * Proposed.
  *
  * - `ticket`: the issuance's counter and transport rows, one call of the
  *   feed's object and its ticket's row, its owner's accounting; leaving
@@ -252,7 +262,7 @@ function estimated(
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
   ticket: estimated(
-    { do_rows_read: 26, do_rows_written: 4, d1_rows_read: 30, d1_rows_written: 14 },
+    { do_rows_read: 26, do_rows_written: 4, d1_rows_read: 191, d1_rows_written: 35 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -265,7 +275,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 30, d1_rows_written: 10 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 422, d1_rows_written: 67 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -278,7 +288,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   admission: estimated(
-    { do_rows_read: 90, do_rows_written: 36, d1_rows_read: 40, d1_rows_written: 16 },
+    { do_rows_read: 105, do_rows_written: 44 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "synchronous",
@@ -290,7 +300,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   terminal: estimated(
-    { do_rows_read: 10, do_rows_written: 8 },
+    { do_rows_read: 10, do_rows_written: 5 },
     {
       validity: { maxMs: DAY, days: 2 },
       duration: "synchronous",
@@ -302,7 +312,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   control: estimated(
-    { do_rows_read: 13, do_rows_written: 4 },
+    { do_rows_read: 13, do_rows_written: 3 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -345,14 +355,17 @@ export const LIVE_LOW_WATER = 8;
 
 /**
  * A block of `unit`'s: `LIVE_BLOCK_UNITS` of it, priced by the rule from
- * that many of the unit's whole prices (so a block always pays for every
- * unit spent from it), each of its requests and allowances counted.
+ * that many of the unit's observations (its margin taken once, on the
+ * block), each of its requests and allowances counted. A unit is spent
+ * from it at an equal share of its price (`liveBlockUnit`).
  */
 function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
+  const most = (r: (typeof R)[number]) =>
+    Math.max(0, ...Object.values(unit.observed).map((o) => o[r]));
   const rows = Object.fromEntries(
     ["do_rows_read", "do_rows_written", "d1_rows_read", "d1_rows_written"].map((r) => [
       r,
-      unit.resources[r as (typeof R)[number]] * LIVE_BLOCK_UNITS,
+      most(r as (typeof R)[number]) * LIVE_BLOCK_UNITS,
     ]),
   );
   return estimated(rows, {
@@ -375,7 +388,7 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   successor's grant; its owner's whole accounting reserved with it.
  */
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 418, do_rows_written: 80, d1_rows_read: 120, d1_rows_written: 40 },
+  { do_rows_read: 418, do_rows_written: 51, d1_rows_read: 132, d1_rows_written: 24 },
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",
@@ -398,7 +411,7 @@ LIVE_PRICES.pump = estimated(
  *   object while it runs).
  */
 LIVE_PRICES.maintenance = estimated(
-  { d1_rows_read: 400, d1_rows_written: 150 },
+  { d1_rows_read: 262, d1_rows_written: 49 },
   {
     validity: { maxMs: 10 * 60_000, days: 2 },
     duration: "owner",
@@ -428,4 +441,16 @@ LIVE_PRICES.recovery = estimated(
 export const LIVE_TURN_RENEWALS = 2;
 
 LIVE_PRICES.control_block = blockOf(LIVE_PRICES.control as LiveManifestEntry);
+
+/**
+ * What one control or mark is spent at from its pool: an equal share of
+ * its block's price (rounded down, so a block's units never cost more than
+ * it), at least the unit's observation.
+ */
+export function liveBlockUnit(unit: "control" | "mark"): ResourceVector {
+  const block = LIVE_PRICES[`${unit}_block`] as LiveManifestEntry;
+  return Object.fromEntries(
+    R.map((r) => [r, Math.floor(block.resources[r] / LIVE_BLOCK_UNITS)]),
+  ) as ResourceVector;
+}
 LIVE_PRICES.mark_block = blockOf(LIVE_PRICES.mark as LiveManifestEntry);

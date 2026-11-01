@@ -49,6 +49,7 @@ import {
   LIVE_TURN_RENEWALS,
   type LiveManifestEntry,
   type LiveManifestUnit,
+  liveBlockUnit,
   liveKindOf,
 } from "../live/manifest.js";
 import { quarantineLiveOwners } from "../live/owners.js";
@@ -116,9 +117,9 @@ export type LiveBudgetV1 =
       readonly admission: unknown;
       /** Its end's provisions, on each day it may live on. */
       readonly terminal: unknown;
-      /** The feed's first blocks of controls and marks (installed while its pools have room). */
-      readonly controls: unknown;
-      readonly marks: unknown;
+      /** The feed's blocks of controls and marks, when it held none (installed while its pools have room). */
+      readonly controls?: unknown;
+      readonly marks?: unknown;
       /** The feed's next turn, when it held none (prepared, not dispatched). */
       readonly turn?: unknown;
     }
@@ -797,7 +798,7 @@ export class UserDO extends MigratingDO {
     const day = budget.ledgerDay(local);
     if (day === null) return false;
     const live = this.#live();
-    const price = unitPrice("mark");
+    const price = liveBlockUnit("mark");
     let marked = false;
     let last = null;
     for (const signal of signals) {
@@ -977,8 +978,8 @@ export class UserDO extends MigratingDO {
       ? await Promise.all([
           this.#funded(budget.admission, "admission"),
           this.#funded(budget.terminal, "terminal"),
-          this.#funded(budget.controls, "control_block"),
-          this.#funded(budget.marks, "mark_block"),
+          budget.controls === undefined ? null : this.#funded(budget.controls, "control_block"),
+          budget.marks === undefined ? null : this.#funded(budget.marks, "mark_block"),
           // Its owner is admitted when it runs: none named yet.
           budget.turn === undefined
             ? null
@@ -987,7 +988,13 @@ export class UserDO extends MigratingDO {
               ),
         ])
       : [null, null, null, null, null];
-    if (!admitted || !admission || !terminal || !controls || !marks) {
+    if (
+      !admitted ||
+      !admission ||
+      !terminal ||
+      (budget.controls !== undefined && !controls) ||
+      (budget.marks !== undefined && !marks)
+    ) {
       if (admitted) await release(this.env.DIRECTORY, [admitted.socketId]);
       return new Response(null, { status: 409 });
     }
@@ -1008,13 +1015,23 @@ export class UserDO extends MigratingDO {
     // Installed only while its grants are current here, stamped with its admission's, its end
     // provided for on each day it may live on, the feed's pools given their first blocks.
     const installed = this.ctx.storage.transactionSync(() => {
-      const grants = [admission, terminal, controls, marks].map((f) => f.envelope);
+      const grants = [admission, terminal, controls, marks].flatMap((f) => (f ? [f.envelope] : []));
       if (!grants.every((g) => this.#current(g))) return false;
       const budget = new LiveBudget(this.ctx.storage.sql);
       const now = budget.ledgerNow(Date.now());
       if (!budget.provideTerminal(admitted.socketId, terminal.envelope, now)) return false;
-      budget.installBlock("control", controls.envelope, now);
-      budget.installBlock("mark", marks.envelope, now);
+      if (controls) budget.installBlock("control", controls.envelope, now);
+      if (marks) budget.installBlock("mark", marks.envelope, now);
+      // A pool left with nothing (blocks the ledger holds but this feed never got: an admission
+      // refused after they were granted, say) has its refill queued under this admission's grant.
+      const day = budget.ledgerDay(Date.now());
+      if (day !== null)
+        for (const [kind, refill] of [
+          ["control", "control_refill"],
+          ["mark", "mark_refill"],
+        ] as const)
+          if (budget.unitsLeft(kind, day, liveBlockUnit(kind), now, 1) === 0)
+            budget.queueOnce(refill, crypto.randomUUID(), now, stampOf(admission.envelope), now);
       // The feed's next turn when it held none: due by the admission's confirmation deadline (an
       // admission never confirmed is forgotten by it).
       if (turn && this.#current(turn.envelope))
@@ -1143,7 +1160,7 @@ export class UserDO extends MigratingDO {
     let refill = false;
     const counted = this.ctx.storage.transactionSync(() => {
       const budget = new LiveBudget(this.ctx.storage.sql);
-      const price = unitPrice("control");
+      const price = liveBlockUnit("control");
       const at = budget.ledgerNow(now);
       // Right at a midnight (which day it is cannot be told) nothing is spent: unpaid, it closes.
       const day = budget.ledgerDay(now);

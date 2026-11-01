@@ -329,6 +329,9 @@ export async function liveTarget(
    * owner never released (a turn that ran released it), valid five minutes on.
    */
   readonly turnHeld: boolean;
+  /** Whether the feed holds a block of controls (of marks) still valid half an hour on. */
+  readonly controlsHeld: boolean;
+  readonly marksHeld: boolean;
 }> {
   const day = `CAST(${LIVE_NOW} / ${DAY} AS INTEGER)`;
   const sent = clock();
@@ -341,13 +344,24 @@ export async function liveTarget(
          coalesce((SELECT issued FROM live_ticket_days WHERE principal_id = ?2 AND day = ${day}), 0)
            AS tickets,
          (${day} + 1) * ${DAY} AS tomorrow,
-         EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_turn
+         EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_recipient
            WHERE recipient = ?2 AND kind = 'pump' AND settled_at IS NULL
              AND valid_until > ${LIVE_NOW} + 300000
              AND json_array_length(released_owners) = 0
              AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
              AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
-           AS turn_held`,
+           AS turn_held,
+         ${["control", "mark"]
+           .map(
+             (kind) => `EXISTS (SELECT 1 FROM live_budget_receipts
+               INDEXED BY live_budget_receipts_recipient
+               WHERE recipient = ?2 AND kind = '${kind}' AND settled_at IS NULL
+                 AND valid_until > ${LIVE_NOW} + 1800000
+                 AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+                 AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
+               AS ${kind}s_held`,
+           )
+           .join(",\n")}`,
     )
     .bind(feedEpochSource(recipient), recipient)
     .first<{
@@ -357,6 +371,8 @@ export async function liveTarget(
       tickets: number;
       tomorrow: number;
       turn_held: number;
+      controls_held: number;
+      marks_held: number;
     }>();
   if (!row?.incarnation) throw new Error("the live ledger has no incarnation");
   const at = clock();
@@ -368,6 +384,8 @@ export async function liveTarget(
     ticketsToday: row.tickets,
     tomorrow: row.tomorrow,
     turnHeld: row.turn_held === 1,
+    controlsHeld: row.controls_held === 1,
+    marksHeld: row.marks_held === 1,
   };
 }
 

@@ -304,26 +304,31 @@ export async function openLiveSocket(
   // together, with the feed's first turn when it holds none (one refused refuses the socket; the
   // others' charges stand).
   const target = await liveTarget(env.DIRECTORY, credential.principalId);
-  const units = [
+  // Its feed's blocks and turn only when it holds none still valid (refills top its pools up).
+  const units: ("admission" | "terminal" | "control_block" | "mark_block" | "pump")[] = [
     "admission",
     "terminal",
-    "control_block",
-    "mark_block",
+    ...(target.controlsHeld ? [] : (["control_block"] as const)),
+    ...(target.marksHeld ? [] : (["mark_block"] as const)),
     ...(target.turnHeld ? [] : (["pump"] as const)),
-  ] as const;
+  ];
   metrics?.count("d1.query", { db: "directory", op: "live_grant" }, units.length + 1);
   const grants = await Promise.all(
     units.map(async (unit) =>
       fund(env.DIRECTORY, await grantFor(target, credential.principalId, unit)),
     ),
   );
-  const [admission, terminal, controls, marks, turn] = grants;
+  const granted = (unit: (typeof units)[number]) => grants[units.indexOf(unit)];
+  const [admission, terminal] = grants;
+  const [controls, marks, turn] = [
+    granted("control_block"),
+    granted("mark_block"),
+    granted("pump"),
+  ];
   if (
     admission?.status !== "funded" ||
     terminal?.status !== "funded" ||
-    controls?.status !== "funded" ||
-    marks?.status !== "funded" ||
-    (turn !== undefined && turn.status !== "funded")
+    grants.some((g) => g.status !== "funded")
   ) {
     const spent = grants.find((g) => g.status === "refused" && g.reason === "daily");
     return spent?.status === "refused" && spent.reason === "daily"
@@ -404,8 +409,10 @@ export async function openLiveSocket(
     admitted,
     admission: funding(admission.value),
     terminal: funding(terminal.value),
-    controls: funding(controls.value, LIVE_BLOCK_UNITS),
-    marks: funding(marks.value, LIVE_BLOCK_UNITS),
+    ...(controls?.status === "funded" && {
+      controls: funding(controls.value, LIVE_BLOCK_UNITS),
+    }),
+    ...(marks?.status === "funded" && { marks: funding(marks.value, LIVE_BLOCK_UNITS) }),
     ...(turn?.status === "funded" && { turn: funding(turn.value) }),
   };
   const response = await env.USER.getByName(credential.principalId).fetch(

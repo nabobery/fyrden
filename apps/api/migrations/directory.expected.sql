@@ -830,6 +830,10 @@ CREATE INDEX live_admissions_day ON live_admissions (day, principal_id);
 -- index live_budget_receipts_expiry
 CREATE INDEX live_budget_receipts_expiry ON live_budget_receipts (expires_at, seq);
 
+-- index live_budget_receipts_recipient
+CREATE INDEX live_budget_receipts_recipient
+  ON live_budget_receipts (recipient, kind, valid_until) WHERE settled_at IS NULL;
+
 -- index live_budget_receipts_turn
 CREATE INDEX live_budget_receipts_turn ON live_budget_receipts (recipient, valid_until)
   WHERE kind = 'pump' AND settled_at IS NULL;

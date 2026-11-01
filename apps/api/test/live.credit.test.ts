@@ -14,11 +14,16 @@ import { Live } from "../src/do/user/live.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
 import { type LiveEnvelope, makeLiveGrant, reserveLive } from "../src/live/budget.js";
 import { planFor } from "../src/live/funding.js";
-import { LIVE_BLOCK_UNITS, LIVE_PRICES, type LiveManifestEntry } from "../src/live/manifest.js";
+import {
+  LIVE_BLOCK_UNITS,
+  LIVE_PRICES,
+  type LiveManifestEntry,
+  liveBlockUnit,
+} from "../src/live/manifest.js";
 import { clockedD1, DAY, incarnation, isolated } from "./helpers/live-budget.js";
 
 const BLOCK = LIVE_PRICES.control_block as LiveManifestEntry;
-const UNIT = (LIVE_PRICES.control as LiveManifestEntry).resources;
+const UNIT = liveBlockUnit("control");
 
 /** A control block granted for `feed`, valid from `from` (by the ledger's clock). */
 async function block(feed: string, from: number): Promise<LiveEnvelope> {

@@ -15,8 +15,8 @@ const SOURCES = import.meta.glob("../src/**/*.ts", {
 /** The Durable Objects that wrap the binding to count their calls, and use it for nothing else. */
 const COUNTING = [
   ...["RepoDO", "UserDO", "OrgDO", "MaintenanceDO"].map((name) => `../src/do/${name}.ts`),
-  // The Worker's entry: each request's own calls counted.
-  "../src/index.ts",
+  // The Worker's requests (both entrypoints): each one's own calls counted.
+  "../src/counted-env.ts",
 ];
 
 /** Where the binding or the raw database may be named, and why. */
