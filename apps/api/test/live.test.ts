@@ -1192,10 +1192,11 @@ describe("a feed's turn", () => {
       );
     });
     socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-    // Queued, it brings the feed's turn due at once.
-    expect(
-      await runInDurableObject(feedOf(owner), (_: UserDO, state) => state.storage.getAlarm()),
-    ).toBeLessThanOrEqual(Date.now());
+    // Queued, it brings the feed's turn due at once (its row, written with the message: the
+    // alarm itself may still be being rewritten).
+    const [due] = await turnOf(owner);
+    expect(due?.phase).toBe("prepared");
+    expect(due?.intended_at).toBeLessThanOrEqual(Date.now());
     await runDurableObjectAlarm(feedOf(owner));
     const after = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
       pending: state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
