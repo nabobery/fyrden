@@ -535,6 +535,15 @@ describe("live recovery", () => {
         tell,
       });
       expect(run).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      // Its own duration settled: the rest of its hold refunded, its escrow place given back.
+      expect(
+        await env.DIRECTORY.prepare(
+          `SELECT count(*) AS n FROM live_budget_receipts
+           WHERE json_extract(plan, '$.kind') = 'recovery' AND recipient = ? AND settled_at IS NULL`,
+        )
+          .bind(feed)
+          .first(),
+      ).toEqual({ n: 0 });
       expect(await localCount(feed, "live_budget_balances")).toBe(0);
       expect((await fenceOf(feed)).cleanupThrough).toBe(grant.seq);
       expect(await targetOf(feed)).toBeNull();

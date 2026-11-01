@@ -5,6 +5,7 @@ import {
   type LiveDurationCompletion,
   type LiveEnvelope,
   type LiveGrantResult,
+  settleLiveDuration,
 } from "./budget.js";
 import { LIVE_ADMISSION } from "./directory.js";
 
@@ -16,8 +17,8 @@ import { LIVE_ADMISSION } from "./directory.js";
  * captures the target only then, asks the object (`UserDO.recoverLiveV1`)
  * to clean a bounded page, and retires the target with its debt only on
  * an acknowledgement of exactly what was captured as clean; anything else
- * backs off. Recovery never makes more for itself to recover. Production
- * wires this with the funded maintenance (later); nothing calls it yet.
+ * backs off. Recovery never makes more for itself to recover. The funded
+ * live maintenance runs it, a few feeds a run (`runLiveMaintenance`).
  */
 
 const N = LIVE_NOW;
@@ -59,6 +60,28 @@ export interface LiveRecoveryTarget {
   readonly nextAttemptAt: number;
 }
 
+/**
+ * Moves a page of targets left by another ledger incarnation (the
+ * directory restored since) to the current one, due at once, through
+ * sequence 1: their feed's rows of that incarnation are invalid under any
+ * fence, so its next recovery removes them all (and nothing granted since)
+ * and retires the target with its debt. How many moved.
+ */
+export async function adoptLiveRecoveryTargets(db: D1Database, limit: number): Promise<number> {
+  const result = await db
+    .prepare(
+      `UPDATE live_recovery_targets
+       SET incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1),
+         through_seq = 1, next_attempt_at = 0, attempts = 0
+       WHERE feed IN (SELECT feed FROM live_recovery_targets
+         WHERE incarnation <> (SELECT incarnation FROM live_budget_state WHERE id = 1)
+         ORDER BY feed LIMIT ?)`,
+    )
+    .bind(limit)
+    .run();
+  return result.meta.changes;
+}
+
 /** The feeds whose recovery is due, earliest first (identities only: captured once funded). */
 export async function dueLiveRecoveryFeeds(
   db: D1Database,
@@ -69,8 +92,11 @@ export async function dueLiveRecoveryFeeds(
   const { results } = await db
     .withSession("first-primary")
     .prepare(
+      // The ledger's own incarnation's only: one of another can be neither captured nor retired.
       `SELECT feed FROM live_recovery_targets INDEXED BY live_recovery_targets_due
-       WHERE next_attempt_at <= ${N} ORDER BY next_attempt_at, feed LIMIT ?`,
+       WHERE next_attempt_at <= ${N}
+         AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+       ORDER BY next_attempt_at, feed LIMIT ?`,
     )
     .bind(limit)
     .all<{ feed: string }>();
@@ -198,6 +224,8 @@ export async function recoverLiveTargets(
     readonly limit: number;
     readonly reserveTarget: (feed: string) => Promise<LiveGrantResult>;
     readonly tell: (request: LiveRecoveryRequest) => Promise<LiveRecoveryReply>;
+    /** Whether to go on to the next target (false once its caller gave up on it). */
+    readonly proceed?: () => boolean;
   },
 ): Promise<{
   readonly attempted: number;
@@ -207,11 +235,14 @@ export async function recoverLiveTargets(
 }> {
   const counts = { attempted: 0, retired: 0, pending: 0, failed: 0 };
   for (const feed of await dueLiveRecoveryFeeds(db, options.limit)) {
+    if (options.proceed && !options.proceed()) break;
     const funded = await options.reserveTarget(feed);
     if (funded.status !== "granted") break;
     const captured = await captureLiveRecoveryTarget(db, feed);
     // Gone since it was selected: its funding is kept charged.
     if (!captured) continue;
+    // Given up on while it was funded: not dispatched (its funding is kept charged).
+    if (options.proceed && !options.proceed()) break;
     const request: LiveRecoveryRequest = {
       protocol: 1,
       nonce: hex(crypto.getRandomValues(new Uint8Array(16))),
@@ -227,6 +258,10 @@ export async function recoverLiveTargets(
     } catch {
       reply = null;
     }
+    // What it used of its grant's duration settled (the rest of its hold refunded), apart from
+    // whether its acknowledgement retires its target.
+    if (acknowledges(request, reply) && reply.completion)
+      await settleLiveDuration(db, reply.completion).catch(() => "unknown");
     if (
       acknowledges(request, reply) &&
       reply.status === "clean" &&

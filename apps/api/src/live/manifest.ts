@@ -389,6 +389,41 @@ LIVE_PRICES.pump = estimated(
   },
 );
 
+/**
+ * - `maintenance`: one funded run of live maintenance (a cleanup unit):
+ *   a page of expired receipts and of old days, a day's duration debt
+ *   served, a few feeds' recoveries (each funded on its own), a page of
+ *   leases reaped and a page of revocations told (see `LIVE_MAINTENANCE`).
+ * - `recovery`: one feed's recovery page (a cleanup unit, owned by its
+ *   object while it runs).
+ */
+LIVE_PRICES.maintenance = estimated(
+  { d1_rows_read: 400, d1_rows_written: 150 },
+  {
+    validity: { maxMs: 10 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 60_000,
+    maxQuantity: 1,
+    requests: 20,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
+  },
+);
+LIVE_PRICES.recovery = estimated(
+  { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 10, d1_rows_written: 4 },
+  {
+    validity: { maxMs: 10 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 60_000,
+    maxQuantity: 1,
+    requests: 1,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
+  },
+);
+
 /** Queued renewals one turn runs at most. */
 export const LIVE_TURN_RENEWALS = 2;
 

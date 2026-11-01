@@ -16,7 +16,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
 import { LIVE_NOW, type LiveEnvelope, makeLiveGrant } from "./budget.js";
 import { type LiveCredential, liveCredential } from "./credential.js";
-import { admit, liveAllowance, release } from "./directory.js";
+import { admit, LIVE_ADMISSION, liveAllowance, release } from "./directory.js";
 import {
   fund,
   LIVE_MANIFEST_REVISION,
@@ -341,9 +341,11 @@ export async function openLiveSocket(
     terminal.value.plan.validUntil - target.ledger.now + target.ledger.at - 60_000,
   );
   metrics?.count("d1.query", { db: "directory", op: "live_admit" }, 3);
+  // Its lease lapses past its first renewal deadline unless renewals extend it.
+  const leaseUntil = Math.min(expiresAt, now + LIVE_POLICY.renewMs + LIVE_ADMISSION.leaseMarginMs);
   const refusal = await admit(
     env.DIRECTORY,
-    { id: socketId, ticketId, feed: credential.principalId, expiresAt },
+    { id: socketId, ticketId, feed: credential.principalId, expiresAt: leaseUntil },
     credential,
     allowance,
     now,

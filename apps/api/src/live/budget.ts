@@ -418,7 +418,10 @@ export async function reserveLive(
       const ordinaryGates = ordinary
         ? [
             ...R.map((r) => `debt_${r} + ${addedDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`),
-            `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N} ORDER BY expires_at, seq LIMIT 1)`,
+            // Maintenance's own receipts excepted: the next run removes them, and they alone never
+            // call for one.
+            `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N}
+              AND kind <> 'maintenance' ORDER BY expires_at, seq LIMIT 1)`,
             `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
           ].join("\n    AND ")
         : "1";

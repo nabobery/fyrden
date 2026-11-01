@@ -37,9 +37,9 @@ function counting() {
             runs.push(`${name} recheckSuppressions`);
             return stub.recheckSuppressions();
           },
-          sweepRevocations: () => {
-            runs.push(`${name} sweepRevocations`);
-            return stub.sweepRevocations();
+          liveMaintenance: () => {
+            runs.push(`${name} liveMaintenance`);
+            return stub.liveMaintenance();
           },
         };
       },
@@ -79,7 +79,7 @@ describe("the five-minute maintenance", () => {
       `${MAINTENANCE_OBJECT} run`,
       `${MAINTENANCE_OBJECT} repairSearch`,
       `${MAINTENANCE_OBJECT} recheckSuppressions`,
-      `${MAINTENANCE_OBJECT} sweepRevocations`,
+      `${MAINTENANCE_OBJECT} liveMaintenance`,
     ]);
     expect(await left()).toBe(0);
   });

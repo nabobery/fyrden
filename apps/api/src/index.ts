@@ -86,13 +86,13 @@ export default {
     await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
       const maintenance = env.MAINTENANCE.getByName(MAINTENANCE_OBJECT);
       metrics.count("do.request", { class: "MaintenanceDO", method: "run" }, 4);
-      // Search repairs, suppression rechecks and revocation sweeps in requests of their own, so
+      // Search repairs, suppression rechecks and live maintenance in requests of their own, so
       // their D1 calls, lookups and feed calls are an invocation's own.
       const outcomes = await Promise.allSettled([
         maintenance.run(),
         maintenance.repairSearch(),
         maintenance.recheckSuppressions(),
-        maintenance.sweepRevocations(),
+        maintenance.liveMaintenance(),
       ]);
       for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
     });

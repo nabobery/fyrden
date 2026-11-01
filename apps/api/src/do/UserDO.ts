@@ -33,7 +33,7 @@ import {
   validateLiveCoverage,
 } from "../live/budget.js";
 import { liveCredential } from "../live/credential.js";
-import { confirm, release } from "../live/directory.js";
+import { confirm, extendLease, LIVE_ADMISSION, release } from "../live/directory.js";
 import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
 import {
   expectationOf,
@@ -1259,6 +1259,25 @@ export class UserDO extends MigratingDO {
       return;
     }
     const deadline = Math.min(requestedAt + LIVE_POLICY.renewMs, held.expires_at);
+    // Its lease extended with it (a lease lapses unless renewals extend it); one not extended is
+    // unanswered, its deadline left as it was.
+    const leased = await extendLease(
+      this.env.DIRECTORY,
+      id,
+      Math.min(held.expires_at, deadline + LIVE_ADMISSION.leaseMarginMs),
+    ).catch(() => false);
+    if (!current()) return;
+    if (!leased) {
+      const again = live.socket(id);
+      if (!again || again.renewal_nonce !== nonce) return;
+      if (again.renew_failures + 1 >= 2)
+        return this.#closeSocket(id, CLOSE_EXPIRED, "the credential could not be checked");
+      this.ctx.storage.transactionSync(() => {
+        live.update(id, { renew_failures: again.renew_failures + 1 });
+        live.finishRenewal(id, nonce, generation);
+      });
+      return;
+    }
     this.ctx.storage.transactionSync(() => {
       live.update(id, { deadline, renew_failures: 0 });
       live.finishRenewal(id, nonce, generation);
@@ -1342,16 +1361,23 @@ export class UserDO extends MigratingDO {
    * socket resting on one is admitted or renewed, and every open one
    * resting on one closed; in any order, any number of times.
    */
-  async revoked(dependencies: readonly string[]): Promise<void> {
+  async revoked(dependencies: readonly string[]): Promise<readonly string[]> {
     await this.#checkEpoch();
     const live = this.#live();
-    const ids = this.ctx.storage.transactionSync(() => live.revoke(dependencies, Date.now()));
+    // Recorded, and every socket resting on one forgotten (its end's provisions with it) before it
+    // is closed; their leases are released by whoever told it (the sweep), not from here.
+    const ids = this.ctx.storage.transactionSync(() => {
+      const closing = live.revoke(dependencies, Date.now());
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      for (const id of closing) {
+        live.forget(id);
+        budget.forgetTerminal(id);
+      }
+      return closing;
+    });
     for (const id of ids)
       for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_REVOKED, "revoked");
-    this.ctx.storage.transactionSync(() => {
-      for (const id of ids) live.forget(id);
-    });
-    await release(this.env.DIRECTORY, ids);
+    return ids;
   }
 
   /**

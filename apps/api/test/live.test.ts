@@ -1221,6 +1221,27 @@ describe("a feed's turn", () => {
     for (const s of [first, second]) s.ws?.close(1000, "done");
   });
 
+  it("leases a socket to its renewal deadline, each renewal extending the lease", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const lease = () =>
+      env.DIRECTORY.prepare("SELECT expires_at AS at FROM live_sockets WHERE feed = ?")
+        .bind(owner.principalId)
+        .first<{ at: number }>()
+        .then((r) => r?.at as number);
+    const first = await lease();
+    expect(first).toBeLessThanOrEqual(
+      Date.now() + LIVE_POLICY.renewMs + LIVE_ADMISSION.leaseMarginMs,
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    await handledThenTurn(owner);
+    expect(await socket.next()).toMatchObject({ t: "renewed" });
+    expect(await lease()).toBeGreaterThan(first);
+    socket.ws?.close(1000, "done");
+  });
+
   it("names no successor once the feed has no socket", async () => {
     const owner = await user();
     const socket = await open(owner.token);

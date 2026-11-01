@@ -25,6 +25,12 @@ export const LIVE_ADMISSION = {
   revocations: 50,
   /** How long fully told revocations are kept. */
   keepMs: 7 * 24 * 60 * 60_000,
+  /**
+   * How long past a socket's renewal deadline its lease holds: a lease
+   * lapses unless renewals extend it, so a socket gone without a word stops
+   * counting by then.
+   */
+  leaseMarginMs: 2 * 60_000,
 } as const;
 
 const DAY = 24 * 60 * 60_000;
@@ -127,6 +133,29 @@ export async function confirm(db: D1Database, socketId: string, now: number): Pr
   return row !== null;
 }
 
+/**
+ * Extends an open lease to `until` (never shortens one): a renewal's, so a
+ * lease holds while its socket is renewed. Whether the lease is there.
+ */
+export async function extendLease(
+  db: D1Database,
+  socketId: string,
+  until: number,
+  now: number = Date.now(),
+): Promise<boolean> {
+  // Only a lease still held, by this Worker's clock and D1's own as it runs: one lapsed
+  // meanwhile stays lapsed (its place may be another's).
+  const row = await db
+    .prepare(
+      `UPDATE live_sockets SET expires_at = max(expires_at, ?2)
+       WHERE socket_id = ?1 AND state = 'open' AND expires_at > max(?3, ${LIVE_NOW})
+       RETURNING socket_id`,
+    )
+    .bind(socketId, until, now)
+    .first<{ socket_id: string }>();
+  return row !== null;
+}
+
 /** Releases a socket's lease and dependency rows (again: nothing). */
 export async function release(db: D1Database, socketIds: readonly string[]): Promise<void> {
   if (socketIds.length === 0) return;
@@ -147,7 +176,11 @@ export async function release(db: D1Database, socketIds: readonly string[]): Pro
  * due first; told revocations past their keep; admission and ticket counts
  * before yesterday; tickets' transports past their expiry.
  */
-export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
+export function reaping(
+  db: D1Database,
+  now: number,
+  rows: number = LIVE_ADMISSION.reapRows,
+): D1PreparedStatement[] {
   // Each kind read through its own index (a run's at most), then the earliest due of both: the
   // same choice for both deletes (the dependency rows go first, the leases still there).
   const due = `SELECT socket_id FROM (
@@ -159,12 +192,8 @@ export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
         ORDER BY pending_until LIMIT ?2))
     GROUP BY socket_id ORDER BY min(due), socket_id LIMIT ?2`;
   return [
-    db
-      .prepare(`DELETE FROM live_socket_deps WHERE socket_id IN (${due})`)
-      .bind(now, LIVE_ADMISSION.reapRows),
-    db
-      .prepare(`DELETE FROM live_sockets WHERE socket_id IN (${due})`)
-      .bind(now, LIVE_ADMISSION.reapRows),
+    db.prepare(`DELETE FROM live_socket_deps WHERE socket_id IN (${due})`).bind(now, rows),
+    db.prepare(`DELETE FROM live_sockets WHERE socket_id IN (${due})`).bind(now, rows),
     db
       .prepare(
         `DELETE FROM revocations WHERE seq IN (SELECT seq FROM revocations INDEXED BY revocations_at
@@ -172,8 +201,14 @@ export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
              AND NOT EXISTS (SELECT 1 FROM revocation_targets t WHERE t.seq = revocations.seq)
            ORDER BY at LIMIT ?2)`,
       )
-      .bind(now - LIVE_ADMISSION.keepMs, LIVE_ADMISSION.reapRows),
-    db.prepare("DELETE FROM live_admissions WHERE day < ?").bind(Math.floor(now / DAY) - 1),
+      .bind(now - LIVE_ADMISSION.keepMs, rows),
+    db
+      .prepare(
+        `DELETE FROM live_admissions WHERE (principal_id, day) IN (
+           SELECT principal_id, day FROM live_admissions INDEXED BY live_admissions_day
+           WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
+      )
+      .bind(Math.floor(now / DAY) - 1, rows),
     // Tickets' day counts before yesterday, and transports past their expiry, a run's at most.
     db
       .prepare(
@@ -181,19 +216,25 @@ export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
            SELECT principal_id, day FROM live_ticket_days INDEXED BY live_ticket_days_day
            WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
       )
-      .bind(Math.floor(now / DAY) - 1, LIVE_ADMISSION.reapRows),
+      .bind(Math.floor(now / DAY) - 1, rows),
     db
       .prepare(
         `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
            SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
            WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
       )
-      .bind(now, LIVE_ADMISSION.reapRows),
+      .bind(now, rows),
   ];
 }
 
-/** Tells one feed's object that dependencies were revoked; resolves when it applied them. */
-export type Teller = (feed: string, dependencies: readonly string[]) => Promise<void>;
+/**
+ * Tells one feed's object that dependencies were revoked; resolves when it
+ * applied them, with the sockets it closed (their leases are released here).
+ */
+export type Teller = (
+  feed: string,
+  dependencies: readonly string[],
+) => Promise<readonly string[] | void>;
 
 /**
  * One sweep run: expands revocations (each one's sockets through the
@@ -206,6 +247,12 @@ export async function sweep(
   tell: Teller,
   now: number,
   metrics?: Metrics,
+  limits: {
+    readonly deliveries?: number;
+    readonly revocations?: number;
+    /** Whether to go on to the next group of deliveries (false once the caller gave up). */
+    readonly proceed?: () => boolean;
+  } = {},
 ): Promise<{ expanded: number; told: number; failed: number }> {
   const primary = db.withSession("first-primary");
   const { results: open } = await primary
@@ -213,7 +260,7 @@ export async function sweep(
       `SELECT seq, subject, cursor FROM revocations INDEXED BY revocations_open
        WHERE expanded = 0 ORDER BY seq LIMIT ?`,
     )
-    .bind(LIVE_ADMISSION.revocations)
+    .bind(limits.revocations ?? LIVE_ADMISSION.revocations)
     .all<{ seq: number; subject: string; cursor: string | null }>();
   let scanned = 0;
   let expanded = 0;
@@ -252,11 +299,12 @@ export async function sweep(
          INDEXED BY revocation_targets_due JOIN revocations r ON r.seq = t.seq
        WHERE t.next_attempt_at <= ? ORDER BY t.next_attempt_at, t.seq, t.feed LIMIT ?`,
     )
-    .bind(now, LIVE_ADMISSION.deliveries)
+    .bind(now, limits.deliveries ?? LIVE_ADMISSION.deliveries)
     .all<{ seq: number; feed: string; attempts: number; subject: string }>();
   let told = 0;
   let failed = 0;
   for (let i = 0; i < due.length; i += 8) {
+    if (limits.proceed && !limits.proceed()) break;
     const slice = due.slice(i, i + 8);
     const outcomes = await Promise.allSettled(slice.map((t) => tell(t.feed, [t.subject])));
     const statements = slice.map((t, j) =>
@@ -271,6 +319,21 @@ export async function sweep(
             )
             .bind(t.seq, t.feed, now + Math.min(60 * 60_000, 60_000 * 2 ** t.attempts)),
     );
+    // The sockets each feed closed: their leases go with its target.
+    const closed = outcomes.flatMap((o) =>
+      o.status === "fulfilled" && o.value ? [...o.value] : [],
+    );
+    if (closed.length > 0)
+      statements.push(
+        db
+          .prepare(
+            "DELETE FROM live_socket_deps WHERE socket_id IN (SELECT value FROM json_each(?))",
+          )
+          .bind(JSON.stringify(closed)),
+        db
+          .prepare("DELETE FROM live_sockets WHERE socket_id IN (SELECT value FROM json_each(?))")
+          .bind(JSON.stringify(closed)),
+      );
     for (const outcome of outcomes)
       if (outcome.status === "fulfilled") told++;
       else failed++;
