@@ -16,12 +16,26 @@ import { LIVE_DAILY, LIVE_NOW, LIVE_PROTECTED, type LiveRecipientType } from "./
  * release one.
  *
  * Accounting helpers: their caller pays for its own work, theirs
- * included. Nothing in production calls them yet.
+ * included.
  */
 
 const DAY = 86_400_000;
 const N = LIVE_NOW;
 const D = `CAST(${N} / ${DAY} AS INTEGER)`;
+
+/**
+ * The places owners of live work hold at once (Proposed): the deployment's,
+ * ordinary work's and cleanup's among them, and each object's; enough for
+ * a caller and its callee, a successor being prepared, and a cleanup
+ * caller and its target apart.
+ */
+export const LIVE_OWNER_LIMITS: LiveOwnerLimits = {
+  deploymentTotal: 6,
+  deploymentOrdinary: 4,
+  deploymentCleanup: 2,
+  perObjectOrdinary: 2,
+  perObjectCleanup: 1,
+};
 
 /** Days a settlement page covers at most. */
 export const LIVE_OWNER_PAGE_DAYS = 4;
@@ -29,7 +43,7 @@ export const LIVE_OWNER_PAGE_DAYS = 4;
 /** Owners one request admits at most (a caller and its callees). */
 export const LIVE_OWNERS_PER_REQUEST = 4;
 
-/** Places owners may hold (caps across days and instances). Declared by the caller: no production values yet. */
+/** Places owners may hold (caps across days and instances). */
 export interface LiveOwnerLimits {
   readonly deploymentTotal: number;
   readonly deploymentOrdinary: number;

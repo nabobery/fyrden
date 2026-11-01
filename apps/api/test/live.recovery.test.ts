@@ -431,7 +431,7 @@ describe("live credit in a feed's object", () => {
         .bind(`feed:${feed}`)
         .run();
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_restore");
+      await feedOf(feed).inboxThread("none");
       const after = await fenceOf(feed);
       expect(after.epoch).toBe(2);
       expect(after.authorizationGen).toBe(before.authorizationGen + 1);
@@ -458,9 +458,9 @@ describe("live credit in a feed's object", () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("inc")}`;
       const grant = await ordinaryGrant(feed);
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       const before = await fenceOf(feed);
       expect(before.incarnation).toBe(grant.plan.incarnation);
       const fresh = "f".repeat(32);
@@ -468,7 +468,7 @@ describe("live credit in a feed's object", () => {
         .bind(fresh)
         .run();
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       const after = await fenceOf(feed);
       expect([after.incarnation, after.authorizationGen]).toEqual([
         fresh,
@@ -487,7 +487,7 @@ describe("live credit in a feed's object", () => {
   it("keeps the feed's epoch where it was when the fence cannot move with it", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("txn")}`;
-      await feedOf(feed).liveTicket("tok_txn");
+      await feedOf(feed).inboxThread("none");
       // No alarm of its own runs into the failing fence meanwhile (the clock is real here).
       await runInDurableObject(feedOf(feed), async (_: UserDO, state) => {
         state.storage.sql.exec("DELETE FROM user_schedule");
@@ -501,7 +501,7 @@ describe("live credit in a feed's object", () => {
         .run();
       await evictDurableObject(feedOf(feed));
       const failed = await feedOf(feed)
-        .liveTicket("tok_txn")
+        .inboxThread("none")
         .then(
           () => null,
           (error: unknown) => error,

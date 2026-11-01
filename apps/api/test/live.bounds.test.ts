@@ -84,6 +84,25 @@ describe("the lease reaper", () => {
     expect(await left(feed)).toBe(0);
     expect(await depsLeft(feed)).toBe(0);
   });
+
+  it("removes tickets' counts of days before yesterday, keeping yesterday's and today's", async () => {
+    const principal = `usr_days${crypto.randomUUID().slice(0, 8)}`;
+    const now = Date.now();
+    const today = Math.floor(now / 86_400_000);
+    for (const day of [today - 3, today - 2, today - 1, today])
+      await env.DIRECTORY.prepare(
+        "INSERT INTO live_ticket_days (principal_id, day, issued) VALUES (?, ?, 1)",
+      )
+        .bind(principal, day)
+        .run();
+    await env.DIRECTORY.batch(reaping(env.DIRECTORY, now));
+    const kept = await env.DIRECTORY.prepare(
+      "SELECT day FROM live_ticket_days WHERE principal_id = ? ORDER BY day",
+    )
+      .bind(principal)
+      .all<{ day: number }>();
+    expect(kept.results.map((r) => r.day)).toEqual([today - 1, today]);
+  });
 });
 
 describe("a feed's live state", () => {

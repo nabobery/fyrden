@@ -1,6 +1,7 @@
 import { ALARM_UNITS, type AlarmUnit } from "../do/user/alarm-budget.js";
 import { DISCRETIONARY_RESOURCES, type ResourceVector } from "../effects/discretionary.js";
 import { isLiveVector } from "./budget.js";
+import { LIVE_PENDING_MS } from "./duration.js";
 
 /*
  * Live work's prices: what one admission of each funded unit may use at
@@ -106,6 +107,12 @@ export interface LiveManifestEntry {
   readonly observed: Readonly<Record<string, ResourceVector>>;
   /** The Durable Object requests one admission may make (entries, callbacks, child calls). */
   readonly requests: number;
+  /**
+   * An owned unit's pending bound: the longest its caller waits for it (and
+   * stops waiting, the owner left for recovery), its holds covering a run of
+   * it and its tail; `LIVE_PENDING_MS` unless shorter.
+   */
+  readonly pendingMs?: number;
 }
 
 const ROWS = ["do_rows_read", "do_rows_written", "d1_rows_read", "d1_rows_written"] as const;
@@ -160,6 +167,14 @@ export function liveManifestError(
       return `${unit}: its quantity must be a positive count`;
     if (!Number.isSafeInteger(entry.requests) || entry.requests < 1)
       return `${unit}: its requests must be a positive count`;
+    if (
+      entry.pendingMs !== undefined &&
+      (!Number.isSafeInteger(entry.pendingMs) ||
+        entry.pendingMs < 1 ||
+        entry.pendingMs > LIVE_PENDING_MS ||
+        entry.duration !== "owner")
+    )
+      return `${unit}: its pending bound must be an owned unit's, at most ${LIVE_PENDING_MS} ms`;
     const { maxMs, days } = entry.validity ?? {};
     if (
       !Number.isSafeInteger(maxMs) ||
@@ -187,3 +202,78 @@ export function liveManifestError(
   }
   return null;
 }
+
+const ZERO = Object.fromEntries(R.map((r) => [r, 0])) as ResourceVector;
+const vector = (parts: Partial<ResourceVector>): ResourceVector => ({ ...ZERO, ...parts });
+
+/** An entry priced by the rule from `estimate` (an estimate of its fixtures' most, until measured). */
+function estimated(
+  estimate: Partial<ResourceVector>,
+  entry: Omit<LiveManifestEntry, "resources" | "observed" | "components"> &
+    Partial<Pick<LiveManifestEntry, "components">>,
+): LiveManifestEntry {
+  const observed = vector(estimate);
+  return {
+    components: [],
+    ...entry,
+    observed: { estimate: observed },
+    resources: livePrice([observed], entry.requests, entry.duration, entry.maxQuantity),
+  };
+}
+
+/**
+ * The prices of the units wired so far (Proposed: estimated, not yet
+ * measured; the manifest's literal prices are frozen from measurements
+ * once every unit is wired).
+ *
+ * - `ticket`: the issuance's counter and transport rows, one call of the
+ *   feed's object and its ticket's row, its owner's accounting; leaving
+ *   the ticket's local row and the directory's rows to clean up.
+ * - `upgrade_transport`: the whole upgrade attempt, owned: the transport's
+ *   claim, the redemption's call of the feed's object, the admission's
+ *   refusals, the check after its dependencies are indexed, and the
+ *   socket's or the refusal's upgrade, over the ticket's life.
+ * - `admission`: a socket admitted: its lease and dependencies, its
+ *   confirmation, installation and terminal provisions (the transport's
+ *   owner covers the time it is awaited: its own duration is an entry's).
+ */
+export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
+  ticket: estimated(
+    { do_rows_read: 10, do_rows_written: 4, d1_rows_read: 30, d1_rows_written: 14 },
+    {
+      validity: { maxMs: 60_000, days: 2 },
+      duration: "owner",
+      pendingMs: 30_000,
+      maxQuantity: 1,
+      requests: 1,
+      directoryCleanupDebt: vector({ d1_rows_written: 2 }),
+      localCleanupDebt: vector({ do_rows_written: 2 }),
+      dayCleanupDebt: ZERO,
+    },
+  ),
+  upgrade_transport: estimated(
+    { do_rows_read: 20, do_rows_written: 6, d1_rows_read: 30, d1_rows_written: 10 },
+    {
+      validity: { maxMs: 120_000, days: 2 },
+      duration: "owner",
+      pendingMs: 30_000,
+      maxQuantity: 1,
+      requests: 2,
+      directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+      localCleanupDebt: ZERO,
+      dayCleanupDebt: ZERO,
+    },
+  ),
+  admission: estimated(
+    { do_rows_read: 40, do_rows_written: 20, d1_rows_read: 40, d1_rows_written: 16 },
+    {
+      validity: { maxMs: 120_000, days: 2 },
+      duration: "synchronous",
+      maxQuantity: 1,
+      requests: 2,
+      directoryCleanupDebt: vector({ d1_rows_written: 6 }),
+      localCleanupDebt: vector({ do_rows_written: 10 }),
+      dayCleanupDebt: ZERO,
+    },
+  ),
+};

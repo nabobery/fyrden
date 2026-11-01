@@ -15,6 +15,7 @@ import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
+import { LIVE_DAILY } from "../src/live/budget.js";
 import { sweep } from "../src/live/directory.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
@@ -299,6 +300,24 @@ describe("a listen stream", () => {
     });
     // The socket was there before the acknowledgement: a change right after it is heard.
     expect(await socketsOf(owner)).toEqual({ leases: 1, local: 1 });
+    // Paid for as a ticket's redemption is: its transport and admission granted, the transport's
+    // owner released.
+    expect(
+      await env.DIRECTORY.prepare(
+        `SELECT json_extract(plan, '$.kind') AS kind FROM live_budget_receipts
+         WHERE json_extract(plan, '$.recipient') = ? ORDER BY kind`,
+      )
+        .bind(owner.principalId)
+        .all()
+        .then((r) => r.results),
+    ).toEqual([{ kind: "admission" }, { kind: "upgrade_transport" }]);
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ?",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
     await pump(owner, hidden, 1);
     await pump(owner, mine, 1);
     expect(await stream.next()).toMatchObject(updated(owner));
@@ -361,6 +380,38 @@ describe("a listen stream", () => {
     });
     expect((await socketsOf(owner)).leases).toBe(LIVE_POLICY.perCredential);
     for (const stream of streams) stream.abort.abort();
+  });
+
+  it("is refused before acknowledgement once today's allowance is spent, saying when it is back", async () => {
+    const owner = await user();
+    const { day } = (await env.DIRECTORY.prepare(
+      "SELECT CAST(unixepoch() / 86400 AS INTEGER) AS day",
+    ).first<{ day: number }>()) as { day: number };
+    // The day's row exists once anything was granted today: a listen grants its transport.
+    const first = await listen([feedUri(owner)], bearer(owner.token));
+    await first.next();
+    first.abort.abort();
+    const spent = await env.DIRECTORY.prepare(
+      "SELECT do_requests AS n FROM live_budget_days WHERE day = ?",
+    )
+      .bind(day)
+      .first<{ n: number }>();
+    await env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+      .bind(LIVE_DAILY.do_requests, day)
+      .run();
+    try {
+      const refused = await listen([feedUri(owner)], bearer(owner.token));
+      expect(await refused.next()).toMatchObject({
+        id: "listen-1",
+        error: {
+          data: { status: 429, code: "live_budget", retry_at: (day + 1) * 86_400_000 },
+        },
+      });
+    } finally {
+      await env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+        .bind(spent?.n ?? 0, day)
+        .run();
+    }
   });
 
   it("is refused to a delegated or a DPoP-bound token, as live sockets are", async () => {

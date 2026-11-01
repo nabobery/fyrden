@@ -1,4 +1,5 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { LIVE_NOW } from "./budget.js";
 import type { LiveCredential } from "./credential.js";
 
 /*
@@ -38,13 +39,15 @@ export function liveAllowance(env: object): number | null {
 }
 
 /** Why an admission was refused. */
-export type Refusal = "allowance" | "daily";
+export type Refusal = "allowance" | "daily" | "funding";
 
 /**
  * Admits a socket in one batch: its pending lease (until confirmed, at most
- * `pendingMs`) and its dependency rows, only while the deployment has room
- * and the principal has opened fewer than `perDay` today. Null when
- * admitted, else why not.
+ * `pendingMs`) and its dependency rows, only while the deployment has room,
+ * the principal has opened fewer than `perDay` today, and the admission's
+ * grant (`fundingId`) still holds in the ledger (unexpired, unsettled, by
+ * D1's time): the lease records it, so no lease stands without the grant
+ * that pays for it. Null when admitted, else why not.
  */
 export async function admit(
   db: D1Database,
@@ -52,18 +55,21 @@ export async function admit(
   credential: LiveCredential,
   allowance: number,
   now: number,
+  fundingId: string,
 ): Promise<Refusal | null> {
   const day = Math.floor(now / DAY);
   const [lease] = await db.batch([
     db
       .prepare(
         `INSERT INTO live_sockets (socket_id, ticket_id, feed, credential_id, state, pending_until,
-           expires_at)
-         SELECT ?1, ?2, ?3, ?4, 'pending', ?5, ?6
+           expires_at, funding_operation_id)
+         SELECT ?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?11
          WHERE (SELECT count(*) FROM live_sockets WHERE expires_at > ?7
              AND (state = 'open' OR pending_until > ?7)) < ?8
            AND coalesce((SELECT n FROM live_admissions WHERE principal_id = ?3 AND day = ?9), 0)
-             < ?10`,
+             < ?10
+           AND EXISTS (SELECT 1 FROM live_budget_receipts WHERE operation_id = ?11
+             AND settled_at IS NULL AND valid_until > ${LIVE_NOW})`,
       )
       .bind(
         socket.id,
@@ -76,6 +82,7 @@ export async function admit(
         allowance,
         day,
         LIVE_ADMISSION.perDay,
+        fundingId,
       ),
     db
       .prepare(
@@ -94,12 +101,17 @@ export async function admit(
       .bind(socket.feed, day, socket.id),
   ]);
   if ((lease?.meta.changes ?? 0) > 0) return null;
-  const daily = await db
+  const why = await db
     .withSession("first-primary")
-    .prepare("SELECT n FROM live_admissions WHERE principal_id = ? AND day = ?")
-    .bind(socket.feed, day)
-    .first<{ n: number }>();
-  return (daily?.n ?? 0) >= LIVE_ADMISSION.perDay ? "daily" : "allowance";
+    .prepare(
+      `SELECT (SELECT n FROM live_admissions WHERE principal_id = ?1 AND day = ?2) AS n,
+         EXISTS (SELECT 1 FROM live_budget_receipts WHERE operation_id = ?3
+           AND settled_at IS NULL AND valid_until > ${LIVE_NOW}) AS funded`,
+    )
+    .bind(socket.feed, day, fundingId)
+    .first<{ n: number | null; funded: number }>();
+  if ((why?.n ?? 0) >= LIVE_ADMISSION.perDay) return "daily";
+  return why?.funded === 1 ? "allowance" : "funding";
 }
 
 /** Confirms a pending lease, only while it stands; whether it did. */
@@ -132,8 +144,8 @@ export async function release(db: D1Database, socketIds: readonly string[]): Pro
 /**
  * Reaps leases whose release was lost (pending past its wait, or past its
  * expiry), with their dependency rows, at most a run's in all, the earliest
- * due first; told revocations past their keep; admission counts before
- * yesterday.
+ * due first; told revocations past their keep; admission and ticket counts
+ * before yesterday; tickets' transports past their expiry.
  */
 export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
   // Each kind read through its own index (a run's at most), then the earliest due of both: the
@@ -162,6 +174,21 @@ export function reaping(db: D1Database, now: number): D1PreparedStatement[] {
       )
       .bind(now - LIVE_ADMISSION.keepMs, LIVE_ADMISSION.reapRows),
     db.prepare("DELETE FROM live_admissions WHERE day < ?").bind(Math.floor(now / DAY) - 1),
+    // Tickets' day counts before yesterday, and transports past their expiry, a run's at most.
+    db
+      .prepare(
+        `DELETE FROM live_ticket_days WHERE (principal_id, day) IN (
+           SELECT principal_id, day FROM live_ticket_days INDEXED BY live_ticket_days_day
+           WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
+      )
+      .bind(Math.floor(now / DAY) - 1, LIVE_ADMISSION.reapRows),
+    db
+      .prepare(
+        `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
+           SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
+           WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
+      )
+      .bind(now, LIVE_ADMISSION.reapRows),
   ];
 }
 

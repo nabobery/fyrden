@@ -23,6 +23,7 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import { threadId } from "../src/do/user/inbox.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
+import { LIVE_DAILY, LIVE_ORDINARY_DEBT_LIMIT } from "../src/live/budget.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
@@ -242,15 +243,198 @@ describe("a live socket", () => {
     expect(leases).toEqual({ n: 1 });
   });
 
-  it("writes nothing to the live ledger: grants are not wired yet", async () => {
+  it("is funded before anything is woken: its transport, ticket and admission granted, their owners released", async () => {
     const owner = await user();
-    const socket = await open(owner.token);
-    expect(socket.response.status).toBe(101);
-    const count = (table: string) =>
-      env.DIRECTORY.prepare(`SELECT count(*) AS n FROM ${table}`).first<{ n: number }>();
-    expect(await count("live_budget_receipts")).toEqual({ n: 0 });
-    expect(await count("live_recovery_targets")).toEqual({ n: 0 });
-    socket.ws?.close(1000, "done");
+    const count = async (sql: string, ...values: unknown[]) =>
+      (
+        await env.DIRECTORY.prepare(sql)
+          .bind(...values)
+          .first<{ n: number }>()
+      )?.n;
+    const receipts = () =>
+      count(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE json_extract(plan, '$.recipient') = ?",
+        owner.principalId,
+      );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    expect(await receipts()).toBe(2);
+    const upgrade = () =>
+      call(
+        new Request(
+          `${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`,
+          {
+            headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+          },
+        ),
+      );
+    const opened = await upgrade();
+    expect(opened.status).toBe(101);
+    expect(await receipts()).toBe(3);
+    // Every owner accounted and released: none held.
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ?",
+        owner.principalId,
+      ),
+    ).toBe(0);
+    // Its transport claimed once: the ticket does not open another.
+    expect((await upgrade()).status).toBe(401);
+    opened.webSocket?.accept();
+    opened.webSocket?.close(1000, "done");
+  });
+
+  it("is refused for its funding by an upgrade closed with why: 4413 for today, 4412 for now", async () => {
+    const today = async () =>
+      (
+        await env.DIRECTORY.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{
+          d: number;
+        }>()
+      )?.d as number;
+    const refusedWith = async (spend: () => Promise<unknown>, undo: () => Promise<unknown>) => {
+      const owner = await user();
+      const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+      await spend();
+      try {
+        const response = await call(
+          new Request(
+            `${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`,
+            { headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` } },
+          ),
+        );
+        expect(response.status).toBe(101);
+        const ws = response.webSocket as WebSocket;
+        const closed = new Promise<number>((resolve) =>
+          ws.addEventListener("close", (event) => resolve(event.code)),
+        );
+        ws.accept();
+        // No socket of it was made.
+        expect(
+          await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
+            .bind(owner.principalId)
+            .first(),
+        ).toEqual({ n: 0 });
+        return await closed;
+      } finally {
+        await undo();
+      }
+    };
+    const day = await today();
+    const spent = await env.DIRECTORY.prepare(
+      "SELECT do_requests FROM live_budget_days WHERE day = ?",
+    )
+      .bind(day)
+      .first<{ do_requests: number }>();
+    // Today's requests spent: a definitive refusal.
+    expect(
+      await refusedWith(
+        () =>
+          env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+            .bind(LIVE_DAILY.do_requests, day)
+            .run(),
+        () =>
+          env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+            .bind(spent?.do_requests ?? 0, day)
+            .run(),
+      ),
+    ).toBe(4413);
+    // Ordinary work blocked by what cleanup owes: for now only.
+    // (An admission leaves directory rows to clean up: debt of them past what ordinary work may.)
+    const debt = await env.DIRECTORY.prepare(
+      "SELECT debt_d1_rows_written AS n FROM live_budget_state WHERE id = 1",
+    ).first<{ n: number }>();
+    expect(
+      await refusedWith(
+        () =>
+          env.DIRECTORY.prepare(
+            "UPDATE live_budget_state SET debt_d1_rows_written = ? WHERE id = 1",
+          )
+            .bind(LIVE_ORDINARY_DEBT_LIMIT.d1_rows_written)
+            .run(),
+        () =>
+          env.DIRECTORY.prepare(
+            "UPDATE live_budget_state SET debt_d1_rows_written = ? WHERE id = 1",
+          )
+            .bind(debt?.n ?? 0)
+            .run(),
+      ),
+    ).toBe(4412);
+  });
+
+  it("is refused for now (4412), not as a stranger, when its feed was restored since its ticket", async () => {
+    const owner = await user();
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    // A restore since: the feed's epoch moved past the one its transport was granted under.
+    await env.DIRECTORY.prepare(
+      `INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)
+       ON CONFLICT (source_id) DO UPDATE SET epoch_gen = epoch_gen + 1`,
+    )
+      .bind(`feed:${owner.principalId}`)
+      .run();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4412);
+  });
+
+  it("is issued 60 tickets a principal a UTC day, then refused until the next (by the ledger's day)", async () => {
+    const owner = await user();
+    const day = (
+      await env.DIRECTORY.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{
+        d: number;
+      }>()
+    )?.d as number;
+    await env.DIRECTORY.prepare(
+      "INSERT INTO live_ticket_days (principal_id, day, issued) VALUES (?, ?, 60)",
+    )
+      .bind(owner.principalId, day)
+      .run();
+    const refused = await ticketFor(owner.token);
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({
+      code: "live_budget",
+      retry_at: (day + 1) * 86_400_000,
+    });
+    // Refused before its transport was paid for: nothing granted for it.
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE json_extract(plan, '$.recipient') = ?",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("is answered with the life its ticket has left", async () => {
+    const owner = await user();
+    const issued = (await (await ticketFor(owner.token)).json()) as { expires_in: number };
+    expect(issued.expires_in).toBeGreaterThan(0);
+    expect(issued.expires_in).toBeLessThanOrEqual(LIVE_POLICY.ticketMs / 1000);
+  });
+
+  it("stores no ticket its funding does not pay for", async () => {
+    const owner = await user();
+    const stored = await feedOf(owner).liveTicketV1(
+      { protocol: 1, revision: 1, envelope: null, quantity: 1, ownerId: "own_forged" },
+      {
+        hash: "a".repeat(64),
+        credentialId: "tok_forged",
+        expiresAt: Date.now() + 30_000,
+        transport: { operationId: "op_forged" },
+      },
+    );
+    expect(stored).toEqual({ status: "refused" });
+    const rows = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT count(*) AS n FROM live_tickets").one(),
+    );
+    expect(rows).toEqual({ n: 0 });
   });
 
   it("is not offered while the deployment has not turned live hints on", async () => {
@@ -457,7 +641,7 @@ describe("a live socket", () => {
     expect(await again.closed).toEqual({ code: 1008 });
   });
 
-  it("is refused past the deployment's allowance", async () => {
+  it("is refused past the deployment's allowance for now (4412), past its principal's day until tomorrow (4413)", async () => {
     const owner = await user();
     const vars = { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" };
     // The allowance counts every open lease: with one already open (any test's), none more.
@@ -467,9 +651,24 @@ describe("a live socket", () => {
     )
       .bind(uniqueId("lsk"), uniqueId("t"), Date.now() + 60_000)
       .run();
-    const refused = await open(owner.token, vars);
-    expect(refused.response.status).toBe(503);
-    expect(refused.response.headers.get("Retry-After")).toBe("60");
+    const full = await open(owner.token, vars);
+    expect(full.response.status).toBe(101);
+    expect(await full.closed).toEqual({ code: 4412 });
+    // The principal's admissions for the day (this Worker's) spent.
+    const other = await user();
+    await env.DIRECTORY.prepare(
+      "INSERT INTO live_admissions (principal_id, day, n) VALUES (?, ?, ?)",
+    )
+      .bind(other.principalId, Math.floor(Date.now() / 86_400_000), LIVE_ADMISSION.perDay)
+      .run();
+    const spent = await open(other.token);
+    expect(spent.response.status).toBe(101);
+    expect(await spent.closed).toEqual({ code: 4413 });
+    expect(
+      await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed IN (?, ?)")
+        .bind(owner.principalId, other.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
   });
 
   it("is admitted again after its principal is unsuspended, a delivery for the old authority aside", async () => {

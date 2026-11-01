@@ -27,6 +27,7 @@ describe("a ticket's transport", () => {
       credentialId: "tok_t",
       expiresAt: now + 30_000,
       operationId: "op_t",
+      envelope: null,
     };
     expect(await recordTransport(db, t)).toBe(true);
     expect(await recordTransport(db, t)).toBe(false);

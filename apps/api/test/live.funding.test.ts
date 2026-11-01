@@ -21,10 +21,13 @@ import {
   fund,
   LIVE_MANIFEST_REVISION,
   type LiveFunding,
+  liveTarget,
+  ownedRun,
   planFor,
   validateFunding,
 } from "../src/live/funding.js";
 import {
+  LIVE_PRICES,
   LIVE_REQUIRED_COMPONENTS,
   type LiveManifestEntry,
   livePrice,
@@ -406,5 +409,108 @@ describe("funding a grant", () => {
         reason: "daily",
         retryAt: (day + 1) * DAY,
       });
+    }));
+});
+
+describe("owned live work", () => {
+  /** A funded transport for a fresh feed, planned from the ledger's time now. */
+  const transport = async () => {
+    const recipient = `usr_${crypto.randomUUID()}`;
+    const target = await liveTarget(env.DIRECTORY, recipient);
+    const funded = await fund(
+      env.DIRECTORY,
+      await makeLiveGrant(
+        planFor(
+          LIVE_PRICES.upgrade_transport as LiveManifestEntry,
+          {
+            incarnation: target.incarnation,
+            recipientType: "UserDO",
+            recipient,
+            epoch: target.epoch,
+            kind: "upgrade_transport",
+            class: "ordinary",
+            producesLocal: false,
+          },
+          target.ledger.now,
+        ),
+      ),
+    );
+    if (funded.status !== "funded") throw new Error(funded.reason);
+    return { envelope: funded.value, ledger: target.ledger };
+  };
+  const ownerRow = (ownerId: string | null) =>
+    env.DIRECTORY.prepare("SELECT status, started_at FROM live_duration_owners WHERE owner_id = ?")
+      .bind(ownerId)
+      .first<{ status: string; started_at: number }>();
+
+  it("is timed on the ledger's clock from when it was sampled, the wait since included", () =>
+    isolated(async () => {
+      const { envelope, ledger } = await transport();
+      // Sampled five seconds ago (by this Worker's clock): its run starts five seconds on.
+      const run = await ownedRun(
+        env.DIRECTORY,
+        envelope,
+        "upgrade",
+        async (funding) => (await ownerRow(funding.ownerId))?.started_at,
+        { ledger: { ...ledger, at: ledger.at - 5_000 } },
+      );
+      expect(run.status).toBe("funded");
+      expect((run as { value: number }).value).toBeGreaterThanOrEqual(ledger.now + 5_000);
+      // D1's whole second and its answer's time: what the ledger's time may be past its sample.
+      expect(ledger.slack).toBeGreaterThanOrEqual(1_000);
+    }));
+
+  it("is given up on past its pending bound, told to stop, its owner left for recovery", () =>
+    isolated(async () => {
+      const { envelope, ledger } = await transport();
+      let ownerId: string | null = null;
+      let stopped = false;
+      const run = await ownedRun(
+        env.DIRECTORY,
+        envelope,
+        "upgrade",
+        async (funding, signal) => {
+          ownerId = funding.ownerId;
+          // Waits on its deadline only (no timer of the test's own).
+          await new Promise((resolve) => signal.addEventListener("abort", resolve));
+          stopped = signal.aborted;
+          return "late";
+        },
+        { ledger, pendingMs: 20 },
+      );
+      expect(run).toEqual({ status: "refused", reason: "temporary" });
+      expect(stopped).toBe(true);
+      expect((await ownerRow(ownerId))?.status).toBe("dispatched");
+    }));
+
+  it("keeps its result when its accounting fails after it ran, its owner left for recovery", () =>
+    isolated(async () => {
+      const { envelope, ledger } = await transport();
+      let down = false;
+      // The directory unreachable from the moment the call ran.
+      const db = new Proxy(env.DIRECTORY, {
+        get(target, key) {
+          if (down && (key === "batch" || key === "prepare"))
+            return () => {
+              throw new Error("the directory is unreachable");
+            };
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      let ownerId: string | null = null;
+      const run = await ownedRun(
+        db,
+        envelope,
+        "upgrade",
+        async (funding) => {
+          ownerId = funding.ownerId;
+          down = true;
+          return "opened";
+        },
+        { ledger },
+      );
+      expect(run).toEqual({ status: "funded", value: "opened" });
+      expect((await ownerRow(ownerId))?.status).toBe("dispatched");
     }));
 });

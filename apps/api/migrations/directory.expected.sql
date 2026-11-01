@@ -382,7 +382,15 @@ CREATE TABLE live_sockets (
   state TEXT NOT NULL CHECK (state IN ('pending', 'open')),
   pending_until INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
-) STRICT;
+, funding_operation_id TEXT) STRICT;
+
+-- table live_ticket_days
+CREATE TABLE live_ticket_days (
+  principal_id TEXT NOT NULL CHECK (length(principal_id) > 0),
+  day INTEGER NOT NULL CHECK (day >= 0),
+  issued INTEGER NOT NULL CHECK (issued BETWEEN 1 AND 60),
+  PRIMARY KEY (principal_id, day)
+) STRICT, WITHOUT ROWID;
 
 -- table live_ticket_transports
 CREATE TABLE live_ticket_transports (
@@ -393,7 +401,9 @@ CREATE TABLE live_ticket_transports (
   operation_id TEXT NOT NULL CHECK (length(operation_id) BETWEEN 1 AND 300),
   claimed_at INTEGER CHECK (claimed_at IS NULL OR claimed_at >= 0),
   claim_id TEXT
-) STRICT, WITHOUT ROWID;
+, envelope_json TEXT CHECK (
+  envelope_json IS NULL OR (json_valid(envelope_json) AND json_type(envelope_json) = 'object')
+)) STRICT, WITHOUT ROWID;
 
 -- table memberships
 CREATE TABLE memberships (
@@ -850,6 +860,9 @@ CREATE INDEX live_sockets_feed ON live_sockets (feed);
 
 -- index live_sockets_pending
 CREATE INDEX live_sockets_pending ON live_sockets (pending_until) WHERE state = 'pending';
+
+-- index live_ticket_days_day
+CREATE INDEX live_ticket_days_day ON live_ticket_days (day, principal_id);
 
 -- index live_ticket_transports_expiry
 CREATE INDEX live_ticket_transports_expiry ON live_ticket_transports (expires_at, ticket_hash);

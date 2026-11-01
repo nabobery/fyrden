@@ -63,6 +63,7 @@ describe("a socket's queued renewal", () => {
             { id, credentialId: "tok_1", expiresAt: now + DAY, scopes: [], repoIds: null },
             [],
             at,
+            { epoch: 0, incarnation: "", seq: 0, validUntil: 0 },
           );
           live.open(id);
         }

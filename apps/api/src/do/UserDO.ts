@@ -23,17 +23,19 @@ import {
   type Turn,
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
+import type { LiveEnvelope } from "../live/budget.js";
 import { isLiveVector, livePlanError, validateLiveCoverage } from "../live/budget.js";
 import { liveCredential } from "../live/credential.js";
 import { confirm, release } from "../live/directory.js";
 import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
+import { expectationOf, type LiveFunding, validateFunding } from "../live/funding.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "../live/manifest.js";
 import { quarantineLiveOwners } from "../live/owners.js";
 import {
   LIVE_RECOVERY_DURATION,
   type LiveRecoveryReply,
   type LiveRecoveryRequest,
 } from "../live/recovery.js";
-import { randomSecret } from "../oauth/params.js";
 import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { userSchema } from "./schema/user.js";
@@ -76,13 +78,49 @@ import {
   type Candidate as LiveCandidate,
   type LiveSignal,
   type LiveSocket,
-  ticketHash,
 } from "./user/live.js";
 import { LiveBudget } from "./user/live-budget.js";
 import { eligibleLiveDeadline, LIVE_BLOCKED, type LiveReadiness } from "./user/live-schedule.js";
 
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
-export const LIVE_ADMITTED = "X-Fyrden-Live-Admitted";
+export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
+
+/** What the Worker hands a live upgrade: an admitted socket with its funding, or a refusal with its transport's. */
+export type LiveBudgetV1 =
+  | { readonly admitted: LiveAdmitted; readonly admission: unknown }
+  | { readonly refusal: 4412 | 4413; readonly transport: unknown };
+
+/** A ticket as the Worker hands it to its feed: its hash, credential, expiry and transport's reference. */
+export interface LiveTicketV1 {
+  readonly hash: string;
+  readonly credentialId: string;
+  readonly expiresAt: number;
+  readonly transport: { readonly operationId: string };
+}
+
+/** The stamp of the grant `envelope` (what recovery retires the rows it paid for by). */
+const stampOf = (envelope: LiveEnvelope) => ({
+  epoch: envelope.plan.epoch,
+  incarnation: envelope.plan.incarnation,
+  seq: envelope.seq,
+  validUntil: envelope.plan.validUntil,
+});
+
+const liveTicketShaped = (t: unknown): t is LiveTicketV1 => {
+  if (typeof t !== "object" || t === null) return false;
+  const { hash, credentialId, expiresAt, transport } = t as Partial<LiveTicketV1>;
+  return (
+    typeof hash === "string" &&
+    /^[0-9a-f]{64}$/.test(hash) &&
+    typeof credentialId === "string" &&
+    credentialId.length > 0 &&
+    Number.isSafeInteger(expiresAt) &&
+    typeof transport === "object" &&
+    transport !== null &&
+    typeof transport.operationId === "string" &&
+    transport.operationId.length > 0
+  );
+};
 
 /** What the Worker admitted: the socket, its credential and its dependencies. */
 export interface LiveAdmitted {
@@ -707,46 +745,154 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * A ticket for one live socket of `credentialId` (single use, for
-   * `LIVE_POLICY.ticketMs`); null for a retired feed.
+   * Stores a ticket of one live socket, funded: its `funding` (a `ticket`
+   * grant for this feed, with its owner) checked before anything of the
+   * feed is read, then its hash, credential, expiry and transport kept
+   * (single use, until `ticket.expiresAt`). `retired` for a retired feed,
+   * `refused` for a funding or ticket that does not hold.
    */
-  async liveTicket(credentialId: string): Promise<string | null> {
+  async liveTicketV1(
+    funding: unknown,
+    ticket: LiveTicketV1,
+  ): Promise<{ readonly status: "stored" | "retired" | "refused" }> {
+    const entry = LIVE_PRICES.ticket as LiveManifestEntry;
+    const checked = await validateFunding(
+      this.env.DIRECTORY,
+      funding,
+      expectationOf(entry, {
+        recipientType: "UserDO",
+        recipient: this.ctx.id.name as string,
+        kind: "ticket",
+        class: "ordinary",
+      }),
+    );
+    if (checked.status !== "valid" || !liveTicketShaped(ticket)) return { status: "refused" };
     await this.#checkEpoch();
-    if (this.#retired()) return null;
-    const ticket = randomSecret(32);
-    const hash = await ticketHash(ticket);
+    if (this.#retired()) return { status: "retired" };
+    const { envelope } = checked.funding;
     const now = Date.now();
     const live = this.#live();
-    this.ctx.storage.transactionSync(() => {
+    return this.ctx.storage.transactionSync(() => {
+      // Its grant still current here (no restore or recovery since it was checked), the ticket
+      // still to live.
+      if (!this.#current(envelope) || ticket.expiresAt <= now)
+        return { status: "refused" as const };
       live.prune(now);
-      live.storeTicket(hash, credentialId, now + LIVE_POLICY.ticketMs);
+      live.storeTicket(
+        ticket.hash,
+        ticket.credentialId,
+        ticket.expiresAt,
+        ticket.transport,
+        stampOf(envelope),
+      );
+      return { status: "stored" as const };
     });
-    return ticket;
   }
 
-  /** Redeems a ticket once, for the credential it was issued to; whether it held. */
-  async liveRedeem(ticket: string, credentialId: string): Promise<boolean> {
+  /**
+   * Redeems a ticket once, funded: its `funding` (the ticket's transport,
+   * with its owner) checked before anything of the feed is read, then the
+   * ticket of `hash` taken for `credentialId`, when it was issued with this
+   * very transport and is unexpired: `redeemed`; `refused` for funding
+   * that does not pay for it (or is fenced since), `unknown` for a ticket
+   * that does not hold (or a retired feed).
+   */
+  async liveRedeemV1(
+    funding: unknown,
+    hash: string,
+    credentialId: string,
+  ): Promise<"redeemed" | "refused" | "unknown"> {
+    const checked = await this.#funded(funding, "upgrade_transport");
+    if (!checked) return "refused";
     await this.#checkEpoch();
-    if (this.#retired()) return false;
-    const hash = await ticketHash(ticket);
+    if (this.#retired()) return "unknown";
     const live = this.#live();
-    return this.ctx.storage.transactionSync(() =>
-      live.redeemTicket(hash, credentialId, Date.now()),
+    return this.ctx.storage.transactionSync(() => {
+      if (!this.#current(checked.envelope)) return "refused";
+      return live.redeemTicket(hash, credentialId, Date.now(), checked.envelope.operationId)
+        ? "redeemed"
+        : "unknown";
+    });
+  }
+
+  /** Whether `envelope`'s grant is current under the feed's fence (no restore or recovery past it). */
+  #current(envelope: LiveEnvelope): boolean {
+    const fence = new LiveBudget(this.ctx.storage.sql).fence();
+    return (
+      envelope.plan.epoch === fence.epoch &&
+      envelope.plan.incarnation === fence.incarnation &&
+      envelope.seq > fence.cleanupThrough
+    );
+  }
+
+  /** `funding` checked as paying for `kind` of this feed (before anything of it is read), or null. */
+  async #funded(
+    funding: unknown,
+    kind: "ticket" | "upgrade_transport" | "admission",
+  ): Promise<LiveFunding | null> {
+    const checked = await this.#fundingCheck(funding, kind);
+    return checked.status === "valid" ? checked.funding : null;
+  }
+
+  /** `funding` checked as paying for `kind` of this feed: valid, or why not. */
+  #fundingCheck(
+    funding: unknown,
+    kind: "ticket" | "upgrade_transport" | "admission",
+    /** A refusal's upgrade: its transport's grant, its owner named or not (one never admitted). */
+    anyOwner = false,
+  ): ReturnType<typeof validateFunding> {
+    const expected = expectationOf(LIVE_PRICES[kind] as LiveManifestEntry, {
+      recipientType: "UserDO",
+      recipient: this.ctx.id.name as string,
+      kind,
+      class: "ordinary",
+    });
+    const unowned =
+      anyOwner && typeof funding === "object" && funding !== null && "ownerId" in funding
+        ? (funding as { ownerId: unknown }).ownerId === null
+        : false;
+    return validateFunding(
+      this.env.DIRECTORY,
+      funding,
+      unowned ? { ...expected, owned: false } : expected,
     );
   }
 
   /**
-   * An admitted live socket's upgrade, handed over by the Worker (the
-   * object is reached only through it): confirmed in the directory before
-   * anything is exposed, fenced against retirement and revocation after
-   * every await; refused, its lease is released.
+   * A live socket's upgrade, handed over by the Worker (the object is
+   * reached only through it), funded (`LIVE_BUDGET`). An admitted socket
+   * comes with its admission's funding, checked before anything else:
+   * confirmed in the directory before anything is exposed, fenced against
+   * retirement and revocation after every await; refused, its lease is
+   * released. A refusal comes with its transport's funding: the socket is
+   * accepted only to be closed at once with its code (4412: try again
+   * soon; 4413: today's allowance spent), no lease or socket row made.
    */
   override async fetch(request: Request): Promise<Response> {
-    const admitted = JSON.parse(
-      request.headers.get(LIVE_ADMITTED) ?? "null",
-    ) as LiveAdmitted | null;
-    if (request.headers.get("Upgrade") !== "websocket" || !admitted)
+    const budget = JSON.parse(request.headers.get(LIVE_BUDGET) ?? "null") as LiveBudgetV1 | null;
+    if (request.headers.get("Upgrade") !== "websocket" || typeof budget !== "object" || !budget)
       return new Response(null, { status: 400 });
+    if ("refusal" in budget) {
+      const code = budget.refusal;
+      // A transport fenced since (its feed restored) still pays for its refusal: its charge stands
+      // in the ledger, and a socket closed at once keeps nothing here.
+      const paid =
+        code === 4412 || code === 4413
+          ? await this.#fundingCheck(budget.transport, "upgrade_transport", true)
+          : null;
+      if (!paid || (paid.status !== "valid" && paid.reason !== "fenced"))
+        return new Response(null, { status: 400 });
+      const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+      server.accept();
+      server.close(code, code === 4413 ? "live hints spent today's allowance" : "try again soon");
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    const admitted = budget.admitted;
+    const admission = admitted ? await this.#funded(budget.admission, "admission") : null;
+    if (!admitted || !admission) {
+      if (admitted) await release(this.env.DIRECTORY, [admitted.socketId]);
+      return new Response(null, { status: 409 });
+    }
     await this.#checkEpoch();
     const live = this.#live();
     const refuse = async (status: number) => {
@@ -758,7 +904,9 @@ export class UserDO extends MigratingDO {
     const held = live.counts(admitted.credentialId);
     if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
       return refuse(429);
-    this.ctx.storage.transactionSync(() =>
+    // Installed only while its admission's grant is current here, stamped with it.
+    const installed = this.ctx.storage.transactionSync(() => {
+      if (!this.#current(admission.envelope)) return false;
       live.addSocket(
         {
           id: admitted.socketId,
@@ -769,18 +917,23 @@ export class UserDO extends MigratingDO {
         },
         admitted.dependencies,
         Date.now(),
-      ),
-    );
+        stampOf(admission.envelope),
+      );
+      return true;
+    });
+    if (!installed) return refuse(409);
     // Its recovery is due before anything is awaited: an object stopped mid-confirmation forgets it.
     this.#schedule("live", Date.now() + LIVE_CONFIRM_MS);
     await this.#arm();
     const confirmed = await confirm(this.env.DIRECTORY, admitted.socketId, Date.now()).catch(
       () => false,
     );
-    // Retired, revoked or forgotten while it was confirmed: nothing is exposed.
+    // Retired, revoked, restored past its grant or forgotten while it was confirmed: nothing is
+    // exposed.
     if (
       !confirmed ||
       this.#retired() ||
+      !this.#current(admission.envelope) ||
       live.anyRevoked(admitted.dependencies) ||
       !live.socket(admitted.socketId)
     )

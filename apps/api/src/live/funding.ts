@@ -1,6 +1,9 @@
+import { feedEpochSource } from "../do/user/feed.js";
 import { DISCRETIONARY_RESOURCES, type ResourceVector } from "../effects/discretionary.js";
+import { clock } from "../services.js";
 import {
   isLiveVector,
+  LIVE_NOW,
   type LiveDayCharge,
   type LiveEnvelope,
   type LiveGrantPlan,
@@ -13,6 +16,15 @@ import {
 } from "./budget.js";
 import { LIVE_PENDING_MS, reserveDuration } from "./duration.js";
 import type { LiveManifestEntry, LiveValidity } from "./manifest.js";
+import {
+  admitLiveOwners,
+  LIVE_OWNER_LIMITS,
+  type LiveOwnerLimits,
+  markLiveOwnerDispatched,
+  observeLiveOwner,
+  releaseLiveOwner,
+  settleLiveOwnerPage,
+} from "./owners.js";
 
 /*
  * Live work funded before it runs: the Worker (or an object calling
@@ -70,6 +82,8 @@ export interface LiveFundingExpectation {
   readonly dayCleanupDebt: ResourceVector;
   /** An owned unit's tail past its pending bound: its holds must cover any run of both. */
   readonly tailMs: number;
+  /** An owned unit's pending bound (its caller waits no longer). */
+  readonly pendingMs: number;
 }
 
 /** The expectation of funding priced by `entry` (an owned unit's runs lasting its pending bound and `tailMs`). */
@@ -81,6 +95,7 @@ export function expectationOf(
   return {
     ...target,
     tailMs,
+    pendingMs: entry.pendingMs ?? LIVE_PENDING_MS,
     price: entry.resources,
     maxQuantity: entry.maxQuantity,
     owned: entry.duration === "owner",
@@ -162,7 +177,7 @@ export function fundingShapeError(
   if (!Number.isSafeInteger(expected.tailMs) || expected.tailMs < 0)
     return "an expectation without a tail";
   const holds = expected.owned
-    ? reserveDuration(plan.validFrom, plan.validUntil, LIVE_PENDING_MS, expected.tailMs)
+    ? reserveDuration(plan.validFrom, plan.validUntil, expected.pendingMs, expected.tailMs)
     : [];
   // Every day it may touch pays the whole price itself: another day's charge pays nothing of it.
   for (const day of [...new Set([...days, ...holds.map((h) => h.day)])]) {
@@ -230,7 +245,9 @@ export function planFor(
   if (R.some((r) => entry.localCleanupDebt[r] > 0) && !target.producesLocal)
     throw new RangeError("local cleanup without its recovery");
   const holds =
-    entry.duration === "owner" ? reserveDuration(from, until, LIVE_PENDING_MS, tailMs) : [];
+    entry.duration === "owner"
+      ? reserveDuration(from, until, entry.pendingMs ?? LIVE_PENDING_MS, tailMs)
+      : [];
   const charges: LiveDayCharge[] = [...new Set([...days, ...holds.map((h) => h.day)])]
     .sort((a, b) => a - b)
     .map((day) => {
@@ -280,4 +297,194 @@ export async function fund(
   if (result.reason === "daily" && result.retryAt !== undefined)
     return { status: "refused", reason: "daily", retryAt: result.retryAt };
   return { status: "refused", reason: "temporary" };
+}
+
+/**
+ * The ledger's time (D1's) as sampled, and this Worker's clock once it was
+ * read: a run is timed from both. D1's time is whole seconds and reached
+ * this Worker some time after it was taken, so at `at` the ledger's time
+ * was `now` or up to `slack` past it.
+ */
+export interface LedgerClock {
+  readonly now: number;
+  readonly at: number;
+  readonly slack: number;
+}
+
+/**
+ * What a plan for `recipient` needs of the ledger now: its incarnation, the
+ * feed's epoch, D1's time (the ledger's clock, which a plan's validity is
+ * judged by: it starts there, never ahead of it) with when it was read, and
+ * the tickets issued to `recipient` today (D1's day) with the next day's
+ * start.
+ */
+export async function liveTarget(
+  db: D1Database,
+  recipient: string,
+): Promise<{
+  readonly incarnation: string;
+  readonly epoch: number;
+  readonly ledger: LedgerClock;
+  readonly ticketsToday: number;
+  readonly tomorrow: number;
+}> {
+  const day = `CAST(${LIVE_NOW} / ${DAY} AS INTEGER)`;
+  const sent = clock();
+  const row = await db
+    .withSession("first-primary")
+    .prepare(
+      `SELECT (SELECT incarnation FROM live_budget_state WHERE id = 1) AS incarnation,
+         coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0) AS epoch,
+         ${LIVE_NOW} AS now,
+         coalesce((SELECT issued FROM live_ticket_days WHERE principal_id = ?2 AND day = ${day}), 0)
+           AS tickets,
+         (${day} + 1) * ${DAY} AS tomorrow`,
+    )
+    .bind(feedEpochSource(recipient), recipient)
+    .first<{
+      incarnation: string;
+      epoch: number;
+      now: number;
+      tickets: number;
+      tomorrow: number;
+    }>();
+  if (!row?.incarnation) throw new Error("the live ledger has no incarnation");
+  const at = clock();
+  return {
+    incarnation: row.incarnation,
+    epoch: row.epoch,
+    // Its second's remainder and the time the answer took: what the ledger's time may be past.
+    ledger: { now: row.now, at, slack: 1_000 + Math.max(0, at - sent) },
+    ticketsToday: row.tickets,
+    tomorrow: row.tomorrow,
+  };
+}
+
+/**
+ * Runs `call` as owned live work: `request` granted, then run as
+ * `ownedRun` runs a grant.
+ */
+export async function ownedCall<T>(
+  db: D1Database,
+  request: LiveGrantRequest,
+  role: string,
+  call: (funding: LiveFunding, signal: AbortSignal) => Promise<T>,
+  options: OwnedRunOptions = {},
+): Promise<FundedResult<T>> {
+  const granted = await fund(db, request);
+  if (granted.status !== "funded") return granted;
+  return ownedRun(db, granted.value, role, call, options);
+}
+
+export interface OwnedRunOptions {
+  /** How long the call is waited for at most (its unit's pending bound): then given up on. */
+  readonly pendingMs?: number;
+  readonly limits?: LiveOwnerLimits;
+  readonly quantity?: number;
+  /** The ledger's clock as sampled: the owner's run is timed on it (its grant's own clock). */
+  readonly ledger?: LedgerClock;
+}
+
+/**
+ * Runs `call` as owned live work paid for by `envelope`: its owner admitted
+ * and recorded dispatched before the call, the call made with its funding
+ * and a signal aborted once it outlasts its pending bound (the call checks
+ * it after each await, and stops: nothing more done, what it took given
+ * back), then its run observed on the ledger's clock, settled and
+ * released. A call that fails or is given up on (an answer lost, the
+ * object unreachable, too slow) is refused for now and leaves its owner
+ * dispatched: its work may still run, so maintenance recovers it as
+ * uncertain, its place kept.
+ */
+export async function ownedRun<T>(
+  db: D1Database,
+  envelope: LiveEnvelope,
+  role: string,
+  call: (funding: LiveFunding, signal: AbortSignal) => Promise<T>,
+  options: OwnedRunOptions = {},
+): Promise<FundedResult<T>> {
+  const { plan } = envelope;
+  // Its owner admitted and its dispatch recorded before the call: nothing runs otherwise.
+  let ownerId: string;
+  let begun: number;
+  let startedAt: number;
+  try {
+    const admitted = await admitLiveOwners(
+      db,
+      {
+        incarnation: plan.incarnation,
+        class: plan.class,
+        dispatchFrom: plan.validFrom,
+        dispatchUntil: plan.validUntil,
+        owners: [{ operationId: envelope.operationId, role }],
+      },
+      options.limits ?? LIVE_OWNER_LIMITS,
+    );
+    if (admitted.status !== "admitted") return { status: "refused", reason: "temporary" };
+    ownerId = admitted.owners[0]?.ownerId as string;
+    // Its run on the ledger's clock: D1's time when sampled, moved on by what this Worker
+    // measured since (to its dispatch, then to its end).
+    begun = clock();
+    startedAt = options.ledger ? options.ledger.now + (begun - options.ledger.at) : begun;
+    if (
+      (await markLiveOwnerDispatched(db, ownerId, {
+        instance: crypto.randomUUID(),
+        startedAt,
+      })) !== "dispatched"
+    )
+      return { status: "refused", reason: "temporary" };
+  } catch {
+    // Nothing called: an owner admitted but never recorded dispatched is released once its window
+    // passed; one whose dispatch was recorded, its answer lost, is recovered as uncertain.
+    return { status: "refused", reason: "temporary" };
+  }
+  // Waited for no longer than its pending bound: past it the call is given up on (its owner left
+  // dispatched, for recovery), and told, so it stops rather than apply late.
+  const deadline = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let value: T;
+  try {
+    value = await Promise.race([
+      call(
+        {
+          protocol: 1,
+          revision: LIVE_MANIFEST_REVISION,
+          envelope,
+          quantity: options.quantity ?? 1,
+          ownerId,
+        },
+        deadline.signal,
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          deadline.abort();
+          reject(new Error("live work outlasted its pending bound"));
+        }, options.pendingMs ?? LIVE_PENDING_MS);
+      }),
+    ]);
+  } catch {
+    deadline.abort();
+    return { status: "refused", reason: "temporary" };
+  } finally {
+    clearTimeout(timer);
+  }
+  // Its end as late as the ledger's time may be (so a run reaching past midnight is charged
+  // there); accounted, then released. Its result stands whatever the accounting does: an owner
+  // not released keeps its place until recovery accounts for it.
+  const finishedAt = startedAt + Math.max(0, clock() - begun) + (options.ledger?.slack ?? 0);
+  try {
+    await observeLiveOwner(db, ownerId, {
+      startedAt,
+      physicalFinishedAt: finishedAt,
+      chargedThrough: finishedAt,
+    });
+    for (let page = 0; page < 2; page++) {
+      const settled = await settleLiveOwnerPage(db, ownerId);
+      if (settled.status === "duplicate" || (settled.status === "settled" && settled.accounted))
+        break;
+      if (settled.status !== "settled") break;
+    }
+    await releaseLiveOwner(db, ownerId);
+  } catch {}
+  return { status: "funded", value };
 }

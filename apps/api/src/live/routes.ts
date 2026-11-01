@@ -3,13 +3,25 @@ import type { Input, issueLiveTicket, Output } from "@fyrden/api-contract";
 import { hashToken } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
-import { LIVE_ADMITTED, type LiveAdmitted } from "../do/UserDO.js";
-import { LIVE_POLICY } from "../do/user/live.js";
+import { LIVE_BUDGET, type LiveAdmitted, type LiveBudgetV1 } from "../do/UserDO.js";
+import { LIVE_POLICY, ticketHash } from "../do/user/live.js";
+import { randomSecret } from "../oauth/params.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
+import { LIVE_NOW, makeLiveGrant } from "./budget.js";
 import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, liveAllowance, release } from "./directory.js";
+import {
+  fund,
+  LIVE_MANIFEST_REVISION,
+  liveTarget,
+  ownedCall,
+  ownedRun,
+  planFor,
+} from "./funding.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "./manifest.js";
+import { claimTransport, type LiveTransport } from "./transports.js";
 
 /*
  * Live notification hints: a ticket (`notifications.live_ticket`), then
@@ -25,7 +37,109 @@ import { admit, liveAllowance, release } from "./directory.js";
 const unavailable = () =>
   new OperationError(503, "live_unavailable", "This deployment sends no live hints.");
 
-/** The `notifications.live_ticket` operation. */
+/** Tickets a principal is issued a UTC day at most (each counted with its transport). */
+export const LIVE_TICKETS_A_DAY = 60;
+
+const DAY = 86_400_000;
+
+/** A funding refusal, as the ticket operation answers it. */
+function refusal(result: { readonly reason: "daily" | "temporary"; readonly retryAt?: number }) {
+  if (result.reason === "daily" && result.retryAt !== undefined)
+    return new OperationError(
+      429,
+      "live_budget",
+      "Live hints have spent today's allowance. Try again tomorrow (UTC).",
+      undefined,
+      undefined,
+      Math.max(1, Math.ceil((result.retryAt - clock()) / 1000)),
+      result.retryAt,
+    );
+  return new OperationError(
+    503,
+    "live_temporary",
+    "Live hints cannot be funded right now. Try again shortly.",
+    undefined,
+    undefined,
+    60,
+  );
+}
+
+/** What a live plan for `recipient` is made from: the ledger's state and clock now. */
+type Target = Awaited<ReturnType<typeof liveTarget>>;
+
+/** The grant request of `kind` for `target`'s feed, starting at the ledger's time. */
+function grantFor(
+  target: Target,
+  recipient: string,
+  kind: "ticket" | "upgrade_transport" | "admission",
+) {
+  return makeLiveGrant(
+    planFor(
+      LIVE_PRICES[kind] as LiveManifestEntry,
+      {
+        incarnation: target.incarnation,
+        epoch: target.epoch,
+        recipientType: "UserDO",
+        recipient,
+        class: "ordinary",
+        kind,
+        producesLocal: kind !== "upgrade_transport",
+      },
+      target.ledger.now,
+    ),
+  );
+}
+
+/** How long `kind`'s owned call is waited for at most. */
+const pendingOf = (kind: "ticket" | "upgrade_transport") =>
+  (LIVE_PRICES[kind] as LiveManifestEntry).pendingMs as number;
+
+/**
+ * Counts a ticket for `transport.feed` today (D1's day) and records its
+ * transport, in one batch: neither past the day's `LIVE_TICKETS_A_DAY`.
+ * The day's start of the next day when the day is full, else null.
+ */
+async function countTicket(db: D1Database, transport: LiveTransport): Promise<number | null> {
+  const day = `CAST(${LIVE_NOW} / ${DAY} AS INTEGER)`;
+  const [counted, , next] = await db.batch<{ issued?: number; tomorrow?: number }>([
+    db
+      .prepare(
+        `INSERT INTO live_ticket_days (principal_id, day, issued) VALUES (?1, ${day}, 1)
+         ON CONFLICT (principal_id, day) DO UPDATE SET issued = issued + 1 WHERE issued < ?2
+         RETURNING issued`,
+      )
+      .bind(transport.feed, LIVE_TICKETS_A_DAY),
+    db
+      .prepare(
+        `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at,
+           operation_id, envelope_json) SELECT ?1, ?2, ?3, ?4, ?5, ?6 WHERE changes() > 0`,
+      )
+      .bind(
+        transport.ticketHash,
+        transport.feed,
+        transport.credentialId,
+        transport.expiresAt,
+        transport.operationId,
+        transport.envelope === null ? null : JSON.stringify(transport.envelope),
+      ),
+    db.prepare(`SELECT (${day} + 1) * ${DAY} AS tomorrow`),
+  ]);
+  if (counted?.results[0]) return null;
+  return (
+    (next?.results[0]?.tomorrow as number | undefined) ?? (Math.floor(clock() / DAY) + 1) * DAY
+  );
+}
+
+/**
+ * The `notifications.live_ticket` operation: a ticket, funded before
+ * anything is woken. A principal past the day's tickets is refused before
+ * anything is paid for. Then its transport's grant (it pays for the
+ * redemption, and a refusal's upgrade, later), counted with the day's
+ * tickets and recorded in the directory; then the ticket's own grant, an
+ * owned call of the feed's object that stores it. The ticket is made and
+ * hashed here; only its hash leaves, and it is answered with the life it
+ * has left. Anything failing on the way is refused for now.
+ */
 export async function issueLiveTicketOperation(
   ctx: OpContext,
   _input: Input<typeof issueLiveTicket>,
@@ -37,16 +151,73 @@ export async function issueLiveTicketOperation(
       "delegated_listing",
       "Open live hints with the user's own credentials.",
     );
-  const credential = await liveCredential(ctx.env.DIRECTORY, ctx.auth.id, clock());
+  const db = ctx.env.DIRECTORY;
+  const credential = await liveCredential(db, ctx.auth.id, clock());
   if (!credential)
     throw new OperationError(401, "invalid_token", "The token is invalid, expired or revoked.");
-  ctx.metrics.count("do.request", { class: "UserDO", method: "liveTicket" });
-  const ticket = await ctx.env.USER.getByName(credential.principalId).liveTicket(credential.id);
-  if (ticket === null)
+  const feed = credential.principalId;
+  try {
+    return await issueTicket(ctx, credential, feed);
+  } catch (error) {
+    if (error instanceof OperationError) throw error;
+    ctx.log.error("live ticket issuance failed", { error });
+    throw refusal({ reason: "temporary" });
+  }
+}
+
+async function issueTicket(
+  ctx: OpContext,
+  credential: LiveCredential,
+  feed: string,
+): Promise<Output<typeof issueLiveTicket>> {
+  const db = ctx.env.DIRECTORY;
+  const ticket = randomSecret(32);
+  const hash = await ticketHash(ticket);
+  ctx.metrics.count("d1.query", { db: "directory", op: "live_target" });
+  // Plans start at the ledger's time (D1's), never ahead of it.
+  const target = await liveTarget(db, feed);
+  // Past the day's tickets: refused before a transport is paid for (the count below decides).
+  if (target.ticketsToday >= LIVE_TICKETS_A_DAY)
+    throw refusal({ reason: "daily", retryAt: target.tomorrow });
+  // The redemption's funding, made with the ticket: a ticket that cannot be redeemed is not issued.
+  ctx.metrics.count("d1.query", { db: "directory", op: "live_grant" });
+  const transport = await fund(db, await grantFor(target, feed, "upgrade_transport"));
+  if (transport.status !== "funded") throw refusal(transport);
+  // The ticket lives by the clock its redemption is judged by (this Worker's, its object's).
+  const expiresAt = clock() + LIVE_POLICY.ticketMs;
+  ctx.metrics.count("d1.query", { db: "directory", op: "live_ticket_count" });
+  const full = await countTicket(db, {
+    ticketHash: hash,
+    feed,
+    credentialId: credential.id,
+    expiresAt,
+    operationId: transport.value.operationId,
+    envelope: transport.value,
+  });
+  if (full !== null) throw refusal({ reason: "daily", retryAt: full });
+  ctx.metrics.count("do.request", { class: "UserDO", method: "liveTicketV1" });
+  const stored = await ownedCall(
+    db,
+    await grantFor(target, feed, "ticket"),
+    "ticket",
+    (funding) =>
+      ctx.env.USER.getByName(feed).liveTicketV1(funding, {
+        hash,
+        credentialId: credential.id,
+        expiresAt,
+        transport: { operationId: transport.value.operationId },
+      }),
+    { ledger: target.ledger, pendingMs: pendingOf("ticket") },
+  );
+  if (stored.status !== "funded") throw refusal(stored);
+  if (stored.value.status === "retired")
     throw new OperationError(401, "invalid_token", "The account is being deleted.");
+  // Stored with the life it has left: a ticket with under a second of it is not handed out.
+  const left = Math.floor((expiresAt - clock()) / 1000);
+  if (stored.value.status !== "stored" || left < 1) throw refusal({ reason: "temporary" });
   return {
     ticket,
-    expires_in: LIVE_POLICY.ticketMs / 1000,
+    expires_in: left,
     url: `${ctx.requestOrigin.replace(/^http/, "ws")}/api/notifications/live?ticket=${encodeURIComponent(ticket)}`,
   };
 }
@@ -55,34 +226,79 @@ export async function issueLiveTicketOperation(
 export interface LiveRefusal {
   readonly ok: false;
   readonly status: 401 | 409 | 429 | 503;
-  readonly code: "invalid_token" | "live_conflict" | "too_many_sockets" | "live_unavailable";
+  readonly code:
+    | "invalid_token"
+    | "live_conflict"
+    | "too_many_sockets"
+    | "live_unavailable"
+    | "live_budget"
+    | "live_temporary";
   readonly message: string;
   readonly headers: Record<string, string>;
+  /**
+   * How a browser's upgrade is refused, its credential holding: today's
+   * allowance (or the principal's day) spent, until `retryAt` (4413), or
+   * for now (4412). None for a credential that no longer holds.
+   */
+  readonly budget?: "daily" | "temporary";
+  readonly retryAt?: number;
 }
+
+type Opened = { readonly ok: true; readonly response: Response } | LiveRefusal;
+
+const refused = (
+  status: LiveRefusal["status"],
+  code: LiveRefusal["code"],
+  message: string,
+  budget: LiveRefusal["budget"],
+  headers: Record<string, string> = {},
+): LiveRefusal => ({ ok: false, status, code, message, headers, ...(budget ? { budget } : {}) });
+
+/** Refused for now: a retry soon may succeed. */
+const temporary = (message = "Live hints cannot be funded right now.") =>
+  refused(503, "live_temporary", message, "temporary", { "Retry-After": "60" });
+
+/** Refused until `retryAt` (the next UTC day). */
+const daily = (code: "live_budget" | "too_many_sockets", message: string, retryAt: number) => ({
+  ...refused(429, code, message, "daily", {
+    "Retry-After": String(Math.max(1, Math.ceil((retryAt - clock()) / 1000))),
+  }),
+  retryAt,
+});
 
 /**
  * Opens a live socket of `credential` on its feed's object, once whatever
- * proved the request is spent (a ticket, or an authenticated MCP listen):
- * admitted by the directory (the deployment's allowance, the principal's
- * daily admissions), checked again now that its dependencies are indexed,
- * then handed to the object, which confirms it and applies the caps. The
- * object's 101 carries the socket; `ticketId` is unique to the admission.
+ * proved the request is spent (a ticket, or an authenticated MCP listen),
+ * as the owned work of its transport (`signal` aborted once that outlasts
+ * its pending bound: nothing more is done, a lease taken released). The
+ * admission's own grant first; then admitted by the directory against it
+ * (the deployment's allowance, the principal's daily admissions), checked
+ * again now that its dependencies are indexed, then handed to the object
+ * with the grant, which confirms it and applies the caps. The object's 101
+ * carries the socket; `ticketId` is unique to the admission.
  */
 export async function openLiveSocket(
   env: Env,
   credential: LiveCredential,
   ticketId: string,
   metrics: Metrics | undefined,
-): Promise<{ readonly ok: true; readonly response: Response } | LiveRefusal> {
-  const refused = (
-    status: LiveRefusal["status"],
-    code: LiveRefusal["code"],
-    message: string,
-    headers: Record<string, string> = {},
-  ): LiveRefusal => ({ ok: false, status, code, message, headers });
+  signal: AbortSignal,
+): Promise<Opened> {
   const allowance = liveAllowance(env);
   if (allowance === null)
-    return refused(503, "live_unavailable", "This deployment sends no live hints.");
+    return refused(503, "live_unavailable", "This deployment sends no live hints.", undefined);
+  // The admission's own grant first: no lease or local obligation before it is paid for.
+  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 2);
+  const target = await liveTarget(env.DIRECTORY, credential.principalId);
+  const admission = await fund(
+    env.DIRECTORY,
+    await grantFor(target, credential.principalId, "admission"),
+  );
+  if (admission.status !== "funded")
+    return admission.reason === "daily"
+      ? daily("live_budget", "Live hints have spent today's allowance.", admission.retryAt)
+      : temporary();
+  if (signal.aborted) return temporary();
   const now = clock();
   const socketId = newId("lsk");
   const expiresAt = Math.min(now + LIVE_POLICY.lifeMs, credential.expiresAt);
@@ -93,18 +309,25 @@ export async function openLiveSocket(
     credential,
     allowance,
     now,
+    admission.value.operationId,
   );
   if (refusal === "daily")
-    return refused(429, "too_many_sockets", "Too many live sockets opened today.", {
-      "Retry-After": "3600",
-    });
+    return daily(
+      "too_many_sockets",
+      "Too many live sockets opened today.",
+      (Math.floor(now / DAY) + 1) * DAY,
+    );
   if (refusal === "allowance")
-    return refused(503, "live_unavailable", "The deployment has no room for another live socket.", {
-      "Retry-After": "60",
-    });
+    return temporary("The deployment has no room for another live socket.");
+  if (refusal === "funding") return temporary();
+  // The lease is this function's until the object takes the socket: released if what follows
+  // fails, or once it is given up on.
+  if (signal.aborted) {
+    await release(env.DIRECTORY, [socketId]);
+    return temporary();
+  }
   // Checked again now that its dependencies are indexed: a revocation swept before they were
-  // would have found no socket, so authority changed since the first check refuses it. The
-  // lease is this function's until the object takes the socket: released if this fails.
+  // would have found no socket, so authority changed since the first check refuses it.
   let holds: boolean;
   try {
     const again = await liveCredential(env.DIRECTORY, credential.id, clock());
@@ -113,9 +336,11 @@ export async function openLiveSocket(
     await release(env.DIRECTORY, [socketId]).catch(() => {});
     throw error;
   }
-  if (!holds) {
+  if (!holds || signal.aborted) {
     await release(env.DIRECTORY, [socketId]);
-    return refused(401, "invalid_token", "The credential no longer holds.");
+    return holds
+      ? temporary()
+      : refused(401, "invalid_token", "The credential no longer holds.", undefined);
   }
   const admitted: LiveAdmitted = {
     socketId,
@@ -128,19 +353,78 @@ export async function openLiveSocket(
   metrics?.count("do.request", { class: "UserDO", method: "fetch" });
   // From here the object owns it: it releases a socket it refuses, and one whose answer is lost
   // here closes at its renewal deadline, nothing renewing it.
+  const budget: LiveBudgetV1 = {
+    admitted,
+    admission: {
+      protocol: 1,
+      revision: LIVE_MANIFEST_REVISION,
+      envelope: admission.value,
+      quantity: 1,
+      ownerId: null,
+    },
+  };
   const response = await env.USER.getByName(credential.principalId).fetch(
     new Request("https://user.internal/live", {
-      headers: { Upgrade: "websocket", [LIVE_ADMITTED]: JSON.stringify(admitted) },
+      headers: { Upgrade: "websocket", [LIVE_BUDGET]: JSON.stringify(budget) },
     }),
   );
-  if (response.status === 101 && response.webSocket) return { ok: true, response };
+  if (response.status === 101 && response.webSocket) {
+    // Opened only after it was given up on: nobody takes it, so it is closed at once (its object
+    // releasing its lease as for any close).
+    if (signal.aborted) {
+      response.webSocket.accept();
+      response.webSocket.close(4412, "try again soon");
+      return temporary();
+    }
+    return { ok: true, response };
+  }
   // The object released its lease: past a cap, its credential revoked or its feed retired, or
   // its confirmation lost.
   if (response.status === 429)
-    return refused(429, "too_many_sockets", "This credential or feed holds its most live sockets.");
+    return refused(
+      429,
+      "too_many_sockets",
+      "This credential or feed holds its most live sockets.",
+      "temporary",
+      { "Retry-After": "60" },
+    );
   if (response.status === 410)
-    return refused(401, "invalid_token", "The credential no longer holds.");
-  return refused(409, "live_conflict", "The live socket could not be confirmed; try again.");
+    return refused(401, "invalid_token", "The credential no longer holds.", undefined);
+  return {
+    ...refused(
+      409,
+      "live_conflict",
+      "The live socket could not be confirmed; try again.",
+      "temporary",
+    ),
+  };
+}
+
+/**
+ * Opens a live socket of `credential` with no ticket (an MCP listen): its
+ * transport's grant made here, and the opening run as that transport's
+ * owned work, as a ticket's redemption is. A refusal of the transport is
+ * answered as the opening's own.
+ */
+export async function openOwnedLiveSocket(
+  env: Env,
+  credential: LiveCredential,
+  ticketId: string,
+  metrics: Metrics | undefined,
+): Promise<Opened> {
+  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 2);
+  const target = await liveTarget(env.DIRECTORY, credential.principalId);
+  const opened = await ownedCall(
+    env.DIRECTORY,
+    await grantFor(target, credential.principalId, "upgrade_transport"),
+    "upgrade",
+    (_funding, signal) => openLiveSocket(env, credential, ticketId, metrics, signal),
+    { ledger: target.ledger, pendingMs: pendingOf("upgrade_transport") },
+  );
+  if (opened.status === "funded") return opened.value;
+  return opened.reason === "daily" && opened.retryAt !== undefined
+    ? daily("live_budget", "Live hints have spent today's allowance.", opened.retryAt)
+    : temporary();
 }
 
 /** The credential a live upgrade presents: the session of its cookie, or its bearer token. */
@@ -181,17 +465,66 @@ export function mountLive(app: Hono<AppEnv>): void {
     if (!credentialId) return c.text("Not signed in as the ticket's credential.", 401);
     const credential = await liveCredential(c.env.DIRECTORY, credentialId, clock());
     if (!credential) return c.text("The credential no longer holds.", 401);
+    const db = c.env.DIRECTORY;
+    const metrics = c.get("metrics");
+    const hash = await ticketHash(ticket);
+    const notTheirs = () => c.text("The ticket is not this credential's, used, or expired.", 401);
+    // The ticket's transport, claimed once: what pays for this whole attempt.
+    metrics?.count("d1.query", { db: "directory", op: "live_transport_claim" }, 2);
+    const transport = await claimTransport(db, hash, credential.id, crypto.randomUUID(), clock());
+    if (!transport?.envelope || transport.feed !== credential.principalId) return notTheirs();
+    const ledger = await liveTarget(db, credential.principalId)
+      .then((target) => target.ledger)
+      .catch(() => undefined);
     const feed = c.env.USER.getByName(credential.principalId);
-    c.get("metrics")?.count("do.request", { class: "UserDO", method: "liveRedeem" });
-    if (!(await feed.liveRedeem(ticket, credential.id)))
-      return c.text("The ticket is not this credential's, used, or expired.", 401);
-    const opened = await openLiveSocket(
-      c.env,
-      credential,
-      await hashToken(ticket),
-      c.get("metrics"),
+    // Refused for its funding or capacity, its credential holding: upgraded to be closed with why
+    // (4413 today's allowance or the principal's day spent, 4412 try again soon), paid for by the
+    // transport.
+    const refuse = (code: 4412 | 4413, funding: unknown) => {
+      const refusal: LiveBudgetV1 = { refusal: code, transport: funding };
+      metrics?.count("do.request", { class: "UserDO", method: "fetch" });
+      return feed.fetch(
+        new Request("https://user.internal/live", {
+          headers: { Upgrade: "websocket", [LIVE_BUDGET]: JSON.stringify(refusal) },
+        }),
+      );
+    };
+    const attempt = await ownedRun(
+      db,
+      transport.envelope,
+      "upgrade",
+      async (funding, signal) => {
+        metrics?.count("do.request", { class: "UserDO", method: "liveRedeemV1" });
+        const redeemed = await feed.liveRedeemV1(funding, hash, credential.id);
+        // Its funding refused by the feed (fenced since it was granted): for now, not the ticket.
+        if (redeemed === "refused") return refuse(4412, funding);
+        if (redeemed !== "redeemed" || signal.aborted) return notTheirs();
+        const opened = await openLiveSocket(c.env, credential, hash, metrics, signal).catch(
+          (error: unknown) => {
+            c.get("log")?.error("live socket opening failed", { error });
+            return temporary();
+          },
+        );
+        if (opened.ok) return opened.response;
+        if (!opened.budget || signal.aborted)
+          return c.text(opened.message, opened.status, opened.headers);
+        return refuse(opened.budget === "daily" ? 4413 : 4412, funding);
+      },
+      { ...(ledger ? { ledger } : {}), pendingMs: pendingOf("upgrade_transport") },
     );
-    if (!opened.ok) return c.text(opened.message, opened.status, opened.headers);
-    return opened.response;
+    if (attempt.status === "funded") return attempt.value;
+    // Its owner not admitted (owner capacity), or its run failed: refused for now, paid for by the
+    // transport with no owner named. Only an unreachable feed answers over HTTP.
+    try {
+      return await refuse(4412, {
+        protocol: 1,
+        revision: LIVE_MANIFEST_REVISION,
+        envelope: transport.envelope,
+        quantity: 1,
+        ownerId: null,
+      });
+    } catch {
+      return c.text("Live hints cannot be funded right now.", 503, { "Retry-After": "60" });
+    }
   });
 }

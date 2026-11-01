@@ -24,6 +24,13 @@ export const Problem = z.object({
     .int()
     .optional()
     .describe("With a 429: seconds to wait before trying again (also the `Retry-After` header)."),
+  retry_at: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "Fyrden: with a refusal that lasts until a known time (a daily allowance spent): when to try again, Unix time in milliseconds (the next UTC day's start).",
+    ),
 });
 
 export type Problem = z.infer<typeof Problem>;
@@ -38,6 +45,7 @@ export interface ProblemInit {
   resync?: string;
   currentVersion?: number;
   retryAfter?: number;
+  retryAt?: number;
 }
 
 /**
@@ -55,5 +63,6 @@ export function makeProblem(init: ProblemInit): Problem {
     ...(init.resync !== undefined && { resync: init.resync }),
     ...(init.currentVersion !== undefined && { current_version: init.currentVersion }),
     ...(init.retryAfter !== undefined && { retry_after: init.retryAfter }),
+    ...(init.retryAt !== undefined && { retry_at: init.retryAt }),
   };
 }

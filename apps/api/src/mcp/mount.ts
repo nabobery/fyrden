@@ -24,7 +24,7 @@ import { NO_STORE } from "../http/cache.js";
 import { problem } from "../http/problem.js";
 import { liveCredential } from "../live/credential.js";
 import { liveAllowance } from "../live/directory.js";
-import { openLiveSocket } from "../live/routes.js";
+import { openOwnedLiveSocket } from "../live/routes.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext, rateLimitKey } from "../ops/execute.js";
 import { API_VERSION, opContext, operationHandler } from "../rest/mount.js";
@@ -344,6 +344,7 @@ function listenRefusal(
   code: string,
   detail: string,
   retryAfter?: number,
+  retryAt?: number,
 ): Response {
   return Response.json({
     jsonrpc: "2.0",
@@ -357,6 +358,7 @@ function listenRefusal(
         detail,
         requestId: ctx.requestId,
         ...(retryAfter !== undefined && { retryAfter }),
+        ...(retryAt !== undefined && { retryAt }),
       }),
     },
   });
@@ -429,7 +431,12 @@ async function serveListen(
       "invalid_token",
       "This credential cannot hold a live socket.",
     );
-  const opened = await openLiveSocket(c.env, credential, `listen:${newId("lsk")}`, ctx.metrics);
+  const opened = await openOwnedLiveSocket(
+    c.env,
+    credential,
+    `listen:${newId("lsk")}`,
+    ctx.metrics,
+  );
   const socket = opened.ok ? (opened.response.webSocket as WebSocket) : null;
   // The client left while the socket was opened: it goes at once.
   if (socket && request.signal.aborted) {
@@ -445,6 +452,7 @@ async function serveListen(
       opened.code,
       opened.message,
       opened.headers["Retry-After"] ? Number(opened.headers["Retry-After"]) : undefined,
+      opened.retryAt,
     );
   if (!socket) throw new Error("an opened live socket without its WebSocket");
   socket.accept();

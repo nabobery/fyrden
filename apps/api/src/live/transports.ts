@@ -1,3 +1,5 @@
+import type { LiveEnvelope } from "./budget.js";
+
 /*
  * Live tickets' transports in the directory (migration 0040): what the
  * Worker finds of a ticket before it wakes the feed's object, so the
@@ -14,6 +16,8 @@ export interface LiveTransport {
   readonly credentialId: string;
   readonly expiresAt: number;
   readonly operationId: string;
+  /** Its grant, as the redemption hands it on (null for one recorded without it). */
+  readonly envelope: LiveEnvelope | null;
 }
 
 /** Expired transports a call removes at most. */
@@ -23,8 +27,9 @@ export const LIVE_TRANSPORT_PAGE = 100;
 export async function recordTransport(db: D1Database, transport: LiveTransport): Promise<boolean> {
   const result = await db
     .prepare(
-      `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at, operation_id)
-       VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (ticket_hash) DO NOTHING`,
+      `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at,
+         operation_id, envelope_json)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT (ticket_hash) DO NOTHING`,
     )
     .bind(
       transport.ticketHash,
@@ -32,6 +37,7 @@ export async function recordTransport(db: D1Database, transport: LiveTransport):
       transport.credentialId,
       transport.expiresAt,
       transport.operationId,
+      transport.envelope === null ? null : JSON.stringify(transport.envelope),
     )
     .run();
   return result.meta.changes > 0;
@@ -54,7 +60,7 @@ export async function claimTransport(
       `UPDATE live_ticket_transports SET claimed_at = coalesce(claimed_at, ?4), claim_id = ?3
        WHERE ticket_hash = ?1 AND credential_id = ?2 AND expires_at > ?4
          AND (claim_id IS NULL OR claim_id = ?3)
-       RETURNING ticket_hash, feed, credential_id, expires_at, operation_id`,
+       RETURNING ticket_hash, feed, credential_id, expires_at, operation_id, envelope_json`,
     )
     .bind(ticketHash, credentialId, claimId, now)
     .first<{
@@ -63,6 +69,7 @@ export async function claimTransport(
       credential_id: string;
       expires_at: number;
       operation_id: string;
+      envelope_json: string | null;
     }>();
   if (!row) return null;
   return {
@@ -71,6 +78,7 @@ export async function claimTransport(
     credentialId: row.credential_id,
     expiresAt: row.expires_at,
     operationId: row.operation_id,
+    envelope: row.envelope_json === null ? null : (JSON.parse(row.envelope_json) as LiveEnvelope),
   };
 }
 

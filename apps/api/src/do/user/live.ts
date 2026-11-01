@@ -131,25 +131,46 @@ export class Live {
     return this.sql.exec<{ seq: number }>("SELECT seq FROM live_meta WHERE id = 1").one().seq;
   }
 
-  /** Stores a ticket (its hash) for `credentialId`, until `expiresAt`. */
-  storeTicket(hash: string, credentialId: string, expiresAt: number): void {
+  /**
+   * Stores a ticket (its hash) for `credentialId`, until `expiresAt`, with
+   * its transport's reference and the stamp of the grant that paid for it.
+   */
+  storeTicket(
+    hash: string,
+    credentialId: string,
+    expiresAt: number,
+    transport: Record<string, unknown>,
+    stamp: { epoch: number; incarnation: string; seq: number; validUntil: number },
+  ): void {
     this.sql.exec(
-      "INSERT INTO live_tickets (ticket_hash, credential_id, expires_at) VALUES (?, ?, ?)",
+      `INSERT INTO live_tickets (ticket_hash, credential_id, expires_at, transport_json,
+         budget_epoch, budget_incarnation, budget_seq, budget_valid_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       hash,
       credentialId,
       expiresAt,
+      JSON.stringify(transport),
+      stamp.epoch,
+      stamp.incarnation,
+      stamp.seq,
+      stamp.validUntil,
     );
   }
 
-  /** Redeems a ticket once: its credential, when it is that one's and unexpired. */
-  redeemTicket(hash: string, credentialId: string, now: number): boolean {
+  /**
+   * Redeems a ticket once: its credential's, unexpired, and issued with the
+   * transport `transportId` (the grant funding its redemption).
+   */
+  redeemTicket(hash: string, credentialId: string, now: number, transportId: string): boolean {
     const row = this.sql
-      .exec<{ credential_id: string; expires_at: number }>(
-        "SELECT credential_id, expires_at FROM live_tickets WHERE ticket_hash = ?",
+      .exec<{ credential_id: string; expires_at: number; transport_json: string | null }>(
+        "SELECT credential_id, expires_at, transport_json FROM live_tickets WHERE ticket_hash = ?",
         hash,
       )
       .toArray()[0];
     if (!row || row.credential_id !== credentialId) return false;
+    const transport = JSON.parse(row.transport_json ?? "null") as { operationId?: unknown } | null;
+    if (transport?.operationId !== transportId) return false;
     this.sql.exec("DELETE FROM live_tickets WHERE ticket_hash = ?", hash);
     return row.expires_at > now;
   }
@@ -207,16 +228,18 @@ export class Live {
     },
     dependencies: readonly string[],
     now: number,
+    /** The admission's grant that paid for it: what recovery retires it by. */
+    stamp: { epoch: number; incarnation: string; seq: number; validUntil: number },
   ): void {
     const progress = this.seq();
     this.sql.exec(
-      // Stamped with the budget fence it was admitted under: a restore that moves the fence makes
-      // it stale (see `stale`).
+      // Stamped with the grant it was admitted by: a restore or recovery that moves the fence past
+      // it makes it stale (see `stale`), and recovery finds it by it.
       `INSERT INTO live_local (socket_id, credential_id, phase, expires_at, deadline, sent, acked,
          refresh_pending, blocked_since, renew_failures, controls_used, minute_start, minute_count,
-         delivered_seq, retry_at, scopes, repo_ids, budget_epoch, budget_incarnation)
-       SELECT ?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?, epoch, incarnation
-       FROM live_budget_fence WHERE id = 1`,
+         delivered_seq, retry_at, scopes, repo_ids, budget_epoch, budget_incarnation, budget_seq,
+         budget_valid_until)
+       VALUES (?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?)`,
       socket.id,
       socket.credentialId,
       socket.expiresAt,
@@ -225,12 +248,21 @@ export class Live {
       progress,
       JSON.stringify(socket.scopes),
       socket.repoIds ? JSON.stringify(socket.repoIds) : null,
+      stamp.epoch,
+      stamp.incarnation,
+      stamp.seq,
+      stamp.validUntil,
     );
     for (const dependency of new Set(dependencies))
       this.sql.exec(
-        "INSERT INTO live_local_deps (socket_id, dependency) VALUES (?, ?)",
+        `INSERT INTO live_local_deps (socket_id, dependency, budget_epoch, budget_incarnation,
+           budget_seq, budget_valid_until) VALUES (?, ?, ?, ?, ?, ?)`,
         socket.id,
         dependency,
+        stamp.epoch,
+        stamp.incarnation,
+        stamp.seq,
+        stamp.validUntil,
       );
   }
 
