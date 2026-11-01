@@ -1348,14 +1348,6 @@ export class UserDO extends MigratingDO {
     });
   }
 
-  /** Forgets a socket and releases its lease; one already forgotten (by recovery) is left to the reaper. */
-  async #forgetSocket(id: string): Promise<void> {
-    const live = this.#live();
-    if (!live.socket(id)) return;
-    this.ctx.storage.transactionSync(() => live.forget(id));
-    await release(this.env.DIRECTORY, [id]);
-  }
-
   /**
    * Dependencies revoked (told by the directory's sweep): recorded, so no
    * socket resting on one is admitted or renewed, and every open one

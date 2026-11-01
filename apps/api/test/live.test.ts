@@ -36,7 +36,7 @@ import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
-import { entry } from "./helpers/feed.js";
+import { countingExec, entry } from "./helpers/feed.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -47,6 +47,10 @@ afterEach(async () => {
   // together passes a day's (Proposed) allowance. What its grants leave owed, and its turns left
   // unused (holding the day's escrow places), maintenance clears in production.
   await env.DIRECTORY.batch([
+    // Its sockets' leases too (they lapse minutes after their sockets go): the deployment's
+    // allowance is each test's own.
+    env.DIRECTORY.prepare("DELETE FROM live_socket_deps"),
+    env.DIRECTORY.prepare("DELETE FROM live_sockets"),
     env.DIRECTORY.prepare("DELETE FROM live_budget_days"),
     env.DIRECTORY.prepare(
       `UPDATE live_budget_state SET debt_do_requests = 0, debt_do_rows_read = 0,
@@ -1255,6 +1259,133 @@ describe("a feed's turn", () => {
     await runInDurableObject(feedOf(owner), () => {});
     await runDurableObjectAlarm(feedOf(owner));
     expect(await turnOf(owner)).toEqual([]);
+  });
+});
+
+describe("live work's rows in a feed's object", () => {
+  /** Counts the rows the feed's object reads and writes while `fn` runs. */
+  async function rows(who: Who, fn: () => Promise<unknown>) {
+    const sql = await runInDurableObject(feedOf(who), (_: UserDO, state) => state.storage.sql);
+    const count = countingExec(sql);
+    try {
+      await fn();
+      await runInDurableObject(feedOf(who), () => {});
+    } finally {
+      // biome-ignore lint/correctness/noUnsafeFinally: the count is the point
+      return count.stop();
+    }
+  }
+  const measured: Record<string, { read: number; written: number }> = {};
+  const note = (unit: string, r: { read: number; written: number }) => {
+    const was = measured[unit] ?? { read: 0, written: 0 };
+    measured[unit] = {
+      read: Math.max(was.read, r.read),
+      written: Math.max(was.written, r.written),
+    };
+  };
+
+  it("is within each unit's observed rows", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    // A ticket stored.
+    let issued: { ticket: string } | undefined;
+    note(
+      "ticket",
+      await rows(owner, async () => {
+        issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+      }),
+    );
+    // Its upgrade: the redemption and the admission with its provisions, blocks and turn.
+    let socket: Awaited<ReturnType<typeof open>> | undefined;
+    note(
+      "admission",
+      await rows(owner, async () => {
+        socket = await open(owner.token);
+      }),
+    );
+    // A control.
+    note(
+      "control",
+      await rows(owner, async () => {
+        socket?.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+      }),
+    );
+    // A mark: a change applied with and without live sockets, its difference the mark's.
+    const marked = await rows(owner, () => feedOf(owner).applyFeed([change(owner, repo, 1)]));
+    // A turn running the pump.
+    note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
+    // A renewal's turn.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    socket?.ws?.send(JSON.stringify({ t: "renew" }));
+    await runInDurableObject(feedOf(owner), () => {});
+    note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
+    // The socket's end.
+    note(
+      "terminal",
+      await rows(owner, async () => {
+        socket?.ws?.close(1000, "done");
+        await socket?.closed;
+      }),
+    );
+    // The pump's most: a page of changed streams (and more), a credential's most sockets.
+    const busy = await user();
+    const busyRepos: { id: string; conversation: string }[] = [];
+    for (let i = 0; i < LIVE_POLICY.dirtyPage + 2; i++) busyRepos.push(await repoWithIssue(busy));
+    const busySockets: Awaited<ReturnType<typeof open>>[] = [];
+    for (let i = 0; i < LIVE_POLICY.perCredential; i++) busySockets.push(await open(busy.token));
+    await feedOf(busy).applyFeed(busyRepos.map((r) => change(busy, r, 1)));
+    note("pump", await rows(busy, () => runDurableObjectAlarm(feedOf(busy))));
+    // A mark of a stream already holding its most causes.
+    const many = await rows(busy, () =>
+      feedOf(busy).applyFeed(
+        Array.from({ length: LIVE_POLICY.candidatesPerStream + 1 }, (_, i) => ({
+          ...change(busy, busyRepos[0] as never, 10 + i),
+          conversation: `c${i}`,
+        })) as never,
+      ),
+    );
+    note("mark", {
+      read: Math.ceil(many.read / (LIVE_POLICY.candidatesPerStream + 1)),
+      written: Math.ceil(many.written / (LIVE_POLICY.candidatesPerStream + 1)),
+    });
+    for (const s of busySockets) s.ws?.close(1000, "done");
+    // A transport whose admission is refused: its redemption and the refusal's upgrade.
+    const refusedOwner = await user();
+    await env.DIRECTORY.prepare(
+      `INSERT INTO live_sockets (socket_id, ticket_id, feed, credential_id, state, pending_until,
+         expires_at) VALUES (?, ?, 'usr_x', 'tok_x', 'open', 0, ?)`,
+    )
+      .bind(uniqueId("lsk"), uniqueId("t"), Date.now() + 60_000)
+      .run();
+    note(
+      "upgrade_transport",
+      await rows(refusedOwner, async () => {
+        const refused = await open(refusedOwner.token, { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" });
+        await refused.closed;
+      }),
+    );
+    const bare = await user();
+    const bareRepo = await repoWithIssue(bare);
+    const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));
+    note("mark", {
+      read: Math.max(0, marked.read - unmarked.read),
+      written: Math.max(0, marked.written - unmarked.written),
+    });
+    expect(issued?.ticket).toBeDefined();
+    // What was measured (for the manifest's observations), when asked.
+    if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));
+    for (const [unit, r] of Object.entries(measured)) {
+      const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
+      const observed = Object.values(entry.observed);
+      const most = (k: "do_rows_read" | "do_rows_written") =>
+        Math.max(...observed.map((o) => o[k]));
+      expect({ unit, read: r.read, written: r.written }).toEqual({
+        unit,
+        read: Math.min(r.read, most("do_rows_read")),
+        written: Math.min(r.written, most("do_rows_written")),
+      });
+    }
   });
 });
 

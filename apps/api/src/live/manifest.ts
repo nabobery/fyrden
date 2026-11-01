@@ -252,7 +252,7 @@ function estimated(
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
   ticket: estimated(
-    { do_rows_read: 10, do_rows_written: 4, d1_rows_read: 30, d1_rows_written: 14 },
+    { do_rows_read: 26, do_rows_written: 4, d1_rows_read: 30, d1_rows_written: 14 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -265,7 +265,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   upgrade_transport: estimated(
-    { do_rows_read: 20, do_rows_written: 6, d1_rows_read: 30, d1_rows_written: 10 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 30, d1_rows_written: 10 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -278,7 +278,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   admission: estimated(
-    { do_rows_read: 40, do_rows_written: 20, d1_rows_read: 40, d1_rows_written: 16 },
+    { do_rows_read: 90, do_rows_written: 36, d1_rows_read: 40, d1_rows_written: 16 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "synchronous",
@@ -290,7 +290,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   terminal: estimated(
-    { do_rows_read: 8, do_rows_written: 8 },
+    { do_rows_read: 10, do_rows_written: 8 },
     {
       validity: { maxMs: DAY, days: 2 },
       duration: "synchronous",
@@ -302,7 +302,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   control: estimated(
-    { do_rows_read: 6, do_rows_written: 4 },
+    { do_rows_read: 13, do_rows_written: 4 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -314,7 +314,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   mark: estimated(
-    { do_rows_read: 6, do_rows_written: 6 },
+    { do_rows_read: 25, do_rows_written: 20 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -375,7 +375,7 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   successor's grant; its owner's whole accounting reserved with it.
  */
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 240, do_rows_written: 80, d1_rows_read: 120, d1_rows_written: 40 },
+  { do_rows_read: 418, do_rows_written: 80, d1_rows_read: 120, d1_rows_written: 40 },
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",
