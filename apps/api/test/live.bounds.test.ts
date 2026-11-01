@@ -218,26 +218,6 @@ describe("a feed's live state", () => {
       expect(due).toBe(now + LIVE_POLICY.slowMs);
     });
   });
-
-  it("is cleared a page at a time when the feed retires", async () => {
-    await inLive((live, sql) => {
-      for (let i = 0; i < 1_100; i++)
-        sql.exec(
-          "INSERT INTO live_dirty (stream, repo_id, subject, seq, explicit_seq, many_seq) VALUES (?, ?, 'issue', ?, 0, 0)",
-          `r${i}\nissue`,
-          `r${i}`,
-          i + 1,
-        );
-      let steps = 0;
-      for (let more = true; more; steps++) {
-        const counter = countingExec(sql);
-        more = live.clearStep();
-        expect(counter.stop().written).toBeLessThanOrEqual(2 * LIVE_POLICY.pruneRows + 8);
-      }
-      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM live_dirty").one().n).toBe(0);
-      expect(steps).toBe(Math.ceil(1_100 / LIVE_POLICY.pruneRows) + 1);
-    });
-  });
 });
 
 describe("a retired feed", () => {

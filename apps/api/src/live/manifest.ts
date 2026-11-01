@@ -1,6 +1,6 @@
 import { ALARM_UNITS, type AlarmUnit } from "../do/user/alarm-budget.js";
 import { DISCRETIONARY_RESOURCES, type ResourceVector } from "../effects/discretionary.js";
-import { isLiveVector } from "./budget.js";
+import { isLiveVector, type LiveUnit } from "./budget.js";
 import { LIVE_PENDING_MS } from "./duration.js";
 
 /*
@@ -45,6 +45,9 @@ export type LiveManifestUnit = (typeof LIVE_MANIFEST_UNITS)[number];
 export const LIVE_SYNCHRONOUS_MS = 1_000;
 
 const DAY = 86_400_000;
+
+/** How long a pool's block may be spent from (Proposed). */
+export const LIVE_BLOCK_MS = 6 * 60 * 60_000;
 
 /**
  * The inline components a unit an alarm runs must reserve with it: an
@@ -234,8 +237,18 @@ function estimated(
  *   refusals, the check after its dependencies are indexed, and the
  *   socket's or the refusal's upgrade, over the ticket's life.
  * - `admission`: a socket admitted: its lease and dependencies, its
- *   confirmation, installation and terminal provisions (the transport's
- *   owner covers the time it is awaited: its own duration is an entry's).
+ *   confirmation and installation, its terminal provisions' and its feed's
+ *   first blocks' installation (the transport's owner covers the time it is
+ *   awaited: its own duration is an entry's).
+ * - `terminal`: one socket's end on a day it may live on: the event that
+ *   detects it, the provision consumed and the socket forgotten, its close
+ *   and the callbacks that follow it (no directory call). Granted with the
+ *   admission over the socket's life, so each day it may live on pays its
+ *   own.
+ * - `control` / `mark`: one control message (its counters and its
+ *   acknowledgement or renewal request), or one stream marked changed, as
+ *   spent from the feed's pool; `control_block` / `mark_block` a block of
+ *   them, installed into the pool whole.
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
   ticket: estimated(
@@ -276,4 +289,82 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       dayCleanupDebt: ZERO,
     },
   ),
+  terminal: estimated(
+    { do_rows_read: 8, do_rows_written: 8 },
+    {
+      validity: { maxMs: DAY, days: 2 },
+      duration: "synchronous",
+      maxQuantity: 1,
+      requests: 2,
+      directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+      localCleanupDebt: vector({ do_rows_written: 2 }),
+      dayCleanupDebt: ZERO,
+    },
+  ),
+  control: estimated(
+    { do_rows_read: 6, do_rows_written: 4 },
+    {
+      validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
+      duration: "synchronous",
+      maxQuantity: 1,
+      requests: 1,
+      directoryCleanupDebt: ZERO,
+      localCleanupDebt: ZERO,
+      dayCleanupDebt: ZERO,
+    },
+  ),
+  mark: estimated(
+    { do_rows_read: 6, do_rows_written: 6 },
+    {
+      validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
+      duration: "synchronous",
+      maxQuantity: 1,
+      requests: 1,
+      directoryCleanupDebt: ZERO,
+      localCleanupDebt: ZERO,
+      dayCleanupDebt: ZERO,
+    },
+  ),
 };
+
+/** The ledger's kind a unit is granted as: a block as the unit it holds. */
+export function liveKindOf(
+  unit: "ticket" | "upgrade_transport" | "admission" | "terminal",
+): LiveUnit;
+export function liveKindOf(unit: "control_block" | "mark_block"): "control" | "mark";
+export function liveKindOf(unit: LiveManifestUnit): LiveUnit;
+export function liveKindOf(unit: LiveManifestUnit): LiveUnit {
+  if (unit === "control_block") return "control";
+  if (unit === "mark_block") return "mark";
+  return unit as LiveUnit;
+}
+
+/** Units a block holds, and how few left of a pool asks for its refill. */
+export const LIVE_BLOCK_UNITS = 32;
+export const LIVE_LOW_WATER = 8;
+
+/**
+ * A block of `unit`'s: `LIVE_BLOCK_UNITS` of it, priced by the rule from
+ * that many of the unit's whole prices (so a block always pays for every
+ * unit spent from it), each of its requests and allowances counted.
+ */
+function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
+  const rows = Object.fromEntries(
+    ["do_rows_read", "do_rows_written", "d1_rows_read", "d1_rows_written"].map((r) => [
+      r,
+      unit.resources[r as (typeof R)[number]] * LIVE_BLOCK_UNITS,
+    ]),
+  );
+  return estimated(rows, {
+    validity: unit.validity,
+    duration: "synchronous",
+    maxQuantity: LIVE_BLOCK_UNITS,
+    requests: unit.requests * LIVE_BLOCK_UNITS,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: vector({ do_rows_written: 2 }),
+    dayCleanupDebt: ZERO,
+  });
+}
+
+LIVE_PRICES.control_block = blockOf(LIVE_PRICES.control as LiveManifestEntry);
+LIVE_PRICES.mark_block = blockOf(LIVE_PRICES.mark as LiveManifestEntry);

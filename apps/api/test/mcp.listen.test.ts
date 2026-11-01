@@ -163,10 +163,11 @@ const socketsOf = async (who: Who) => ({
  * The feed's sockets once its object has handled a close: each round trip to the object runs
  * after events it already received (a bounded number of them, no timer).
  */
-async function released(who: Who) {
+/** `who`'s sockets once the object forgot every one (their leases are maintenance's to release). */
+async function forgotten(who: Who) {
   for (let i = 0; i < 100; i++) {
     const now = await socketsOf(who);
-    if (now.leases === 0 && now.local === 0) return now;
+    if (now.local === 0) return now;
     await runInDurableObject(feedOf(who), () => {});
   }
   return socketsOf(who);
@@ -300,8 +301,8 @@ describe("a listen stream", () => {
     });
     // The socket was there before the acknowledgement: a change right after it is heard.
     expect(await socketsOf(owner)).toEqual({ leases: 1, local: 1 });
-    // Paid for as a ticket's redemption is: its transport and admission granted, the transport's
-    // owner released.
+    // Paid for as a ticket's redemption is: its transport, its admission with its end's provisions
+    // and the feed's first blocks granted, the transport's owner released.
     expect(
       await env.DIRECTORY.prepare(
         `SELECT json_extract(plan, '$.kind') AS kind FROM live_budget_receipts
@@ -310,7 +311,13 @@ describe("a listen stream", () => {
         .bind(owner.principalId)
         .all()
         .then((r) => r.results),
-    ).toEqual([{ kind: "admission" }, { kind: "upgrade_transport" }]);
+    ).toEqual([
+      { kind: "admission" },
+      { kind: "control" },
+      { kind: "mark" },
+      { kind: "terminal" },
+      { kind: "upgrade_transport" },
+    ]);
     expect(
       await env.DIRECTORY.prepare(
         "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ?",
@@ -353,14 +360,15 @@ describe("a listen stream", () => {
     expect(await socketsOf(owner)).toEqual({ leases: 0, local: 0 });
   });
 
-  it("closes its socket when the client cancels it, the lease released", async () => {
+  it("closes its socket when the client cancels it, the object forgetting it", async () => {
     const owner = await user();
     const stream = await listen([feedUri(owner)], bearer(owner.token));
     await stream.next();
     expect((await socketsOf(owner)).leases).toBe(1);
     await stream.cancel();
-    // The object hears the close; its lease goes with it.
-    expect(await released(owner)).toEqual({ leases: 0, local: 0 });
+    // The object hears the close and forgets it on its terminal provision; its lease is left for
+    // maintenance to release.
+    expect(await forgotten(owner)).toEqual({ leases: 1, local: 0 });
   });
 
   it("shares the live sockets' caps: a credential's sixth is refused, nothing admitted for it", async () => {
@@ -443,7 +451,7 @@ describe("a listen stream", () => {
     await sweep(env.DIRECTORY, (feed, deps) => env.USER.getByName(feed).revoked(deps), Date.now());
     graceful(await stream.next());
     expect(await stream.next()).toBeNull();
-    expect((await socketsOf(owner)).leases).toBe(0);
+    expect((await socketsOf(owner)).local).toBe(0);
   });
 
   it("acknowledges only what its reader took: one that stops reading ends after the slow-consumer deadline", async () => {
@@ -476,7 +484,7 @@ describe("a listen stream", () => {
     expect(await stream.next()).toMatchObject(updated(owner));
     graceful(await stream.next());
     expect(await stream.next()).toBeNull();
-    expect((await socketsOf(owner)).leases).toBe(0);
+    expect((await socketsOf(owner)).local).toBe(0);
   });
 
   it("can be opened again after it ended, and the feed read from there", async () => {
@@ -485,7 +493,7 @@ describe("a listen stream", () => {
     const first = await listen([feedUri(owner)], bearer(owner.token));
     await first.next();
     await first.cancel();
-    expect(await released(owner)).toEqual({ leases: 0, local: 0 });
+    expect(await forgotten(owner)).toEqual({ leases: 1, local: 0 });
     const again = await listen([feedUri(owner)], bearer(owner.token));
     expect(await again.next()).toMatchObject({
       method: "notifications/subscriptions/acknowledged",

@@ -9,7 +9,7 @@ import { randomSecret } from "../oauth/params.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
-import { LIVE_NOW, makeLiveGrant } from "./budget.js";
+import { LIVE_NOW, type LiveEnvelope, makeLiveGrant } from "./budget.js";
 import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, liveAllowance, release } from "./directory.js";
 import {
@@ -20,7 +20,7 @@ import {
   ownedRun,
   planFor,
 } from "./funding.js";
-import { LIVE_PRICES, type LiveManifestEntry } from "./manifest.js";
+import { LIVE_BLOCK_UNITS, LIVE_PRICES, type LiveManifestEntry, liveKindOf } from "./manifest.js";
 import { claimTransport, type LiveTransport } from "./transports.js";
 
 /*
@@ -71,19 +71,19 @@ type Target = Awaited<ReturnType<typeof liveTarget>>;
 function grantFor(
   target: Target,
   recipient: string,
-  kind: "ticket" | "upgrade_transport" | "admission",
+  unit: "ticket" | "upgrade_transport" | "admission" | "terminal" | "control_block" | "mark_block",
 ) {
   return makeLiveGrant(
     planFor(
-      LIVE_PRICES[kind] as LiveManifestEntry,
+      LIVE_PRICES[unit] as LiveManifestEntry,
       {
         incarnation: target.incarnation,
         epoch: target.epoch,
         recipientType: "UserDO",
         recipient,
         class: "ordinary",
-        kind,
-        producesLocal: kind !== "upgrade_transport",
+        kind: liveKindOf(unit),
+        producesLocal: unit !== "upgrade_transport",
       },
       target.ledger.now,
     ),
@@ -287,21 +287,39 @@ export async function openLiveSocket(
   const allowance = liveAllowance(env);
   if (allowance === null)
     return refused(503, "live_unavailable", "This deployment sends no live hints.", undefined);
-  // The admission's own grant first: no lease or local obligation before it is paid for.
-  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 2);
+  // Its grants first: no lease or local obligation before they are paid for. The admission, its
+  // end on each day it may live on, and the feed's first blocks of controls and marks, granted
+  // together (one refused refuses the socket; the others' charges stand).
+  metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 5);
   const target = await liveTarget(env.DIRECTORY, credential.principalId);
-  const admission = await fund(
-    env.DIRECTORY,
-    await grantFor(target, credential.principalId, "admission"),
+  const units = ["admission", "terminal", "control_block", "mark_block"] as const;
+  const grants = await Promise.all(
+    units.map(async (unit) =>
+      fund(env.DIRECTORY, await grantFor(target, credential.principalId, unit)),
+    ),
   );
-  if (admission.status !== "funded")
-    return admission.reason === "daily"
-      ? daily("live_budget", "Live hints have spent today's allowance.", admission.retryAt)
+  const [admission, terminal, controls, marks] = grants;
+  if (
+    admission?.status !== "funded" ||
+    terminal?.status !== "funded" ||
+    controls?.status !== "funded" ||
+    marks?.status !== "funded"
+  ) {
+    const spent = grants.find((g) => g.status === "refused" && g.reason === "daily");
+    return spent?.status === "refused" && spent.reason === "daily"
+      ? daily("live_budget", "Live hints have spent today's allowance.", spent.retryAt)
       : temporary();
+  }
   if (signal.aborted) return temporary();
   const now = clock();
   const socketId = newId("lsk");
-  const expiresAt = Math.min(now + LIVE_POLICY.lifeMs, credential.expiresAt);
+  // Never past what its end is provided for: its terminal grant's validity (the ledger's time,
+  // on this Worker's clock as sampled), a minute kept.
+  const expiresAt = Math.min(
+    now + LIVE_POLICY.lifeMs,
+    credential.expiresAt,
+    terminal.value.plan.validUntil - target.ledger.now + target.ledger.at - 60_000,
+  );
   metrics?.count("d1.query", { db: "directory", op: "live_admit" }, 3);
   const refusal = await admit(
     env.DIRECTORY,
@@ -353,15 +371,19 @@ export async function openLiveSocket(
   metrics?.count("do.request", { class: "UserDO", method: "fetch" });
   // From here the object owns it: it releases a socket it refuses, and one whose answer is lost
   // here closes at its renewal deadline, nothing renewing it.
+  const funding = (envelope: LiveEnvelope, quantity = 1) => ({
+    protocol: 1,
+    revision: LIVE_MANIFEST_REVISION,
+    envelope,
+    quantity,
+    ownerId: null,
+  });
   const budget: LiveBudgetV1 = {
     admitted,
-    admission: {
-      protocol: 1,
-      revision: LIVE_MANIFEST_REVISION,
-      envelope: admission.value,
-      quantity: 1,
-      ownerId: null,
-    },
+    admission: funding(admission.value),
+    terminal: funding(terminal.value),
+    controls: funding(controls.value, LIVE_BLOCK_UNITS),
+    marks: funding(marks.value, LIVE_BLOCK_UNITS),
   };
   const response = await env.USER.getByName(credential.principalId).fetch(
     new Request("https://user.internal/live", {

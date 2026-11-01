@@ -158,6 +158,19 @@ describe("a funding", () => {
       expect(await validateFunding(block.db, block.funding, blockExpected)).toMatchObject({
         status: "valid",
       });
+      // Its allowance debited outright on its day, never held: no place in the day's escrow.
+      const { plan } = block.funding.envelope;
+      expect(plan.charges.map((c) => [c.duration, c.resources.do_duration_ms])).toEqual(
+        plan.charges.map(() => [null, BLOCK.resources.do_duration_ms]),
+      );
+      const day = await env.DIRECTORY.prepare("SELECT escrow FROM live_budget_days WHERE day = ?")
+        .bind(testDay(1))
+        .first<{ escrow: string }>();
+      expect(
+        (JSON.parse(day?.escrow ?? "[]") as { id: string }[]).some(
+          (e) => e.id === block.funding.envelope.operationId,
+        ),
+      ).toBe(false);
     }));
 
   it("is refused from its shape for anything it is not, before reading the ledger", () =>

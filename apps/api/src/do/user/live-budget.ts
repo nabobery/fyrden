@@ -137,6 +137,63 @@ export class LiveBudget {
   }
 
   /**
+   * The ledger's time (D1's) by this object's clock `local`, at the latest
+   * it may be: as far ahead as the ledger may have been when a funding was
+   * last checked. Its credit's times (validity, the day spent from) are the
+   * ledger's, so they are judged by it, late rather than early (credit ends
+   * no later than it does; work past a midnight is never yesterday's).
+   */
+  ledgerNow(local: number): number {
+    return local + this.#clock().high;
+  }
+
+  /**
+   * The UTC day the ledger is on by this object's clock `local`, or null
+   * when it cannot be told (the ledger's time may be either side of a
+   * midnight): nothing is spent then.
+   */
+  ledgerDay(local: number): number | null {
+    const { high, width } = this.#clock();
+    const day = Math.floor((local + high) / DAY);
+    return Math.floor((local + high - width) / DAY) === day ? day : null;
+  }
+
+  /** The days the ledger may be on by `local`: the later first (one, away from a midnight). */
+  ledgerDays(local: number): number[] {
+    const { high, width } = this.#clock();
+    const later = Math.floor((local + high) / DAY);
+    const earlier = Math.floor((local + high - width) / DAY);
+    return later === earlier ? [later] : [later, earlier];
+  }
+
+  #clock(): { high: number; width: number } {
+    const row = this.sql
+      .exec<{ ledger_offset_ms: number; ledger_uncertainty_ms: number }>(
+        "SELECT ledger_offset_ms, ledger_uncertainty_ms FROM live_budget_fence WHERE id = 1",
+      )
+      .one();
+    return { high: row.ledger_offset_ms, width: row.ledger_uncertainty_ms };
+  }
+
+  /**
+   * Records the ledger's time `ledgerAt` (D1's, whole seconds) as answered
+   * to a request this object's clock sent at `sent` and heard back at
+   * `received`: the ledger was then between `ledgerAt` (as received) and a
+   * second past it (as sent). A sample older than the one kept is not
+   * recorded.
+   */
+  noteLedger(ledgerAt: number, sent: number, received: number): void {
+    this.sql.exec(
+      `UPDATE live_budget_fence SET ledger_offset_ms = ?1, ledger_uncertainty_ms = ?2,
+         ledger_sampled_at = ?3
+       WHERE id = 1 AND ledger_sampled_at <= ?3`,
+      ledgerAt + 1_000 - sent,
+      1_000 + Math.max(0, received - sent),
+      sent,
+    );
+  }
+
+  /**
    * Moves the fence to the feed's epoch and the ledger's incarnation when
    * either changed: every credit, pending installation and captured
    * authorization result before is invalid at once (and the live alarm
@@ -644,15 +701,181 @@ export class LiveBudget {
   }
 
   /**
-   * Spends `price` of today's `kind` credit (`day` must be `now`'s) across
-   * the valid grants (oldest first), all of it or nothing.
+   * Installs a block an entry was granted with (an admission's first
+   * blocks, its funding checked by the caller): into `balance`'s pool on
+   * each day it is charged to, while it is current and valid; `full` when a
+   * day already holds its most spendable grants (it is then not installed:
+   * its charge stands).
    */
-  spend(kind: "control" | "mark", day: number, price: ResourceVector, now: number): boolean {
-    // Work runs on the day it runs: a day captured before an await is not charged after it.
-    if (day !== Math.floor(now / DAY)) return false;
-    const rows = this.sql
-      .exec<{ operation_id: string; remaining: string }>(
-        `SELECT b.operation_id, b.remaining FROM live_budget_balances b
+  installBlock(
+    balance: "control" | "mark",
+    grant: LiveEnvelope,
+    now: number,
+  ): "installed" | "duplicate" | "refused" | "full" {
+    const plan = grant.plan;
+    if (
+      this.sql
+        .exec(
+          "SELECT 1 FROM live_budget_balances WHERE operation_id = ? LIMIT 1",
+          grant.operationId,
+        )
+        .toArray().length > 0
+    )
+      return "duplicate";
+    if (
+      plan.kind !== balance ||
+      !plan.producesLocal ||
+      plan.recipientType !== "UserDO" ||
+      this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: grant.seq }) ||
+      now < plan.validFrom ||
+      now >= plan.validUntil
+    )
+      return "refused";
+    if (this.#poolFull(balance, plan, now)) return "full";
+    for (const charge of plan.charges)
+      this.sql.exec(
+        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        grant.operationId,
+        charge.day,
+        balance,
+        JSON.stringify(canonicalVector(charge.resources)),
+        plan.epoch,
+        plan.incarnation,
+        grant.seq,
+        plan.validUntil,
+      );
+    return "installed";
+  }
+
+  /**
+   * Provides `socketId`'s terminal work from its grant: a provision on each
+   * day the grant is charged to, what that day's end of the socket may use;
+   * false when the grant is not current and valid.
+   */
+  provideTerminal(socketId: string, grant: LiveEnvelope, now: number): boolean {
+    const plan = grant.plan;
+    if (
+      plan.kind !== "terminal" ||
+      this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: grant.seq }) ||
+      now < plan.validFrom ||
+      now >= plan.validUntil
+    )
+      return false;
+    for (const charge of plan.charges)
+      this.sql.exec(
+        `INSERT INTO live_budget_terminal (socket_id, day, operation_id, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        socketId,
+        charge.day,
+        grant.operationId,
+        JSON.stringify(canonicalVector(charge.resources)),
+        plan.epoch,
+        plan.incarnation,
+        grant.seq,
+        plan.validUntil,
+      );
+    return true;
+  }
+
+  /**
+   * Ends `socketId` on its terminal provision of the first of `days` that
+   * has one current, valid at `now` and holding `price` (the days the
+   * ledger may be on): consumed with every other day's provision of it;
+   * whether it did (none: nothing of the socket may be done, its recovery
+   * retires it).
+   */
+  terminate(
+    socketId: string,
+    days: readonly number[],
+    price: ResourceVector,
+    now: number,
+  ): boolean {
+    return days.some((day) => this.#terminateOn(socketId, day, price, now));
+  }
+
+  #terminateOn(socketId: string, day: number, price: ResourceVector, now: number): boolean {
+    const row = this.sql
+      .exec<{ remaining: string }>(
+        `SELECT t.remaining FROM live_budget_terminal t JOIN live_budget_fence f ON f.id = 1
+         WHERE t.socket_id = ?1 AND t.day = ?2
+           AND t.budget_epoch = f.epoch AND t.budget_incarnation = f.incarnation
+           AND t.budget_seq > f.cleanup_through AND t.budget_valid_until > ?3`,
+        socketId,
+        day,
+        now,
+      )
+      .toArray()[0];
+    if (!row) return false;
+    const remaining = JSON.parse(row.remaining) as Record<string, number>;
+    if (!R.every((r) => (remaining[r] ?? 0) >= price[r])) return false;
+    this.sql.exec("DELETE FROM live_budget_terminal WHERE socket_id = ?", socketId);
+    return true;
+  }
+
+  /** Forgets `socketId`'s terminal provisions (its admission refused after they were made). */
+  forgetTerminal(socketId: string): void {
+    this.sql.exec("DELETE FROM live_budget_terminal WHERE socket_id = ?", socketId);
+  }
+
+  /** Whole `unit`s left of today's `kind` credit (`day` must be `now`'s), counted to `atMost`. */
+  unitsLeft(
+    kind: "control" | "mark",
+    day: number,
+    unit: ResourceVector,
+    now: number,
+    atMost: number,
+  ): number {
+    if (day !== Math.floor(now / DAY)) return 0;
+    const rows = this.#spendable(kind, day, now);
+    let units = 0;
+    for (const row of rows) {
+      const remaining = JSON.parse(row.remaining) as Record<string, number>;
+      units += Math.min(
+        ...R.filter((r) => unit[r] > 0).map((r) => Math.floor((remaining[r] ?? 0) / unit[r])),
+      );
+      if (units >= atMost) return atMost;
+    }
+    return units;
+  }
+
+  /**
+   * The stamp of the newest current grant of today's `kind` pool, drained
+   * or not (what a refill asked for an empty pool is queued under), or null.
+   */
+  poolStamp(kind: "control" | "mark", day: number, now: number): LiveFundingStamp | null {
+    const row = this.sql
+      .exec<{ e: number; i: string; s: number; v: number }>(
+        `SELECT b.budget_epoch AS e, b.budget_incarnation AS i, b.budget_seq AS s,
+           b.budget_valid_until AS v FROM live_budget_balances b
+           INDEXED BY live_budget_balances_pool JOIN live_budget_fence f ON f.id = 1
+         WHERE b.kind = ?1 AND b.day = ?2
+           AND b.budget_epoch = f.epoch AND b.budget_incarnation = f.incarnation
+           AND b.budget_seq > f.cleanup_through AND b.budget_valid_until > ?3
+         ORDER BY b.budget_seq DESC LIMIT 1`,
+        kind,
+        day,
+        now,
+      )
+      .toArray()[0];
+    return row ? { epoch: row.e, incarnation: row.i, seq: row.s, validUntil: row.v } : null;
+  }
+
+  /** Today's spendable balances of `kind`, oldest first, a pool's at most. */
+  #spendable(kind: "control" | "mark", day: number, now: number) {
+    return this.sql
+      .exec<{
+        operation_id: string;
+        remaining: string;
+        budget_epoch: number;
+        budget_incarnation: string;
+        budget_seq: number;
+        budget_valid_until: number;
+      }>(
+        `SELECT b.operation_id, b.remaining, b.budget_epoch, b.budget_incarnation, b.budget_seq,
+           b.budget_valid_until FROM live_budget_balances b
            INDEXED BY live_budget_balances_live JOIN live_budget_fence f ON f.id = 1
          WHERE b.kind = ?1 AND b.day = ?2 AND b.remaining <> '${EMPTY}'
            AND b.budget_epoch = f.epoch AND b.budget_incarnation = f.incarnation
@@ -664,8 +887,32 @@ export class LiveBudget {
         LIVE_POOL_GRANTS,
       )
       .toArray();
+  }
+
+  /**
+   * Spends `price` of today's `kind` credit (`day` must be `now`'s) across
+   * the valid grants (oldest first), all of it or nothing.
+   */
+  spend(kind: "control" | "mark", day: number, price: ResourceVector, now: number): boolean {
+    return this.spendFrom(kind, day, price, now) !== null;
+  }
+
+  /**
+   * Spends as `spend` does: the stamp of the newest grant it charged (what
+   * the work it paid for is stamped with), or null when it spent nothing.
+   */
+  spendFrom(
+    kind: "control" | "mark",
+    day: number,
+    price: ResourceVector,
+    now: number,
+  ): LiveFundingStamp | null {
+    // Work runs on the day it runs: a day captured before an await is not charged after it.
+    if (day !== Math.floor(now / DAY)) return null;
+    const rows = this.#spendable(kind, day, now);
     const left = Object.fromEntries(R.map((r) => [r, price[r]])) as Record<string, number>;
     const updates: { operation_id: string; remaining: Record<string, number> }[] = [];
+    let stamp: LiveFundingStamp | null = null;
     for (const row of rows) {
       const remaining = JSON.parse(row.remaining) as Record<string, number>;
       let changed = false;
@@ -677,10 +924,23 @@ export class LiveBudget {
           changed = true;
         }
       }
-      if (changed) updates.push({ operation_id: row.operation_id, remaining });
+      if (changed) {
+        updates.push({ operation_id: row.operation_id, remaining });
+        stamp = {
+          epoch: row.budget_epoch,
+          incarnation: row.budget_incarnation,
+          seq: row.budget_seq,
+          validUntil: row.budget_valid_until,
+        };
+      }
       if (R.every((r) => left[r] === 0)) break;
     }
-    if (!R.every((r) => left[r] === 0)) return false;
+    if (!R.every((r) => left[r] === 0)) return null;
+    // A balance out of a counter the work needs pays for nothing more (a block's margin past its
+    // last unit): drained whole, it no longer counts in its pool.
+    for (const u of updates)
+      if (R.some((r) => price[r] > 0 && (u.remaining[r] ?? 0) === 0))
+        for (const r of R) u.remaining[r] = 0;
     for (const u of updates)
       this.sql.exec(
         "UPDATE live_budget_balances SET remaining = ? WHERE operation_id = ? AND day = ?",
@@ -688,7 +948,7 @@ export class LiveBudget {
         u.operation_id,
         day,
       );
-    return true;
+    return stamp;
   }
 
   /** Keeps an ordinary grant's duration completion for its settlement, while the grant is current. */

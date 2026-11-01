@@ -29,7 +29,13 @@ import { liveCredential } from "../live/credential.js";
 import { confirm, release } from "../live/directory.js";
 import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
 import { expectationOf, type LiveFunding, validateFunding } from "../live/funding.js";
-import { LIVE_PRICES, type LiveManifestEntry } from "../live/manifest.js";
+import {
+  LIVE_LOW_WATER,
+  LIVE_PRICES,
+  type LiveManifestEntry,
+  type LiveManifestUnit,
+  liveKindOf,
+} from "../live/manifest.js";
 import { quarantineLiveOwners } from "../live/owners.js";
 import {
   LIVE_RECOVERY_DURATION,
@@ -87,8 +93,19 @@ export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
 
 /** What the Worker hands a live upgrade: an admitted socket with its funding, or a refusal with its transport's. */
 export type LiveBudgetV1 =
-  | { readonly admitted: LiveAdmitted; readonly admission: unknown }
+  | {
+      readonly admitted: LiveAdmitted;
+      readonly admission: unknown;
+      /** Its end's provisions, on each day it may live on. */
+      readonly terminal: unknown;
+      /** The feed's first blocks of controls and marks (installed while its pools have room). */
+      readonly controls: unknown;
+      readonly marks: unknown;
+    }
   | { readonly refusal: 4412 | 4413; readonly transport: unknown };
+
+/** What one control message, one mark and one socket's end are spent at. */
+const unitPrice = (unit: LiveManifestUnit) => (LIVE_PRICES[unit] as LiveManifestEntry).resources;
 
 /** A ticket as the Worker hands it to its feed: its hash, credential, expiry and transport's reference. */
 export interface LiveTicketV1 {
@@ -145,6 +162,16 @@ const LIVE_RETRY_MS = 60_000;
 function socketIdOf(ws: WebSocket): string | undefined {
   const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
   return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
+}
+
+/**
+ * Whether a socket's prepaid end has passed (its attachment says when, on
+ * this object's clock): nothing of it may be done then, no SQL read, its
+ * recovery retires it.
+ */
+function unpaid(ws: WebSocket, now: number): boolean {
+  const attached = ws.deserializeAttachment() as { until?: unknown } | null;
+  return typeof attached?.until === "number" && now >= attached.until;
 }
 
 /** When an alarm that could not reach the directory, or a step that failed, tries again. Proposed. */
@@ -258,8 +285,9 @@ export class UserDO extends MigratingDO {
     const live = this.#live();
     const { applied, queued, signalled } = this.ctx.storage.transactionSync(() => {
       const { signals, ...applied } = feed.apply(entries, gate);
-      // Live sockets hear of the streams changed, when the feed has any.
-      const signalled = live.counts("").feed > 0 && live.mark(signals);
+      // Live sockets hear of the streams changed, when the feed has any (as far as its marks are
+      // paid for).
+      const signalled = live.counts("").feed > 0 && this.#markPaid(signals, now);
       // The email an entry carries, whatever the inbox made of it, but not for a purged repository.
       const mailable = entries.filter(
         (e) => e.recipient.email && e.occurredAt > (feed.purgedThrough(e.repoId) ?? -1),
@@ -604,7 +632,7 @@ export class UserDO extends MigratingDO {
     }
     const feed = this.#feed();
     const steps = {
-      retire: () => (feed.retireStep() || this.#live().clearStep() ? Date.now() : null),
+      retire: () => (feed.retireStep() ? Date.now() : null),
       retain: () => (feed.retainStep() ? Date.now() : feed.nextRetention()),
       cursors: () => (feed.expireCursorsStep() ? Date.now() : feed.nextCursorExpiry()),
     } satisfies Record<(typeof KINDS)[number], () => number | null>;
@@ -729,11 +757,43 @@ export class UserDO extends MigratingDO {
 
   /** Marks the principal's own changes to streams (other sockets refresh them). */
   #explicit(streams: readonly { repoId: string; subject: SubjectKind }[]): void {
-    const live = this.#live();
-    if (live.counts("").feed === 0) return;
-    live.mark(
+    if (this.#live().counts("").feed === 0) return;
+    this.#markPaid(
       streams.map((s): LiveSignal => ({ repoId: s.repoId, subject: s.subject, explicit: true })),
+      Date.now(),
     );
+  }
+
+  /**
+   * Marks `signals` (call within a transaction), each paid for first by one
+   * mark of today's pool and stamped with the grant that paid: marking
+   * stops at the first that cannot be (hints are then left out; the core
+   * change stands), and a pool at low water or empty has its refill queued
+   * once.
+   * Whether any was marked.
+   */
+  #markPaid(signals: readonly LiveSignal[], local: number): boolean {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const now = budget.ledgerNow(local);
+    // Right at a midnight (which day it is cannot be told): no mark, no hint.
+    const day = budget.ledgerDay(local);
+    if (day === null) return false;
+    const live = this.#live();
+    const price = unitPrice("mark");
+    let marked = false;
+    let last = null;
+    for (const signal of signals) {
+      const paid = budget.spendFrom("mark", day, price, now);
+      if (!paid) break;
+      live.mark([signal], paid);
+      marked = true;
+      last = paid;
+    }
+    // Its refill queued at low water, or once nothing is left (under the pool's newest grant).
+    const stamp = last ?? budget.poolStamp("mark", day, now);
+    if (stamp && budget.unitsLeft("mark", day, price, now, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER)
+      budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
+    return marked;
   }
 
   /** The `live` kind due by what the pump has to do next. */
@@ -826,36 +886,38 @@ export class UserDO extends MigratingDO {
   }
 
   /** `funding` checked as paying for `kind` of this feed (before anything of it is read), or null. */
-  async #funded(
-    funding: unknown,
-    kind: "ticket" | "upgrade_transport" | "admission",
-  ): Promise<LiveFunding | null> {
+  async #funded(funding: unknown, kind: LiveManifestUnit): Promise<LiveFunding | null> {
     const checked = await this.#fundingCheck(funding, kind);
     return checked.status === "valid" ? checked.funding : null;
   }
 
   /** `funding` checked as paying for `kind` of this feed: valid, or why not. */
-  #fundingCheck(
+  async #fundingCheck(
     funding: unknown,
-    kind: "ticket" | "upgrade_transport" | "admission",
+    kind: LiveManifestUnit,
     /** A refusal's upgrade: its transport's grant, its owner named or not (one never admitted). */
     anyOwner = false,
   ): ReturnType<typeof validateFunding> {
     const expected = expectationOf(LIVE_PRICES[kind] as LiveManifestEntry, {
       recipientType: "UserDO",
       recipient: this.ctx.id.name as string,
-      kind,
+      kind: liveKindOf(kind),
       class: "ordinary",
     });
     const unowned =
       anyOwner && typeof funding === "object" && funding !== null && "ownerId" in funding
         ? (funding as { ownerId: unknown }).ownerId === null
         : false;
-    return validateFunding(
+    const sent = Date.now();
+    const checked = await validateFunding(
       this.env.DIRECTORY,
       funding,
       unowned ? { ...expected, owned: false } : expected,
     );
+    // The ledger's clock as just read: what this object judges its credit's times by.
+    if (checked.status === "valid")
+      new LiveBudget(this.ctx.storage.sql).noteLedger(checked.ledgerAt, sent, Date.now());
+    return checked;
   }
 
   /**
@@ -888,15 +950,27 @@ export class UserDO extends MigratingDO {
       return new Response(null, { status: 101, webSocket: client });
     }
     const admitted = budget.admitted;
-    const admission = admitted ? await this.#funded(budget.admission, "admission") : null;
-    if (!admitted || !admission) {
+    // Its admission, its end's provisions and the feed's first blocks, each checked as paying for
+    // what it is.
+    const [admission, terminal, controls, marks] = admitted
+      ? await Promise.all([
+          this.#funded(budget.admission, "admission"),
+          this.#funded(budget.terminal, "terminal"),
+          this.#funded(budget.controls, "control_block"),
+          this.#funded(budget.marks, "mark_block"),
+        ])
+      : [null, null, null, null];
+    if (!admitted || !admission || !terminal || !controls || !marks) {
       if (admitted) await release(this.env.DIRECTORY, [admitted.socketId]);
       return new Response(null, { status: 409 });
     }
     await this.#checkEpoch();
     const live = this.#live();
     const refuse = async (status: number) => {
-      this.ctx.storage.transactionSync(() => live.forget(admitted.socketId));
+      this.ctx.storage.transactionSync(() => {
+        live.forget(admitted.socketId);
+        new LiveBudget(this.ctx.storage.sql).forgetTerminal(admitted.socketId);
+      });
       await release(this.env.DIRECTORY, [admitted.socketId]);
       return new Response(null, { status });
     };
@@ -904,9 +978,16 @@ export class UserDO extends MigratingDO {
     const held = live.counts(admitted.credentialId);
     if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
       return refuse(429);
-    // Installed only while its admission's grant is current here, stamped with it.
+    // Installed only while its grants are current here, stamped with its admission's, its end
+    // provided for on each day it may live on, the feed's pools given their first blocks.
     const installed = this.ctx.storage.transactionSync(() => {
-      if (!this.#current(admission.envelope)) return false;
+      const grants = [admission, terminal, controls, marks].map((f) => f.envelope);
+      if (!grants.every((g) => this.#current(g))) return false;
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const now = budget.ledgerNow(Date.now());
+      if (!budget.provideTerminal(admitted.socketId, terminal.envelope, now)) return false;
+      budget.installBlock("control", controls.envelope, now);
+      budget.installBlock("mark", marks.envelope, now);
       live.addSocket(
         {
           id: admitted.socketId,
@@ -940,7 +1021,13 @@ export class UserDO extends MigratingDO {
       return refuse(409);
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server, [admitted.socketId]);
-    server.serializeAttachment({ v: 1, id: admitted.socketId });
+    // When its prepaid end passes, on this object's clock (read with no SQL by its callbacks).
+    const offset = new LiveBudget(this.ctx.storage.sql).ledgerNow(0);
+    server.serializeAttachment({
+      v: 1,
+      id: admitted.socketId,
+      until: terminal.envelope.plan.validUntil - offset,
+    });
     this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
     await this.#scheduleLive();
     return new Response(null, { status: 101, webSocket: client });
@@ -952,6 +1039,11 @@ export class UserDO extends MigratingDO {
    * its life; anything else, or past a bound, closes it.
    */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // Past its prepaid end: nothing read or spent, only closed (its rows are its recovery's).
+    if (unpaid(ws, Date.now())) {
+      ws.close(CLOSE_EXPIRED, "expired: reconnect with a new ticket");
+      return;
+    }
     // A restored object takes its epoch first; unread, nothing is applied.
     if (!(await this.#epochTaken())) return;
     const id = socketIdOf(ws);
@@ -961,9 +1053,13 @@ export class UserDO extends MigratingDO {
       ws.close(CLOSE_EXPIRED, "unknown socket");
       return;
     }
-    // State from before a restore (or another ledger incarnation): nothing it says is applied.
-    if (live.stale(id))
-      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
+    // State from before a restore (or another ledger incarnation): nothing it says is applied,
+    // and nothing of it is paid for any more (its credit went with the restore): only told to
+    // reread, its rows left to recovery.
+    if (live.stale(id)) {
+      ws.close(CLOSE_RESYNC, "restored: reread and reconnect");
+      return;
+    }
     const now = Date.now();
     // Past its deadline or its life: closed, whatever it says.
     if (socket.deadline <= now || socket.expires_at <= now)
@@ -973,6 +1069,30 @@ export class UserDO extends MigratingDO {
     const used = socket.controls_used + 1;
     const size =
       typeof message === "string" ? new TextEncoder().encode(message).length : message.byteLength;
+    // Every message pays for itself first, one control of today's pool, whatever it turns out to
+    // be; its counters move with it, and a pool at low water has its refill queued once.
+    const counted = this.ctx.storage.transactionSync(() => {
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const price = unitPrice("control");
+      const at = budget.ledgerNow(now);
+      // Right at a midnight (which day it is cannot be told) nothing is spent: unpaid, it closes.
+      const day = budget.ledgerDay(now);
+      const paid = day === null ? null : budget.spendFrom("control", day, price, at);
+      if (!paid) return false;
+      live.update(id, {
+        controls_used: used,
+        minute_count: minute,
+        ...(fresh && { minute_start: now }),
+      });
+      if (
+        day !== null &&
+        budget.unitsLeft("control", day, price, at, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER
+      )
+        budget.queueOnce("control_refill", crypto.randomUUID(), at, paid, at);
+      return true;
+    });
+    // Nothing left to pay for it: closed to come back once there is (a new admission brings it).
+    if (!counted) return this.#closeSocket(id, 4412, "try again soon");
     if (
       typeof message !== "string" ||
       size > LIVE_POLICY.controlBytes ||
@@ -980,13 +1100,6 @@ export class UserDO extends MigratingDO {
       used > LIVE_POLICY.controlsLife
     )
       return this.#closeSocket(id, 1008, "control message refused");
-    this.ctx.storage.transactionSync(() =>
-      live.update(id, {
-        controls_used: used,
-        minute_count: minute,
-        ...(fresh && { minute_start: now }),
-      }),
-    );
     let control: unknown;
     try {
       control = JSON.parse(message);
@@ -1028,8 +1141,11 @@ export class UserDO extends MigratingDO {
     const current = live.socket(id);
     if (!current) return;
     // Restored (or another ledger incarnation) while the credential was checked: not renewed.
-    if (live.stale(id))
-      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
+    if (live.stale(id)) {
+      for (const ws of this.ctx.getWebSockets(id))
+        ws.close(CLOSE_RESYNC, "restored: reread and reconnect");
+      return;
+    }
     // Its deadline or life passed while the credential was checked: closed, not renewed.
     if (current.deadline <= Date.now() || current.expires_at <= Date.now())
       return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
@@ -1064,15 +1180,17 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * A socket closed or failed: forgotten and its lease released, once the
-   * object took its epoch. One already forgotten (recovery deleted it
-   * before closing it) wakes nothing: no bootstrap, no alarm.
+   * A socket closed or failed: forgotten on its terminal provision, once
+   * the object took its epoch (its lease is maintenance's to release). One
+   * already forgotten (ended here, or deleted by recovery) wakes nothing:
+   * no bootstrap, no alarm.
    */
   async #socketGone(ws: WebSocket): Promise<void> {
+    if (unpaid(ws, Date.now())) return;
     const id = socketIdOf(ws);
     if (id === undefined || !this.#live().socket(id)) return;
     if (!(await this.#epochTaken())) return;
-    await this.#forgetSocket(id);
+    this.#endSocket(id);
   }
 
   /** Whether the object took its epoch (false when the directory could not be read). */
@@ -1083,10 +1201,36 @@ export class UserDO extends MigratingDO {
     );
   }
 
-  /** Closes a socket, forgets it and releases its lease. */
-  async #closeSocket(id: string, code: number, reason: string): Promise<void> {
-    for (const ws of this.ctx.getWebSockets(id)) ws.close(code, reason);
-    await this.#forgetSocket(id);
+  /**
+   * Ends a socket on today's terminal provision: forgotten, then closed with
+   * `code` (its callbacks then find nothing). One with no provision left
+   * (its prepaid days passed, or recovery took it) is only closed, its
+   * attachment marking it past its end so nothing more of it is read; its
+   * rows are its recovery's. Its lease is maintenance's to release.
+   */
+  #closeSocket(id: string, code: number, reason: string): void {
+    const ended = this.#endSocket(id);
+    for (const ws of this.ctx.getWebSockets(id)) {
+      // Its end not paid for: past it from now on, so nothing more of it reads anything.
+      if (!ended) ws.serializeAttachment({ v: 1, id, until: Date.now() });
+      ws.close(code, reason);
+    }
+  }
+
+  /** Forgets a socket on today's terminal provision, consumed; whether it was. */
+  #endSocket(id: string): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const local = Date.now();
+      const ended = budget.terminate(
+        id,
+        budget.ledgerDays(local),
+        unitPrice("terminal"),
+        budget.ledgerNow(local),
+      );
+      if (ended) this.#live().forget(id);
+      return ended;
+    });
   }
 
   /** Forgets a socket and releases its lease; one already forgotten (by recovery) is left to the reaper. */
@@ -1505,15 +1649,10 @@ export class UserDO extends MigratingDO {
         this.ctx.storage.sql.exec("DELETE FROM email_queue");
         this.#schedule("retire", Date.now());
       });
-    // Live sockets go with it: closed, their leases released, their state forgotten (sockets at
-    // once, at most a feed's; the rest a page a step of the retirement).
-    const live = this.#live();
-    const sockets = live.sockets().map((s) => s.socket_id);
-    for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_REVOKED, "retired");
-    this.ctx.storage.transactionSync(() => {
-      for (const id of sockets) live.forget(id);
-    });
-    await release(this.env.DIRECTORY, sockets);
+    // Live sockets go with it, each on its terminal provision (at most a feed's); what else of
+    // live is left, and their leases, are recovery's and maintenance's.
+    for (const socket of this.#live().sockets())
+      this.#closeSocket(socket.socket_id, CLOSE_REVOKED, "retired");
     await this.#arm();
   }
 

@@ -311,6 +311,9 @@ CREATE INDEX live_revoked_budget ON live_revoked (budget_incarnation, budget_epo
 CREATE INDEX live_tickets_budget ON live_tickets (budget_incarnation, budget_epoch, budget_seq, ticket_hash);
 CREATE INDEX live_tickets_expiry ON live_tickets (expires_at, ticket_hash);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
+ALTER TABLE live_budget_fence ADD COLUMN ledger_offset_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE live_budget_fence ADD COLUMN ledger_sampled_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE live_budget_fence ADD COLUMN ledger_uncertainty_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE live_tickets ADD COLUMN transport_json TEXT CHECK (
         transport_json IS NULL
         OR (json_valid(transport_json) AND json_type(transport_json) = 'object')

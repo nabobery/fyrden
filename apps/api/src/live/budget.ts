@@ -253,10 +253,9 @@ export function livePlanError(plan: LiveGrantPlan): string | null {
     if (i === 1 && charge.day !== (charges[0] as LiveDayCharge).day + 1) return "charge days";
     const hold = charge.duration;
     if (hold === undefined) return "duration";
-    if (hold === null) {
-      if (charge.resources.do_duration_ms !== 0) return "duration";
-      continue;
-    }
+    // No hold: any duration it pays is debited outright (a synchronous entry's fixed allowance),
+    // never settled or refunded, so it takes no place in the day's escrow.
+    if (hold === null) continue;
     if (
       typeof hold !== "object" ||
       hold === null ||

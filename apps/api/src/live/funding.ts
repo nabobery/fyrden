@@ -252,22 +252,14 @@ export function planFor(
     .sort((a, b) => a - b)
     .map((day) => {
       const runs = days.includes(day);
-      // An owner's hold, or a synchronous entry's allowance held on each day it may run.
-      const allowance = entry.resources.do_duration_ms;
-      const hold =
-        entry.duration === "owner"
-          ? (holds.find((h) => h.day === day) ?? null)
-          : runs && allowance > 0
-            ? {
-                day,
-                from: Math.max(from, day * DAY),
-                until: Math.min(until, (day + 1) * DAY),
-                ms: allowance,
-              }
-            : null;
+      // An owner's hold (settled by what it ran), or a synchronous entry's allowance debited
+      // outright on each day it may run (never refunded, so never held in escrow).
+      const hold = entry.duration === "owner" ? (holds.find((h) => h.day === day) ?? null) : null;
+      const duration =
+        entry.duration === "owner" ? (hold?.ms ?? 0) : runs ? entry.resources.do_duration_ms : 0;
       // A day it can only run into (past a midnight) pays the whole price too: its calls may land there.
       const resources = Object.fromEntries(
-        R.map((r) => [r, r === "do_duration_ms" ? (hold?.ms ?? 0) : entry.resources[r]]),
+        R.map((r) => [r, r === "do_duration_ms" ? duration : entry.resources[r]]),
       ) as ResourceVector;
       return { day, resources, duration: hold };
     });
