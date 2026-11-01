@@ -272,7 +272,8 @@ CREATE TABLE search_reconciles (
 , partial INTEGER NOT NULL DEFAULT 0
   CHECK (partial IN (0, 1)), coverage INTEGER NOT NULL DEFAULT 0
   CHECK (coverage IN (0, 1)), partial_reason TEXT, recovery_gen INTEGER NOT NULL DEFAULT 0
-  CHECK (recovery_gen >= 0)) STRICT;
+  CHECK (recovery_gen >= 0), indexing_gen INTEGER NOT NULL DEFAULT 0
+  CHECK (indexing_gen >= 0)) STRICT;
 
 -- table search_repairs
 CREATE TABLE search_repairs (
@@ -336,7 +337,8 @@ CREATE TABLE search_sources (
   cutoff_seq INTEGER NOT NULL
 , index_covered INTEGER NOT NULL DEFAULT 0
   CHECK (index_covered IN (0, 1)), visible_gen INTEGER NOT NULL DEFAULT 0
-  CHECK (visible_gen >= 0)) STRICT;
+  CHECK (visible_gen >= 0), indexing_gen INTEGER NOT NULL DEFAULT 0
+  CHECK (indexing_gen >= 0)) STRICT;
 
 -- table search_sweep
 CREATE TABLE search_sweep (
@@ -480,6 +482,10 @@ CREATE INDEX search_repairs_retry ON search_repairs (retry_at, repo_id)
 
 -- index search_repo_nums_indexed
 CREATE INDEX search_repo_nums_indexed ON search_repo_nums (repo_id) WHERE indexed = 1;
+
+-- index search_sources_indexing
+CREATE INDEX search_sources_indexing ON search_sources (indexing_gen, repo_id)
+  WHERE index_covered = 1;
 
 -- index search_sources_uncovered
 CREATE INDEX search_sources_uncovered ON search_sources (repo_id) WHERE index_covered = 0;

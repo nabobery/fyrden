@@ -8,7 +8,8 @@ import { readModelState } from "../read-model/maintenance.js";
 import { recoveryState } from "../read-model/recovery.js";
 import { restoreTokenState } from "../read-model/restore-token.js";
 import { ADMISSION } from "./admission.js";
-import { searchIndexing } from "./repairs.js";
+import { INTERACTIVE } from "./interactive.js";
+import { searchIndexingState } from "./repairs.js";
 
 /** Search's rows the status reads besides its singletons, each through an index. */
 export const STATUS_QUERIES = {
@@ -27,6 +28,9 @@ export const STATUS_QUERIES = {
     ORDER BY visible_gen, repo_id LIMIT 1`,
   /** The purge next (the index of purges by generation). */
   nextPurge: "SELECT repo_id FROM search_purges ORDER BY recovery_gen, repo_id LIMIT 1",
+  /** A source known whole only at an older indexing generation (the index of sources by it). */
+  firstStale: `SELECT repo_id FROM search_sources WHERE index_covered = 1 AND indexing_gen < ?1
+    ORDER BY indexing_gen, repo_id LIMIT 1`,
 };
 
 /**
@@ -45,7 +49,7 @@ export async function getSearchStatusOperation(
 ): Promise<Output<typeof getSearchStatus>> {
   const { env, metrics } = ctx;
   metrics.count("d1.query", { db: "directory", op: "search_indexing" });
-  const indexing = await searchIndexing(env);
+  const indexing = await searchIndexingState(env);
   metrics.count("d1.query", { db: "directory", op: "read_model_status" }, 2);
   metrics.count("d1.query", { db: "org", op: "read_model_status" }, 2);
   const state = await readModelState(env, DEFAULT_ORG_SHARD);
@@ -56,10 +60,11 @@ export async function getSearchStatusOperation(
   metrics.count("d1.query", { db: "org", op: "search_status" });
   metrics.count("d1.query", { db: "directory", op: "read_model_recovery" });
   const recovery = await recoveryState(env, DEFAULT_ORG_SHARD);
-  const [budget, size, counts, repair, parked, uncovered, hidden, purge] = await db.batch([
+  const [budget, size, counts, repair, parked, uncovered, hidden, purge, stale] = await db.batch([
     db.prepare(
       `SELECT CAST(unixepoch() / 86400 AS INTEGER) AS day, coalesce(b.rows, 0) AS rows,
-         coalesce(b.reads, 0) AS reads, coalesce(b.repo_rows, 0) AS repo_rows
+         coalesce(b.reads, 0) AS reads, coalesce(b.repo_rows, 0) AS repo_rows,
+         coalesce(b.interactive_reads, 0) AS interactive_reads
        FROM (SELECT 1) LEFT JOIN search_budget b ON b.day = CAST(unixepoch() / 86400 AS INTEGER)`,
     ),
     db.prepare("SELECT bytes, bytes_reserved, observed FROM search_size WHERE id = 1"),
@@ -71,12 +76,14 @@ export async function getSearchStatusOperation(
     db.prepare(STATUS_QUERIES.firstUncovered),
     db.prepare(STATUS_QUERIES.firstHidden),
     db.prepare(STATUS_QUERIES.nextPurge),
+    db.prepare(STATUS_QUERIES.firstStale).bind(indexing.gen),
   ]);
   const today = budget?.results[0] as {
     day: number;
     rows: number;
     reads: number;
     repo_rows: number;
+    interactive_reads: number;
   };
   const observed = size?.results[0] as
     | { bytes: number; bytes_reserved: number; observed: number }
@@ -91,7 +98,7 @@ export async function getSearchStatusOperation(
   const whole = uncovered?.results[0] as { repo_id: string } | undefined;
   const { directory, local, admission, writers } = state;
   return {
-    indexing,
+    indexing: indexing.on,
     protocol: {
       serving_version: READ_MODEL_PROTOCOL,
       deployed_version: directory?.executorVersion ?? null,
@@ -131,6 +138,7 @@ export async function getSearchStatusOperation(
       rows: today.rows,
       reads: today.reads,
       repo_rows: today.repo_rows,
+      interactive_reads: today.interactive_reads,
       bytes: observed?.bytes ?? 0,
       bytes_reserved: observed?.bytes_reserved ?? 0,
       observed_sequence: observed?.observed ?? 0,
@@ -142,6 +150,7 @@ export async function getSearchStatusOperation(
         max_bytes: ADMISSION.maxBytes,
         repository_daily_rows: ADMISSION.repoDailyRows,
         repository_capacity: REPO_INDEX.capacity,
+        interactive_daily_reads: INTERACTIVE.dailyReads,
       },
       repair_pending: next !== undefined,
       next_repair_since: next?.since ?? null,
@@ -152,6 +161,8 @@ export async function getSearchStatusOperation(
       recovery_gen: indexes?.recovery_gen ?? 0,
       first_hidden: (hidden?.results[0] as { repo_id: string } | undefined)?.repo_id ?? null,
       next_purge: (purge?.results[0] as { repo_id: string } | undefined)?.repo_id ?? null,
+      indexing_gen: indexing.gen,
+      first_stale: (stale?.results[0] as { repo_id: string } | undefined)?.repo_id ?? null,
     },
   };
 }

@@ -36,6 +36,7 @@ import {
   spentStatement,
   usedBy,
 } from "./admission.js";
+import { searchIndexingState } from "./repairs.js";
 import {
   eligible,
   FENCES,
@@ -185,7 +186,11 @@ export async function reconcileSource(
         await account(db, reservation, [], 0, metrics, lookups);
         return end("done");
       }
-      pass = await start(db, repoId, page, reservation, metrics);
+      // The indexing generation it starts under: what it certifies, at its end.
+      if (calls) calls.left--;
+      metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+      const { gen: indexingGen } = await searchIndexingState(env);
+      pass = await start(db, repoId, page, indexingGen, reservation, metrics);
       // Refused (the read model's ownership is ahead of the object's): later.
       if (pass === undefined) return end("more");
       continue;
@@ -349,7 +354,8 @@ export async function reconcileSource(
           .bind(repoId, pass.gen),
         db
           .prepare(
-            `UPDATE search_sources SET index_covered = 1
+            `UPDATE search_sources SET index_covered = 1, indexing_gen = (SELECT c.indexing_gen
+               FROM search_reconciles c WHERE c.repo_id = ?1 AND c.gen = ?4)
              WHERE repo_id = ?1 AND ${FENCES} AND ${SAME_DAY(5)}
                AND EXISTS (SELECT 1 FROM search_reconciles c WHERE c.repo_id = ?1 AND c.gen = ?4
                  AND c.kind = 'done' AND c.partial = 0 AND c.coverage = 1)
@@ -523,6 +529,7 @@ async function start(
   db: D1Database,
   repoId: string,
   page: ExportPage,
+  indexingGen: number,
   reservation: Reservation,
   metrics: Metrics | undefined,
 ): Promise<Pass | undefined> {
@@ -549,17 +556,25 @@ async function start(
     db
       .prepare(
         `INSERT INTO search_reconciles (repo_id, gen, epoch_gen, owner_gen, watermark, kind,
-           after, started_at, coverage, recovery_gen)
-         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5, 1, ${RECOVERY_GEN}
+           after, started_at, coverage, recovery_gen, indexing_gen)
+         SELECT ?1, 1, ?2, ?3, ?4, 'subjects', 0, ?5, 1, ${RECOVERY_GEN}, ?7
          WHERE ${FENCES} AND ${SAME_DAY(6)}
          ON CONFLICT (repo_id) DO UPDATE SET gen = search_reconciles.gen + 1,
            epoch_gen = excluded.epoch_gen, owner_gen = excluded.owner_gen,
            watermark = excluded.watermark, kind = 'subjects', after = 0,
            started_at = excluded.started_at, partial = 0, partial_reason = NULL, coverage = 1,
-           recovery_gen = excluded.recovery_gen
+           recovery_gen = excluded.recovery_gen, indexing_gen = excluded.indexing_gen
          RETURNING gen`,
       )
-      .bind(repoId, page.epochGen, page.ownerGen, page.watermark, now, reservation.day),
+      .bind(
+        repoId,
+        page.epochGen,
+        page.ownerGen,
+        page.watermark,
+        now,
+        reservation.day,
+        indexingGen,
+      ),
     // The repair revision asked for so far is the one this pass covers.
     db
       .prepare(

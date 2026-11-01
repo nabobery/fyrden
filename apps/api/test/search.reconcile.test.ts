@@ -1086,4 +1086,30 @@ describe("a reconciliation, of the full-text indexes", () => {
     expect((await counters())?.live_docs).toBe((counted?.live_docs ?? 0) - 1);
     await integrity();
   });
+
+  it("certifies its source at the indexing generation its pass started under", async () => {
+    const generation = (n: number) =>
+      env.DIRECTORY.prepare(
+        `INSERT INTO deployment_settings (name, value, updated_at)
+         VALUES ('search_indexing_generation', ?1, 0)
+         ON CONFLICT (name) DO UPDATE SET value = ?1`,
+      )
+        .bind(String(n))
+        .run();
+    const source = () =>
+      db
+        .prepare("SELECT index_covered, indexing_gen FROM search_sources WHERE repo_id = ?")
+        .bind(repo.id)
+        .first<{ index_covered: number; indexing_gen: number }>();
+    await generation(7);
+    expect(await reconcileSource(env, target())).toBe("done");
+    expect(await source()).toEqual({ index_covered: 1, indexing_gen: 7 });
+    // Indexing changed while a pass ran: it certifies the generation it started under.
+    await generation(8);
+    expect(await reconcileSource(env, target(), { pages: 1 })).toBe("more");
+    await generation(9);
+    expect(await reconcileSource(env, target())).toBe("done");
+    expect(await source()).toEqual({ index_covered: 1, indexing_gen: 8 });
+    await generation(0);
+  });
 });

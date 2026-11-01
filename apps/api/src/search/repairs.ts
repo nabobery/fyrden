@@ -41,10 +41,23 @@ export const REPAIR_POLICY = {
 
 /** Whether the deployment writes and repairs search's projections. */
 export async function searchIndexing(env: Pick<Env, "DIRECTORY">): Promise<boolean> {
+  return (await searchIndexingState(env)).on;
+}
+
+/** The deployment's search indexing: on or off, and its generation (raised at each change; 0 before any). */
+export interface IndexingState {
+  readonly on: boolean;
+  readonly gen: number;
+}
+
+/** The deployment's search indexing, in one query. */
+export async function searchIndexingState(env: Pick<Env, "DIRECTORY">): Promise<IndexingState> {
   const row = await env.DIRECTORY.prepare(
-    "SELECT value FROM deployment_settings WHERE name = 'search_indexing'",
-  ).first<{ value: string }>();
-  return row?.value === "on";
+    `SELECT max(CASE WHEN name = 'search_indexing' THEN value END) AS state,
+       max(CASE WHEN name = 'search_indexing_generation' THEN CAST(value AS INTEGER) END) AS gen
+     FROM deployment_settings WHERE name IN ('search_indexing', 'search_indexing_generation')`,
+  ).first<{ state: string | null; gen: number | null }>();
+  return { on: row?.state === "on", gen: row?.gen ?? 0 };
 }
 
 /**

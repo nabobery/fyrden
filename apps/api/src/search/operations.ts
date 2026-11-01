@@ -23,7 +23,7 @@ import {
   type SearchTarget,
 } from "./parser.js";
 import { type Matches, matchDocuments, matchRepositories } from "./query.js";
-import { searchIndexing } from "./repairs.js";
+import { type IndexingState, searchIndexingState } from "./repairs.js";
 
 /*
  * The search operations: a principal's searches rate limited
@@ -204,11 +204,11 @@ async function reading<T>(
   search: (
     db: D1Database,
     reservation: InteractiveReservation,
-    indexing: boolean,
+    indexing: IndexingState,
   ) => Promise<Page<T>>,
 ): Promise<Page<T>["result"]> {
   ctx.metrics.count("d1.query", { db: "directory", op: "search_indexing" });
-  const indexing = await searchIndexing(ctx.env);
+  const indexing = await searchIndexingState(ctx.env);
   const db = readModelFor(ctx.env, DEFAULT_ORG_SHARD);
   for (let attempt = 0; ; attempt++) {
     const reservation = await reserveInteractive(db, SEARCH_RESERVE[target]);

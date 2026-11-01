@@ -154,6 +154,7 @@ async function docs(
     page?: number;
     perPage?: number;
     indexing?: boolean;
+    gen?: number;
     order?: ListingOrder;
   } = {},
 ) {
@@ -164,7 +165,7 @@ async function docs(
     scope,
     options.people ?? NOBODY,
     { page: options.page ?? 1, perPage: options.perPage ?? 30 },
-    options.indexing ?? true,
+    { on: options.indexing ?? true, gen: options.gen ?? 0 },
     options.order,
   );
   return { ...found, numbers: found.items.map((i) => i.number) };
@@ -359,7 +360,7 @@ describe("an issue search's matches", () => {
         [scoped(repo)],
         NOBODY,
         { page: 1, perPage: 30 },
-        true,
+        { on: true, gen: 0 },
       );
       return { incomplete: found?.incomplete, numbers: found?.items.map((i) => i.number) };
     };
@@ -419,6 +420,10 @@ describe("an issue search's matches", () => {
       .run();
     const pending = await docs(t, [scoped(repo)]);
     expect(pending).toMatchObject({ incomplete: true, numbers: [1] });
+    // One known whole at an older indexing generation: what happened since may not be projected.
+    const older = await source([{ number: 1, title: t }]);
+    expect((await docs(t, [scoped(older)])).incomplete).toBe(false);
+    expect((await docs(t, [scoped(older)], { gen: 1 })).incomplete).toBe(true);
     // One never certified.
     const uncertified = newId("rep");
     expect((await docs(t, [scoped(uncertified)])).incomplete).toBe(true);
@@ -611,7 +616,7 @@ describe("a repository search's matches", () => {
         parseSearchQuery(t, "repositories"),
         scope,
         { page: 1, perPage: 30 },
-        true,
+        { on: true, gen: 0 },
       );
       return found?.items.map((i) => i.repoId).sort();
     };

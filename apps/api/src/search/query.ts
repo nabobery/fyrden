@@ -4,6 +4,7 @@ import type { GeneratedFilters } from "./compiler.js";
 import { type InteractiveReservation, readOnDay } from "./interactive.js";
 import type { ParsedQuery } from "./parser.js";
 import { RANKING, type RankingCharge, rankCandidates } from "./ranking.js";
+import type { IndexingState } from "./repairs.js";
 import { DOC_KIND, DOC_STATE } from "./statements.js";
 import { SOURCE_VISIBLE } from "./visibility.js";
 
@@ -70,8 +71,12 @@ export const fenced = (row: string, repo: string) => `${row}.deleted = 0
   AND ${row}.owner_gen >= coalesce((SELECT o.owner_gen FROM source_owner o
     WHERE o.source_id = ${repo}), 0)`;
 
-/** SQL: 1 when every repository of the JSON array `ids` has a source known whole and shown. */
-const WHOLE = (ids: string) => `SELECT coalesce(min(s.repo_id IS NOT NULL AND s.index_covered = 1
+/**
+ * SQL: 1 when every repository of the JSON array `ids` has a source known
+ * whole, at the indexing generation `gen`, and shown.
+ */
+const WHOLE = (ids: string, gen: string) => `SELECT coalesce(min(s.repo_id IS NOT NULL
+    AND s.index_covered = 1 AND s.indexing_gen = ${gen}
     AND ${SOURCE_VISIBLE("j.value")} AND NOT EXISTS (SELECT 1 FROM search_repairs r
       WHERE r.repo_id = j.value AND r.dirty > r.covered)), 1)
   FROM json_each(${ids}) j LEFT JOIN search_sources s ON s.repo_id = j.value`;
@@ -115,12 +120,13 @@ async function scopeNumbers(
  * The statement counting `matched` (candidates' rows, by `ord`, at most
  * `RESULTS.depth` and one more to tell there are more) and taking the page
  * asked for of the first `RESULTS.depth`, with whether the scope's sources
- * (the JSON array `?4`) are known whole, in the same snapshot. Binds:
- * candidates `?1`, the day `?5`, the depth `?6`, the page `?7` and `?8`.
+ * (the JSON array `?4`) are known whole at the indexing generation `?9`, in
+ * the same snapshot. Binds: candidates `?1`, the day `?5`, the depth `?6`,
+ * the page `?7` and `?8`.
  */
 const paged = (matched: string) => `WITH matched AS MATERIALIZED (${matched}
     ORDER BY c.ord LIMIT ?6 + 1)
-  SELECT (SELECT count(*) FROM matched) AS total, (${WHOLE("?4")}) AS whole, m.*
+  SELECT (SELECT count(*) FROM matched) AS total, (${WHOLE("?4", "?9")}) AS whole, m.*
   FROM (SELECT 1) LEFT JOIN (SELECT * FROM (SELECT * FROM matched ORDER BY ord LIMIT ?6)
     ORDER BY ord LIMIT ?7 OFFSET ?8) m
   ORDER BY m.ord`;
@@ -134,6 +140,7 @@ const pageBinds = (
   scopes: readonly [unknown, unknown, unknown],
   request: PageRequest,
   reservation: InteractiveReservation,
+  indexing: IndexingState,
 ): unknown[] => [
   JSON.stringify(candidates),
   ...scopes.map((ids) => JSON.stringify(ids)),
@@ -141,6 +148,7 @@ const pageBinds = (
   RESULTS.depth,
   request.perPage,
   (request.page - 1) * request.perPage,
+  indexing.gen,
 ];
 
 /** A page's matches from its statement's rows (`total`, `whole`, then a match's columns, or none). */
@@ -245,7 +253,7 @@ export async function matchDocuments(
   scoped: readonly ScopedRepo[],
   people: People,
   request: PageRequest,
-  indexing: boolean,
+  indexing: IndexingState,
   order?: ListingOrder,
 ): Promise<Matches<DocMatch>> {
   const listing =
@@ -263,11 +271,11 @@ export async function matchDocuments(
     const kinds = asked.filter((k) => (k === DOC_KIND.issue ? r.issues : r.pulls));
     return kinds.length > 0 ? [{ id: r.entry.id, kinds }] : [];
   });
-  if (readable.length === 0) return none(!indexing, 0);
+  if (readable.length === 0) return none(!indexing.on, 0);
   const ids = readable.map((r) => r.id);
   const scope = await scopeNumbers(db, reservation, ids);
   let reads = scope.reads;
-  let incomplete = !indexing;
+  let incomplete = !indexing.on;
   let candidates: readonly number[] = [];
   const nums = readable.flatMap((r) => scope.nums.get(r.id)?.num ?? []);
   // Something of theirs indexed, and every handle naming someone: else nothing matches.
@@ -309,6 +317,7 @@ export async function matchDocuments(
     ],
     request,
     reservation,
+    indexing,
   );
   const bind = (value: unknown) => `?${binds.push(value)}`;
   const where = [
@@ -377,11 +386,11 @@ export async function matchRepositories(
   parsed: ParsedQuery,
   scoped: readonly ScopedRepo[],
   request: PageRequest,
-  indexing: boolean,
+  indexing: IndexingState,
 ): Promise<Matches<RepoMatch> | null> {
   if (parsed.text.length === 0) return null;
   const readable = scoped.filter((r) => r.metadata).map((r) => r.entry);
-  if (readable.length === 0) return none(!indexing, 0);
+  if (readable.length === 0) return none(!indexing.on, 0);
   const ids = readable.map((r) => r.id);
   const owners = new Set(readable.map((r) => r.ownerId));
   const scope = await scopeNumbers(
@@ -391,7 +400,7 @@ export async function matchRepositories(
     owners.size === 1 ? ([...owners][0] as string) : null,
   );
   let reads = scope.reads;
-  let incomplete = !indexing;
+  let incomplete = !indexing.on;
   let candidates: readonly number[] = [];
   // Something of theirs in the repository index: else nothing matches.
   if ([...scope.nums.values()].some((n) => n.indexed)) {
@@ -419,7 +428,7 @@ export async function matchRepositories(
           WHERE ${among("r.repo_id", "?2")} AND ${fenced("r", "r.repo_id")}
             AND ${SOURCE_VISIBLE("r.repo_id")}`),
       )
-      .bind(...pageBinds(candidates, [ids, [], ids], request, reservation)),
+      .bind(...pageBinds(candidates, [ids, [], ids], request, reservation, indexing)),
   ]);
   reads += result?.meta.rows_read ?? 0;
   return pageOf(

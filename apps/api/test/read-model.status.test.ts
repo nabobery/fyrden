@@ -188,9 +188,14 @@ describe("search's status", () => {
       firstUncovered: "search_sources_uncovered",
       firstHidden: "search_sources_visible",
       nextPurge: "search_purges_generation",
+      firstStale: "search_sources_indexing",
     };
     for (const [name, sql] of Object.entries(STATUS_QUERIES)) {
-      const { results } = await db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all<{ detail: string }>();
+      // (The indexing generation, where one is asked for.)
+      const { results } = await db
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .bind(...(sql.includes("?1") ? [1] : []))
+        .all<{ detail: string }>();
       const plan = results.map((r) => r.detail).join(" | ");
       expect(plan, name).toMatch(
         new RegExp(
