@@ -3,8 +3,9 @@
 // entry points only (REST `/feed`, `/feed/sync`, MCP `get_feed` and
 // `sync_feed`, stock git). The agent sees a review asked of its user, the
 // outcome of reviews of its user's pull request and a merge conflict on it,
-// each once, in its latest state. A forged cursor, or one ahead of the feed,
-// is refused with 410 and where to resync. Once its user is removed as a
+// each once, in its latest state. A forged cursor, one naming no snapshot of
+// the feed, or one of before streams ahead of the feed, is refused with 410
+// and where to resync. Once its user is removed as a
 // collaborator, that repository's items are gone, and stay gone when access
 // is given back: only new items come.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -36,8 +37,9 @@ let ownerWork = "";
 let devWork = "";
 let repoId = "";
 let agent: Awaited<ReturnType<typeof delegatedAgent>>;
-/** Where the agent started following. */
+/** Where the agent started following, through REST and through MCP (a cursor is its token's own). */
 let start = "";
+let startMcp = "";
 
 beforeAll(async () => {
   forge = await startForge("feed");
@@ -54,6 +56,7 @@ beforeAll(async () => {
     "pull_requests:read",
   ]);
   start = (await agent.api.call("feed.sync", {})).head_cursor;
+  startMcp = (await agent.mcp.tool<{ head_cursor: string }>("sync_feed", {})).head_cursor;
 }, 180_000);
 
 afterAll(async () => {
@@ -146,7 +149,7 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
       });
     // MCP reads the same feed the same way.
     const viaMcp = await agent.mcp.tool<{ items: FeedItem[] }>("get_feed", {
-      since: start,
+      since: startMcp,
       limit: 100,
     });
     expect(
@@ -177,23 +180,27 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
     );
   });
 
-  it("refuses a forged cursor or one ahead of the feed with 410 and where to resync", async () => {
+  it("refuses a forged cursor, an unknown one or one ahead of the feed with 410 and where to resync", async () => {
     const synced = await agent.api.call("feed.sync", {});
     const cursor = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
     const real = JSON.parse(Buffer.from(synced.head_cursor, "base64url").toString()) as {
       v: number;
       e: string;
-      s: number;
+      i: string;
     };
-    const forged = cursor({ v: 1, e: `${real.e}x`, s: real.s });
-    const ahead = cursor({ ...real, s: real.s + 1_000_000 });
-    for (const since of [forged, ahead])
+    const forged = cursor({ ...real, e: `${real.e}x` });
+    const unknown = cursor({ ...real, i: "0".repeat(32) });
+    // Of before streams: a sequence number of the whole feed, past its head.
+    const ahead = cursor({ v: 1, e: real.e, s: 1_000_000 });
+    for (const since of [forged, unknown, ahead])
       expect(await refusal(agent.api.call("feed.list", { since }))).toMatchObject({
         status: 410,
         code: "cursor_expired",
         resync: "/api/feed/sync",
       });
     await expect(agent.mcp.tool("get_feed", { since: forged })).rejects.toThrow(/cursor_expired/);
+    // The REST token's cursor is not the MCP token's.
+    await expect(agent.mcp.tool("get_feed", { since: start })).rejects.toThrow(/cursor_expired/);
   });
 
   it("drops a removed collaborator's items, and brings only new ones once access is back", {

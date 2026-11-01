@@ -147,6 +147,7 @@ export async function eraseRepository(
   for (const archive of archives) {
     if (spent()) return "partial";
     if (isUlid(archive.run_id)) await deletePrefixes([archive.network_id], archive.run_id);
+    sql.exec("DELETE FROM archive_zip_chunks WHERE run_id = ?", archive.run_id);
     sql.exec("DELETE FROM archive_zip_records WHERE run_id = ?", archive.run_id);
     sql.exec("DELETE FROM archive_segments WHERE run_id = ?", archive.run_id);
     sql.exec("DELETE FROM archives WHERE run_id = ?", archive.run_id);

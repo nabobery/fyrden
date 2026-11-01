@@ -1,4 +1,4 @@
-import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, PERMISSION_NAMES } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, SCOPE_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { MAX_TOKEN_DAYS, NewHandle } from "./admin.js";
@@ -146,7 +146,7 @@ export const createAgentToken = defineOperation({
     agent: AgentHandle,
     type: z.enum(["pat", "git"]).default("pat"),
     scopes: z
-      .array(z.enum(PERMISSION_NAMES))
+      .array(z.enum(SCOPE_NAMES))
       .max(32)
       .default([])
       .describe(

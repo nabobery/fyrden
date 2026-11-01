@@ -8,6 +8,7 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import { attemptDelivery } from "../src/webhooks/deliver.js";
 import { openSecret, secretKeys } from "../src/webhooks/secrets.js";
 import { api, json, user } from "./helpers/api.js";
+import { admitted } from "./helpers/read-model.js";
 import { inRepo } from "./helpers/repo-git.js";
 import { type HookOut, RECEIVER, webhookTest } from "./helpers/webhooks.js";
 
@@ -106,11 +107,12 @@ describe("webhooks", () => {
     const id = (ping as { delivery_id: string }).delivery_id;
     await attemptDelivery(t.deps(), id);
     // A long history (as many redeliveries make): 44 more attempts after the first.
-    await env.ORG_READ.prepare(
-      `WITH RECURSIVE k(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM k WHERE n < 45)
+    await admitted()
+      .prepare(
+        `WITH RECURSIVE k(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM k WHERE n < 45)
        INSERT INTO webhook_attempts (delivery_id, n, at, status, response_excerpt)
        SELECT ?, n, ?, 500, 'busy' FROM k`,
-    )
+      )
       .bind(id, Date.now())
       .run();
     type Page = {

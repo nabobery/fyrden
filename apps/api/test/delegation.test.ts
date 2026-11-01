@@ -544,7 +544,10 @@ describe("what a delegated token changes in a repository", () => {
         request_id: settingsRequest,
       },
     ]);
-    const acted = recorded.events.filter((e) => e.type !== "repo.created");
+    // Not what the repository was created with (its creation and its default labels).
+    const acted = recorded.events.filter(
+      (e) => e.type !== "repo.created" && e.type !== "label.created",
+    );
     expect(acted.length).toBeGreaterThan(0);
     for (const event of acted) expect(event.actChain).toEqual([agent.id]);
   });

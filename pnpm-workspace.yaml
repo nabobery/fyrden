@@ -86,3 +86,13 @@ overrides:
   # pinned to a release at least two weeks old instead of the newest in range.
   "@pierre/diffs>shiki": "4.4.3"
   "@pierre/diffs>@shikijs/transformers": "4.4.3"
+  # Reviewed 2026-10-24: miniflare (through wrangler, dev and deploy tooling only) pins undici
+  # 7.28.0, inside GHSA-xjj6-f33q-929c (a denial of service on excessive content-encodings,
+  # 7.18.0 to 7.30.0). 7.30.1 is the patched release of the same minor line. Drop this once
+  # miniflare moves past it.
+  "miniflare>undici": "7.30.1"
+  # Reviewed 2026-10-24: GHSA-mrhx-c7xc-m3w5 (memory exhausted validating oversized constrained
+  # collections, before 4.6.6). @cloudflare/vitest-plugin 1.4.0 pins zod 4.6.5 exactly, and
+  # Stryker's mutation-server-protocol resolves to it; every copy follows the catalog's patched
+  # release of the same minor line.
+  zod: "catalog:"

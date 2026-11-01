@@ -14,6 +14,7 @@ export function tokenRecord(principalId: string, repoIds: string[] | null = null
     principalType: "user",
     principalHandle: handleOf(principalId),
     isInstanceAdmin: false,
+    lifecycleGen: 0,
     scopes: [],
     repoIds,
     expiresAt: Date.now() + 60 * 60 * 1000,

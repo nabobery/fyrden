@@ -1,6 +1,7 @@
 import { currentInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { bytesBody, encodeFatalError, requestedSideband } from "@fyrden/git-core";
 import { isRepoDeleted } from "../do/repo/events.js";
+import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import { authorizeGit } from "./auth.js";
 import { checkRequestType, type GitContext, gitPayload, gitText, repoParams } from "./http.js";
 import { contentType, NO_CACHE_HEADERS } from "./protocol.js";
@@ -85,6 +86,11 @@ async function readProbe(
 export async function receivePack(c: GitContext): Promise<Response> {
   const wrongType = checkRequestType(c, SERVICE);
   if (wrongType) return wrongType;
+  // A push is a write: none while the read model's maintenance holds writes back.
+  if (readModelMaintenance(c.env))
+    return gitText(c, 503, "Pushes are paused for maintenance. Try again later.", {
+      "Retry-After": String(MAINTENANCE_RETRY_MS / 1000),
+    });
   const { owner, name } = repoParams(c);
   const access = await authorizeGit(c, owner, name, "write");
   if (!access.ok) return access.response;

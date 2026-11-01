@@ -1,6 +1,7 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
 import type { PrincipalType } from "../principals/principal.js";
 import { type ApprovalInput, evaluateApprovals } from "../pulls/approvals.js";
+import { type CodeOwnersInput, codeOwnerRefusal } from "../pulls/code-owner-approvals.js";
 import {
   type MergeMethod,
   PRECHECK_RULES,
@@ -42,6 +43,11 @@ export interface MergeContext {
   readonly unresolvedThreads: number;
   /** Whether the head contains the base branch's current tip. */
   readonly upToDate: boolean;
+  /**
+   * Its code owners, when a rule that applies asks for their review (left
+   * out, such a rule refuses: they could not be worked out).
+   */
+  readonly codeOwners?: CodeOwnersInput;
 }
 
 export interface RuleViolation {
@@ -163,13 +169,18 @@ function pullRequestRefusal(rule: Rule, merge: MergeContext | undefined): string
   const parameters = pullRequestParameters(rule);
   if (!parameters.allowed_merge_methods.includes(merge.method))
     return `pull request #${merge.number} cannot be merged by ${merge.method} (allowed: ${parameters.allowed_merge_methods.join(", ")})`;
-  const outcome = evaluateApprovals(merge.approvals, {
+  const settings = {
     required: parameters.required_approving_review_count,
     dismissStale: parameters.dismiss_stale_reviews_on_push,
     requireLastPushApproval: parameters.require_last_push_approval,
     allowAgentApprovals: parameters.allow_agent_approvals,
-  });
+  };
+  const outcome = evaluateApprovals(merge.approvals, settings);
   const reasons = [...outcome.reasons];
+  if (parameters.require_code_owner_review) {
+    const owners = codeOwnerRefusal(merge.approvals, merge.codeOwners, settings);
+    if (owners) reasons.push(owners);
+  }
   if (parameters.required_review_thread_resolution && merge.unresolvedThreads > 0)
     reasons.push(
       `${merge.unresolvedThreads} review thread${merge.unresolvedThreads === 1 ? " is" : "s are"} unresolved`,

@@ -25,7 +25,7 @@ import { type OpContext, OperationError } from "../ops/execute.js";
 import { ATTEMPT_POLICY } from "../webhooks/deliver.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import { DELIVERY_POLICY, type DeliveryMessage } from "../webhooks/sink.js";
-import type { RepoEntry } from "./directory.js";
+import { authorize, type RepoEntry } from "./directory.js";
 import { actorOf } from "./pulls.js";
 
 /*
@@ -117,6 +117,32 @@ const stub = (ctx: OpContext, entry: RepoEntry, method: string) => {
   return ctx.env.REPO.getByName(entry.id);
 };
 
+/** What a repository's webhooks carry: whoever manages them or reads their deliveries reads these. */
+const HOOK_CONTENT = ["issues:read", "pull_requests:read"] as const;
+
+/**
+ * The repository, for a hook operation `permission` allows: a hook sends
+ * issue and pull request contents out, and its deliveries keep them, so
+ * the caller also needs each content read, checked on its own (the hook
+ * permissions imply none of them); refused 403.
+ */
+async function hookRepoFor(
+  ctx: OpContext,
+  owner: string,
+  repo: string,
+  permission: "repository_hooks:read" | "repository_hooks:write",
+): Promise<RepoEntry> {
+  const entry = await repoFor(ctx, owner, repo, permission);
+  for (const read of HOOK_CONTENT)
+    if (!(await authorize(ctx.env, ctx.auth, entry, read, ctx.metrics)))
+      throw new OperationError(
+        403,
+        "forbidden",
+        `Webhooks carry issue and pull request contents: this takes ${HOOK_CONTENT.join(" and ")} too.`,
+      );
+  return entry;
+}
+
 /** The events a hook takes, `*` alone standing for all. */
 const eventsOf = (events: readonly string[]) =>
   (events.includes("*") ? ["*"] : [...new Set(events)]) as HookEvent[];
@@ -125,7 +151,7 @@ export async function listHooksOperation(
   ctx: OpContext,
   input: Input<typeof listHooks>,
 ): Promise<Output<typeof listHooks>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:read");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:read");
   const hooks = unwrap(await stub(ctx, entry, "listHooks").listHooks());
   const last = await lastResponses(
     ctx,
@@ -139,7 +165,7 @@ export async function getHookOperation(
   ctx: OpContext,
   input: Input<typeof getHook>,
 ): Promise<Output<typeof getHook>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:read");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:read");
   const hook = unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
   return hookOut(hook, (await lastResponses(ctx, entry.id, [hook.id])).get(hook.id));
 }
@@ -148,7 +174,7 @@ export async function createHookOperation(
   ctx: OpContext,
   input: Input<typeof createHook>,
 ): Promise<Output<typeof createHook>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   const url = await checkUrl(ctx, input.config.url, entry);
   const made = unwrap(
     await stub(ctx, entry, "createHook").createHook(
@@ -168,7 +194,7 @@ export async function updateHookOperation(
   ctx: OpContext,
   input: Input<typeof updateHook>,
 ): Promise<Output<typeof updateHook>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   const url =
     input.config?.url === undefined ? undefined : await checkUrl(ctx, input.config.url, entry);
   const hook = unwrap(
@@ -192,7 +218,7 @@ export async function deleteHookOperation(
   ctx: OpContext,
   input: Input<typeof deleteHook>,
 ): Promise<Output<typeof deleteHook>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   unwrap(await stub(ctx, entry, "deleteHook").deleteHook(input.hook_id, actorOf(ctx)));
   // Its waiting deliveries now (an attempt would find the hook gone anyway).
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_cancel" });
@@ -212,7 +238,7 @@ export async function pingHookOperation(
   ctx: OpContext,
   input: Input<typeof pingHook>,
 ): Promise<Output<typeof pingHook>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   unwrap(await stub(ctx, entry, "pingHook").pingHook(input.hook_id, actorOf(ctx)));
   return { id: input.hook_id, state: "pinged" };
 }
@@ -221,7 +247,7 @@ export async function rotateHookSecretOperation(
   ctx: OpContext,
   input: Input<typeof rotateHookSecret>,
 ): Promise<Output<typeof rotateHookSecret>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   const made = unwrap(
     await stub(ctx, entry, "rotateHookSecret").rotateHookSecret(input.hook_id, actorOf(ctx)),
   );
@@ -232,7 +258,7 @@ export async function dropPreviousHookSecretOperation(
   ctx: OpContext,
   input: Input<typeof dropPreviousHookSecret>,
 ): Promise<Output<typeof dropPreviousHookSecret>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   const repo = stub(ctx, entry, "dropPreviousHookSecret");
   unwrap(await repo.dropPreviousHookSecret(input.hook_id, actorOf(ctx)));
   return { id: input.hook_id, secrets: unwrap(await repo.getHook(input.hook_id)).secrets };
@@ -267,7 +293,7 @@ export async function listHookDeliveriesOperation(
   ctx: OpContext,
   input: Input<typeof listHookDeliveries>,
 ): Promise<Output<typeof listHookDeliveries>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:read");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:read");
   unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
   const [before, beforeId] = decodeCursor(input.cursor);
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_deliveries" });
@@ -321,7 +347,7 @@ export async function getHookDeliveryOperation(
   ctx: OpContext,
   input: Input<typeof getHookDelivery>,
 ): Promise<Output<typeof getHookDelivery>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:read");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:read");
   unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
   const before = decodeAttemptCursor(input.cursor);
   const db = readModelFor(ctx.env, DEFAULT_ORG_SHARD);
@@ -379,7 +405,7 @@ export async function redeliverHookDeliveryOperation(
   ctx: OpContext,
   input: Input<typeof redeliverHookDelivery>,
 ): Promise<Output<typeof redeliverHookDelivery>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "repository_hooks:write");
+  const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   const hook = unwrap(await stub(ctx, entry, "getHook").getHook(input.hook_id));
   if (!hook.active)
     throw new OperationError(422, "hook_inactive", "The hook is not active: turn it on first.");
@@ -458,6 +484,7 @@ export async function redeliverHookDeliveryOperation(
     );
   // A message lost here is sent again by the cron (its enqueued time is set).
   await ctx.env.WEBHOOKS.send({ delivery: moved.delivery_id } satisfies DeliveryMessage);
+  ctx.metrics.count("queue.send", { queue: "webhooks" });
   return deliveryOut(moved);
 }
 

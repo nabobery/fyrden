@@ -1,4 +1,4 @@
-import { PERMISSION_NAMES } from "@fyrden/domain";
+import { SCOPE_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { MAX_TOKEN_DAYS } from "./admin.js";
@@ -73,7 +73,7 @@ export const createUserToken = defineOperation({
   input: z.object({
     type: z.enum(["pat", "git"]).default("pat"),
     scopes: z
-      .array(z.enum(PERMISSION_NAMES))
+      .array(z.enum(SCOPE_NAMES))
       .max(32)
       .default([])
       .describe("Permissions it is limited to (and what they imply). Empty: your token's."),

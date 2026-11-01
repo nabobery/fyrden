@@ -1,6 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { principalWithToken, scopedToken } from "./helpers/principals.js";
+import { admitted } from "./helpers/read-model.js";
 
 const ORIGIN = "https://fyrden.test";
 
@@ -93,11 +94,12 @@ describe("repos.list", () => {
     const owner = await principalWithToken("user", "pat");
     const id = await create(owner.token, "projected");
     expect((await list(owner.token)).repos[0]?.default_branch).toBe("main");
-    await env.ORG_READ.prepare(
-      `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, created_at, deleted,
+    await admitted()
+      .prepare(
+        `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, created_at, deleted,
          epoch_gen, version, owner_gen, updated_seq, updated_at)
        VALUES (?, ?, 'projected', 'private', 'refs/heads/trunk', 0, 0, 1, 2, 1, 2, 0)`,
-    )
+      )
       .bind(id, owner.principalId)
       .run();
     expect((await list(owner.token)).repos[0]?.default_branch).toBe("trunk");

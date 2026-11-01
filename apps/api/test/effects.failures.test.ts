@@ -12,6 +12,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { EffectSink } from "../src/effects/journal.js";
 import worker from "../src/index.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
+import { admitted } from "./helpers/read-model.js";
 import { logs } from "./setup/log-capture.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
@@ -20,25 +21,26 @@ const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H7";
 const EFFECTS_CRON = "2-59/5 * * * *";
 
 beforeAll(async () => {
-  await env.ORG_READ.batch([
-    env.ORG_READ.prepare("ALTER TABLE effects DROP COLUMN lease_token"),
-    env.ORG_READ.prepare("ALTER TABLE effects DROP COLUMN lease_until"),
+  await admitted().batch([
+    admitted().prepare("ALTER TABLE effects DROP COLUMN lease_token"),
+    admitted().prepare("ALTER TABLE effects DROP COLUMN lease_until"),
   ]);
 });
 
 async function pendingEffect(): Promise<string> {
   const id = uniqueId("effect");
-  await env.ORG_READ.prepare(
-    `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at)
-     VALUES (?, 'webhooks', 'hooks', '{}', 0, 0)`,
-  )
+  await admitted()
+    .prepare(
+      `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at, recover_at)
+     VALUES (?, 'webhooks', 'hooks', '{}', 0, 0, 0)`,
+    )
     .bind(id)
     .run();
   return id;
 }
 
 const effectRow = (id: string) =>
-  env.ORG_READ.prepare("SELECT state, attempts FROM effects WHERE effect_id = ?").bind(id).first();
+  admitted().prepare("SELECT state, attempts FROM effects WHERE effect_id = ?").bind(id).first();
 
 /** Counts `name`'s points by their first dimension. */
 const counted = (points: { name: string; blobs: string[]; value: number }[], name: string) =>
@@ -55,11 +57,12 @@ describe("effects that cannot be claimed", () => {
     const effect = await pendingEffect();
     // A delivery past retention whose body was never stored: reconciling deletes it.
     const delivery = uniqueId("delivery");
-    await env.ORG_READ.prepare(
-      `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
+    await admitted()
+      .prepare(
+        `INSERT INTO webhook_deliveries (delivery_id, repo_id, hook_id, event, action, private,
          payload_key, state, reason, attempts, next_attempt_at, created_at, updated_at, expires_at)
        VALUES (?, ?, 1, 'push', NULL, 1, ?, 'dropped', 'payload_too_large', 0, 0, 0, 0, 1)`,
-    )
+      )
       .bind(delivery, uniqueId("rep"), `webhooks/${delivery}.json`)
       .run();
     const metrics = createFakeDataset();
@@ -74,12 +77,13 @@ describe("effects that cannot be claimed", () => {
     expect(
       logs.entries().filter((e) => e.level === "error" && e.op === "cron.effects"),
     ).toMatchObject([
-      { task: "effects.sweep", error: { message: expect.stringMatching(/lease_token/) } },
+      { task: "effects.recover", error: { message: expect.stringMatching(/lease_token/) } },
     ]);
-    expect(counted(metrics.points, "effects.sweep")).toEqual({ error: 1 });
+    expect(counted(metrics.points, "effects.recover")).toEqual({ error: 1 });
     expect(counted(metrics.points, "webhooks.reconcile")).toEqual({ ok: 1 });
     expect(
-      await env.ORG_READ.prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
+      await admitted()
+        .prepare("SELECT 1 FROM webhook_deliveries WHERE delivery_id = ?")
         .bind(delivery)
         .first(),
     ).toBeNull();
@@ -110,10 +114,13 @@ describe("effects that cannot be claimed", () => {
       data: { via: "push", refs: [] },
       stored: false,
     };
+    // Delivered inline, so the invocation claims it.
     const sink: EffectSink = {
       name: "test_hook",
+      inline: true,
       plan: () => [{ target: "hook_1", payload: {} }],
       deliver: async () => {},
+      deliverBatch: async (effects) => ({ delivered: effects.map((effect) => effect.id) }),
     };
     const points: string[] = [];
     const outcome = await applyEnvelope(
@@ -128,7 +135,7 @@ describe("effects that cannot be claimed", () => {
     expect(outcome).toBe("applied");
     expect(
       logs.entries().filter((e) => e.level === "error" && e.op === "effects.dispatch"),
-    ).toMatchObject([{ msg: "dispatching effects failed", sourceId: repoId }]);
+    ).toMatchObject([{ msg: "dispatching effects failed", sink: "test_hook" }]);
     expect(points.filter((p) => p.startsWith("effects.dispatch"))).toEqual([
       "effects.dispatch error",
     ]);

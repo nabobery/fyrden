@@ -23,6 +23,7 @@ import type { MergeStamps, PullDiscussion } from "./pull-discussion.js";
 import type { PullRecord } from "./pulls.js";
 import { type RebasePolicy, rebaseCommits } from "./rebase-replay.js";
 import { type RebaseSagas, rebaseJobId, type SagaView } from "./rebase-saga.js";
+import type { ReviewerConfirmations } from "./reviewer-confirmation.js";
 import type { WriteContext } from "./write-context.js";
 
 /*
@@ -84,6 +85,8 @@ export interface MergingDeps extends WriteContext {
   readonly feed: RepoFeed;
   readonly mergePolicy: () => MergePolicy;
   readonly rebasePolicy: () => RebasePolicy;
+  /** Confirms, at the commit, the reviewers whose approvals the merge counts. */
+  readonly reviewers: ReviewerConfirmations;
   /** For tests: runs before a merge is committed. */
   readonly hooks: () => { readonly beforeFinish?: () => Promise<void> };
 }
@@ -162,12 +165,18 @@ export class PullMerging {
       );
     }
 
-    const { merge, asRead, stamps } = await this.deps.discussion.standing(
-      number,
-      pull,
-      method,
-      upToDate,
-    );
+    const standing = await this.deps.discussion.standing(number, pull, method, upToDate, {
+      principal: actor.principal,
+      grantId: actor.grantId ?? null,
+    });
+    const { merge, asRead, stamps } = standing;
+    // Bound, with no await since, to the ownership the reviewers were just judged under.
+    const confirm = this.deps.reviewers.for(standing.ceilings);
+    if (standing.refusal)
+      return fail(standing.refusal.status, standing.refusal.code, standing.refusal.error);
+    // More than the commit's confirmation reads: refused before anything is stored.
+    const tooMany = this.deps.reviewers.tooMany(standing);
+    if (tooMany) return fail(422, tooMany.code, tooMany.error);
     const baseRef = `refs/heads/${pull.baseRef}`;
     const precheck = await authority.precheckUpdates(
       actor.principal,
@@ -218,6 +227,7 @@ export class PullMerging {
         committer: identity.committer,
         message,
         merge,
+        confirm,
         fence: () =>
           pulls.mergeFence(number, pull) && JSON.stringify(stamps()) === JSON.stringify(asRead)
             ? undefined

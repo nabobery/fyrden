@@ -19,6 +19,11 @@ export interface PushDecision {
   readonly actChain?: readonly string[];
   /** The request committing the push, for its audit row. */
   readonly requestId?: string | null;
+  /**
+   * The principals whose roles the decision rests on (the token's, and
+   * its agents' owners'), for a write that checks them again as it commits.
+   */
+  readonly checked?: readonly string[];
 }
 
 /**
@@ -101,6 +106,13 @@ export function pushCommitter(
   via: RefActor["via"] = "push",
   /** A base's maintainer writing a pull request's head here (see `RefActor.maintainerFor`). */
   maintainerFor?: RefActor["maintainerFor"],
+  /**
+   * The caller's last await before the transaction that makes the upload
+   * live, run once, after the pack-count cap's merge: what it learns,
+   * `fence` checks in that transaction (a merge's confirmation of its
+   * reviewers).
+   */
+  beforeCommit?: () => Promise<void>,
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
   const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
@@ -113,6 +125,7 @@ export function pushCommitter(
     return undefined;
   };
   let gate: Promise<GateOutcome> | undefined;
+  let prepared: Promise<void> | undefined;
   const prepare = async (gated: PushCapGate): Promise<GateOutcome> => {
     let outcome: GateOutcome;
     try {
@@ -136,6 +149,10 @@ export function pushCommitter(
       if (outcome.kind === "failed")
         return { ok: false, reason: "failed", message: PACK_CAP_FAILED };
       if (outcome.kind === "merged") swap = outcome.merge;
+    }
+    if (request.withUpload && beforeCommit) {
+      prepared ??= beforeCommit();
+      await prepared;
     }
     const removePacks = swap ? [...swap.removePacks] : [];
     for (let attempt = 0; attempt < MAX_VERSION_RETRIES; attempt++) {

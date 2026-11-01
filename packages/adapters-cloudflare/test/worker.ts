@@ -15,6 +15,22 @@ export class MigrationProbeDO extends DurableObject {
     }
   }
 
+  /** `migrate`, returning too the statements it ran, in order. */
+  migrateRecording(migrations: DoMigration[]) {
+    const sql = this.ctx.storage.sql;
+    const exec = sql.exec.bind(sql);
+    const statements: string[] = [];
+    (sql as { exec: typeof sql.exec }).exec = ((query: string, ...bindings: unknown[]) => {
+      statements.push(query.trim());
+      return exec(query, ...bindings);
+    }) as typeof sql.exec;
+    try {
+      return { ...this.migrate(migrations), statements };
+    } finally {
+      (sql as { exec: typeof sql.exec }).exec = exec;
+    }
+  }
+
   schema(): string {
     return dumpSchema(this.ctx.storage);
   }

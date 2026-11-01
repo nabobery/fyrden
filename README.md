@@ -22,13 +22,16 @@ enabled (each is switched on once in the dashboard) and `wrangler login`.
 ```sh
 pnpm install
 node packages/cli/src/index.ts doctor
-node packages/cli/src/index.ts deploy --plan free   # or --plan paid
+node packages/cli/src/index.ts deploy --plan free   # or --plan paid [--internal-calls N]
 ```
 
 `deploy` creates the D1 databases, R2 buckets, queues and KV namespace if they
 are missing, applies migrations and checks each D1 database against its
 expected schema (see [D1 schema drift](docs/operations/d1-schema.md)),
-deploys `fyrden-api` and then `fyrden-web`,
+deploys `fyrden-api` (pausing the `fyrden-events` queue's delivery meanwhile,
+so no Worker of the version before reads an event the new one makes; a manual
+`wrangler deploy` should do the same with `wrangler queues pause-delivery` and
+`resume-delivery`) and then `fyrden-web`,
 and prints a one-time bootstrap secret for creating the first admin. A
 Deploy to Cloudflare button follows once a deployment is usable end to end.
 

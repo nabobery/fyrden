@@ -4,9 +4,15 @@
 // with a spy (below), so the queue's consumer never makes an attempt behind
 // a test's back, in this test or a later one.
 import { env } from "cloudflare:workers";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpContext } from "../src/ops/execute.js";
+import { redeliverHookDeliveryOperation } from "../src/repos/hooks.js";
 import { ATTEMPT_POLICY, attemptDelivery, reconcileWebhooks } from "../src/webhooks/deliver.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { admitted } from "./helpers/read-model.js";
 import { webhookTest } from "./helpers/webhooks.js";
 
 const t = webhookTest();
@@ -63,6 +69,44 @@ describe("redelivery", () => {
     ]);
   });
 
+  it("counts the message it sends, and none it could not send", async () => {
+    const { hook, id } = await delivered(400);
+    const checked = await new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    }).verify(t.owner.token, "write");
+    if (!checked.ok) throw new Error(`the token is refused: ${checked.reason}`);
+    let sent = 0;
+    const metrics = {
+      count(name: string, dimensions: Record<string, string>, value = 1) {
+        if (name === "queue.send" && dimensions.queue === "webhooks") sent += value;
+      },
+    } as unknown as Metrics;
+    const ctx = {
+      env,
+      auth: checked.record,
+      requestId: "req_test",
+      metrics,
+    } as unknown as OpContext;
+    const input = { owner: t.owner.handle, repo: t.repo.name, hook_id: hook, delivery_id: id };
+    vi.spyOn(env.WEBHOOKS, "send").mockRejectedValueOnce(new Error("queue down"));
+    await expect(redeliverHookDeliveryOperation(ctx, input)).rejects.toThrow(/queue down/);
+    expect(sent).toBe(0);
+    // Another hook's, sent: counted once.
+    const other = (await t.createHook()).body.id;
+    await t.materialize((await t.outbox()).filter((e) => e.webhooks));
+    const next = (await t.deliveries())
+      .map((d) => (d as { delivery_id: string }).delivery_id)
+      .find((d) => d !== id);
+    if (!next) throw new Error("no second delivery");
+    t.answer = () => new Response("no", { status: 400 });
+    await attemptDelivery(t.deps(), next);
+    await redeliverHookDeliveryOperation(ctx, { ...input, hook_id: other, delivery_id: next });
+    expect(queued).toEqual([next]);
+    expect(sent).toBe(1);
+  });
+
   it("makes one attempt only, not the automatic retries", async () => {
     const { hook, id } = await delivered(400);
     expect((await redeliver(hook, id)).status).toBe(202);
@@ -89,7 +133,8 @@ describe("redelivery", () => {
     const stranger = await user();
     expect((await redeliver(hook.id, id, stranger)).status).toBe(404);
     const key = (
-      await env.ORG_READ.prepare("SELECT payload_key FROM webhook_deliveries WHERE delivery_id = ?")
+      await admitted()
+        .prepare("SELECT payload_key FROM webhook_deliveries WHERE delivery_id = ?")
         .bind(id)
         .first<{ payload_key: string }>()
     )?.payload_key as string;
@@ -100,14 +145,14 @@ describe("redelivery", () => {
   it("waits for a hook a 410 is turning off, and refuses an expired delivery", async () => {
     const { hook, id } = await delivered(400);
     const set = (column: string, value: number) =>
-      env.ORG_READ.prepare(`UPDATE webhook_deliveries SET ${column} = ? WHERE delivery_id = ?`)
+      admitted()
+        .prepare(`UPDATE webhook_deliveries SET ${column} = ? WHERE delivery_id = ?`)
         .bind(value, id)
         .run();
     await set("disable_hook_version", 1);
     expect((await redeliver(hook, id)).body.code).toBe("hook_being_disabled");
-    await env.ORG_READ.prepare(
-      "UPDATE webhook_deliveries SET disable_hook_version = NULL WHERE delivery_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE webhook_deliveries SET disable_hook_version = NULL WHERE delivery_id = ?")
       .bind(id)
       .run();
     await set("expires_at", Date.now() - 1);
@@ -117,15 +162,15 @@ describe("redelivery", () => {
   it("leaves nothing for a claim of an earlier attempt to record", async () => {
     const { hook, id } = await delivered(400);
     // A claim of the first round, still running (its lease long gone) when the delivery is sent again.
-    await env.ORG_READ.prepare(
-      "UPDATE webhook_deliveries SET lease_token = 'stale' WHERE delivery_id = ?",
-    )
+    await admitted()
+      .prepare("UPDATE webhook_deliveries SET lease_token = 'stale' WHERE delivery_id = ?")
       .bind(id)
       .run();
     expect((await redeliver(hook, id)).status).toBe(202);
-    const row = await env.ORG_READ.prepare(
-      "SELECT lease_token, attempt_limit, attempts FROM webhook_deliveries WHERE delivery_id = ?",
-    )
+    const row = await admitted()
+      .prepare(
+        "SELECT lease_token, attempt_limit, attempts FROM webhook_deliveries WHERE delivery_id = ?",
+      )
       .bind(id)
       .first<{ lease_token: string | null; attempt_limit: number; attempts: number }>();
     expect(row).toEqual({ lease_token: null, attempt_limit: 2, attempts: 1 });
@@ -134,22 +179,23 @@ describe("redelivery", () => {
   it("stops once a delivery has made as many attempts as one keeps", async () => {
     const { hook, id } = await delivered(400);
     const attempted = (n: number) =>
-      env.ORG_READ.prepare("UPDATE webhook_deliveries SET attempts = ? WHERE delivery_id = ?")
+      admitted()
+        .prepare("UPDATE webhook_deliveries SET attempts = ? WHERE delivery_id = ?")
         .bind(n, id)
         .run();
     // One short of the most: the last one allowed.
     await attempted(ATTEMPT_POLICY.maxTotalAttempts - 1);
     expect((await redeliver(hook, id)).status).toBe(202);
-    const limit = await env.ORG_READ.prepare(
-      "SELECT attempt_limit FROM webhook_deliveries WHERE delivery_id = ?",
-    )
+    const limit = await admitted()
+      .prepare("SELECT attempt_limit FROM webhook_deliveries WHERE delivery_id = ?")
       .bind(id)
       .first<{ attempt_limit: number }>();
     expect(limit?.attempt_limit).toBe(ATTEMPT_POLICY.maxTotalAttempts);
     // Its last attempt made: no more, by hand either.
-    await env.ORG_READ.prepare(
-      "UPDATE webhook_deliveries SET state = 'failed', attempts = attempt_limit WHERE delivery_id = ?",
-    )
+    await admitted()
+      .prepare(
+        "UPDATE webhook_deliveries SET state = 'failed', attempts = attempt_limit WHERE delivery_id = ?",
+      )
       .bind(id)
       .run();
     const refused = await redeliver(hook, id);
@@ -162,16 +208,16 @@ describe("redelivery", () => {
     const { id } = await delivered(400);
     const cap = ATTEMPT_POLICY.maxTotalAttempts;
     const row = () =>
-      env.ORG_READ.prepare(
-        "SELECT state, reason, attempts FROM webhook_deliveries WHERE delivery_id = ?",
-      )
+      admitted()
+        .prepare("SELECT state, reason, attempts FROM webhook_deliveries WHERE delivery_id = ?")
         .bind(id)
         .first();
     // Pending past the most, whatever its own limit says (not by this API): never claimed.
-    await env.ORG_READ.prepare(
-      `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
+    await admitted()
+      .prepare(
+        `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
          attempt_limit = ?, next_attempt_at = 0 WHERE delivery_id = ?`,
-    )
+      )
       .bind(cap, cap + 5, id)
       .run();
     await attemptDelivery(t.deps(), id);
@@ -184,10 +230,11 @@ describe("redelivery", () => {
     expect(await row()).toEqual({ state: "failed", reason: "attempts_spent", attempts: cap });
 
     // One short of the most: its last attempt, failed, is not retried.
-    await env.ORG_READ.prepare(
-      `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
+    await admitted()
+      .prepare(
+        `UPDATE webhook_deliveries SET state = 'pending', reason = NULL, attempts = ?,
          next_attempt_at = 0 WHERE delivery_id = ?`,
-    )
+      )
       .bind(cap - 1, id)
       .run();
     t.answer = () => new Response("busy", { status: 503 });

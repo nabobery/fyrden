@@ -165,10 +165,11 @@ export async function signature(
   secrets: readonly string[],
   message: { readonly id: string; readonly timestamp: number; readonly body: Uint8Array },
 ): Promise<string> {
-  const signed = new Uint8Array([
-    ...encoder.encode(`${message.id}.${message.timestamp}.`),
-    ...message.body,
-  ]);
+  const prefix = encoder.encode(`${message.id}.${message.timestamp}.`);
+  // Copied once, not spread element by element (a body is up to 192 KiB).
+  const signed = new Uint8Array(prefix.length + message.body.length);
+  signed.set(prefix);
+  signed.set(message.body, prefix.length);
   const parts: string[] = [];
   for (const secret of secrets) {
     const raw = fromBase64(

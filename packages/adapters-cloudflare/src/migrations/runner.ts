@@ -22,9 +22,17 @@ export function applyDoMigrations(
 ): MigrationResult {
   validateMigrations(migrations);
   const sql = storage.sql;
-  sql.exec(
-    `CREATE TABLE IF NOT EXISTS ${VERSION_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)`,
-  );
+  // Read first: an object waking with nothing to migrate writes nothing. On Workers Free, once
+  // the account's rows written for the day are spent, every statement that writes is refused,
+  // even one that would change nothing (`CREATE TABLE IF NOT EXISTS`), and reads must still work.
+  const known =
+    sql
+      .exec("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?", VERSION_TABLE)
+      .toArray().length > 0;
+  if (!known)
+    sql.exec(
+      `CREATE TABLE ${VERSION_TABLE} (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)`,
+    );
   const from = currentVersion(storage);
   const latest = migrations.length;
   if (from > latest) {

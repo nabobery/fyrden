@@ -47,10 +47,20 @@ export async function pkce(): Promise<{ verifier: string; challenge: string }> {
   return { verifier, challenge };
 }
 
+/** A session for an active user, as a sign-in starts one at its current lifecycle generation. */
+export async function testSession(userId: string): Promise<{ cookie: string; sessionId: string }> {
+  const row = await env.DIRECTORY.prepare("SELECT lifecycle_gen FROM principals WHERE id = ?")
+    .bind(userId)
+    .first<{ lifecycle_gen: number }>();
+  const session = await startSession(env, userId, row?.lifecycle_gen ?? 0, { via: "test" });
+  if (!session) throw new Error(`no session could start for ${userId}`);
+  return session;
+}
+
 /** A signed-in user's cookie header. */
 export async function signedIn(): Promise<{ cookie: string; userId: string }> {
   const who = await user();
-  const session = await startSession(env, who.principalId, { via: "test" });
+  const session = await testSession(who.principalId);
   return { cookie: `${SESSION_COOKIE}=${session.cookie}`, userId: who.principalId };
 }
 

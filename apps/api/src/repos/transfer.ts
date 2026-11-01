@@ -3,15 +3,18 @@ import type { Input, Output, transferRepo } from "@fyrden/api-contract";
 import { actingRoleIn, canUseAccount, findAccount } from "../accounts/account.js";
 import { recordedAccount } from "../accounts/grants.js";
 import { accountLimits } from "../accounts/quotas.js";
-import { readModelFor } from "../events/read-model.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { READ_MODEL_LONE_WRITE, withReadModel } from "../read-model/executor.js";
+import { spentStatement } from "../search/admission.js";
+import { REQUEST_ROWS, repairStatement, searchIndexing } from "../search/repairs.js";
 import { clock, newId } from "../services.js";
 import {
   checkNewRepo,
   defaultBranchOf,
   findReposById,
   forgetResolved,
+  OWNER_REMAINS,
   type RepoEntry,
 } from "./directory.js";
 import { readModelDetails } from "./listing.js";
@@ -183,6 +186,12 @@ function failure(reason: string | null): OperationError {
         "transfer_in_progress",
         "The repository changed owner meanwhile.",
       );
+    case "owner_deleted":
+      return new OperationError(
+        404,
+        "owner_not_found",
+        "The new account is being deleted; the repository stays where it was.",
+      );
     default:
       return new OperationError(404, "repo_not_found", "The repository is gone.");
   }
@@ -347,17 +356,37 @@ async function runStep(
       return "fence";
     }
     case "fence": {
-      // Before the repository lands: no event of an older owner generation applies after it.
-      metrics?.count("do.request", { class: "RepoDO", method: "transferGeneration" });
-      const ownerGen = await stub.transferGeneration(transferId);
-      metrics?.count("d1.query", { db: "org", op: "source_owner" });
-      await readModelFor(env, transfer.org_shard)
-        .prepare(
-          `INSERT INTO source_owner (source_id, owner_gen) VALUES (?, ?)
-           ON CONFLICT (source_id) DO UPDATE SET owner_gen = max(owner_gen, excluded.owner_gen)`,
-        )
-        .bind(transfer.repo_id, ownerGen)
-        .run();
+      // Before the repository lands: no event of an older owner generation applies after it. Its
+      // search projections, written under the old owner, are reconciled (while indexing is on).
+      await withReadModel(env, transfer.org_shard, async (db, writer) => {
+        // The writer's lease before the generation is asked for: a pause begun meanwhile waits
+        // for it (and refuses the fence once it has moved on).
+        metrics?.count("d1.query", { db: "directory", op: "read_model_lease" }, 2);
+        await writer.acquire();
+        metrics?.count("do.request", { class: "RepoDO", method: "transferGeneration" });
+        const ownerGen = await stub.transferGeneration(transferId);
+        await transferHooks.afterGeneration?.();
+        metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+        const indexing = await searchIndexing(env);
+        metrics?.count("d1.query", { db: "org", op: "source_owner" });
+        await db.batch([
+          db
+            .prepare(
+              `INSERT INTO source_owner (source_id, owner_gen) VALUES (?, ?)
+               ON CONFLICT (source_id) DO UPDATE SET owner_gen = max(owner_gen, excluded.owner_gen)`,
+            )
+            .bind(transfer.repo_id, ownerGen),
+          ...(indexing
+            ? [
+                repairStatement(db, transfer.repo_id, "transferred", clock()),
+                spentStatement(db, {
+                  rows: REQUEST_ROWS + READ_MODEL_LONE_WRITE.rows,
+                  reads: READ_MODEL_LONE_WRITE.reads,
+                }),
+              ]
+            : []),
+        ]);
+      });
       return "repo";
     }
     case "repo": {
@@ -386,6 +415,13 @@ async function runStep(
   }
 }
 
+/** Hooks into a transfer's directory move. For tests. */
+export const transferHooks: {
+  beforeMove?: () => Promise<void>;
+  /** Between the fence's generation and its write to the read model. */
+  afterGeneration?: () => Promise<void>;
+} = {};
+
 /**
  * Moves the repository in the directory and advances the job in one
  * batch, while this runner holds the job at this step: its owner and name
@@ -400,6 +436,7 @@ async function moveInDirectory(
   lease: string,
   metrics: Metrics | undefined,
 ): Promise<"moved" | { cancelled: string }> {
+  await transferHooks.beforeMove?.();
   const db = env.DIRECTORY;
   // Last chance to call it off: the new account makes room for it (its storage, settled now
   // that it is frozen, and its collaborators), held for this transfer alone.
@@ -411,7 +448,8 @@ async function moveInDirectory(
   // ?7 the transfer, ?8 this runner's lease.
   const holds = `EXISTS (SELECT 1 FROM repo_transfers WHERE repo_id = ?1 AND transfer_id = ?7
       AND step = 'directory' AND lease_id = ?8)`;
-  const eligible = `id = ?1 AND owner_id = ?4 AND state = 'active' AND ${holds}
+  // Never to a user being deleted (a deletion that began after the transfer wins).
+  const eligible = `id = ?1 AND owner_id = ?4 AND state = 'active' AND ${holds} AND ${OWNER_REMAINS("?2")}
     AND NOT EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
       AND state <> 'deleted' AND id <> ?1)
     AND (SELECT count(*) FROM repos WHERE owner_id = ?2 AND state <> 'deleted'
@@ -434,6 +472,7 @@ async function moveInDirectory(
       .prepare(
         `SELECT
            (SELECT state FROM repos WHERE id = ?1) AS state,
+           ${OWNER_REMAINS("?2")} AS owner,
            EXISTS (SELECT 1 FROM repos WHERE owner_id = ?2 AND name = ?3 COLLATE NOCASE
              AND state <> 'deleted' AND id <> ?1) AS taken`,
       )
@@ -476,8 +515,11 @@ async function moveInDirectory(
       .bind(...args),
   ]);
   if ((saved?.meta.changes ?? 0) > 0) return "moved";
-  const before = seen?.results[0] as { state: string | null; taken: number } | undefined;
+  const before = seen?.results[0] as
+    | { state: string | null; owner: number; taken: number }
+    | undefined;
   if (before?.state !== "active") return { cancelled: "repo_deleted" };
+  if (before.owner !== 1) return { cancelled: "owner_deleted" };
   return { cancelled: before.taken ? "name_taken" : "quota_exceeded" };
 }
 

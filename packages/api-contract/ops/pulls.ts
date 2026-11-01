@@ -1,5 +1,6 @@
 import {
   HANDLE_SHAPE,
+  LOCK_REASONS,
   MAX_HANDLE_LENGTH,
   MAX_PULL_BODY_LENGTH,
   MAX_PULL_TITLE_LENGTH,
@@ -7,7 +8,9 @@ import {
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 import { CommitObject } from "./browse.js";
+import { BoundedPerPage } from "./pages.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
+import { ExpectedVersion, ReactionRollup, SortingOutput, Version } from "./subject-meta.js";
 
 const RepoInput = {
   owner: z
@@ -65,6 +68,10 @@ export const PullRequest = z.object({
     .describe(
       "Whether those with write access to the base may change the head branch when it is in a fork (updating it, resolving its conflicts, applying suggestions), as long as its author can.",
     ),
+  locked: z
+    .boolean()
+    .describe("Its conversation is locked: only write access and above comment and review."),
+  active_lock_reason: z.enum(LOCK_REASONS).nullable(),
   title: z.string(),
   body: z.string().nullable(),
   user: z
@@ -84,6 +91,7 @@ export const PullRequest = z.object({
     ),
   created_at: z.number().int().describe("Unix time in milliseconds."),
   updated_at: z.number().int().describe("Unix time in milliseconds."),
+  version: Version,
   closed_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   merged_at: z.number().int().nullable().describe("Unix time in milliseconds."),
   merge_commit_sha: z
@@ -94,6 +102,8 @@ export const PullRequest = z.object({
     .object({ id: z.string() })
     .nullable()
     .describe("Who merged it (the user, when agents acted for one)."),
+  ...SortingOutput,
+  reactions: ReactionRollup,
 });
 
 export const listPulls = defineOperation({
@@ -105,7 +115,7 @@ export const listPulls = defineOperation({
   input: z.object({
     ...RepoInput,
     state: z.enum(["open", "closed", "all"]).default("open"),
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    per_page: BoundedPerPage,
     cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
   }),
   output: z.object({
@@ -214,6 +224,7 @@ export const updatePull = defineOperation({
       .boolean()
       .optional()
       .describe("The author only: let the base's maintainers change a head branch in a fork."),
+    expected_version: ExpectedVersion,
   }),
   output: PullRequest,
   permission: "pull_requests:write",

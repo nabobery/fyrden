@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useFetcher, useRevalidator } from "react-router";
 import { METHOD_LABEL, type MergeMethod, type MergeRules } from "../lib/merge.js";
 import type { PullRequest } from "../lib/pulls.js";
@@ -92,10 +92,19 @@ export function MergeBox({
   pull,
   rules,
   conflicts,
+  hidden,
+  canAct = true,
 }: {
   pull: PullRequest;
   rules: MergeRules | null;
   conflicts: string;
+  /** Fields its forms send besides their own (the viewer they were made for). */
+  hidden?: ReactNode;
+  /**
+   * Whether its forms are offered (a viewer known to be signed in): what
+   * stands in the way of a merge is shown either way.
+   */
+  canAct?: boolean;
 }) {
   const id = useId();
   const merge = useFetcher<MergeAnswer>();
@@ -145,7 +154,11 @@ export function MergeBox({
           The base branch's rulesets could not be read; every method is offered.
         </p>
       )}
-      {methods.length === 0 ? (
+      {!canAct ? (
+        <p className="muted">
+          Merging and updating the branch need you signed in: reload the page.
+        </p>
+      ) : methods.length === 0 ? (
         <p className="error">The rulesets on the base branch allow no merge method in common.</p>
       ) : (
         <merge.Form
@@ -158,6 +171,7 @@ export function MergeBox({
         >
           <input type="hidden" name="intent" value="merge" />
           <input type="hidden" name="sha" value={pull.head.sha} />
+          {hidden}
           <fieldset>
             <legend>Merge method</legend>
             {methods.map((m) => (
@@ -234,14 +248,17 @@ export function MergeBox({
           {merge.data.error}
         </p>
       )}
-      <update.Form method="post" className="row">
-        <input type="hidden" name="intent" value="update-branch" />
-        <input type="hidden" name="expected_head_sha" value={pull.head.sha} />
-        <button type="submit" disabled={updating}>
-          Update branch
-        </button>
-        <span className="muted">Merge the base branch's latest commit into this one.</span>
-      </update.Form>
+      {canAct && (
+        <update.Form method="post" className="row">
+          <input type="hidden" name="intent" value="update-branch" />
+          <input type="hidden" name="expected_head_sha" value={pull.head.sha} />
+          {hidden}
+          <button type="submit" disabled={updating}>
+            Update branch
+          </button>
+          <span className="muted">Merge the base branch's latest commit into this one.</span>
+        </update.Form>
+      )}
       {update.data?.error && (
         <p className="error" role="alert">
           {update.data.error}

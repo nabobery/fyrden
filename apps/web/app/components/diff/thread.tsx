@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import { type DiffSide, type Thread, when, who } from "../../lib/pulls.js";
-import { useDraft, useScopedKey } from "../drafts.js";
+import { useDraft, useScopedKey, ViewerField } from "../drafts.js";
 import { Markdown } from "../markdown.js";
 
 /** What a files-page form answers: what was done, or why not. */
@@ -139,6 +139,7 @@ export function ThreadView({
             {suggestions.has(c.id) && canAct && (
               <apply.Form method="post">
                 <input type="hidden" name="intent" value="apply" />
+                <ViewerField />
                 <input type="hidden" name="comment_id" value={c.id} />
                 <button type="submit" disabled={apply.state !== "idle"}>
                   Apply suggestion
@@ -152,6 +153,7 @@ export function ThreadView({
         <>
           <reply.Form method="post" className="thread-reply">
             <input type="hidden" name="intent" value="reply" />
+            <ViewerField />
             <input type="hidden" name="in_reply_to" value={thread.comments[0]?.id ?? ""} />
             <label htmlFor={replyId}>Reply</label>
             <textarea
@@ -171,6 +173,7 @@ export function ThreadView({
           <Outcome answer={reply.data} done="Reply added." />
           <resolve.Form method="post">
             <input type="hidden" name="intent" value={thread.resolved ? "unresolve" : "resolve"} />
+            <ViewerField />
             <input type="hidden" name="thread_id" value={thread.id} />
             <button type="submit" disabled={resolve.state !== "idle"}>
               {thread.resolved ? "Unresolve conversation" : "Resolve conversation"}
@@ -276,6 +279,7 @@ export function LineCommentForm({
       )}
       <fetcher.Form method="post">
         <input type="hidden" name="intent" value="comment" />
+        <ViewerField />
         <input type="hidden" name="path" value={path} />
         {previousPath !== undefined && (
           <input type="hidden" name="previous_path" value={previousPath} />

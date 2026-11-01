@@ -7,7 +7,13 @@ import {
 } from "@fyrden/adapters-cloudflare/obs";
 import { createMiddleware } from "hono/factory";
 
-export type ObsVariables = { requestId: string; log: Logger; metrics: Metrics };
+export type ObsVariables = {
+  requestId: string;
+  log: Logger;
+  metrics: Metrics;
+  /** When the request arrived (milliseconds since the epoch), before anything awaited. */
+  receivedAt: number;
+};
 
 /**
  * Per-request logger and metrics. Runs after the request-id middleware; every
@@ -19,9 +25,10 @@ export type ObsVariables = { requestId: string; log: Logger; metrics: Metrics };
 export const obs = createMiddleware<{ Bindings: Env; Variables: ObsVariables }>(async (c, next) => {
   const log = createLogger({ requestId: c.get("requestId") });
   const metrics = createMetrics(c.env.METRICS);
+  const start = Date.now();
+  c.set("receivedAt", start);
   c.set("log", log);
   c.set("metrics", metrics);
-  const start = Date.now();
   const invocation = new Invocation(metrics, { where: "worker", op: "unmatched" });
   try {
     await invocation.run(next);

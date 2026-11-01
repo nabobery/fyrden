@@ -1,4 +1,5 @@
 import { encodePktLine, encodeV2CapabilityAdvertisement, flushPkt } from "@fyrden/git-core";
+import { readModelMaintenance } from "../read-model/maintenance.js";
 import { authorizeGit } from "./auth.js";
 import { type GitContext, gitPayload, gitText, repoParams } from "./http.js";
 import {
@@ -25,6 +26,8 @@ import {
  *
  * Requests without `service` are dumb HTTP, which Fyrden does not serve.
  */
+const MAINTENANCE_PUSH_MESSAGE = "Pushes are paused for maintenance. Try again later.";
+
 export async function infoRefs(c: GitContext): Promise<Response> {
   const service = c.req.query("service");
   if (service === undefined)
@@ -35,6 +38,10 @@ export async function infoRefs(c: GitContext): Promise<Response> {
   if (service === "git-upload-pack" && version !== 2) {
     return gitPayload(errPacket(V2_ONLY_MESSAGE), advertisement);
   }
+  // No push while the read model's maintenance holds writes back: said here, where git prints it
+  // ("remote error: ..."; the push request itself refuses too, for a push that began before).
+  if (service === "git-receive-pack" && readModelMaintenance(c.env))
+    return gitPayload(errPacket(MAINTENANCE_PUSH_MESSAGE), advertisement);
 
   const { owner, name } = repoParams(c);
   const access = await authorizeGit(

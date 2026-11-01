@@ -2064,7 +2064,9 @@ describe("a head branch in a fork, written from the base", () => {
 
   it("is refused once the author is disabled, though its role in the fork remains", async () => {
     await opened({ maintainer_can_modify: true });
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = ? WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = ?, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(Date.now(), contributor.principalId)
       .run();
     const before = await forkTip();

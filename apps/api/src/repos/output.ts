@@ -21,6 +21,7 @@ export function repoOutput(
   return {
     id: repo.id,
     owner: repo.ownerHandle,
+    ...(repo.ownerType && { owner_type: repo.ownerType === "org" ? "Organization" : "User" }),
     name: repo.name,
     full_name: `${repo.ownerHandle}/${repo.name}`,
     visibility: repo.visibility,

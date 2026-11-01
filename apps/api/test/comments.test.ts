@@ -95,7 +95,7 @@ describe("conversation comments", () => {
       api("GET", `${path}/issues/comments/${first.body.id}`, owner.token),
     );
     expect(one.body).toEqual(first.body);
-    expect((await comment(owner, "x", 99)).body.code).toBe("pull_not_found");
+    expect((await comment(owner, "x", 99)).body.code).toBe("issue_not_found");
     expect((await comment(await user())).status).toBe(404);
   });
 

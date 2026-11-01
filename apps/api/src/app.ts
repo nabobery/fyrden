@@ -3,14 +3,18 @@ import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { requestId } from "hono/request-id";
 import { authRouter } from "./auth/login.js";
+import { mountEmailEvents } from "./email/events.js";
+import { mountUnsubscribe } from "./email/unsubscribe.js";
 import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
 import { problem } from "./http/problem.js";
+import { mountLive } from "./live/routes.js";
 import { mountMcp } from "./mcp/mount.js";
 import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
 import { wellKnownRouter } from "./oauth/metadata.js";
 import { oauthRouter } from "./oauth/token.js";
+import { READ_MODEL_PROTOCOL } from "./read-model/executor.js";
 import { mountArchives } from "./rest/archive.js";
 import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
@@ -34,7 +38,12 @@ export function createApp() {
 
   app.get("/healthz", async (c) => {
     const result = await deepHealth(c.env, requestMeta(c.get("log")), c.get("metrics"));
-    if (result.rateLimited) return c.json({ ok: false, error: "rate_limited" }, 429);
+    // The version served needs no check: a deploy reads it here even when the checks are limited.
+    if (result.rateLimited)
+      return c.json(
+        { ok: false, error: "rate_limited", readModel: { protocol: READ_MODEL_PROTOCOL } },
+        429,
+      );
     return c.json(
       { ...result.report, requestId: c.get("requestId") },
       result.report.ok ? 200 : 503,
@@ -43,12 +52,15 @@ export function createApp() {
 
   app.route("/v0/admin/bootstrap", bootstrap);
   app.route("/oauth", oauthRouter);
+  mountEmailEvents(app);
   app.route("/auth", authRouter);
   app.route("/.well-known", wellKnownRouter);
+  mountLive(app);
   mountRest(app);
   mountRaw(app);
   mountArchives(app);
   mountMcp(app);
+  mountUnsubscribe(app);
   app.route("/", gitRouter);
 
   return app;

@@ -129,7 +129,9 @@ describe("the conversation's merge box", () => {
       "GET /api/repos/ada/demo": () => json(repo),
     });
     const data = await loader({
-      request: new Request(`${ORIGIN}/ada/demo/pull/7`),
+      request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+        headers: { Cookie: "fyrden_session=s" },
+      }),
       context,
       params,
     } as never);
@@ -239,7 +241,7 @@ describe("reviewing, merging and updating the branch", () => {
       "PUT /api/repos/ada/demo/pulls/7/update-branch": reply,
     });
     const outcome = await action({
-      request: formPost("/ada/demo/pull/7", fields),
+      request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);

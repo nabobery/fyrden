@@ -5,6 +5,7 @@ import {
   createIdFactory,
   type DomainEvent,
   type Envelope,
+  GITHUB_DEFAULT_LABELS,
   parseEnvelope,
   secureRandomBytes,
 } from "@fyrden/domain";
@@ -613,8 +614,10 @@ describe("repository events", () => {
       .first<{ epoch_gen: number }>();
     expect(epoch?.epoch_gen).toBe(1);
     const events = await inRepo(env.REPO.getByName(id), outboxEvents);
+    // Its default labels are created with it.
     expect(events.map((e) => [e.type, e.id.epochGen, e.entity?.row?.name])).toEqual([
       ["repo.created", 1, name],
+      ...GITHUB_DEFAULT_LABELS.map((l) => ["label.created", 1, l.name]),
     ]);
   });
 });

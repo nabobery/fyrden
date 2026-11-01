@@ -1,4 +1,4 @@
-import { PERMISSION_NAMES } from "@fyrden/domain";
+import { SCOPE_NAMES } from "@fyrden/domain";
 import { Hono } from "hono";
 import type { AuthVariables } from "../middleware/auth.js";
 import { DPOP_ALGS } from "./dpop.js";
@@ -30,7 +30,7 @@ wellKnownRouter.get("/oauth-authorization-server", (c) => {
       code_challenge_methods_supported: ["S256"],
       token_endpoint_auth_methods_supported: ["none"],
       revocation_endpoint_auth_methods_supported: ["none"],
-      scopes_supported: PERMISSION_NAMES,
+      scopes_supported: SCOPE_NAMES,
       authorization_response_iss_parameter_supported: true,
       dpop_signing_alg_values_supported: DPOP_ALGS,
       client_id_metadata_document_supported: true,
@@ -49,7 +49,7 @@ wellKnownRouter.get("/oauth-protected-resource/:resource", (c) => {
       resource: resourceUri(origin, resource as Resource),
       resource_name: resource === "mcp" ? "Fyrden MCP server" : "Fyrden REST API",
       authorization_servers: [origin],
-      scopes_supported: PERMISSION_NAMES,
+      scopes_supported: SCOPE_NAMES,
       bearer_methods_supported: ["header"],
       dpop_signing_alg_values_supported: DPOP_ALGS,
     },

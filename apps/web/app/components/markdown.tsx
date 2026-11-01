@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fenceLanguage } from "../lib/highlight-languages.js";
 import type { MarkdownPlace } from "../lib/markdown-place.js";
 import { drawDiagrams } from "../lib/mermaid.client.js";
 
@@ -10,7 +11,9 @@ import { drawDiagrams } from "../lib/mermaid.client.js";
  * in the server build) turns it into safe HTML: raw HTML escaped, only safe
  * link protocols, and with `at` a README's links into the repository. Its Mermaid code blocks are then
  * drawn (`lib/mermaid.client.ts`, which loads Mermaid only when there is a
- * diagram).
+ * diagram), and its code blocks fenced with a language the highlighter
+ * knows highlighted (`lib/highlight.client.ts`, loaded only when there is
+ * such a block).
  */
 export function Markdown({ source, at }: { source: string; at?: MarkdownPlace | undefined }) {
   const [html, setHtml] = useState<string | null>(null);
@@ -35,6 +38,20 @@ export function Markdown({ source, at }: { source: string; at?: MarkdownPlace | 
     if (blocks.length === 0) return;
     let cancelled = false;
     void drawDiagrams(blocks, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+  }, [html]);
+  useEffect(() => {
+    if (html === null) return;
+    const blocks = [...(ref.current?.querySelectorAll("pre > code") ?? [])].filter(
+      (code) => fenceLanguage(code.className) !== null,
+    );
+    if (blocks.length === 0) return;
+    let cancelled = false;
+    void import("../lib/highlight.client.js").then(({ highlightBlocks }) =>
+      highlightBlocks(blocks, () => cancelled),
+    );
     return () => {
       cancelled = true;
     };

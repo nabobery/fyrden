@@ -93,8 +93,10 @@ describe("MCP endpoint", () => {
         description: want.description,
         annotations: want.annotations,
         inputSchema: want.inputSchema,
-        outputSchema: want.outputSchema,
+        ...(want.outputSchema !== undefined && { outputSchema: want.outputSchema }),
       });
+      // A tool that answers nothing declares no output schema.
+      if (want.outputSchema === undefined) expect(tool).not.toHaveProperty("outputSchema");
     }
   });
 
@@ -306,6 +308,7 @@ describe("MCP resources", () => {
     expect(templates.resourceTemplates.map((t) => t.uriTemplate)).toEqual([
       "fyrden://repos/{owner}/{repo}/files/{+path}",
       "fyrden://repos/{owner}/{repo}/refs/{ref}/files/{+path}",
+      "fyrden://feed/{principal}",
     ]);
     const uri = `fyrden://repos/${owner.handle}/${name}/files/docs/hello.md`;
     const read = await result<{ contents: { uri: string; text?: string; mimeType: string }[] }>(

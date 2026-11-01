@@ -4,6 +4,7 @@
 // comments and branch names shown as text, never markup.
 
 import { describe, expect, it } from "vitest";
+import { NO_VERSION } from "../app/lib/edits.server.js";
 import {
   default as Pull,
   action as pullAction,
@@ -14,8 +15,8 @@ import {
   action as pullsAction,
   loader as pullsLoader,
 } from "../app/routes/repo.pulls.js";
-import { formPost, json, ORIGIN } from "./helpers/context.js";
-import { api, pathOf, pullRequest, repo, VIEWER } from "./helpers/pulls.js";
+import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
+import { api, NO_REACTIONS, pathOf, pullRequest, repo, VIEWER } from "./helpers/pulls.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
 const params = { owner: "ada", repo: "demo", number: "7" };
@@ -169,6 +170,7 @@ describe("a pull request's conversation", () => {
               body: "first",
               created_at: at(1),
               updated_at: at(1),
+              reactions: NO_REACTIONS,
             },
             {
               id: 2,
@@ -177,6 +179,7 @@ describe("a pull request's conversation", () => {
               body: "third",
               created_at: at(3),
               updated_at: at(4),
+              reactions: NO_REACTIONS,
             },
           ],
           next_cursor: "more",
@@ -238,6 +241,7 @@ describe("a pull request's conversation", () => {
               body: HOSTILE,
               created_at: 1,
               updated_at: 1,
+              reactions: NO_REACTIONS,
             },
           ],
           next_cursor: null,
@@ -292,6 +296,12 @@ describe("a pull request's conversation", () => {
     expect(page({}, VIEWER)).toContain("Convert to draft");
     expect(page({ state: "closed" }, VIEWER)).toContain("Reopen pull request");
     expect(page({ state: "closed", merged: true }, VIEWER)).not.toContain("Reopen pull request");
+    // Every form names the viewer it was made for, so another's session sends none of them.
+    const html = page({ head_repo_id: "rep_fork", user: { id: VIEWER, login: "ada" } }, VIEWER);
+    const forms = html.match(/<form[\s\S]*?<\/form>/g) ?? [];
+    expect(forms.length).toBeGreaterThan(5);
+    for (const form of forms)
+      expect(form).toContain(`<input type="hidden" name="viewer" value="${VIEWER}"/>`);
   });
 });
 
@@ -305,7 +315,7 @@ describe("changing a pull request", () => {
       "POST /api/repos/ada/demo/issues/7/comments": () => json({ id: 1 }, 201),
     });
     const outcome = await pullAction({
-      request: formPost("/ada/demo/pull/7", fields),
+      request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);
@@ -326,13 +336,13 @@ describe("changing a pull request", () => {
       maintainer_can_modify: true,
     });
     expect((await act({ intent: "maintainer" })).body).toEqual({ maintainer_can_modify: false });
-    expect((await act({ intent: "edit", title: " New ", body: "  code" })).body).toEqual({
-      title: "New",
-      body: "  code",
-    });
-    expect((await act({ intent: "edit", title: "New", body: "  " })).body).toEqual({
+    expect(
+      (await act({ intent: "edit", title: " New ", body: "  code", version: "3" })).body,
+    ).toEqual({ title: "New", body: "  code", expected_version: 3 });
+    expect((await act({ intent: "edit", title: "New", body: "  ", version: "3" })).body).toEqual({
       title: "New",
       body: null,
+      expected_version: 3,
     });
     expect(await act({ intent: "comment", body: "  indented" })).toMatchObject({
       outcome: { ok: "comment" },
@@ -348,5 +358,310 @@ describe("changing a pull request", () => {
       body: undefined,
     });
     expect((await act({ intent: "close" }, 403)).outcome).toEqual({ error: "Not yours." });
+  });
+
+  it("edits only at the version the form was opened at, keeping the text it refuses", async () => {
+    // A form that says no version sends nothing: it would overwrite whatever changed since.
+    expect(await act({ intent: "edit", title: "New", body: "mine" })).toEqual({
+      outcome: {
+        error: NO_VERSION,
+        kept: { title: "New", body: "mine", version: undefined, viewer: VIEWER },
+      },
+      call: undefined,
+      body: undefined,
+    });
+    const { context } = api({
+      "PATCH /api/repos/ada/demo/pulls/7": () =>
+        json({ code: "stale", detail: "It changed since the version given." }, 409),
+    });
+    const outcome = await pullAction({
+      request: formPost("/ada/demo/pull/7", {
+        viewer: VIEWER,
+        intent: "edit",
+        title: "New",
+        body: "mine",
+        version: "3",
+      }),
+      context,
+      params,
+    } as never);
+    expect(outcome).toEqual({
+      error: expect.stringContaining("changed since you opened it"),
+      kept: { title: "New", body: "mine", version: 3, viewer: VIEWER },
+    });
+  });
+
+  it("shows the text an edit could not save, kept at the version it was written from", () => {
+    const page = (viewer: string) =>
+      renderPage(
+        Pull,
+        "/ada/demo/pull/7",
+        {
+          owner: "ada",
+          repo: "demo",
+          pull: pullRequest({ version: 5 }),
+          viewer,
+          viewerKnown: true,
+          body: null,
+          timeline: [],
+          commentPages: { next: null, first: null },
+          reviewPages: { next: null, first: null },
+        },
+        {
+          error: "changed",
+          kept: { title: "Mine", body: "my <text>", version: 4, viewer: VIEWER },
+        },
+      );
+    // Another viewer (signed in from another tab while it was sent) never sees it.
+    const other = page("usr_other");
+    expect(other).not.toContain("my &lt;text&gt;");
+    expect(other).toContain('<input type="hidden" name="version" value="5"/>');
+    const html = page(VIEWER);
+    // Refused, its text is checked against the version it was written from until read anew.
+    expect(html).toContain('<input type="hidden" name="version" value="4"/>');
+    expect(html).toContain("my &lt;text&gt;");
+  });
+});
+
+describe("reactions on a pull request", () => {
+  const base = {
+    owner: "ada",
+    repo: "demo",
+    body: "b",
+    commentPages: { next: null, first: null },
+    reviewPages: { next: null, first: null },
+    rules: null,
+    permissions: null,
+  };
+  const comment = {
+    kind: "comment",
+    id: 5,
+    at: 1,
+    author: "usr_other",
+    agents: [],
+    body: "c",
+    edited: false,
+    reactions: { ...NO_REACTIONS, total_count: 1, eyes: 1, viewer: [{ id: 8, content: "eyes" }] },
+  };
+  const reacted = pullRequest({
+    reactions: { ...NO_REACTIONS, total_count: 1, rocket: 1, viewer: [] },
+  });
+
+  it("toggles on the description and on each comment, by the viewer's own ids", () => {
+    const html = renderPage(Pull, "/ada/demo/pull/7", {
+      ...base,
+      pull: reacted,
+      viewer: VIEWER,
+      timeline: [comment],
+    });
+    expect(html).toMatch(
+      /value="react"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="rocket"/,
+    );
+    expect(html).toMatch(
+      /value="unreact"\/><input type="hidden" name="target" value="5"\/><input type="hidden" name="content" value="eyes"\/><input type="hidden" name="reaction_id" value="8"/,
+    );
+  });
+
+  it("shows counts only when signed out, or locked without write access", () => {
+    for (const [viewer, pull, push] of [
+      [null, reacted, false],
+      [VIEWER, { ...reacted, locked: true }, false],
+    ] as const) {
+      const html = renderPage(Pull, "/ada/demo/pull/7", {
+        ...base,
+        pull,
+        viewer,
+        permissions: { push },
+        timeline: [comment],
+      });
+      expect(html).toContain('<span class="visually-hidden">Rocket</span> <!-- -->1');
+      expect(html).not.toMatch(/value="(un)?react"/);
+    }
+    const writer = renderPage(Pull, "/ada/demo/pull/7", {
+      ...base,
+      pull: { ...reacted, locked: true },
+      viewer: VIEWER,
+      permissions: { push: true },
+      timeline: [],
+    });
+    expect(writer).toMatch(/value="react"/);
+  });
+
+  it("asks a closed, locked pull request's repository whether the viewer still reacts", async () => {
+    const page = async (permissions: Record<string, boolean>) => {
+      const { context, calls } = api({
+        "GET /api/repos/ada/demo/pulls/7": () =>
+          json({ ...reacted, state: "closed", closed_at: 5, locked: true }),
+        "GET /api/repos/ada/demo/issues/7/comments": () =>
+          json({ comments: [], next_cursor: null }),
+        "GET /api/repos/ada/demo/pulls/7/reviews": () => json({ reviews: [], next_cursor: null }),
+        "GET /api/repos/ada/demo": () => json({ ...repo, permissions }),
+      });
+      const data = await pullLoader({
+        request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+          headers: { Cookie: "fyrden_session=s" },
+        }),
+        context,
+        params,
+      } as never);
+      // No rulesets for a closed one: the merge box is not shown.
+      expect(calls.map(pathOf)).not.toContain("GET /api/repos/ada/demo/rulesets");
+      return renderPage(Pull, "/ada/demo/pull/7", data);
+    };
+    expect(await page({ push: true, pull: true })).toMatch(/value="react"/);
+    expect(await page({ push: false, pull: true })).not.toMatch(/value="(un)?react"/);
+  });
+
+  it("adds to the pull request by its number, takes back a comment's", async () => {
+    const { context, calls } = api({
+      "POST /api/repos/ada/demo/issues/7/reactions": () => json({ id: 3 }, 201),
+      "DELETE /api/repos/ada/demo/issues/comments/5/reactions/8": () =>
+        json({ id: 8, state: "deleted" }),
+    });
+    const send = (fields: Record<string, string>) =>
+      pullAction({
+        request: formPost("/ada/demo/pull/7", { viewer: VIEWER, ...fields }),
+        context,
+        params,
+      } as never);
+    expect(await send({ intent: "react", target: "issue", content: "rocket" })).toMatchObject({
+      ok: "react",
+    });
+    expect(
+      await send({ intent: "unreact", target: "5", content: "eyes", reaction_id: "8" }),
+    ).toMatchObject({ ok: "unreact" });
+    expect(await send({ intent: "react", target: "issue", content: "nope" })).toMatchObject({
+      error: "No such reaction.",
+    });
+    expect(calls.filter((c) => c.method !== "GET").map(pathOf)).toEqual([
+      "POST /api/repos/ada/demo/issues/7/reactions",
+      "DELETE /api/repos/ada/demo/issues/comments/5/reactions/8",
+    ]);
+  });
+});
+
+describe("a pull request comment's permalink", () => {
+  const comment = (id: number, body = `comment ${id}`) => ({
+    id,
+    user: { id: "usr_a" },
+    performed_via_agents: [],
+    body,
+    created_at: id,
+    updated_at: id,
+    reactions: NO_REACTIONS,
+  });
+  async function load(search: string, comments: unknown[] = [], next: string | null = null) {
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/issues/7/comments": () => json({ comments, next_cursor: next }),
+      "GET /api/repos/ada/demo/pulls/7/reviews": () => json({ reviews: [], next_cursor: null }),
+      "GET /api/repos/ada/demo": () => json(repo),
+    });
+    const data = await pullLoader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7${search}`),
+      context,
+      params,
+    } as never);
+    return {
+      data,
+      listed: calls.map(pathOf).find((p) => p.includes("/comments")),
+      reviewed: calls.map(pathOf).find((p) => p.includes("/reviews")),
+    };
+  }
+
+  it("loads the page that starts with it, and says when it is not there", async () => {
+    const found = await load("?comment=9", [comment(9), comment(10)]);
+    expect(found.listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=8");
+    expect(found.data).toMatchObject({
+      linked: { id: 9, missing: false },
+      commentPages: { first: "/ada/demo/pull/7" },
+    });
+    expect((await load("?comment=9", [comment(10)])).data).toMatchObject({
+      linked: { id: 9, missing: true },
+    });
+  });
+
+  it("gives way to a named page of comments, with a cursor or without", async () => {
+    for (const [search, asked] of [
+      ["?comment=9&comments=%3AC2", "cursor=C2"],
+      ["?comment=30&comments=3%3A", "after=3"],
+    ] as const) {
+      const { data, listed } = await load(search);
+      expect(listed, search).toBe(`GET /api/repos/ada/demo/issues/7/comments?per_page=25&${asked}`);
+      expect(data).toMatchObject({ linked: null });
+    }
+  });
+
+  it("goes on after the last item shown, never back through an API page that grew", async () => {
+    // Shown up to 29 of the page C25 begins: the comments after 29, whatever C25 holds now.
+    const { listed, reviewed } = await load("?comments=29%3AC25&reviews=4%3AR2");
+    expect(listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=29");
+    expect(reviewed).toBe("GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&after=4");
+    // An API page not yet gone into: its cursor.
+    expect((await load("?reviews=%3AR2")).reviewed).toBe(
+      "GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&cursor=R2",
+    );
+  });
+
+  it("goes on from it, its next pages never the permalink again, their first the start", async () => {
+    // Cut by its source: three comments of 192 KiB, one a page.
+    const big = (id: number) => comment(id, "€".repeat(65_536));
+    const linked = await load("?comment=30", [big(30), big(31), big(32)]);
+    const next = linked.data.commentPages.next ?? "";
+    expect(next).toBe("/ada/demo/pull/7?comments=30%3A");
+    // That page asks the API after the last comment shown, and is a page of comments, not 30's.
+    const following = await load(next.replace("/ada/demo/pull/7", ""), [big(31), big(32)]);
+    expect(following.listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=30");
+    expect(following.data).toMatchObject({
+      linked: null,
+      commentPages: { first: "/ada/demo/pull/7" },
+    });
+    // An API page after it: its cursor, and back to the start.
+    const paged = await load("?comment=30", [comment(30)], "C2");
+    expect(paged.data.commentPages.next).toBe("/ada/demo/pull/7?comments=%3AC2");
+  });
+});
+
+describe("a pull request page whose session could not be checked", () => {
+  it("says so, rather than sign the viewer out (and draw its editors anew)", async () => {
+    const { context } = fakeApi((request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/auth/session") return new Response("down", { status: 503 });
+      if (url.pathname.endsWith("/comments")) return json({ comments: [], next_cursor: null });
+      if (url.pathname.endsWith("/reviews")) return json({ reviews: [], next_cursor: null });
+      if (url.pathname.endsWith("/rulesets")) return json({ rulesets: [] });
+      if (url.pathname === "/api/repos/ada/demo") return json(repo);
+      return json(pullRequest());
+    });
+    const data = await pullLoader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+        headers: { Cookie: "fyrden_session=s" },
+      }),
+      context,
+      params,
+    } as never);
+    expect(data).toMatchObject({ viewer: null, viewerKnown: false });
+  });
+
+  it("offers no editor until the viewer is known, so none is drawn anew once it is", () => {
+    const html = renderPage(Pull, "/ada/demo/pull/7", {
+      owner: "ada",
+      repo: "demo",
+      pull: pullRequest(),
+      viewer: null,
+      viewerKnown: false,
+      body: null,
+      timeline: [],
+      commentPages: { next: null, first: null },
+      reviewPages: { next: null, first: null },
+    });
+    expect(html).toContain("reload the page to write here");
+    expect(html).not.toContain("Edit title and description");
+    expect(html).not.toContain('name="intent" value="comment"');
+    expect(html).not.toContain("Close pull request");
+    // What stands in the way of a merge is shown; merging and updating the branch are not offered.
+    expect(html).toContain("Merging and updating the branch need you signed in");
+    expect(html).not.toContain('name="intent" value="merge"');
+    expect(html).not.toContain('name="intent" value="update-branch"');
   });
 });

@@ -10,6 +10,7 @@ export function problemResponse(
 ): Response {
   return c.json(body, body.status as ContentfulStatusCode, {
     "Content-Type": "application/problem+json",
+    ...(body.retry_after !== undefined && { "Retry-After": String(body.retry_after) }),
     ...headers,
   });
 }

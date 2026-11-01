@@ -1,11 +1,17 @@
-import { type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
-import type { Context, Hono } from "hono";
+import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { NO_STORE, notModified } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext, type OpHandler, type OpResult } from "../ops/execute.js";
+import {
+  executeOperation,
+  type OpContext,
+  type OpHandler,
+  type OpResult,
+  sessionRefusal,
+} from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
 import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
@@ -24,6 +30,7 @@ export function opContext(c: AppContext): OpContext {
     requestId: c.get("requestId"),
     requestHost: new URL(c.req.url).hostname,
     requestOrigin: new URL(c.req.url).origin,
+    receivedAt: c.get("receivedAt"),
     waitUntil: (p) => c.executionCtx.waitUntil(p),
   };
 }
@@ -107,7 +114,7 @@ async function respondWithEtag(c: AppContext, output: unknown, status: number): 
 }
 
 function respond(c: AppContext, op: OperationDef, result: OpResult): Response | Promise<Response> {
-  const replayed: Record<string, string> = result.replayed ? { "Idempotent-Replayed": "true" } : {};
+  const headers: Record<string, string> = result.replayed ? { "Idempotent-Replayed": "true" } : {};
   if (!result.ok) {
     const retry =
       result.problem.code === "rate_limited"
@@ -115,14 +122,16 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
         : result.problem.code === "idempotency_key_in_use"
           ? { "Retry-After": "5" }
           : {};
-    return problemResponse(c, result.problem, { ...retry, ...replayed });
+    return problemResponse(c, result.problem, { ...retry, ...headers });
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
+  // Nothing to answer: no body (a replay of it too).
+  if (answersNothing(op)) return c.body(null, op.successStatus === 205 ? 205 : 204, headers);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
     (result.status ?? op.successStatus ?? 200) as ContentfulStatusCode,
-    op.secretResponse ? { ...NO_STORE, ...replayed } : replayed,
+    op.secretResponse ? { ...NO_STORE, ...headers } : headers,
   );
 }
 
@@ -141,6 +150,14 @@ const GIT_TRANSPORT = new Set([
 
 const gitTransport = (op: OperationDef) => ({ git: GIT_TRANSPORT.has(op.id) });
 
+/** An operation's answers kept by no cache when it asks (`noStore`): refusals before it runs too. */
+const caching =
+  (op: OperationDef): MiddlewareHandler =>
+  async (c, next) => {
+    await next();
+    if (op.noStore) c.res.headers.set("Cache-Control", "private, no-store");
+  };
+
 export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   app.get(`${API_PREFIX}/openapi.json`, (c) =>
     c.json(
@@ -154,24 +171,33 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
   for (const op of registry as readonly OperationDef[]) {
     const path =
       API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
-    app.on(op.method, path, requireAuth("by-method", "api", gitTransport(op)), async (c) => {
-      const read = await readInput(c, op);
-      if (!read.ok) return problem(c, read.status, read.code, read.detail);
-      const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;
-      if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
-        return problem(
+    app.on(
+      op.method,
+      path,
+      caching(op),
+      requireAuth("by-method", "api", gitTransport(op)),
+      async (c) => {
+        // Before the body or its key are looked at (as the executor would, after them).
+        const refused = sessionRefusal(op, c.get("auth"));
+        if (refused) return problem(c, 403, refused.code, refused.detail);
+        const read = await readInput(c, op);
+        if (!read.ok) return problem(c, read.status, read.code, read.detail);
+        const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;
+        if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
+          return problem(
+            c,
+            422,
+            "invalid_idempotency_key",
+            "An Idempotency-Key is 1-255 printable ASCII characters.",
+          );
+        return respond(
           c,
-          422,
-          "invalid_idempotency_key",
-          "An Idempotency-Key is 1-255 printable ASCII characters.",
+          op,
+          await executeOperation(op, operationHandler(op), opContext(c), read.input, {
+            ...(key !== undefined && { idempotencyKey: key }),
+          }),
         );
-      return respond(
-        c,
-        op,
-        await executeOperation(op, operationHandler(op), opContext(c), read.input, {
-          ...(key !== undefined && { idempotencyKey: key }),
-        }),
-      );
-    });
+      },
+    );
   }
 }

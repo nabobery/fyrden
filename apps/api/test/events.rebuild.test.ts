@@ -12,6 +12,7 @@ import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { advanceDeletion, keepTombstone, markDeletions } from "../src/repos/deletion.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { principalWithToken } from "./helpers/principals.js";
+import { admitted } from "./helpers/read-model.js";
 import { inRepo, oid } from "./helpers/repo-git.js";
 
 /**
@@ -78,11 +79,12 @@ async function deliver(repoId: string) {
 
 /** The projected rows of `ids`, without the bookkeeping columns a rebuild writes differently. */
 async function rows(ids: string[]) {
-  const { results } = await env.ORG_READ.prepare(
-    `SELECT repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at, deleted,
+  const { results } = await admitted()
+    .prepare(
+      `SELECT repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at, deleted,
        epoch_gen, version, owner_gen, description
      FROM repos WHERE repo_id IN (SELECT value FROM json_each(?)) ORDER BY repo_id`,
-  )
+    )
     .bind(JSON.stringify(ids))
     .all();
   return results;
@@ -96,13 +98,13 @@ async function restart(repoId: string) {
 }
 
 async function forget(ids: string[]) {
-  await env.ORG_READ.batch([
-    env.ORG_READ.prepare(
-      "DELETE FROM repos WHERE repo_id IN (SELECT value FROM json_each(?))",
-    ).bind(JSON.stringify(ids)),
-    env.ORG_READ.prepare(
-      "DELETE FROM consumer_epochs WHERE source_id IN (SELECT value FROM json_each(?))",
-    ).bind(JSON.stringify(ids)),
+  await admitted().batch([
+    admitted()
+      .prepare("DELETE FROM repos WHERE repo_id IN (SELECT value FROM json_each(?))")
+      .bind(JSON.stringify(ids)),
+    admitted()
+      .prepare("DELETE FROM consumer_epochs WHERE source_id IN (SELECT value FROM json_each(?))")
+      .bind(JSON.stringify(ids)),
   ]);
 }
 
@@ -183,11 +185,12 @@ describe("read-model rebuild", () => {
     expect(tombstone).toEqual([expect.objectContaining({ deleted: 1 })]);
     // As if the tombstone had been lost (a shard restored from before it).
     await forget([id]);
-    await env.ORG_READ.prepare(
-      `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at,
+    await admitted()
+      .prepare(
+        `INSERT INTO repos (repo_id, owner_id, name, visibility, default_branch, pushed_at, created_at,
          deleted, epoch_gen, version, owner_gen, updated_seq, updated_at, description)
        SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, 0, 0, ?11`,
-    )
+      )
       .bind(
         ...(
           [

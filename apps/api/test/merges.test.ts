@@ -281,6 +281,34 @@ describe("rulesets judge the merge", () => {
     expect((await merge(owner)).status).toBe(200);
   });
 
+  it("counts no approval of a suspended reviewer, and counts it again once unsuspended", async () => {
+    await ruleset({ required_approving_review_count: 1 });
+    await open(owner);
+    const head = (await pull()).head.sha;
+    const writer = await collaborator("push");
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/reviews`, writer.token, {
+          commit_id: head,
+          event: "APPROVE",
+        })
+      ).status,
+    ).toBe(200);
+    const admin = await user(true);
+    const suspended = `/users/${writer.handle}/suspended`;
+    expect((await api("PUT", suspended, admin.token, {})).status).toBe(204);
+    const refused = await merge(owner);
+    expect(refused).toMatchObject({ status: 405, body: { code: "merge_refused" } });
+    expect(refused.body.detail).toContain("approv");
+    // Still listed: the review is the suspended user's, kept as GitHub keeps it.
+    const listed = await json<{ reviews: { user: { id: string } }[] }>(
+      api("GET", `${path}/pulls/1/reviews`, owner.token),
+    );
+    expect(listed.body.reviews.map((r) => r.user.id)).toEqual([writer.principalId]);
+    expect((await api("DELETE", suspended, admin.token)).status).toBe(204);
+    expect((await merge(owner)).status).toBe(200);
+  });
+
   it("asks for an approval after the last push from someone other than its pusher", async () => {
     await ruleset({ require_last_push_approval: true });
     await open(owner);

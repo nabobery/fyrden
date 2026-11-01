@@ -19,6 +19,7 @@
     "@fyrden/api-contract": "workspace:*",
     "@fyrden/domain": "workspace:*",
     "@pierre/diffs": "1.6.1",
+    "@pierre/highlights": "0.2.0",
     "isbot": "5.2.2",
     "mermaid": "12.2.0",
     "micromark": "4.0.3",

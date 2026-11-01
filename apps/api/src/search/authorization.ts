@@ -1,0 +1,193 @@
+import type { RepoPermission } from "@fyrden/domain";
+import { MAX_READER_REPOS } from "../do/OrgDO.js";
+import { FreshAccess } from "../feed/access.js";
+import { type OpContext, OperationError } from "../ops/execute.js";
+import {
+  allowedWithRole,
+  findReposById,
+  listOwnedRepos,
+  type RepoEntry,
+  resolveRepo,
+} from "../repos/directory.js";
+import type { ParsedQuery } from "./parser.js";
+
+/*
+ * Which repositories a search may read, decided afresh for every request
+ * (never from a repository's cached ACL window): its scope (`repo:`,
+ * `org:`, `user:`, which intersect) resolved on the directory's primary to
+ * the repositories active there now, at most `SEARCH_SCOPE.repositories`;
+ * then the caller's role on each as its account's object has it now
+ * (`FreshAccess`, its ceilings applied), and what its token allows there
+ * with that role (its scopes and repository list). Search needs a scope:
+ * there is no deployment-wide search. An answer that could not be had is a
+ * refusal, never a smaller scope.
+ */
+
+export const SEARCH_SCOPE = {
+  /** The repositories one search's scope may hold at most (an owner's, past which it is refused). */
+  repositories: 1_000,
+  /** The different repositories a query may name (each looked up and decided). */
+  named: 4,
+} as const;
+
+/** `values` once each, by `key`. */
+const distinct = <T>(values: readonly T[], key: (value: T) => string): T[] => [
+  ...new Map(values.map((v) => [key(v), v])).values(),
+];
+
+/** A repository of a search's scope, and what the caller may read of it. */
+export interface ScopedRepo {
+  readonly entry: RepoEntry;
+  readonly metadata: boolean;
+  readonly issues: boolean;
+  readonly pulls: boolean;
+}
+
+const READS = {
+  metadata: "metadata:read",
+  issues: "issues:read",
+  pulls: "pull_requests:read",
+} as const satisfies Record<string, RepoPermission>;
+
+/** The owner a handle names now, of the type asked, or none. */
+async function ownerOf(
+  ctx: Pick<OpContext, "env" | "metrics">,
+  handle: string,
+  type: "org" | "user",
+): Promise<string | null> {
+  ctx.metrics.count("d1.query", { db: "directory", op: "search_owner" });
+  const row = await ctx.env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT id FROM principals WHERE handle = ? COLLATE NOCASE AND type = ?
+         AND lifecycle IN ('active', 'suspended')`,
+    )
+    .bind(handle, type)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+/**
+ * The repositories `parsed`'s scope holds that the caller may read
+ * something of, each with what. Refused when there is no scope
+ * (`search_scope_required`), when an owner's holds more than a search may
+ * (`search_scope_too_broad`), and when a decision could not be had
+ * (`search_authorization_unavailable`); a `repo:` the caller may read
+ * nothing of is not found, as any repository it may not read.
+ */
+export async function authorizeScope(ctx: OpContext, parsed: ParsedQuery): Promise<ScopedRepo[]> {
+  if (parsed.repos.length === 0 && parsed.orgs.length === 0 && parsed.users.length === 0)
+    throw new OperationError(
+      422,
+      "search_scope_required",
+      "A search needs a scope: repo:owner/name, org:handle or user:handle.",
+    );
+  // Each named once (handles ignore case); a few repositories at most.
+  const lower = (h: string) => h.toLowerCase();
+  const orgs = distinct(parsed.orgs, lower);
+  const users = distinct(parsed.users, lower);
+  const named = distinct(parsed.repos, (r) => `${lower(r.owner)}/${lower(r.name)}`);
+  if (named.length > SEARCH_SCOPE.named)
+    throw new OperationError(
+      422,
+      "invalid_search_query",
+      `A search names at most ${SEARCH_SCOPE.named} different repositories.`,
+    );
+  return unavailableUnless(async () => {
+    // The owners named: they all must be the one owner (scopes intersect). Two different handles
+    // never name one owner: nothing to look up.
+    const owners = new Set<string | null>();
+    if (new Set([...orgs, ...users].map(lower)).size > 1) owners.add(null);
+    else {
+      for (const handle of orgs) owners.add(await ownerOf(ctx, handle, "org"));
+      for (const handle of users) owners.add(await ownerOf(ctx, handle, "user"));
+    }
+    if (named.length > 0) {
+      // Each named repository, as the directory's primary has it now, decided before anything is
+      // intersected: one the caller may read nothing of is not found, as one missing is (an
+      // empty intersection would tell them it exists).
+      const found = new Map<string, RepoEntry>();
+      for (const { owner: handle, name } of named) {
+        const entry = await resolveRepo(ctx.env, handle, name, {
+          consistency: "primary",
+          metrics: ctx.metrics,
+        });
+        // Named as every refusal of them is (which one was missing would tell of the others).
+        if (!entry) throw notFound(named.map((r) => `${r.owner}/${r.name}`).join(", "));
+        found.set(entry.id, entry);
+      }
+      const readable = await decided(ctx, [...found.values()]);
+      for (const entry of found.values())
+        if (!readable.some((r) => r.entry.id === entry.id))
+          throw notFound(named.map((r) => `${r.owner}/${r.name}`).join(", "));
+      // Then the scopes intersect: one repository, of the one owner named (if any).
+      if (found.size > 1 || owners.has(null) || owners.size > 1) return [];
+      const [owner] = [...owners];
+      return readable.filter((r) => owner === undefined || r.entry.ownerId === owner);
+    }
+    if (owners.has(null) || owners.size > 1) return [];
+    const [owner] = [...owners] as string[];
+    // The owner's active repositories, one past the most: a token naming some, those of them alone,
+    // looked up by id (never a walk through the owner's for its few).
+    const only = ctx.auth.repoIds;
+    const entries = only
+      ? (await findReposById(ctx.env, only, ctx.metrics)).filter((e) => e.ownerId === owner)
+      : await listOwnedRepos(
+          ctx.env,
+          owner as string,
+          { after: "", limit: SEARCH_SCOPE.repositories + 1, onlyIds: null },
+          ctx.metrics,
+        );
+    if (entries.length > SEARCH_SCOPE.repositories)
+      throw new OperationError(
+        422,
+        "search_scope_too_broad",
+        `A search's scope holds at most ${SEARCH_SCOPE.repositories} repositories: name a repository (repo:owner/name).`,
+      );
+    return decided(ctx, entries);
+  });
+}
+
+/** What the caller may read of each of `entries` (those it may read something of). */
+async function decided(ctx: OpContext, entries: readonly RepoEntry[]): Promise<ScopedRepo[]> {
+  // The caller's role on each, as each account's object has it now, a confirmation's worth at a time.
+  const fresh = new FreshAccess(ctx, ctx.auth);
+  const scoped: ScopedRepo[] = [];
+  for (let i = 0; i < entries.length; i += MAX_READER_REPOS) {
+    const chunk = entries.slice(i, i + MAX_READER_REPOS);
+    const decisions = await fresh.decide(chunk);
+    for (const entry of chunk) {
+      const decision = decisions.get(entry.id);
+      if (!decision || decision === "unknown") throw unavailable();
+      const may = (permission: RepoPermission) =>
+        decision.held && allowedWithRole(ctx.auth, entry, permission, decision.role);
+      const repo = {
+        entry,
+        metadata: may(READS.metadata),
+        issues: may(READS.issues),
+        pulls: may(READS.pulls),
+      };
+      if (repo.metadata || repo.issues || repo.pulls) scoped.push(repo);
+    }
+  }
+  return scoped;
+}
+
+const unavailable = () =>
+  new OperationError(
+    503,
+    "search_authorization_unavailable",
+    "Who may read the repositories searched could not be decided now. Try again.",
+  );
+
+/** `work`'s answer; a failure of what it reads (not a refusal of its own) is an unavailable one. */
+async function unavailableUnless<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof OperationError) throw error;
+    throw unavailable();
+  }
+}
+
+const notFound = (name: string) =>
+  new OperationError(404, "repo_not_found", `No repository ${name} you may read.`);

@@ -28,6 +28,11 @@ export async function openLiveReader(
      */
     readonly maxReads?: number;
     readonly counts?: { reads: number };
+    /**
+     * Bytes the reader may build, objects a delta chain builds on the way
+     * included; past them a read throws `ReaderWorkSpent`. Unlimited by default.
+     */
+    readonly maxBuiltBytes?: number;
     /** A push's own packs, not live yet, read too (its commit point). */
     readonly extraPacks?: readonly string[];
   },
@@ -63,7 +68,10 @@ export async function openLiveReader(
     zlib: createWorkersZlib(),
     memory: git.memory,
     blockCache: blocks.cache,
-    limits: { deltaBaseCacheBytes: limits.deltaBaseCacheBytes },
+    limits: {
+      deltaBaseCacheBytes: limits.deltaBaseCacheBytes,
+      ...(limits.maxBuiltBytes !== undefined && { maxBuiltBytes: limits.maxBuiltBytes }),
+    },
   });
 }
 

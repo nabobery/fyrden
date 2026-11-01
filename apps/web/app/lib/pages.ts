@@ -4,6 +4,12 @@
  * through each on its own.
  */
 
+import { pageUrl } from "./target.js";
+
+/** A positive id from a page's URL, else none. */
+export const positiveId = (value: string | null): number | null =>
+  value !== null && /^[1-9][0-9]{0,14}$/.test(value) ? Number(value) : null;
+
 /** The API query for the page of a listing that `url` names with `param`. */
 export function pageQuery(url: URL, param: string, perPage = 100): string {
   const query = new URLSearchParams({ per_page: String(perPage) });
@@ -20,7 +26,9 @@ export interface PageLinks {
 }
 
 /** Links to a listing's next page (from the API's `next_cursor`) and its first. */
-export function pageLinks(url: URL, param: string, nextCursor: string | null): PageLinks {
+export function pageLinks(request: URL, param: string, nextCursor: string | null): PageLinks {
+  // A navigation's data request's URL: links go to the page itself.
+  const url = pageUrl(request);
   const at = (cursor: string | null) => {
     const query = new URLSearchParams(url.search);
     if (cursor === null) query.delete(param);

@@ -104,6 +104,16 @@ describe("generated artifacts", () => {
     expect(openApiDocument(registry, { version: "0.0.0" })).toMatchSnapshot();
   });
 
+  it("publishes no pattern with Unicode property escapes, which not every client's regexes have", () => {
+    const patterns: string[] = [];
+    JSON.stringify(openApiDocument(registry, { version: "0.0.0" }), (key, value) => {
+      if (key === "pattern" && typeof value === "string") patterns.push(value);
+      return value;
+    });
+    expect(patterns.length).toBeGreaterThan(0);
+    for (const pattern of patterns) expect(pattern).not.toMatch(/\\[pP]\{/);
+  });
+
   it("lists whoami as an MCP tool with the same input schema as the operation", () => {
     const tools = mcpTools(registry);
     const tool = tools.find((t) => t.name === "whoami");
@@ -122,13 +132,16 @@ describe("generated artifacts", () => {
   });
 
   it("names a permission from the table for every other operation", () => {
-    // Facts about the caller or the instance, and the caller's own feed, for any authenticated caller.
+    // Facts about the caller or the instance, the caller's own feed, and issue search (each
+    // repository's issues and pull requests by their own permissions), for any authenticated caller.
     const anyCaller = new Set([
       "meta.whoami",
       "meta.signing_keys.list",
       "feed.list",
       "feed.sync",
       "feed.ack",
+      "feed.digest",
+      "search.issues",
     ]);
     for (const op of registry) {
       if (anyCaller.has(op.id)) continue;

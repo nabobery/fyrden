@@ -56,10 +56,13 @@ const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "auth",
   "mcp",
   "oauth",
+  "unsubscribe",
   "v0",
   // The web's own pages, and the built assets served before it runs.
   "assets",
   "healthz",
+  "notifications",
+  "search",
   "settings",
   "sign-out",
 ]);

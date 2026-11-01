@@ -15,6 +15,7 @@ import {
   serverCommitIdentity,
 } from "@fyrden/domain";
 import { appendTrailers } from "@fyrden/git-core";
+import { SHOWN_HANDLE } from "../accounts/handles.js";
 import type { Browsed } from "../do/repo/browse.js";
 import {
   FILE_WRITE_POLICY,
@@ -114,7 +115,8 @@ export async function noReplyPeople(ctx: OpContext, ids: readonly string[]): Pro
   if (ids.length === 0) return [];
   ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
   const { results } = await ctx.env.DIRECTORY.prepare(
-    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
+     WHERE p.id IN (${ids.map(() => "?").join(", ")})`,
   )
     .bind(...ids)
     .all<{ id: string; handle: string | null }>();
@@ -139,7 +141,8 @@ export async function commitIdentityFor(
   const ids = agentId === null ? [principalId] : [principalId, agentId];
   ctx.metrics.count("d1.query", { db: "directory", op: "principal_handle" });
   const { results } = await ctx.env.DIRECTORY.prepare(
-    `SELECT id, handle FROM principals WHERE id IN (${ids.map(() => "?").join(", ")})`,
+    `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
+     WHERE p.id IN (${ids.map(() => "?").join(", ")})`,
   )
     .bind(...ids)
     .all<{ id: string; handle: string | null }>();

@@ -13,8 +13,15 @@ export type ReviewState = (typeof REVIEW_STATES)[number];
 
 /** One submitted review, as the merge check sees it. */
 export interface ReviewFact {
+  /** Who submitted it: a user, or an agent (its own token, or acting for a person). */
+  readonly reviewerId: string;
   /** The root identity of whoever submitted it (a person's own agents share it). */
   readonly reviewerRoot: string;
+  /**
+   * Whether its reviewer (and, for an agent, the agent's owner) is still
+   * active: a review by one disabled since counts for no one.
+   */
+  readonly active: boolean;
   /** Submitted by an agent (its own token, or acting for a person). */
   readonly byAgent: boolean;
   /** The head commit it reviewed. */
@@ -43,6 +50,11 @@ export interface ApprovalInput {
   readonly lastPush: { readonly pusherRoot: string; readonly at: number } | null;
   /** Roots whose reviews count: write access or above, checked when merging. */
   readonly eligibleRoots: ReadonlySet<string>;
+  /**
+   * Reviewers (principals) with write access themselves, an agent capped by
+   * its owner: whose reviews can make them code owners' approvers.
+   */
+  readonly eligiblePrincipals: ReadonlySet<string>;
 }
 
 export interface ApprovalSettings {
@@ -59,6 +71,8 @@ export interface ApprovalSettings {
 export interface ApprovalOutcome {
   /** Distinct roots whose standing review approves. */
   readonly approvals: number;
+  /** Those roots, sorted: whose access a merge's confirmation asks about. */
+  readonly approvers: readonly string[];
   /** Roots whose standing review requests changes. */
   readonly changesRequested: readonly string[];
   /**
@@ -88,6 +102,9 @@ export function evaluateApprovals(
     const current = standing.get(review.reviewerRoot);
     if (!current || review.seq > current.seq) standing.set(review.reviewerRoot, review);
   }
+  // A root whose standing review is by a reviewer disabled since has none: its earlier review
+  // does not stand in.
+  for (const [root, review] of standing) if (!review.active) standing.delete(root);
   const approving = [...standing.values()].filter((r) => r.state === "APPROVED");
   const changesRequested = [...standing.values()]
     .filter((r) => r.state === "CHANGES_REQUESTED")
@@ -112,6 +129,7 @@ export function evaluateApprovals(
     reasons.push("the last push must be approved by someone other than its pusher");
   return {
     approvals: approving.length,
+    approvers: approving.map((r) => r.reviewerRoot).sort(),
     changesRequested,
     lastPushApproved,
     satisfied: reasons.length === 0,

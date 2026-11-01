@@ -1,0 +1,501 @@
+// Which sources need a search reconciliation, by revision, and the repair job:
+// asking while one is pending writes nothing, asking during a pass asks for
+// another after it, a pass covers the revision it started with, and the job
+// works the oldest needs first, a page each, only once search indexing is on;
+// a source whose pass ended partial waits before its next.
+import { env } from "cloudflare:workers";
+import { uniqueId } from "@fyrden/testing";
+import { afterEach, describe, expect, inject, it } from "vitest";
+import { DEFAULT_ORG_SHARD, readModelFor } from "../src/events/read-model.js";
+import {
+  READ_MODEL_ADMISSION,
+  READ_MODEL_LEASE,
+  READ_MODEL_OBSERVATION,
+  withReadModel,
+} from "../src/read-model/executor.js";
+import { ADMISSION, SPENDING } from "../src/search/admission.js";
+import { RECONCILE_POLICY, reconcileSource } from "../src/search/reconcile.js";
+import { REPAIR_POLICY, repairStatement, runSearchRepairs } from "../src/search/repairs.js";
+import { api, json, user } from "./helpers/api.js";
+import { scopedToken } from "./helpers/principals.js";
+import { type PushTarget, postPush } from "./helpers/push.js";
+import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+
+const fx = inject("pushFixtures");
+// Written as production writes it: through the read model's executor.
+const db = readModelFor(env, DEFAULT_ORG_SHARD);
+
+/** A repository with an issue and its branches pushed: its id. */
+async function repository(): Promise<string> {
+  const owner = await user();
+  const repo = (
+    await json<{ id: string; name: string }>(
+      api("POST", "/user/repos", owner.token, { name: uniqueId("r") }),
+    )
+  ).body;
+  const target: PushTarget = {
+    repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
+    owner: {
+      principalId: owner.principalId,
+      token: await scopedToken(owner.principalId, [], "git"),
+    },
+    path: `/${owner.handle}/${repo.name}.git`,
+  };
+  const pushed = await postPush(
+    target,
+    pushBody([{ old: ZERO, new: fx.c1, ref: "refs/heads/main" }], { pack: fx.packC2 }),
+  );
+  expect(pushed.status).toBe(200);
+  const opened = await api("POST", `/repos/${owner.handle}/${repo.name}/issues`, owner.token, {
+    title: "One",
+  });
+  expect(opened.status).toBe(201);
+  return repo.id;
+}
+
+const repair = (repoId: string) =>
+  db
+    .prepare(
+      "SELECT dirty, active, covered, reason, since, next_at FROM search_repairs WHERE repo_id = ?",
+    )
+    .bind(repoId)
+    .first<{
+      dirty: number;
+      active: number | null;
+      covered: number;
+      reason: string;
+      since: number;
+      next_at: number;
+    }>();
+
+/** A source's need with its parking. */
+const parking = (repoId: string) =>
+  db
+    .prepare(
+      `SELECT dirty, covered, next_at, blocked_reason, retry_at FROM search_repairs
+       WHERE repo_id = ?`,
+    )
+    .bind(repoId)
+    .first<{
+      dirty: number;
+      covered: number;
+      next_at: number;
+      blocked_reason: string | null;
+      retry_at: number;
+    }>();
+
+/** Runs `work` with the database at its size threshold (what was reserved released first). */
+async function atThreshold<T>(work: () => Promise<T>): Promise<T> {
+  await withReadModel(env, DEFAULT_ORG_SHARD, (readModel) =>
+    readModel.prepare("UPDATE search_size SET bytes = bytes WHERE id = 1").run(),
+  );
+  await db
+    .prepare("UPDATE search_size SET bytes = ? WHERE id = 1")
+    .bind(ADMISSION.maxBytes - 1)
+    .run();
+  try {
+    return await work();
+  } finally {
+    await db.prepare("UPDATE search_size SET bytes = 0 WHERE id = 1").run();
+  }
+}
+
+/** Runs the job until `repoId`'s need is covered (a run at most each of its pages). */
+async function untilCovered(repoId: string, options: { now?: number } = {}): Promise<void> {
+  for (let run = 0; run < 12 && (await repair(repoId))?.covered === 0; run++)
+    await runSearchRepairs(env, options);
+}
+
+/** `env` whose first batch of a reconciliation's checkpoint runs `before` first. */
+function racing(before: () => Promise<void>): Env {
+  let raced = false;
+  const org = new Proxy(env.ORG_READ, {
+    get(target, prop) {
+      if (prop === "batch")
+        return async (statements: D1PreparedStatement[]) => {
+          const sql = statements.map((s) => (s as unknown as { statement: string }).statement);
+          if (!raced && sql.some((q) => q.includes("UPDATE search_reconciles SET kind"))) {
+            raced = true;
+            await before();
+          }
+          return target.batch(statements);
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(env, {
+    get: (target, prop) => (prop === "ORG_READ" ? org : Reflect.get(target, prop)),
+  });
+}
+
+/** Rows search's spending holds today. */
+const spentRows = async () =>
+  (
+    await db
+      .prepare("SELECT rows FROM search_budget WHERE day = CAST(unixepoch() / 86400 AS INTEGER)")
+      .first<{ rows: number }>()
+  )?.rows ?? 0;
+
+async function indexing(on: boolean): Promise<void> {
+  await (on
+    ? env.DIRECTORY.prepare(
+        `INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', 'on', 0)
+         ON CONFLICT (name) DO UPDATE SET value = 'on'`,
+      )
+    : env.DIRECTORY.prepare("DELETE FROM deployment_settings WHERE name = 'search_indexing'")
+  ).run();
+}
+
+/** `env` whose repositories in `failing` fail every export. */
+function failingFor(failing: ReadonlySet<string>): Env {
+  const repos = new Proxy(env.REPO, {
+    get(target, prop) {
+      if (prop === "getByName")
+        return (name: string) =>
+          failing.has(name)
+            ? { exportPage: () => Promise.reject(new Error("export failed")) }
+            : target.getByName(name);
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(env, {
+    get: (target, prop) => (prop === "REPO" ? repos : Reflect.get(target, prop)),
+  });
+}
+
+/**
+ * `env` whose calls (D1's, org and directory, queries and batches, and the
+ * repository objects' exports) are counted in `seen`.
+ */
+function countingCalls(seen: { calls: number }): Env {
+  const count = (d1: D1Database): D1Database =>
+    new Proxy(d1, {
+      get(target, prop) {
+        if (prop === "batch")
+          return (batch: D1PreparedStatement[]) => {
+            seen.calls++;
+            return target.batch(batch);
+          };
+        if (prop === "prepare")
+          return (sql: string) => {
+            const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+              new Proxy(statement, {
+                get(t, p) {
+                  if (p === "bind") return (...v: unknown[]) => wrap(t.bind(...v));
+                  if (p === "run" || p === "all" || p === "first" || p === "raw")
+                    return (...a: unknown[]) => {
+                      seen.calls++;
+                      return (Reflect.get(t, p) as (...x: unknown[]) => unknown).apply(t, a);
+                    };
+                  const value = Reflect.get(t, p);
+                  return typeof value === "function" ? value.bind(t) : value;
+                },
+              });
+            return wrap(target.prepare(sql));
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  const org = count(env.ORG_READ);
+  const directory = count(env.DIRECTORY);
+  const repos = new Proxy(env.REPO, {
+    get(target, prop) {
+      if (prop === "getByName")
+        return (name: string) => {
+          const stub = target.getByName(name);
+          return new Proxy(stub, {
+            get(t, p) {
+              if (p === "exportPage")
+                return (...a: Parameters<typeof stub.exportPage>) => {
+                  seen.calls++;
+                  return t.exportPage(...a);
+                };
+              return Reflect.get(t, p);
+            },
+          });
+        };
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(env, {
+    get: (target, prop) =>
+      prop === "ORG_READ"
+        ? org
+        : prop === "DIRECTORY"
+          ? directory
+          : prop === "REPO"
+            ? repos
+            : Reflect.get(target, prop),
+  });
+}
+
+afterEach(() => indexing(false));
+
+describe("search repair needs", () => {
+  it("ask once while one is pending, and again after the pass under way", async () => {
+    const repoId = uniqueId("rep");
+    await repairStatement(db, repoId, "restored", 10).run();
+    expect(await repair(repoId)).toEqual({
+      dirty: 1,
+      active: null,
+      covered: 0,
+      reason: "restored",
+      since: 10,
+      next_at: 10,
+    });
+    // Pending: nothing written.
+    expect((await repairStatement(db, repoId, "again", 20).run()).meta.changes).toBe(0);
+    // A pass covers revision 1; a need meanwhile asks for revision 2, once.
+    await db
+      .prepare("UPDATE search_repairs SET active = dirty WHERE repo_id = ?")
+      .bind(repoId)
+      .run();
+    expect((await repairStatement(db, repoId, "during", 30).run()).meta.changes).toBe(1);
+    expect((await repairStatement(db, repoId, "during", 40).run()).meta.changes).toBe(0);
+    expect(await repair(repoId)).toMatchObject({ dirty: 2, active: 1, covered: 0, since: 10 });
+  });
+
+  it("are covered by the pass that started with them, and one asked during it asks for another", async () => {
+    const repoId = await repository();
+    await repairStatement(db, repoId, "backfill", 1).run();
+    expect(await reconcileSource(env, { repoId, shard: "default" }, { pages: 1 })).toBe("more");
+    expect(await repair(repoId)).toMatchObject({ dirty: 1, active: 1, covered: 0 });
+    await repairStatement(db, repoId, "lost", 2).run();
+    expect(await reconcileSource(env, { repoId, shard: "default" })).toBe("done");
+    expect(await repair(repoId)).toMatchObject({ dirty: 2, active: null, covered: 1 });
+    expect(await reconcileSource(env, { repoId, shard: "default" })).toBe("done");
+    expect(await repair(repoId)).toMatchObject({ dirty: 2, active: null, covered: 2 });
+  });
+});
+
+describe("the search repair job", () => {
+  it("does nothing while search indexing is off", async () => {
+    const repoId = await repository();
+    await repairStatement(db, repoId, "backfill", 1).run();
+    expect(await runSearchRepairs(env)).toEqual({ worked: 0, merged: 0 });
+    expect(await repair(repoId)).toMatchObject({ dirty: 1, covered: 0 });
+  });
+
+  it("works the oldest needs first, a page each, the unfinished going to the back", async () => {
+    const first = await repository();
+    const second = await repository();
+    // Only these two need it (earlier tests' sources aside).
+    await db.prepare("DELETE FROM search_repairs").run();
+    await repairStatement(db, first, "backfill", 1).run();
+    await repairStatement(db, second, "backfill", 2).run();
+    await indexing(true);
+    // A page each (each pass's start), the first then behind the second.
+    expect(await runSearchRepairs(env, { pages: 2 * REPAIR_POLICY.pagesPerSource })).toMatchObject({
+      worked: 2,
+    });
+    const [ahead, behind] = [await repair(first), await repair(second)];
+    expect(ahead).toMatchObject({ dirty: 1, active: 1, covered: 0 });
+    expect(behind).toMatchObject({ dirty: 1, active: 1, covered: 0 });
+    expect(ahead?.next_at).toBeGreaterThan(2);
+    expect(behind?.next_at).toBeGreaterThan(ahead?.next_at ?? 0);
+    // Then a page each a turn, in that order, until both are through.
+    await untilCovered(second);
+    expect(await repair(first)).toMatchObject({ dirty: 1, covered: 1 });
+    expect(await repair(second)).toMatchObject({ dirty: 1, covered: 1 });
+    expect(
+      await db
+        .prepare("SELECT count(*) AS n FROM search_docs WHERE repo_id IN (?, ?)")
+        .bind(first, second)
+        .first(),
+    ).toEqual({ n: 2 });
+  });
+
+  it("gives the others their turns when a source fails, keeping its need", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const failing = uniqueId("rep");
+    const healthy = await repository();
+    await repairStatement(db, failing, "backfill", 1).run();
+    await repairStatement(db, healthy, "backfill", 2).run();
+    await indexing(true);
+    const broken = failingFor(new Set([failing]));
+    // A page a turn: every run fails the one, and works on the other until it is through.
+    for (let run = 0; run < 12 && (await repair(healthy))?.covered === 0; run++)
+      await expect(runSearchRepairs(broken)).rejects.toThrow(/1 search repair\(s\) failed/);
+    expect(await repair(healthy)).toMatchObject({ dirty: 1, covered: 1 });
+    expect(await repair(failing)).toMatchObject({ dirty: 1, covered: 0 });
+  });
+
+  it("parks a source whose pass ended partial until its wait is over, the others worked meanwhile", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const parked = await repository();
+    const other = await repository();
+    await repairStatement(db, parked, "backfill", 1).run();
+    const target = { repoId: parked, shard: DEFAULT_ORG_SHARD };
+    expect(await reconcileSource(env, target, { pages: 1 })).toBe("more");
+    // At the size threshold: its growth refused, so the pass ends partial, and its source waits.
+    const before = Date.now();
+    await atThreshold(async () => {
+      while ((await reconcileSource(env, target)) === "more");
+    });
+    const waiting = await parking(parked);
+    // (Asked for again meanwhile, for the additions it refused: still pending.)
+    expect(waiting).toMatchObject({ covered: 0, blocked_reason: "growth" });
+    expect(waiting?.retry_at).toBeGreaterThanOrEqual(before + RECONCILE_POLICY.parkFor);
+    // Passed over while it waits: the other, asked for after it, is worked through.
+    await repairStatement(db, other, "backfill", 2).run();
+    await indexing(true);
+    await untilCovered(other);
+    expect(await repair(other)).toMatchObject({ covered: 1 });
+    expect(await parking(parked)).toEqual(waiting);
+    // Its wait over: woken, at its place, and a whole pass made.
+    await untilCovered(parked, { now: (waiting?.retry_at ?? 0) + 1 });
+    expect(await parking(parked)).toMatchObject({
+      covered: waiting?.dirty,
+      blocked_reason: null,
+      retry_at: 0,
+    });
+  });
+
+  it("parks the only source due through its own run, its turn still taken", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const only = await repository();
+    await repairStatement(db, only, "backfill", 1).run();
+    await indexing(true);
+    // Its pass started, then partial (at the size threshold) to its end, nothing else due.
+    await runSearchRepairs(env);
+    await atThreshold(async () => {
+      for (let run = 0; run < 12 && (await parking(only))?.blocked_reason === null; run++)
+        await runSearchRepairs(env);
+    });
+    const parked = await parking(only);
+    expect(parked).toMatchObject({ covered: 0 });
+    expect(parked?.blocked_reason).not.toBeNull();
+    // Nothing due while it waits: the run works no source.
+    expect(await runSearchRepairs(env)).toMatchObject({ worked: 0 });
+  });
+
+  it("parks nothing by a finishing step another caller worked first", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const repoId = await repository();
+    await repairStatement(db, repoId, "backfill", 1).run();
+    const target = { repoId, shard: DEFAULT_ORG_SHARD };
+    const at = () =>
+      db
+        .prepare("SELECT kind, after FROM search_reconciles WHERE repo_id = ?")
+        .bind(repoId)
+        .first<{ kind: string; after: number }>();
+    // Up to its finishing step (the repository's own row), the pass partial.
+    for (let step = 0; step < 12 && (await at())?.after !== -1; step++)
+      await reconcileSource(env, target, { pages: 1 });
+    expect(await at()).toEqual({ kind: "milestones", after: -1 });
+    await db
+      .prepare(
+        "UPDATE search_reconciles SET partial = 1, partial_reason = 'growth' WHERE repo_id = ?",
+      )
+      .bind(repoId)
+      .run();
+    // Another caller finishes it first (parking its source), and its wait ends; then this one's
+    // finishing, made from the same step, is refused and parks nothing.
+    expect(
+      await reconcileSource(
+        racing(async () => {
+          expect(await reconcileSource(env, target, { pages: 1 })).toBe("done");
+          expect((await parking(repoId))?.blocked_reason).toBe("growth");
+          await db
+            .prepare(
+              "UPDATE search_repairs SET blocked_reason = NULL, retry_at = 0 WHERE repo_id = ?",
+            )
+            .bind(repoId)
+            .run();
+        }),
+        target,
+        { pages: 1 },
+      ),
+    ).toBe("more");
+    expect(await parking(repoId)).toMatchObject({ blocked_reason: null, retry_at: 0 });
+  });
+
+  it("charges a run that finds nothing due what its batches wrote", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    await indexing(true);
+    const before = await spentRows();
+    // (Its calls too few for the indexes' merges after.)
+    expect(await runSearchRepairs(env, { calls: 6 })).toEqual({ worked: 0, merged: 0 });
+    // The selection's batch's admission, the closing spending's (its admission and its own row)
+    // and the writer's lease and size observation.
+    expect((await spentRows()) - before).toBe(
+      READ_MODEL_ADMISSION.rows +
+        SPENDING.rows +
+        1 +
+        READ_MODEL_LEASE.rows +
+        READ_MODEL_OBSERVATION.rows,
+    );
+  });
+
+  it("wakes no more parked sources a run than its policy allows, the earliest due first", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const ids = [uniqueId("rep"), uniqueId("rep"), uniqueId("rep")];
+    for (const [i, id] of ids.entries()) {
+      await repairStatement(db, id, "backfill", 1).run();
+      await db
+        .prepare(
+          "UPDATE search_repairs SET blocked_reason = 'growth', retry_at = ? WHERE repo_id = ?",
+        )
+        .bind(100 + i, id)
+        .run();
+    }
+    await indexing(true);
+    // Not yet due: none woken.
+    await runSearchRepairs(env, { now: 99, calls: 6 });
+    expect((await Promise.all(ids.map(parking))).map((p) => p?.blocked_reason)).toEqual([
+      "growth",
+      "growth",
+      "growth",
+    ]);
+    await runSearchRepairs(env, { now: 1_000, calls: 6 });
+    expect((await Promise.all(ids.map(parking))).map((p) => p?.blocked_reason)).toEqual([
+      ...Array(REPAIR_POLICY.wakePerRun).fill(null),
+      "growth",
+    ]);
+  });
+
+  it("puts a source that had its turn behind every one still waiting, whatever the clock", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const stuck = [uniqueId("rep"), uniqueId("rep"), uniqueId("rep"), uniqueId("rep")];
+    const waiting = await repository();
+    for (const id of stuck) await repairStatement(db, id, "backfill", 1).run();
+    // Asked for later than the clock reads now (another instance's clock ahead).
+    await repairStatement(db, waiting, "backfill", Date.now() + 1_000_000_000).run();
+    await indexing(true);
+    const broken = failingFor(new Set(stuck));
+    // The four oldest fill the run, and fail; then the one waiting is next.
+    await expect(runSearchRepairs(broken)).rejects.toThrow(/4 search repair/);
+    expect(await repair(waiting)).toMatchObject({ covered: 0 });
+    // (The others after it, as many as the run's calls allow), a page a turn until it is through.
+    for (let run = 0; run < 12 && (await repair(waiting))?.covered === 0; run++)
+      await expect(runSearchRepairs(broken)).rejects.toThrow(/search repair\(s\) failed/);
+    expect(await repair(waiting)).toMatchObject({ dirty: 1, covered: 1 });
+  });
+
+  it("makes no more D1 calls a run than it is allowed", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    const sources = [await repository(), await repository(), await repository()];
+    for (const [i, id] of sources.entries()) await repairStatement(db, id, "backfill", i).run();
+    await indexing(true);
+    const seen = { calls: 0 };
+    await runSearchRepairs(countingCalls(seen));
+    expect(seen.calls).toBeGreaterThan(REPAIR_POLICY.callsPerRun / 2);
+    expect(seen.calls).toBeLessThanOrEqual(REPAIR_POLICY.callsPerRun);
+  });
+
+  it("keeps within a small call budget, its own accounting and recorded size included", async () => {
+    await db.prepare("DELETE FROM search_repairs").run();
+    await repairStatement(db, await repository(), "backfill", 0).run();
+    await indexing(true);
+    // Below a reconciliation's turn, at it and past it.
+    for (const calls of [1, 4, 5, 6, 7, 9, 15, 16, 17, 20]) {
+      const seen = { calls: 0 };
+      await runSearchRepairs(countingCalls(seen), { calls });
+      expect({ calls, made: Math.min(seen.calls, calls) }).toEqual({ calls, made: seen.calls });
+    }
+  });
+});

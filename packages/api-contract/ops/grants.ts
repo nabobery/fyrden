@@ -1,4 +1,4 @@
-import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, PERMISSION_NAMES } from "@fyrden/domain";
+import { HANDLE_SHAPE, MAX_HANDLE_LENGTH, SCOPE_NAMES } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
 
@@ -47,7 +47,7 @@ export const createGrant = defineOperation({
       .regex(HANDLE_SHAPE)
       .describe("The agent's handle."),
     scopes: z
-      .array(z.enum(PERMISSION_NAMES))
+      .array(z.enum(SCOPE_NAMES))
       .min(1)
       .max(32)
       .describe("Permissions the agent may use for you (and what they imply)."),

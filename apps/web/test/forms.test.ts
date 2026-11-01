@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { readForm } from "../app/lib/api.server.js";
 import { action as indexAction } from "../app/routes/_index.js";
 import { action } from "../app/routes/repo.edit.js";
+import { action as issueAction } from "../app/routes/repo.issue.js";
+import { action as issuesAction } from "../app/routes/repo.issues.js";
 import { action as pullConflictsAction } from "../app/routes/repo.pull.conflicts.js";
 import { action as pullFilesAction } from "../app/routes/repo.pull.files.js";
 import { action as pullAction } from "../app/routes/repo.pull.js";
@@ -81,6 +83,8 @@ describe("every form action", () => {
     const actions = [
       ["_index", indexAction],
       ["repo.edit", action],
+      ["repo.issue", issueAction],
+      ["repo.issues", issuesAction],
       ["repo.pull", pullAction],
       ["repo.pull.conflicts", pullConflictsAction],
       ["repo.pull.files", pullFilesAction],

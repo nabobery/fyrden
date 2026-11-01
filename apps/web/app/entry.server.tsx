@@ -20,7 +20,8 @@ export const streamTimeout = 5_000;
 function contentSecurityPolicy(nonce: string): string {
   return [
     "default-src 'self'",
-    `script-src 'self' 'nonce-${nonce}'`,
+    // WebAssembly compiled from the origin's own scripts (code highlighting); no eval of strings.
+    `script-src 'self' 'nonce-${nonce}' 'wasm-unsafe-eval'`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data:",
     "font-src 'self' data:",

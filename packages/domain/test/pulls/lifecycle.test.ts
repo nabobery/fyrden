@@ -49,7 +49,7 @@ describe("decidePullAction", () => {
     });
   });
 
-  it("leaves a merged pull request alone except for its title and body", () => {
+  it("leaves a merged pull request alone except for its title, body and lock", () => {
     for (const action of PULL_ACTIONS) {
       const decision = decidePullAction(action, {
         state: "merged",
@@ -57,7 +57,7 @@ describe("decidePullAction", () => {
         isAuthor: true,
         role: "admin",
       });
-      expect(decision.ok).toBe(action === "edit");
+      expect(decision.ok).toBe(action === "edit" || action === "lock" || action === "unlock");
     }
   });
 

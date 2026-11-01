@@ -27,8 +27,11 @@ export interface DoctorReport {
   schemaDrift: string[];
 }
 
-/** The binding of the database that holds the effects journal. */
+/** The binding of the database that holds the effects journal (the org read model, search's too). */
 const EFFECTS_BINDING = "ORG_READ";
+
+/** The binding of the directory database (the deployment's settings). */
+const DIRECTORY_BINDING = "DIRECTORY";
 
 const EFFECTS_SUMMARY =
   "SELECT state, count(*) AS count, min(created_at) AS oldest FROM effects GROUP BY state ORDER BY state";
@@ -100,6 +103,15 @@ export async function doctor(
     }
     if (db.binding === EFFECTS_BINDING) log(await effectsSummary(runner, apiDir, db.name));
   }
+  const directory = plan.d1.find((db) => db.binding === DIRECTORY_BINDING);
+  const org = plan.d1.find((db) => db.binding === EFFECTS_BINDING);
+  if (
+    directory &&
+    org &&
+    !missing.includes(`d1:${directory.name}`) &&
+    !missing.includes(`d1:${org.name}`)
+  )
+    log(await searchSummary(runner, apiDir, directory.name, org.name));
 
   // The key webhook secrets are sealed with (deploy makes it when there is none).
   const secrets = await workerSecrets(runner, config.name).catch(() => null);
@@ -144,6 +156,47 @@ async function effectsSummary(runner: WranglerRunner, apiDir: string, db: string
     return `info ${db} effects: ${states.length > 0 ? states.join(", ") : "none"}`;
   } catch (error) {
     return `WARN could not summarise the ${db} effects: ${message(error)}`;
+  }
+}
+
+/**
+ * Search's state, read only: whether indexing is on and at which
+ * generation, and a repository not yet known whole to search at it (one
+ * row each through an index; none listed is not proof that a backfill
+ * reached every repository).
+ */
+async function searchSummary(
+  runner: WranglerRunner,
+  apiDir: string,
+  directoryDb: string,
+  orgDb: string,
+): Promise<string> {
+  try {
+    const settings = await queryRemote<{ name: string; value: string }>(
+      runner,
+      apiDir,
+      directoryDb,
+      "SELECT name, value FROM deployment_settings WHERE name IN ('search_indexing', 'search_indexing_generation')",
+    );
+    const value = (name: string) => settings.find((s) => s.name === name)?.value;
+    // 1 before any change (as the API reads it).
+    const gen = Number.parseInt(value("search_indexing_generation") ?? "1", 10) || 1;
+    if (value("search_indexing") !== "on")
+      return `info search indexing is off (generation ${gen}): PUT /api/admin/search/indexing turns it on, then POST /api/admin/search/backfill`;
+    const [waiting] = await queryRemote<{ uncovered: string | null; stale: string | null }>(
+      runner,
+      apiDir,
+      orgDb,
+      `SELECT (SELECT repo_id FROM search_sources WHERE index_covered = 0 ORDER BY repo_id LIMIT 1) AS uncovered,
+         (SELECT repo_id FROM search_sources WHERE index_covered = 1 AND indexing_gen < ${gen}
+           ORDER BY indexing_gen, repo_id LIMIT 1) AS stale`,
+    );
+    const repo = waiting?.uncovered ?? waiting?.stale;
+    return repo
+      ? `WARN search indexing is on (generation ${gen}), but ${repo} is not yet known whole to search: results may be incomplete until the repair job reconciles it (POST /api/admin/search/backfill asks for every repository)`
+      : `ok   search indexing is on (generation ${gen}); no repository waits to be known whole`;
+  } catch (error) {
+    return `WARN could not read search's state: ${message(error)}`;
   }
 }
 

@@ -28,10 +28,12 @@ export async function starRepoOperation(
 ): Promise<Output<typeof starRepo>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "metadata:read");
   ctx.metrics.count("d1.query", { db: "directory", op: "star_put" });
-  // Only while the repository is active: a deletion that started meanwhile wins.
+  // Only while the repository is active and the caller is: a deletion that started meanwhile,
+  // of either, wins.
   await ctx.env.DIRECTORY.prepare(
     `INSERT INTO stars (user_id, repo_id, created_at)
      SELECT ?1, id, ?3 FROM repos WHERE id = ?2 AND state = 'active'
+       AND EXISTS (SELECT 1 FROM principals WHERE id = ?1 AND lifecycle = 'active')
      ON CONFLICT (user_id, repo_id) DO NOTHING`,
   )
     .bind(ctx.auth.principalId, entry.id, clock())
@@ -128,7 +130,7 @@ async function listStars(
     .prepare(
       `SELECT ${REPO_COLUMNS}, s.created_at AS starred_at
        FROM stars s JOIN repos r ON r.id = s.repo_id JOIN principals p ON p.id = r.owner_id
-       WHERE s.user_id = ? AND r.state = 'active' AND p.disabled_at IS NULL
+       WHERE s.user_id = ? AND r.state = 'active' AND p.lifecycle IN ('active', 'suspended')
          AND (s.created_at, s.repo_id) < (?, ?)
          AND (? IS NULL OR s.repo_id IN (SELECT value FROM json_each(?)))
        ORDER BY s.created_at DESC, s.repo_id DESC LIMIT ?`,

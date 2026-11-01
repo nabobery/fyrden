@@ -10,7 +10,7 @@ export type GitContext = Context<{ Bindings: Env; Variables: AuthVariables }>;
  */
 export function gitText(
   c: GitContext,
-  status: 400 | 401 | 403 | 404 | 413 | 415 | 429,
+  status: 400 | 401 | 403 | 404 | 413 | 415 | 429 | 503,
   message: string,
   headers: Record<string, string> = {},
 ): Response {

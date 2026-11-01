@@ -1,6 +1,13 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { RepoExport } from "../do/repo/events.js";
-import { epochStatement, repoStatement, type Snapshot } from "../queues/events-consumer.js";
+import {
+  type Admission,
+  epochStatement,
+  repoIndexStatement,
+  repoIndexUse,
+  repoStatements,
+  type Snapshot,
+} from "../queues/events-consumer.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "./read-model.js";
 
 /**
@@ -57,6 +64,39 @@ export async function applyExport(
 ): Promise<void> {
   const now = options.now?.() ?? Date.now();
   const db = readModelFor(env, shard);
+  // Its repository index entry kept while search indexes.
+  options.metrics?.count("d1.query", { db: "directory", op: "search_indexing" });
+  const indexing =
+    (
+      await env.DIRECTORY.prepare(
+        "SELECT value FROM deployment_settings WHERE name = 'search_indexing'",
+      ).first<{ value: string }>()
+    )?.value === "on";
+  const statements = exportStatements(db, exported, now, indexing);
+  options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
+  const results = await db.batch(statements);
+  // What its index entry used of the repository index allowance, settled (a write of its own).
+  const settled = repoIndexStatement(db, repoIndexUse(results.slice(1), true));
+  if (settled.length > 0) {
+    options.metrics?.count("d1.query", { db: "org", op: "search_spent" });
+    await db.batch(settled);
+  }
+}
+
+/**
+ * The statements that apply an exported snapshot: the source's epoch, then
+ * each entity through the consumer's guarded upsert (its repository index
+ * entry kept while search indexes, `indexing`).
+ */
+export function exportStatements(
+  db: D1Database,
+  exported: RepoExport,
+  now: number,
+  indexing: boolean,
+  admit?: Admission,
+  /** A missing repository index entry put back (a reconciliation's last step). */
+  repairIndex = false,
+): D1PreparedStatement[] {
   const { sourceId } = exported;
   const snapshots: Snapshot[] = exported.entities.map((entity) => ({
     id: {
@@ -73,12 +113,12 @@ export async function applyExport(
     data: null,
     stored: false,
   }));
-  const statements = [
+  return [
     epochStatement(db, sourceId, exported.epochGen, now),
-    ...snapshots.map((snapshot) => repoStatement(db, sourceId, snapshot, now)),
+    ...snapshots.flatMap((snapshot) =>
+      repoStatements(db, sourceId, snapshot, now, indexing, admit, repairIndex),
+    ),
   ];
-  options.metrics?.count("d1.query", { db: "org", op: "rebuild_apply" }, statements.length);
-  await db.batch(statements);
 }
 
 /**

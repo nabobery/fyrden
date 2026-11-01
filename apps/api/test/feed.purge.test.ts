@@ -9,6 +9,7 @@ import { env } from "cloudflare:workers";
 import {
   createIdFactory,
   type DomainEvent,
+  eventKey,
   type FeedEntry,
   secureRandomBytes,
 } from "@fyrden/domain";
@@ -16,13 +17,20 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
-import type { FeedPurge } from "../src/do/user/feed.js";
-import { sweepEffects } from "../src/effects/dispatcher.js";
-import { EFFECT_POLICY, type Effect, type EffectSink } from "../src/effects/journal.js";
+import { Feed, type FeedPurge } from "../src/do/user/feed.js";
+import { deliverEffects, invocationBudget, recoverEffects } from "../src/effects/dispatcher.js";
+import {
+  EFFECT_POLICY,
+  type Effect,
+  type EffectSink,
+  effectStatements,
+} from "../src/effects/journal.js";
 import { feedSink } from "../src/feed/sink.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
 import { api, json, user } from "./helpers/api.js";
-import { settleOthersDue } from "./helpers/effects.js";
+import { recordingPublish } from "./helpers/effects.js";
+import { FROM_START, shownCount } from "./helpers/feed.js";
+import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 
@@ -55,7 +63,7 @@ function entry(repoId: string, version: number, occurredAt: number): FeedEntry {
 }
 
 async function shown(stub: DurableObjectStub<UserDO>) {
-  const page = await stub.listFeed(null, 100, {});
+  const page = await stub.listStreams(FROM_START, 100, {});
   if (page.expired) throw new Error("expired");
   return page.items.map((item) => [item.repoId, item.members]);
 }
@@ -116,10 +124,7 @@ describe("purging a feed", () => {
     for (const late of [purgeOf(["rep_a"], t + 1_000, 4), purgeOf(["rep_a"], t - 500, 5)])
       expect(await stub.purge(late)).toEqual({ deleted: 0 });
     expect(await shown(stub)).toHaveLength(2);
-    const items = await runInDurableObject(stub, (_: UserDO, state) =>
-      state.storage.sql.exec("SELECT items FROM feed_meta").one(),
-    );
-    expect(items).toEqual({ items: 2 });
+    expect(await runInDurableObject(stub, (_: UserDO, state) => shownCount(state.storage))).toBe(2);
     // A newer one applies, its mark kept for the repository.
     expect(await stub.purge(purgeOf(["rep_a"], t, 6))).toEqual({ deleted: 1 });
     expect(await marks(stub)).toEqual([
@@ -141,7 +146,7 @@ describe("purging a feed", () => {
     await first.purge(purge);
     await first.applyFeed([old, fresh]);
     const item = async (stub: DurableObjectStub<UserDO>) => {
-      const page = await stub.listFeed(null, 10, {});
+      const page = await stub.listStreams(FROM_START, 10, {});
       if (page.expired) throw new Error("expired");
       return page.items.map((i) => ({ members: i.members, member: i.member, actor: i.actor }));
     };
@@ -162,7 +167,7 @@ describe("purging a feed", () => {
       const stub = env.USER.getByName(uniqueId("usr"));
       for (const one of order) await stub.applyFeed([one]);
       await stub.purge(purgeOf(["rep_a"], t - 500, 5));
-      const page = await stub.listFeed(null, 10, {});
+      const page = await stub.listStreams(FROM_START, 10, {});
       if (page.expired) throw new Error("expired");
       expect(page.items).toMatchObject([
         { epoch: 2, members: ["comment/1"], member: "comment/1", actor: "usr_new" },
@@ -306,16 +311,17 @@ const principals = (n: number) =>
 
 /** The account's effects: `[effect id, state, attempts]`. */
 async function effectsOf(accountId: string) {
-  const { results } = await env.ORG_READ.prepare(
-    "SELECT effect_id, state, attempts, lease_token FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
-  )
+  const { results } = await admitted()
+    .prepare(
+      "SELECT effect_id, state, attempts, lease_token FROM effects WHERE effect_id LIKE ? ORDER BY effect_id",
+    )
     .bind(`${accountId}:%`)
     .all<{ effect_id: string; state: string; attempts: number; lease_token: string | null }>();
   return results;
 }
 
 describe("the feed sink and access revocations", () => {
-  it("plans a revocation as purges of at most 100 principals, and none for one it cannot read", () => {
+  it("plans a revocation as purges of at most 100 principals and 2 repositories, and none for one it cannot read", () => {
     const sourceId = newId("org");
     const event = revokedEvent(sourceId, 1, {
       principals: ["usr_a"],
@@ -324,7 +330,7 @@ describe("the feed sink and access revocations", () => {
     });
     expect(feedSink.plan(event)).toEqual([
       {
-        target: "purge:0",
+        target: "purge:0:r0",
         payload: {
           purge: {
             accountId: sourceId,
@@ -341,8 +347,31 @@ describe("the feed sink and access revocations", () => {
       ...event,
       data: { principals: principals(1_050), repos: ["rep_x"], acl_version: 3 },
     });
-    expect(many.map((p) => p.target)).toEqual(Array.from({ length: 11 }, (_, i) => `purge:${i}`));
+    expect(many.map((p) => p.target)).toEqual(
+      Array.from({ length: 11 }, (_, i) => `purge:${i}:r0`),
+    );
     expect(many.map((p) => feedSink.calls?.(p))).toEqual([...Array(10).fill(100), 50]);
+    // Five repositories: three effects for each part, of at most two repositories.
+    const wide = feedSink.plan({
+      ...event,
+      data: { principals: principals(150), repos: ["r1", "r2", "r3", "r4", "r5"], acl_version: 3 },
+    });
+    expect(wide.map((p) => p.target)).toEqual([
+      "purge:0:r0",
+      "purge:0:r1",
+      "purge:0:r2",
+      "purge:1:r0",
+      "purge:1:r1",
+      "purge:1:r2",
+    ]);
+    expect(wide.map((p) => (p.payload as { purge: { repos: string[] } }).purge.repos)).toEqual([
+      ["r1", "r2"],
+      ["r3", "r4"],
+      ["r5"],
+      ["r1", "r2"],
+      ["r3", "r4"],
+      ["r5"],
+    ]);
     expect(feedSink.plan({ ...event, data: null, stored: true })).toEqual([]);
     expect(feedSink.plan({ ...event, data: { principals: [] } })).toEqual([]);
   });
@@ -405,9 +434,8 @@ describe("the feed sink and access revocations", () => {
       epochGen: 1,
       aclVersion: 9,
     });
-    const epoch = await env.ORG_READ.prepare(
-      "SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?",
-    )
+    const epoch = await admitted()
+      .prepare("SELECT epoch_gen FROM consumer_epochs WHERE source_id = ?")
       .bind(orgId)
       .first();
     expect(epoch).toEqual({ epoch_gen: 1 });
@@ -498,11 +526,10 @@ describe("the feed sink and access revocations", () => {
     expect(purges.map((p) => p.purge.repoIds)).toEqual([[leaving, staying]]);
   });
 
-  it("completes a revocation of 1,050 principals across sweeps, each within its calls", async () => {
+  it("completes a revocation of 1,050 principals across queue messages, each invocation within its calls", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
-    // Its sweeps' bounds hold for its own effects: others' are settled first.
-    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       on,
       {
@@ -515,27 +542,33 @@ describe("the feed sink and access revocations", () => {
           }),
         ],
       },
-      // Nothing inline: the sweeper delivers it all.
-      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+      // Nothing inline: the feed's queue delivers it all.
+      { sinks: [feedSink], publish, inline: { batched: 0 } },
     );
     expect(await effectsOf(orgId)).toHaveLength(11);
-    const due = Date.now() + EFFECT_POLICY.sweepAfterMs;
-    let sweeps = 0;
-    while ((await effectsOf(orgId)).some((e) => e.state === "pending")) {
+    // The queue: one message an invocation, what each sends back taken by a later one.
+    let invocations = 0;
+    for (let next = sent.shift(); next; next = sent.shift()) {
       const before = purges.length;
-      await sweepEffects({ db: env.ORG_READ, env: on, sinks: [feedSink], now: () => due });
-      expect(purges.length - before).toBeLessThanOrEqual(EFFECT_POLICY.sweepCalls);
-      sweeps++;
-      expect(sweeps).toBeLessThanOrEqual(3);
+      const now = Date.now();
+      await deliverEffects(
+        { db: admitted(), env: on, sinks: [feedSink], now: () => now, publish },
+        next.sink,
+        next.ids,
+        invocationBudget(now),
+      );
+      expect(purges.length - before).toBeLessThanOrEqual(EFFECT_POLICY.invocation.calls);
+      invocations++;
+      expect(invocations).toBeLessThanOrEqual(3);
     }
+    expect((await effectsOf(orgId)).every((e) => e.state === "done")).toBe(true);
     expect(new Set(purges.map((p) => p.principal)).size).toBe(1_050);
   });
 
-  it("gives back, untried, the effects past a sweep's calls", async () => {
+  it("gives back, untried, the effects past an invocation's calls, and sends them back", async () => {
     const orgId = newId("org");
     const { on, purges } = recordingPurges();
-    // Its sweeps' bounds hold for its own effects: others' are settled first.
-    await settleOthersDue(Date.now() + EFFECT_POLICY.sweepAfterMs + 60_000);
+    const { publish, sent } = recordingPublish();
     await applyEnvelope(
       on,
       {
@@ -544,23 +577,237 @@ describe("the feed sink and access revocations", () => {
           revokedEvent(orgId, 1, { principals: principals(400), repos: ["rep_x"], acl_version: 2 }),
         ],
       },
-      { sinks: [feedSink], inline: { left: 0, batched: 0 } },
+      { sinks: [feedSink], publish, inline: { batched: 0 } },
     );
-    await sweepEffects({
-      db: env.ORG_READ,
-      env: on,
-      sinks: [feedSink],
-      now: () => Date.now() + EFFECT_POLICY.sweepAfterMs,
-      policy: { ...EFFECT_POLICY, sweepCalls: 150 },
-    });
+    const [message] = sent.splice(0);
+    const policy = {
+      ...EFFECT_POLICY,
+      invocation: { ...EFFECT_POLICY.invocation, calls: 150 },
+    };
+    const now = Date.now();
+    await deliverEffects(
+      { db: admitted(), env: on, sinks: [feedSink], now: () => now, publish, policy },
+      "feed",
+      message?.ids ?? [],
+      invocationBudget(now, policy),
+    );
     expect(purges).toHaveLength(100);
     const rows = await effectsOf(orgId);
     expect(rows.filter((e) => e.state === "done")).toHaveLength(1);
-    expect(rows.filter((e) => e.state === "pending")).toEqual(
-      expect.arrayContaining([expect.objectContaining({ attempts: 0, lease_token: null })]),
+    const pending = rows.filter((e) => e.state === "pending");
+    expect(pending).toHaveLength(3);
+    expect(pending.every((e) => e.attempts === 0 && e.lease_token === null)).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect([...(sent[0]?.ids ?? [])].sort()).toEqual(pending.map((e) => e.effect_id).sort());
+  });
+});
+
+describe("a purge effect planned before purges named at most 2 repositories", () => {
+  it("is delivered as its children, journaled from it and kept with its origin, once", async () => {
+    const accountId = newId("org");
+    const event = revokedEvent(accountId, 3, {
+      principals: ["usr_a", "usr_b"],
+      repos: ["rep_1", "rep_2", "rep_3", "rep_4", "rep_5"],
+      acl_version: 7,
+    });
+    // As an earlier planner journaled it: one effect naming every repository.
+    const parentId = `${eventKey(event.id)}:feed:purge:0`;
+    const payload = {
+      purge: {
+        accountId,
+        principals: ["usr_a", "usr_b"],
+        repos: ["rep_1", "rep_2", "rep_3", "rep_4", "rep_5"],
+        until: event.at,
+        epochGen: 3,
+        aclVersion: 7,
+      },
+    };
+    await admitted()
+      .prepare(
+        `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at, source_id,
+         epoch_gen, owner_gen, any_owner, recover_at, deliver_until)
+       VALUES (?, 'feed', 'purge:0', ?, 0, 1000, ?, 3, 2, 1, 0, 9999999999999)`,
+      )
+      .bind(parentId, JSON.stringify(payload), accountId)
+      .run();
+    const { on, purges } = recordingPurges();
+    const parent = { id: parentId, sink: "feed", target: "purge:0", payload, attempts: 1 };
+    const delivered = await feedSink.deliverBatch?.([parent as Effect], on, admitted());
+    // No feed was called: the children were journaled, and the parent is done.
+    expect(delivered?.delivered).toEqual([parentId]);
+    expect(purges).toEqual([]);
+    const children = async () =>
+      (
+        await admitted()
+          .prepare(
+            `SELECT effect_id, target, payload, state, created_at, source_id, epoch_gen, owner_gen,
+             any_owner, deliver_until FROM effects WHERE effect_id LIKE ? ORDER BY effect_id`,
+          )
+          .bind(`${parentId}:%`)
+          .all<Record<string, unknown>>()
+      ).results;
+    const made = await children();
+    // Their ids are those the planner now gives the same event: delivered again, it adds none.
+    expect(made.map((c) => c.effect_id)).toEqual(
+      feedSink.plan(event).map((p) => `${eventKey(event.id)}:feed:${p.target}`),
     );
-    expect(rows.filter((e) => e.state === "pending" && (e.attempts > 0 || e.lease_token))).toEqual(
-      [],
-    );
+    for (const child of made)
+      expect(child).toMatchObject({
+        state: "pending",
+        created_at: 1000,
+        source_id: accountId,
+        epoch_gen: 3,
+        owner_gen: 2,
+        any_owner: 1,
+        deliver_until: 9999999999999,
+      });
+    expect(made.map((c) => JSON.parse(String(c.payload)).purge.repos)).toEqual([
+      ["rep_1", "rep_2"],
+      ["rep_3", "rep_4"],
+      ["rep_5"],
+    ]);
+    // Delivered again (a retry after the journal write): nothing journaled twice.
+    await feedSink.deliverBatch?.([parent as Effect], on, admitted());
+    expect(await children()).toHaveLength(3);
+  });
+
+  it("is done through the dispatcher; its children are sent by the cron, delivered, and ended by a restore", async () => {
+    const accountId = newId("org");
+    const repos = ["rep_1", "rep_2", "rep_3", "rep_4", "rep_5"];
+    const event = revokedEvent(accountId, 3, {
+      principals: ["usr_a", "usr_b"],
+      repos,
+      acl_version: 7,
+    });
+    const parentId = `${eventKey(event.id)}:feed:purge:0`;
+    const payload = {
+      purge: {
+        accountId,
+        principals: ["usr_a", "usr_b"],
+        repos,
+        until: event.at,
+        epochGen: 1,
+        aclVersion: 7,
+      },
+    };
+    await admitted().batch([
+      admitted()
+        .prepare(
+          "INSERT INTO consumer_epochs (source_id, epoch_gen, updated_at) VALUES (?, 1, 0) ON CONFLICT DO NOTHING",
+        )
+        .bind(accountId),
+      admitted()
+        .prepare(
+          `INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at,
+           source_id, epoch_gen, owner_gen, any_owner, recover_at)
+         VALUES (?, 'feed', 'purge:0', ?, 0, 0, ?, 1, 0, 1, 0)`,
+        )
+        .bind(parentId, JSON.stringify(payload), accountId),
+    ]);
+    const { on, purges } = recordingPurges();
+    const { publish, sent } = recordingPublish();
+    const now = Date.now();
+    const deps = { db: admitted(), env: on, sinks: [feedSink], now: () => now, publish };
+    await deliverEffects(deps, "feed", [parentId], invocationBudget(now));
+    const state = async (id: string) =>
+      admitted()
+        .prepare("SELECT state, last_error FROM effects WHERE effect_id = ?")
+        .bind(id)
+        .first<{ state: string; last_error: string | null }>();
+    expect(await state(parentId)).toMatchObject({ state: "done" });
+    expect(purges).toEqual([]);
+    const children = feedSink.plan(event).map((p) => `${eventKey(event.id)}:feed:${p.target}`);
+    // The event delivered again under the new planner (of the read model's epoch, so eligible):
+    // the same ids, nothing journaled twice, the children as the parent made them.
+    const org = admitted();
+    const again = await org.batch(effectStatements(org, [feedSink], accountId, [event], now));
+    expect(again.flatMap((r) => r.results)).toEqual([]);
+    const kept = await admitted()
+      .prepare(
+        "SELECT DISTINCT created_at, epoch_gen, owner_gen FROM effects WHERE effect_id LIKE ?",
+      )
+      .bind(`${parentId}:%`)
+      .all();
+    expect(kept.results).toEqual([{ created_at: 0, epoch_gen: 1, owner_gen: 0 }]);
+    const count = await admitted()
+      .prepare("SELECT count(*) AS n FROM effects WHERE effect_id LIKE ?")
+      .bind(`${parentId}:%`)
+      .first<{ n: number }>();
+    expect(count).toEqual({ n: 3 });
+    // The effects cron sends the children (overdue as journaled).
+    await recoverEffects({ ...deps, policy: { ...EFFECT_POLICY, recoverPage: 100_000 } });
+    expect(sent.flatMap((m) => m.ids)).toEqual(expect.arrayContaining(children));
+    await deliverEffects(deps, "feed", [children[0] ?? ""], invocationBudget(now));
+    expect(await state(children[0] ?? "")).toMatchObject({ state: "done" });
+    expect(purges.map((p) => [p.principal, p.purge.repoIds])).toEqual([
+      ["usr_a", ["rep_1", "rep_2"]],
+      ["usr_b", ["rep_1", "rep_2"]],
+    ]);
+    // The account restored to an earlier state since: a child not delivered yet is ended, as its
+    // parent would have been.
+    await admitted()
+      .prepare("UPDATE consumer_epochs SET epoch_gen = 2 WHERE source_id = ?")
+      .bind(accountId)
+      .run();
+    await deliverEffects(deps, "feed", [children[1] ?? ""], invocationBudget(now));
+    expect(await state(children[1] ?? "")).toMatchObject({
+      state: "failed",
+      last_error: expect.stringMatching(/^invalidated:/),
+    });
+    expect(purges).toHaveLength(2);
+  });
+
+  it("keeps a repository's purge, scheduling its retention, when the next repository's fails", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    const purge = {
+      repoIds: ["rep_ok", "rep_bad"],
+      until: Date.now(),
+      accountId: "org_x",
+      epochGen: 1,
+      aclVersion: 1,
+    };
+    const original = Feed.prototype.purge;
+    Feed.prototype.purge = function (this: Feed, p: FeedPurge) {
+      if (p.repoIds.includes("rep_bad")) throw new Error("the second repository failed");
+      return original.call(this, p);
+    };
+    try {
+      await runInDurableObject(stub, async (instance: UserDO) => {
+        await expect(instance.purge(purge)).rejects.toThrow(/second repository/);
+      });
+    } finally {
+      Feed.prototype.purge = original;
+    }
+    const after = await runInDurableObject(stub, async (_: UserDO, state) => ({
+      marks: state.storage.sql.exec("SELECT repo_id FROM purge_marks").toArray(),
+      schedule: state.storage.sql.exec("SELECT kind FROM user_schedule").toArray(),
+      alarm: (await state.storage.getAlarm()) !== null,
+    }));
+    expect(after).toEqual({
+      marks: [{ repo_id: "rep_ok" }],
+      schedule: [{ kind: "retain" }],
+      alarm: true,
+    });
+    // Retried: the first is a mark already, the second purged now.
+    expect(await stub.purge(purge)).toEqual({ deleted: 0 });
+  });
+
+  it("is refused by a feed when it names more than 2 repositories", async () => {
+    const stub = env.USER.getByName(uniqueId("usr"));
+    const purge = (repoIds: string[]) => ({
+      repoIds,
+      until: Date.now(),
+      accountId: "org_x",
+      epochGen: 1,
+      aclVersion: 1,
+    });
+    // Asked inside the object: a refusal across RPC is also reported as unhandled there.
+    await runInDurableObject(stub, async (instance: UserDO) => {
+      await expect(instance.purge(purge(["rep_1", "rep_2", "rep_3"]))).rejects.toThrow(/at most 2/);
+      await expect(
+        instance.forgetRepos([purge(["rep_1"]), purge(["rep_2"]), purge(["rep_3"])]),
+      ).rejects.toThrow(/at most 2/);
+      expect(await instance.purge(purge(["rep_1", "rep_2"]))).toEqual({ deleted: 0 });
+    });
   });
 });

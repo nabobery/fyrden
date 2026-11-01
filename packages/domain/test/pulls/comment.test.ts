@@ -24,3 +24,21 @@ describe("decideComment", () => {
     expect(decideComment("edit", { isCommentAuthor: false, role: "triage" }).ok).toBe(false);
   });
 });
+
+describe("decideComment on a locked conversation", () => {
+  it("lets only write and above comment, edit or delete, their own comments included", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom("create", "edit", "delete" as const),
+        fc.boolean(),
+        fc.constantFrom(null, ...REPO_ROLES),
+        (action, isCommentAuthor, role) => {
+          const decision = decideComment(action, { isCommentAuthor, role, locked: true });
+          expect(decision.ok).toBe(atLeast(role, "write"));
+          if (!decision.ok && atLeast(role, "read") && (action === "create" || isCommentAuthor))
+            expect(decision.refusal).toBe("locked");
+        },
+      ),
+    );
+  });
+});

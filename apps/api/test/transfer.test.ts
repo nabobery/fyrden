@@ -10,14 +10,16 @@ import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import { applyEnvelope } from "../src/queues/events-consumer.js";
+import { pauseReadModel, resumeReadModel } from "../src/read-model/maintenance.js";
 import { markDeletions } from "../src/repos/deletion.js";
 import { authorize, renameRepo, resolveRepo } from "../src/repos/directory.js";
-import { advanceTransfer } from "../src/repos/transfer.js";
+import { advanceTransfer, transferHooks } from "../src/repos/transfer.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { entry as feedEntry } from "./helpers/feed.js";
 import { scopedToken } from "./helpers/principals.js";
 import { postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
+import { admitted, runningAgain } from "./helpers/read-model.js";
 
 const fx = inject("pushFixtures");
 
@@ -98,9 +100,8 @@ describe("repository transfers", () => {
     );
     expect(staleVersion).toBeGreaterThan(0);
     const row = () =>
-      env.ORG_READ.prepare(
-        "SELECT owner_id, owner_gen, version, description FROM repos WHERE repo_id = ?",
-      )
+      admitted()
+        .prepare("SELECT owner_id, owner_gen, version, description FROM repos WHERE repo_id = ?")
         .bind(repo.id)
         .first<{ owner_id: string; owner_gen: number; version: number; description: string }>();
     // The move commits first; then the old owner's batch, the newest event yet: refused.
@@ -156,9 +157,8 @@ describe("repository transfers", () => {
     expect(await quota("/user/quota", owner.token)).toBe(0);
     expect(await quota(`/orgs/${org}/quota`, owner.token)).toBe(used);
     // The read model takes no event of the old owner generation.
-    const fence = await env.ORG_READ.prepare(
-      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
-    )
+    const fence = await admitted()
+      .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
       .bind(repo.id)
       .first<{ owner_gen: number }>();
     expect(fence?.owner_gen).toBe(2);
@@ -175,6 +175,87 @@ describe("repository transfers", () => {
       pushBody([{ old: fx.c2, new: fx.c3, ref: "refs/heads/main" }], { pack: fx.packC3ThinOnC2 }),
     );
     expect(pushed.report).toContain("ok refs/heads/main\n");
+  });
+
+  it("ask for the repository's search reconciliation with the fence, while search indexes", async () => {
+    const setting = (on: boolean) =>
+      on
+        ? env.DIRECTORY.prepare(
+            `INSERT INTO deployment_settings (name, value, updated_at) VALUES ('search_indexing', 'on', 0)
+             ON CONFLICT (name) DO UPDATE SET value = 'on'`,
+          ).run()
+        : env.DIRECTORY.prepare(
+            "DELETE FROM deployment_settings WHERE name = 'search_indexing'",
+          ).run();
+    const repair = (repoId: string) =>
+      admitted()
+        .prepare("SELECT reason FROM search_repairs WHERE repo_id = ?")
+        .bind(repoId)
+        .first<{ reason: string }>();
+    const owner = await user();
+    const off = await pushedRepo(owner, "/user/repos");
+    expect(await transfer(owner, off, { new_owner: await newOrg(owner) })).toMatchObject({
+      status: 200,
+    });
+    expect(await repair(off.id)).toBeNull();
+    await setting(true);
+    try {
+      const on = await pushedRepo(owner, "/user/repos");
+      expect(await transfer(owner, on, { new_owner: await newOrg(owner) })).toMatchObject({
+        status: 200,
+      });
+      expect(await repair(on.id)).toEqual({ reason: "transferred" });
+    } finally {
+      await setting(false);
+    }
+  });
+
+  it("write no fence from before a pause of the read model's writers, and fence again after it", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const org = await newOrg(owner);
+    // The transfer runs up to its fence, which waits after asking for the generation while the
+    // read model's writers are paused.
+    transferHooks.afterGeneration = async () => {
+      delete transferHooks.afterGeneration;
+      let progress = await pauseReadModel(env, "default");
+      // The fence's writer is live and of the older generation: the pause waits for it.
+      expect(progress).toMatchObject({ phase: "pausing", live: 1 });
+      progress = await pauseReadModel(env, "default");
+      expect(progress.phase).toBe("pausing");
+    };
+    try {
+      expect(await transfer(owner, repo, { new_owner: org })).toMatchObject({
+        body: { state: "transferring" },
+      });
+      // The fence's batch was refused: nothing written, the step still the fence's.
+      expect(
+        await admitted()
+          .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+          .bind(repo.id)
+          .first(),
+      ).toBeNull();
+      const step = await env.DIRECTORY.prepare("SELECT step FROM repo_transfers WHERE repo_id = ?")
+        .bind(repo.id)
+        .first<{ step: string }>();
+      expect(step?.step).toBe("fence");
+      // Its lease released, the pause completes; resumed, the fence is written.
+      expect(await pauseReadModel(env, "default")).toMatchObject({ phase: "paused" });
+      await resumeReadModel(env, "default");
+      await env.DIRECTORY.prepare("UPDATE repo_transfers SET lease_until = NULL WHERE repo_id = ?")
+        .bind(repo.id)
+        .run();
+      expect(await advanceTransfer(env, repo.id)).toMatchObject({ state: "transferred" });
+      expect(
+        await admitted()
+          .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+          .bind(repo.id)
+          .first(),
+      ).toEqual({ owner_gen: 2 });
+    } finally {
+      delete transferHooks.afterGeneration;
+      await runningAgain(env);
+    }
   });
 
   it("record the request that started them, in the directory and in the repository", async () => {
@@ -577,9 +658,8 @@ describe("a restore", () => {
     // A new instance, as after a restore.
     const restored = env.REPO.getByName(repo.id);
     await restored.checkEpoch();
-    const fence = await env.ORG_READ.prepare(
-      "SELECT owner_gen FROM source_owner WHERE source_id = ?",
-    )
+    const fence = await admitted()
+      .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
       .bind(repo.id)
       .first<{ owner_gen: number }>();
     const account = await runInDurableObject(restored, (r: RepoDO) => r.events.account());
@@ -617,7 +697,8 @@ describe("a restore, further", () => {
 
   const fenceOf = async (repoId: string) =>
     (
-      await env.ORG_READ.prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
+      await admitted()
+        .prepare("SELECT owner_gen FROM source_owner WHERE source_id = ?")
         .bind(repoId)
         .first<{ owner_gen: number }>()
     )?.owner_gen ?? 0;

@@ -33,8 +33,11 @@ export async function loadThreads(
   continuation: string | null,
 ): Promise<{ threads: Thread[]; next: string | null }> {
   const at: Continuation = readContinuation(continuation);
+  // After the last comment shown when the continuation names one, never the API page it saved
+  // (which may hold fewer of them since); else the API page.
   const query = new URLSearchParams({ per_page: String(COMMENTS_PER_PAGE) });
-  if (at.cursor) query.set("cursor", at.cursor);
+  if (at.after !== null) query.set("after", String(at.after));
+  else if (at.cursor) query.set("cursor", at.cursor);
   const page = await apiGet<ReviewCommentsPage>(
     context,
     request,

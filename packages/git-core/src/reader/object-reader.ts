@@ -41,6 +41,21 @@ export interface ReaderLimits {
   readonly deltaBaseCacheBytes: number;
   /** Size of each sequential read in `walk`. Proposed: 8 MiB; tuned under load. */
   readonly rangeBytes: number;
+  /**
+   * Bytes the reader may build in all: every whole object inflated, every
+   * delta program and every object a delta builds, those a chain builds on
+   * the way included (a small object can cost far more than its size). Past
+   * it a read throws {@link ReaderWorkSpent}. Unlimited when not said.
+   */
+  readonly maxBuiltBytes: number;
+}
+
+/** A reader built more bytes than its `maxBuiltBytes` allow. */
+export class ReaderWorkSpent extends Error {
+  override name = "ReaderWorkSpent";
+  constructor(readonly maxBuiltBytes: number) {
+    super(`building the objects read took more than ${maxBuiltBytes} bytes`);
+  }
 }
 
 export const DEFAULT_READER_LIMITS: ReaderLimits = {
@@ -48,6 +63,7 @@ export const DEFAULT_READER_LIMITS: ReaderLimits = {
   maxDeltaDepth: DEFAULT_PACK_LIMITS.maxDeltaDepth,
   deltaBaseCacheBytes: 16 * 1024 * 1024,
   rangeBytes: 8 * 1024 * 1024,
+  maxBuiltBytes: Number.POSITIVE_INFINITY,
 };
 
 export interface ObjectReaderOptions {
@@ -118,6 +134,8 @@ export class ObjectReader {
   /** Where other lookups found objects, by hex oid, oldest first; at most `RECENT_LOCATIONS`. */
   readonly #recent = new Map<string, Location | undefined>();
   #released = false;
+  /** Bytes built so far (see `ReaderLimits.maxBuiltBytes`). */
+  #built = 0;
 
   private constructor(
     options: ObjectReaderOptions,
@@ -236,6 +254,7 @@ export class ObjectReader {
     let size: number;
     try {
       const delta = await readEntry(this.#blocks.read, this.#zlib, this.#pack(at), at.offset, max);
+      this.#spend(delta.data.length);
       size = readDeltaHeader(delta.data, max).resultSize;
     } finally {
       reservation?.release();
@@ -352,6 +371,7 @@ export class ObjectReader {
       const { header } = head;
       if (isObjectType(header.kind)) {
         const entry = await readEntry(read, this.#zlib, pack, current.offset, maxObjectBytes, head);
+        this.#spend(entry.data.length);
         base = { type: header.kind, data: entry.data };
         this.#cache.put(current.pack, current.offset, base);
         break;
@@ -379,7 +399,9 @@ export class ObjectReader {
           maxObjectBytes,
           link.head,
         );
+        this.#spend(delta.length);
         base = { type: base.type, data: this.#apply(base.data, delta, link.at.offset) };
+        this.#spend(base.data.length);
       } finally {
         reservation?.release();
       }
@@ -387,6 +409,13 @@ export class ObjectReader {
       this.#cache.put(link.at.pack, link.at.offset, base);
     }
     return base;
+  }
+
+  /** Counts `bytes` built; past `maxBuiltBytes`, the read stops. */
+  #spend(bytes: number): void {
+    this.#built += bytes;
+    if (this.#built > this.#limits.maxBuiltBytes)
+      throw new ReaderWorkSpent(this.#limits.maxBuiltBytes);
   }
 
   #apply(base: Uint8Array, delta: Uint8Array, offset: number): Uint8Array {
@@ -490,5 +519,9 @@ function checkLimits(limits: ReaderLimits): ReaderLimits {
   check("maxDeltaDepth", 1, 4095);
   check("deltaBaseCacheBytes", 1, Number.MAX_SAFE_INTEGER);
   check("rangeBytes", 1024, Number.MAX_SAFE_INTEGER);
+  if (!(limits.maxBuiltBytes >= 1))
+    throw new RangeError(
+      `reader limit maxBuiltBytes must be at least 1, not ${limits.maxBuiltBytes}`,
+    );
   return limits;
 }

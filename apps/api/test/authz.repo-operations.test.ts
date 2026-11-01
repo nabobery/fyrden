@@ -11,6 +11,7 @@ import { principalWithToken, scopedToken } from "./helpers/principals.js";
 // here, so a new one that skips or weakens the check fails this test.
 
 const ORIGIN = "https://fyrden.test";
+const MISSING_KIND = { status: 403, code: "missing_permission" };
 const UPLOAD_ID = "0".repeat(26);
 const SHA = "a".repeat(40);
 const RULESET = {
@@ -41,6 +42,7 @@ const CASES: Record<
   // The repository is empty: listings answer, a named ref is not found.
   "repos.branches.list": { input: {}, expected: { status: 200 } },
   "repos.branches.get": { input: {}, expected: { status: 404, code: "branch_not_found" } },
+  "repos.codeowners.errors": { input: {}, expected: { status: 404, code: "not_found" } },
   "repos.tags.list": { input: {}, expected: { status: 200 } },
   "repos.commits.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.commits.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
@@ -153,6 +155,7 @@ const CASES: Record<
     input: {},
     expected: { status: 404, code: "pull_not_found" },
   },
+  "pulls.code_owners.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   // The owner itself, found by handle: the missing pull request is what answers.
   "pulls.requested_reviewers.add": {
     input: {
@@ -162,17 +165,89 @@ const CASES: Record<
     },
     expected: { status: 404, code: "pull_not_found" },
   },
-  "issues.comments.list": { input: {}, expected: { status: 404, code: "pull_not_found" } },
-  "issues.comments.create": {
-    input: { body: "checked" },
+  // Its teams named as the repository's owner's: the missing pull request is what answers.
+  "pulls.requested_reviewers.add_teams": {
+    input: {
+      get team_owner() {
+        return handle;
+      },
+      team_reviewers: ["core"],
+    },
     expected: { status: 404, code: "pull_not_found" },
   },
-  "issues.comments.get": { input: {}, expected: { status: 404, code: "comment_not_found" } },
-  "issues.comments.update": {
-    input: { body: "checked" },
+  // Serving issues and pull requests alike, these declare metadata:read and take each kind's own
+  // permission in the handler (see BOTH_KINDS below): metadata:read alone gets no further.
+  "issues.list": { input: {}, expected: MISSING_KIND },
+  "issues.get": { input: {}, expected: MISSING_KIND },
+  "issues.lock": { input: {}, expected: MISSING_KIND },
+  "issues.unlock": { input: {}, expected: MISSING_KIND },
+  "issues.comments.list": { input: {}, expected: MISSING_KIND },
+  "issues.comments.create": { input: { body: "checked" }, expected: MISSING_KIND },
+  "issues.comments.get": { input: {}, expected: MISSING_KIND },
+  "issues.comments.update": { input: { body: "checked" }, expected: MISSING_KIND },
+  "issues.comments.delete": { input: {}, expected: MISSING_KIND },
+  "issues.update": { input: { title: "checked" }, expected: MISSING_KIND },
+  "issues.labels.list": { input: {}, expected: MISSING_KIND },
+  "issues.references.list": { input: {}, expected: MISSING_KIND },
+  "issues.labels.add": { input: { labels: ["checked"] }, expected: MISSING_KIND },
+  "issues.labels.set": { input: { labels: [] }, expected: MISSING_KIND },
+  "issues.labels.remove": { input: {}, expected: MISSING_KIND },
+  "issues.labels.clear": { input: {}, expected: MISSING_KIND },
+  "issues.assignees.add": {
+    input: {
+      get assignees() {
+        return [handle];
+      },
+    },
+    expected: MISSING_KIND,
+  },
+  "issues.assignees.remove": {
+    input: {
+      get assignees() {
+        return [handle];
+      },
+    },
+    expected: MISSING_KIND,
+  },
+  "reactions.issue.list": { input: {}, expected: MISSING_KIND },
+  "reactions.issue.create": { input: { content: "+1" }, expected: MISSING_KIND },
+  "reactions.issue.delete": { input: {}, expected: MISSING_KIND },
+  "reactions.comment.list": { input: {}, expected: MISSING_KIND },
+  "reactions.comment.create": { input: { content: "+1" }, expected: MISSING_KIND },
+  "reactions.comment.delete": { input: {}, expected: MISSING_KIND },
+  // Diff comments are pull requests' only: their reactions declare the pull requests permission.
+  "reactions.review_comment.list": {
+    input: {},
     expected: { status: 404, code: "comment_not_found" },
   },
-  "issues.comments.delete": { input: {}, expected: { status: 404, code: "comment_not_found" } },
+  "reactions.review_comment.create": {
+    input: { content: "+1" },
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  "reactions.review_comment.delete": {
+    input: {},
+    expected: { status: 404, code: "comment_not_found" },
+  },
+  // Labels and milestones serve both kinds: either kind's permission lets a caller through
+  // (see EITHER_KIND below).
+  "labels.list": { input: {}, expected: MISSING_KIND },
+  "labels.get": { input: {}, expected: MISSING_KIND },
+  "labels.create": { input: { name: "checked", color: "000000" }, expected: MISSING_KIND },
+  "labels.update": { input: { color: "000000" }, expected: MISSING_KIND },
+  "labels.delete": { input: {}, expected: MISSING_KIND },
+  "labels.copy_defaults": { input: {}, expected: MISSING_KIND },
+  "milestones.list": { input: {}, expected: MISSING_KIND },
+  "milestones.get": { input: {}, expected: MISSING_KIND },
+  "milestones.create": { input: { title: "checked" }, expected: MISSING_KIND },
+  "milestones.update": { input: { title: "checked" }, expected: MISSING_KIND },
+  "milestones.delete": { input: {}, expected: MISSING_KIND },
+  // These test repositories predate identities (no events to record an issue with): refused
+  // after authorization, with its own code.
+  "issues.create": {
+    input: { title: "checked" },
+    expected: { status: 409, code: "repo_not_ready" },
+  },
+  "issues.delete": { input: {}, expected: { status: 404, code: "issue_not_found" } },
   "pulls.requested_reviewers.remove": {
     input: {
       get reviewers() {
@@ -231,6 +306,14 @@ const SECONDARY: Record<string, { permission: string; input: Record<string, unkn
   "repos.generate": { permission: "contents:read", input: { name: "generated" } },
   "stars.put": { permission: "metadata:read", input: {} },
   "stars.delete": { permission: "metadata:read", input: {} },
+  "watching.get": { permission: "metadata:read", input: {} },
+  "watching.put": { permission: "metadata:read", input: { subscribed: true } },
+  "watching.delete": { permission: "metadata:read", input: {} },
+  "watching.thread_get": { permission: "issues:read", input: {} },
+  "watching.thread_put": { permission: "issues:read", input: { subscribed: true } },
+  "watching.thread_delete": { permission: "issues:read", input: {} },
+  "notifications.repo_list": { permission: "metadata:read", input: {} },
+  "notifications.repo_mark": { permission: "metadata:read", input: {} },
 };
 // Organization operations on a repository (a team's) check the organization
 // first; their tests are with the organization's.
@@ -259,6 +342,9 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")
+    .replace("{milestone_number}", "1")
+    .replace("{reaction_id}", "1")
+    .replace("{name}", "checked")
     .replace("{comment_id}", "1")
     .replace("{thread_id}", "1")
     .replace("{username}", handle)
@@ -288,6 +374,9 @@ async function outcome(res: Response): Promise<Outcome> {
   return { status: res.status, code: (await res.json<{ code: string }>()).code };
 }
 
+/** An operation answering with the repository's file contents beside what it declares (owners from CODEOWNERS). */
+const needsContents = (op: OperationDef) => op.id === "pulls.code_owners.get";
+
 describe("repository operations", () => {
   it("have an input here for each of them", () => {
     expect(repoOps.map((op) => op.id).sort()).toEqual(Object.keys(CASES).sort());
@@ -304,14 +393,161 @@ describe("repository operations", () => {
     },
   );
 
-  it.each(repoOps.map((op) => [op.id, op] as const))(
-    "%s needs no more than the permission it declares",
+  it.each(
+    repoOps.filter((op) => !isHookOp(op) && !needsContents(op)).map((op) => [op.id, op] as const),
+  )("%s needs no more than the permission it declares", async (_, op) => {
+    const token = await scopedToken(owner.principalId, [op.permission]);
+    const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
+    expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
+  });
+});
+
+describe("operations answering with file contents", () => {
+  it.each(repoOps.filter(needsContents).map((op) => [op.id, op] as const))(
+    "%s needs contents:read beside the permission it declares",
     async (_, op) => {
-      const token = await scopedToken(owner.principalId, [op.permission]);
-      const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
-      expect(await outcome(await call(op, token, name))).toEqual(CASES[op.id]?.expected);
+      const declared = await scopedToken(owner.principalId, [op.permission]);
+      expect(await outcome(await call(op, declared))).toEqual({
+        status: 403,
+        code: "missing_permission",
+      });
+      const both = await scopedToken(owner.principalId, [op.permission, "contents:read"]);
+      expect(await outcome(await call(op, both))).toEqual(CASES[op.id]?.expected);
     },
   );
+});
+
+/** A webhook operation: a hook carries issue and pull request contents out. */
+const isHookOp = (op: OperationDef) => op.id.startsWith("repos.hooks.");
+const HOOK_CONTENT = ["issues:read", "pull_requests:read"];
+
+describe("webhook operations", () => {
+  it.each(repoOps.filter(isHookOp).map((op) => [op.id, op] as const))(
+    "%s needs both content reads beside the permission it declares",
+    async (_, op) => {
+      for (const extra of [[], ["issues:read"], ["pull_requests:read"]]) {
+        const token = await scopedToken(owner.principalId, [op.permission, ...extra]);
+        expect(await outcome(await call(op, token))).toEqual({ status: 403, code: "forbidden" });
+      }
+      const token = await scopedToken(owner.principalId, [op.permission, ...HOOK_CONTENT]);
+      expect(await outcome(await call(op, token))).toEqual(CASES[op.id]?.expected);
+    },
+  );
+});
+
+/**
+ * The operations serving issues and pull requests alike, and what each
+ * answers once its kind's permission lets it through (the repository has
+ * no issue or pull request #1, nor comment 1).
+ */
+const BOTH_KINDS: Record<string, Outcome> = {
+  "issues.list": { status: 200 },
+  "issues.get": { status: 404, code: "issue_not_found" },
+  "issues.lock": { status: 404, code: "issue_not_found" },
+  "issues.unlock": { status: 404, code: "issue_not_found" },
+  "issues.comments.list": { status: 404, code: "issue_not_found" },
+  "issues.comments.create": { status: 404, code: "issue_not_found" },
+  "issues.comments.get": { status: 404, code: "comment_not_found" },
+  "issues.comments.update": { status: 404, code: "comment_not_found" },
+  "issues.comments.delete": { status: 404, code: "comment_not_found" },
+  "issues.update": { status: 404, code: "issue_not_found" },
+  "issues.labels.list": { status: 404, code: "issue_not_found" },
+  "issues.references.list": { status: 404, code: "issue_not_found" },
+  "issues.labels.add": { status: 404, code: "issue_not_found" },
+  "issues.labels.set": { status: 404, code: "issue_not_found" },
+  "issues.labels.remove": { status: 404, code: "issue_not_found" },
+  "issues.labels.clear": { status: 404, code: "issue_not_found" },
+  "issues.assignees.add": { status: 404, code: "issue_not_found" },
+  "issues.assignees.remove": { status: 404, code: "issue_not_found" },
+  "reactions.issue.list": { status: 404, code: "issue_not_found" },
+  "reactions.issue.create": { status: 404, code: "issue_not_found" },
+  "reactions.issue.delete": { status: 404, code: "issue_not_found" },
+  "reactions.comment.list": { status: 404, code: "comment_not_found" },
+  "reactions.comment.create": { status: 404, code: "comment_not_found" },
+  "reactions.comment.delete": { status: 404, code: "comment_not_found" },
+};
+
+/**
+ * Labels and milestones, serving both kinds: what each answers once either
+ * kind's permission lets it through (the repository has no label or
+ * milestone, and predates the identities writes need to record events).
+ */
+const EITHER_KIND: Record<string, Outcome> = {
+  "labels.list": { status: 200 },
+  "labels.get": { status: 404, code: "label_not_found" },
+  "labels.create": { status: 409, code: "repo_not_ready" },
+  "labels.update": { status: 409, code: "repo_not_ready" },
+  "labels.delete": { status: 409, code: "repo_not_ready" },
+  "labels.copy_defaults": { status: 409, code: "repo_not_ready" },
+  "milestones.list": { status: 200 },
+  "milestones.get": { status: 404, code: "milestone_not_found" },
+  "milestones.create": { status: 409, code: "repo_not_ready" },
+  "milestones.update": { status: 409, code: "repo_not_ready" },
+  "milestones.delete": { status: 409, code: "repo_not_ready" },
+};
+
+describe("operations serving issues and pull requests", () => {
+  it("are every repository operation that declares metadata:read and names an issue number or comment", () => {
+    const serving = repoOps.filter(
+      (op) =>
+        op.permission === "metadata:read" &&
+        (op.path.includes("/issues") || op.path.includes("{issue_number}")),
+    );
+    expect(serving.map((op) => op.id).sort()).toEqual(Object.keys(BOTH_KINDS).sort());
+  });
+
+  it.each(
+    Object.keys(BOTH_KINDS).flatMap((id) =>
+      (["issues", "pull_requests"] as const).map((kind) => [id, kind] as const),
+    ),
+  )("%s goes on with %s's own permission", async (id, kind) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    const token = await scopedToken(owner.principalId, [
+      `${kind}:${op.method === "GET" ? "read" : "write"}`,
+    ]);
+    expect(await outcome(await call(op, token))).toEqual(BOTH_KINDS[id]);
+  });
+
+  it.each(Object.keys(BOTH_KINDS))(
+    "%s writes nothing with a kind's read permission",
+    async (id) => {
+      const op = registry.find((o) => o.id === id) as OperationDef;
+      if (op.method === "GET") return;
+      const token = await scopedToken(owner.principalId, ["issues:read", "pull_requests:read"]);
+      expect(await outcome(await call(op, token))).toEqual(MISSING_KIND);
+    },
+  );
+});
+
+describe("label and milestone operations", () => {
+  it("are every repository operation that declares metadata:read on labels or milestones", () => {
+    const serving = repoOps.filter(
+      (op) =>
+        op.permission === "metadata:read" &&
+        (op.path.includes("/labels") || op.path.includes("/milestones")) &&
+        !op.path.includes("/issues"),
+    );
+    expect(serving.map((op) => op.id).sort()).toEqual(Object.keys(EITHER_KIND).sort());
+  });
+
+  it.each(
+    Object.keys(EITHER_KIND).flatMap((id) =>
+      (["issues", "pull_requests"] as const).map((kind) => [id, kind] as const),
+    ),
+  )("%s goes on with %s's permission", async (id, kind) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    const token = await scopedToken(owner.principalId, [
+      `${kind}:${op.method === "GET" ? "read" : "write"}`,
+    ]);
+    expect(await outcome(await call(op, token))).toEqual(EITHER_KIND[id]);
+  });
+
+  it.each(Object.keys(EITHER_KIND))("%s writes nothing with read permissions", async (id) => {
+    const op = registry.find((o) => o.id === id) as OperationDef;
+    if (op.method === "GET") return;
+    const token = await scopedToken(owner.principalId, ["issues:read", "pull_requests:read"]);
+    expect(await outcome(await call(op, token))).toEqual(MISSING_KIND);
+  });
 });
 
 describe("operations that read a repository beyond their declared permission", () => {

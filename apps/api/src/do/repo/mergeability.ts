@@ -11,6 +11,7 @@ import {
 import type { RepoEvents } from "./events.js";
 import { MERGE_POLICY, type MergePolicy, mergeOutcome, type TreeOutcome } from "./merge.js";
 import type { PullRecord, RepoPulls } from "./pulls.js";
+import type { SubjectMeta } from "./subject-meta.js";
 
 /*
  * Whether each open pull request merges cleanly into its base branch,
@@ -44,8 +45,8 @@ export interface MergeabilityView {
   readonly mergeableReason: MergeableReason | null;
 }
 
-/** A pull request with whether it merges. */
-export type PullView = PullRecord & MergeabilityView;
+/** A pull request with whether it merges, and its labels, assignees and milestone. */
+export type PullView = PullRecord & MergeabilityView & { readonly meta: SubjectMeta };
 
 /**
  * A slice's merge budgets: the merge's, with fewer reads, since the job

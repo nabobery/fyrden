@@ -12,8 +12,10 @@ import {
   heldBack,
   type NewRepoRow,
   newRepoStatements,
+  publishHooks,
   type RepoEntry,
 } from "../repos/directory.js";
+import { afterPublication } from "../search/published.js";
 import { clock, newId } from "../services.js";
 import type { ForkExport, NetworkFailure, ViewPack } from "./types.js";
 import { chooseBaseCompaction, VIEW_CAP } from "./view-cap.js";
@@ -134,6 +136,9 @@ export async function forkRepository(
   let packsCompacted = 0;
   try {
     const epochGen = await allocateEpoch(env.DIRECTORY, forkId, request.metrics);
+    // A fork starts with its account's default labels, as a new repository does.
+    request.metrics?.count("do.request", { class: "OrgDO", method: "defaultLabels" });
+    const labels = await env.ORG.getByName(request.ownerId).defaultLabels();
     await fork.initFork(
       { networkId, head: exported.head, packs: exported.packs },
       {
@@ -143,6 +148,7 @@ export async function forkRepository(
         epochGen,
         actor: request.actorId ?? request.ownerId,
       },
+      labels,
     );
 
     let frontier = exported.tips.map(hex);
@@ -209,6 +215,7 @@ export async function forkRepository(
     createdBy: request.createdBy ?? null,
   };
   request.metrics?.count("d1.query", { db: "directory", op: "repo_create" }, 6);
+  await publishHooks.before?.();
   const refused = heldBack(
     await env.DIRECTORY.batch([
       ...newRepoStatements(
@@ -231,6 +238,13 @@ export async function forkRepository(
     await advanceDeletion(env, forkId, request.metrics ? { metrics: request.metrics } : {}).catch(
       () => "deleting",
     );
+    if (refused === "owner_gone")
+      return {
+        ok: false,
+        status: 404,
+        code: "owner_not_found",
+        error: `No account ${request.ownerHandle} was found.`,
+      };
     if (refused === "agent_quota_exceeded") {
       const { message } = agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
       return { ok: false, status: 403, code: "quota_exceeded", error: message };
@@ -246,6 +260,11 @@ export async function forkRepository(
   }
   // The name may have redirected to another repository here.
   forgetResolved(request.ownerHandle, request.name);
+  await afterPublication(
+    env,
+    { id: forkId, shard: DEFAULT_ORG_SHARD, storageAt: started },
+    request.metrics,
+  );
   const publishMs = clock() - started;
   log.info("fork published", { forkId, publishMs, commitsCopied, packsCompacted });
   return {

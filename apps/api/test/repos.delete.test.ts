@@ -460,7 +460,7 @@ describe("repos.delete", () => {
   });
 
   it.each([
-    ["the purge", "exportSnapshot", "purge"],
+    ["the purge", "deletionTombstone", "purge"],
     ["the erase", "eraseForDeletion", "erase"],
   ] as const)("resumes after a failure in %s", async (_, method, step) => {
     const repo = await repoWithData();

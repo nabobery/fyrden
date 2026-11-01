@@ -165,13 +165,17 @@ describe("the conflicts page", () => {
     expect(closed.calls.some((c) => pathOf(c).includes("/conflicts"))).toBe(false);
   });
 
-  const page = (files: Record<string, unknown>[], pull: Record<string, unknown> = {}) =>
+  const page = (
+    files: Record<string, unknown>[],
+    pull: Record<string, unknown> = {},
+    viewer: { viewer: string | null; viewerKnown: boolean } = { viewer: VIEWER, viewerKnown: true },
+  ) =>
     renderPage(PullConflicts, "/ada/demo/pull/7/conflicts", {
       owner: "ada",
       repo: "demo",
       number: 7,
       pull: pullRequest({ mergeable: false, mergeable_state: "dirty", ...pull }),
-      viewer: VIEWER,
+      ...viewer,
       conflicts: {
         base_sha: "a".repeat(40),
         head_sha: "b".repeat(40),
@@ -180,6 +184,20 @@ describe("the conflicts page", () => {
       },
       failure: null,
     });
+
+  it("offers no editor until the viewer is known, so none is drawn anew once it is", () => {
+    const files = [{ path: "a.txt", kind: "content", editable: true, content: MARKED }];
+    const unknown = page(files, {}, { viewer: null, viewerKnown: false });
+    expect(unknown).toContain("reload the page to resolve the conflicts here");
+    expect(unknown).not.toContain(`value="${SNAPSHOT}"`);
+    // Which files conflict, and how, is still there to read.
+    expect(unknown).toContain("<code>a.txt</code>");
+    expect(unknown).toContain("&lt;&lt;&lt;&lt;&lt;&lt;&lt;");
+    expect(unknown).not.toContain("<textarea");
+    expect(page(files, {}, { viewer: null, viewerKnown: true })).toContain(
+      "Sign in to resolve the conflicts here.",
+    );
+  });
 
   it("edits the editable files, reading their markers only once in the browser", () => {
     const html = page([{ path: "a.txt", kind: "content", editable: true, content: MARKED }]);
@@ -243,7 +261,7 @@ describe("resolving conflicts", () => {
   async function resolve(fields: Record<string, string>, reply: () => Response) {
     const { context, calls } = api({ "POST /api/repos/ada/demo/pulls/7/conflicts": reply });
     const outcome = await action({
-      request: formPost("/ada/demo/pull/7/conflicts", fields),
+      request: formPost("/ada/demo/pull/7/conflicts", { viewer: VIEWER, ...fields }),
       context,
       params,
     } as never);
@@ -359,6 +377,7 @@ describe("resolving conflicts", () => {
       );
       const outcome = await action({
         request: formPost("/ada/demo/pull/7/conflicts", {
+          viewer: VIEWER,
           conflict_snapshot: SNAPSHOT,
           count: "0",
         }),
@@ -375,7 +394,11 @@ describe("resolving conflicts", () => {
   it("sends a browser the session confirms is signed out to sign in", async () => {
     const { context, calls } = fakeApi(() => json({ code: "unauthorized" }, 401));
     const thrown = await action({
-      request: formPost("/ada/demo/pull/7/conflicts", { conflict_snapshot: SNAPSHOT, count: "0" }),
+      request: formPost("/ada/demo/pull/7/conflicts", {
+        viewer: VIEWER,
+        conflict_snapshot: SNAPSHOT,
+        count: "0",
+      }),
       context,
       params,
     } as never).catch((e: unknown) => e);
@@ -579,7 +602,11 @@ describe("the conflicts form as a browser sends it", () => {
 
   /** Files of nothing but line breaks, as a browser sends them. */
   function newlineFiles(files: number, lines: number): Request {
-    const fields: Record<string, string> = { conflict_snapshot: SNAPSHOT, count: String(files) };
+    const fields: Record<string, string> = {
+      viewer: VIEWER,
+      conflict_snapshot: SNAPSHOT,
+      count: String(files),
+    };
     for (let i = 0; i < files; i++) {
       fields[`path:${i}`] = `f${i}.txt`;
       fields[`eol:${i}`] = "lf";
@@ -643,4 +670,24 @@ describe("the conflicts form as a browser sends it", () => {
     });
     expect(calls.filter((c) => c.method === "POST")).toEqual([]);
   }, 60_000);
+});
+
+describe("the conflicts form made for another viewer", () => {
+  it("commits nothing, keeping the edits", async () => {
+    const { context, calls } = api({});
+    const outcome = await action({
+      request: formPost("/ada/demo/pull/7/conflicts", {
+        viewer: "usr_other",
+        conflict_snapshot: SNAPSHOT,
+        count: "1",
+        "path:0": "a.txt",
+        "eol:0": "lf",
+        "content:0": "resolved\n",
+      }),
+      context,
+      params,
+    } as never);
+    expect(outcome).toMatchObject({ error: expect.stringContaining("someone else") });
+    expect(calls.filter((c) => c.method !== "GET")).toEqual([]);
+  });
 });

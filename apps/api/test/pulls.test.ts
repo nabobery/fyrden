@@ -1,10 +1,12 @@
 // Pull requests between a repository's branches: opening, the permission
 // matrix, and `refs/pull/<n>/head` following the head branch in the same
 // ref transaction as the branch.
+import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { oidFromHex, oidToHex } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
+import { createApp } from "../src/app.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { basic, gitFetch } from "./helpers/git-http.js";
 import { scopedToken } from "./helpers/principals.js";
@@ -113,7 +115,14 @@ describe("opening a pull request", () => {
     const after = await refs();
     expect(after.version).toBe(before.version + 1);
     expect(after.refs["refs/pull/1/head"]).toBe(fx.c2);
-    expect((await get(1)).body).toEqual(opened.body);
+    // Read alone, it also carries the reader's own reactions (none yet).
+    const created = opened.body as typeof opened.body & { reactions: Record<string, unknown> };
+    // A creation's answer carries counts only.
+    expect(created.reactions.viewer).toBeUndefined();
+    expect((await get(1)).body).toEqual({
+      ...created,
+      reactions: { ...created.reactions, viewer: [] },
+    });
     const listed = await json<{ pull_requests: Pull[] }>(api("GET", `${path}/pulls`, owner.token));
     expect(listed.body.pull_requests.map((p) => p.number)).toEqual([1]);
 
@@ -466,5 +475,66 @@ describe("the pull request matrix", () => {
     expect((await open(readOnly, { head: "feature", base: "main" })).status).toBe(403);
     const stranger = await user();
     expect((await open(stranger, { head: "feature", base: "main" })).status).toBe(404);
+  });
+});
+
+describe("the caller's own reactions to a pull request read alone", () => {
+  type Rolled = {
+    reactions: { total_count: number; viewer?: { id: number; content: string }[] };
+  };
+
+  it("come with it, never another's, and never in a listing", async () => {
+    const other = await collaborator("pull");
+    const { number } = (await open(owner, { head: "feature", base: "main" })).body;
+    const mine = await json<{ id: number }>(
+      api("POST", `${path}/issues/${number}/reactions`, owner.token, { content: "heart" }),
+    );
+    await api("POST", `${path}/issues/${number}/reactions`, other.token, { content: "+1" });
+    const read = await json<Rolled>(api("GET", `${path}/pulls/${number}`, owner.token));
+    expect(read.body.reactions.total_count).toBe(2);
+    expect(read.body.reactions.viewer).toEqual([{ id: mine.body.id, content: "heart" }]);
+    const theirs = await json<Rolled>(api("GET", `${path}/pulls/${number}`, other.token));
+    expect(theirs.body.reactions.viewer?.map((r) => r.content)).toEqual(["+1"]);
+    const listed = await json<{ pull_requests: Rolled[] }>(
+      api("GET", `${path}/pulls`, owner.token),
+    );
+    expect(listed.body.pull_requests).toHaveLength(1);
+    expect(listed.body.pull_requests[0]?.reactions.viewer).toBeUndefined();
+  });
+
+  it("are left out, the rest answered, by an earlier object", async () => {
+    const { number } = (await open(owner, { head: "feature", base: "main" })).body;
+    await api("POST", `${path}/issues/${number}/reactions`, owner.token, { content: "eyes" });
+    // An earlier object (while a deploy rolls out) reads the pull request without a viewer.
+    const earlier = new Proxy(env.REPO, {
+      get(target, prop) {
+        if (prop === "getByName")
+          return (name: string) =>
+            new Proxy(target.getByName(name), {
+              get(inner, key) {
+                if (key === "getPull") return (n: number) => inner.getPull(n);
+                // The stub's own RPC methods, unbound (binding one loses its call).
+                return Reflect.get(inner, key);
+              },
+            });
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await createApp().fetch(
+      new Request(`https://fyrden.test/api${path}/pulls/${number}`, {
+        headers: { Authorization: `Bearer ${owner.token}` },
+      }),
+      // Every binding as it is (some are not own properties a spread would copy), REPO swapped.
+      new Proxy(env, {
+        get: (target, key) => (key === "REPO" ? earlier : Reflect.get(target, key)),
+      }),
+      createExecutionContext(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Rolled & { number: number };
+    expect(body.number).toBe(number);
+    expect(body.reactions.total_count).toBe(1);
+    expect(body.reactions.viewer).toBeUndefined();
   });
 });

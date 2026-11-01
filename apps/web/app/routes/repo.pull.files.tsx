@@ -24,6 +24,7 @@ import { Pager } from "../components/pager.js";
 import { PullHeader } from "../components/pull-header.js";
 import { ReviewForm } from "../components/review-form.js";
 import { apiGet, assertSameOrigin, readForm } from "../lib/api.server.js";
+import { viewerRefusal } from "../lib/edits.server.js";
 import { pageLinks } from "../lib/pages.js";
 import {
   field,
@@ -56,7 +57,7 @@ export type FileEntry = Omit<PullFile, "patch"> & { hasPatch: boolean };
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
-  const { pull, viewer } = await loadPull(context, request, params);
+  const { pull, viewer, viewerKnown } = await loadPull(context, request, params);
   const api = pullApiOf(params);
   const cursor = url.searchParams.get("cursor");
   const query = new URLSearchParams({ per_page: String(FILES_PER_PAGE) });
@@ -75,6 +76,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     repo: params.repo,
     pull,
     viewer,
+    viewerKnown,
     cursor,
     files: page.files.map(
       ({ patch, ...rest }): FileEntry => ({ ...rest, hasPatch: patch !== undefined }),
@@ -103,6 +105,9 @@ export async function action({
 }: Route.ActionArgs): Promise<ActionResult> {
   assertSameOrigin(request);
   const form = await readForm(request, FILES_FORM_MAX_BYTES);
+  // The form was made for one viewer: another signed in since (another tab) sends nothing.
+  const refused = await viewerRefusal(context, request, form);
+  if (refused) return { error: refused };
   const api = pullApiOf(params);
   const post = (path: string, body: unknown, intent: string, fallback: string) =>
     send(context, request, "POST", `${api}${path}`, body, intent, fallback);
@@ -408,11 +413,14 @@ function FileSection({
 }
 
 export default function PullFiles({ loaderData }: Route.ComponentProps) {
+  // The viewer as last known: a session that could not be checked keeps it (and its drafts).
+  const known = useRef(loaderData.viewer);
+  if (loaderData.viewerKnown) known.current = loaderData.viewer;
+  const viewer = known.current;
   const {
     owner,
     repo,
     pull,
-    viewer,
     cursor,
     files,
     headSha,
@@ -491,7 +499,8 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
               ))}
             </ol>
           </nav>
-          <Drafts viewer={viewer} page={page}>
+          {/* Drawn anew for another viewer: one account's unsent comments never go as another's. */}
+          <Drafts key={viewer ?? ""} viewer={viewer} page={page}>
             <WindowVirtualizer>
               {files.map((f, i) => (
                 <FileSection
@@ -515,7 +524,13 @@ export default function PullFiles({ loaderData }: Route.ComponentProps) {
       {pull.state === "open" && viewer !== null && (
         // The review is of the head these changes are of, which may be older than the
         // pull request's (a later page keeps the comparison it started with).
-        <ReviewForm headSha={headSha} isAuthor={pull.user.id === viewer} />
+        <ReviewForm
+          // Drawn anew for another viewer: one account's review is never sent as another's.
+          key={viewer}
+          headSha={headSha}
+          isAuthor={pull.user.id === viewer}
+          hidden={<input type="hidden" name="viewer" value={viewer} />}
+        />
       )}
     </main>
   );

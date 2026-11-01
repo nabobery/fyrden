@@ -15,16 +15,42 @@ export interface HealthCheck {
 /**
  * Whether effects (webhook deliveries, feed entries) are on time: `ok` is
  * false when the oldest pending one has been due for longer than the
- * threshold, or the check failed. `overdueS`: how long it has been due.
+ * threshold, one failed for good lately, or the check failed. `overdueS`:
+ * how long it has been due; `failed`: whether one failed for good lately.
  */
 export interface EffectsCheck extends HealthCheck {
   overdueS?: number;
+  failed?: boolean;
 }
 
-/** `ok` covers the storage tiers only: late effects leave the API serving (degraded). */
+/**
+ * Whether user deletions go on: `ok` is false while one waits on an
+ * organization it solely owns (`blocked`), one's last run failed
+ * (`failing`), or one has been due and not run for longer than the
+ * threshold (`overdueS`: how long), or the check failed.
+ */
+export interface DeletionsCheck extends HealthCheck {
+  blocked?: boolean;
+  failing?: boolean;
+  overdueS?: number;
+}
+
+/** The org read model's write protocol this deployment serves (its executor's version). */
+export interface ReadModelServing {
+  protocol: number;
+}
+
+/** `ok` covers the storage tiers only: late effects or deletions leave the API serving (degraded). */
 export interface HealthReport {
   ok: boolean;
-  checks: { d1: HealthCheck; durableObject: HealthCheck; r2: HealthCheck; effects: EffectsCheck };
+  readModel: ReadModelServing;
+  checks: {
+    d1: HealthCheck;
+    durableObject: HealthCheck;
+    r2: HealthCheck;
+    effects: EffectsCheck;
+    deletions: DeletionsCheck;
+  };
 }
 
 /** The deep health check is rate limited; a limited call runs no checks. */

@@ -78,6 +78,34 @@ const BREAKS = new Set([
   "setextHeading",
 ]);
 
+/** A line ending, as the parser counts lines. */
+const LINE_ENDING = /\r\n|\r|\n/g;
+/**
+ * A blank line (spaces and tabs allowed on it): no inline construct spans
+ * one. A CR before an LF is never a line ending of its own (one CRLF is
+ * one line ending, never two).
+ */
+const BLANK_LINE = /(?:\r\n|\r(?!\n)|\n)[ \t]*(?:\r\n|\r(?!\n)|\n)/g;
+
+/**
+ * What of `markdown` is parsed (at most `MENTION_SOURCE_LENGTH`
+ * characters), and its last line read: all of a text that short; of a
+ * longer one, what comes before its last blank line in that start, so no
+ * inline construct (a code span, a link) is cut open to show its rest as
+ * text and no word (`#123`, `@handle`) is shortened into another (none for
+ * a longer text with no blank line there). The whole start is parsed, so a
+ * definition after the last line read still resolves a reference before it.
+ */
+function readable(markdown: string): { source: string; lastLine: number } {
+  if (markdown.length <= MENTION_SOURCE_LENGTH)
+    return { source: markdown, lastLine: Number.POSITIVE_INFINITY };
+  const source = markdown.slice(0, MENTION_SOURCE_LENGTH);
+  let end = 0;
+  for (const blank of source.matchAll(BLANK_LINE)) end = blank.index;
+  const lastLine = end === 0 ? 0 : (source.slice(0, end).match(LINE_ENDING)?.length ?? 0) + 1;
+  return { source, lastLine };
+}
+
 /**
  * The text a reader sees of `markdown` outside code, as the web app's
  * renderer (GitHub-flavored Markdown, raw HTML shown as text) parses it:
@@ -85,9 +113,9 @@ const BREAKS = new Set([
  * inside a word keep it whole), lines, cells and blocks apart. Read from
  * the parser's tokens, never rendered, so its size is the source's.
  */
-function visibleText(markdown: string): string {
-  const source = markdown.slice(0, MENTION_SOURCE_LENGTH);
-  if (!withinBudget(source)) return "";
+export function visibleText(markdown: string): string {
+  const { source, lastLine } = readable(markdown);
+  if (lastLine === 0 || !withinBudget(source)) return "";
   const events = postprocess(
     parse({ extensions: [gfm()] })
       .document()
@@ -99,6 +127,8 @@ function visibleText(markdown: string): string {
   for (const [kind, token, context] of events) {
     const enter = kind === "enter";
     const type = token.type as string;
+    // Past the last line read: nothing more is (the code and links before it already closed).
+    if (token.start.line > lastLine) break;
     if (HIDDEN.has(type)) {
       hidden += enter ? 1 : -1;
       // Code and images stand apart from the text around them; a link's target is just unseen.

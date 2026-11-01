@@ -17,6 +17,16 @@ describe("decideReview", () => {
     for (const event of REVIEW_EVENTS) expect(decideReview({ ...open, event }).ok).toBe(true);
   });
 
+  it("takes reviews of a locked conversation only from write and above", () => {
+    for (const event of REVIEW_EVENTS) {
+      expect(decideReview({ ...open, event, locked: true })).toEqual({
+        ok: false,
+        refusal: "locked",
+      });
+      expect(decideReview({ ...open, event, role: "write", locked: true }).ok).toBe(true);
+    }
+  });
+
   it("lets the author only comment", () => {
     expect(decideReview({ ...open, isAuthor: true, event: "COMMENT" }).ok).toBe(true);
     for (const event of ["APPROVE", "REQUEST_CHANGES"] as const)

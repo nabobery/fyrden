@@ -29,6 +29,9 @@ export const HOOK_EVENTS = [
   "pull_request_review",
   "pull_request_review_comment",
   "issue_comment",
+  "issues",
+  "label",
+  "milestone",
 ] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 

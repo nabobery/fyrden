@@ -5,17 +5,22 @@ import {
   type SsrfPolicy,
 } from "@fyrden/adapters-cloudflare/net";
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
+import type { HookForDelivery } from "../do/repo/hooks.js";
+import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { ownHostsOf } from "../git/import/network.js";
+import { withReadModel } from "../read-model/executor.js";
 import { signature } from "./secrets.js";
 import type { DeliveryMessage } from "./sink.js";
 
 /*
- * Webhook delivery attempts. Each attempt is one queue message: its
+ * Webhook delivery attempts. Each attempt is one queue message (or, for a
+ * few of an event's first attempts, the webhook sink's own call): its
  * consumer claims the delivery (a lease and a token), reads the hook's
  * current configuration and secrets from the repository object, signs the
  * stored body (Standard Webhooks) and posts it through the SSRF guard,
- * then records the attempt and the outcome under its claim. The deliveries
+ * then records the attempt and the outcome under its claim. The sink's
+ * first attempts are claimed together, their hooks read together after
+ * their claims, and post the body the sink holds (`attemptClaimed`). The deliveries
  * table decides when an attempt is due; a retry is a new message sent with
  * a delay, and the cron sends one again for a due delivery whose message
  * was lost (or whose wait was longer than a queue delay may be).
@@ -80,7 +85,7 @@ const attemptCap = (maxAttempts: string, maxTotal: string) =>
 const capOf = (attemptLimit: number | null, policy: AttemptPolicy) =>
   Math.min(attemptLimit ?? policy.maxAttempts, policy.maxTotalAttempts);
 
-type Claimed = {
+export type Claimed = {
   delivery_id: string;
   repo_id: string;
   hook_id: number;
@@ -91,6 +96,11 @@ type Claimed = {
   /** Set for a delivery sent again by hand: its last attempt (else the policy's). */
   attempt_limit: number | null;
   created_at: number;
+  /**
+   * 1 when a payload row owns its body (made from the event's capture,
+   * stored before the delivery was made): a body not found is gone.
+   */
+  owned: number;
 };
 
 /** How an attempt ended. */
@@ -109,6 +119,8 @@ export interface DeliveryDeps {
   readonly now: () => number;
   readonly policy?: AttemptPolicy;
   readonly metrics?: Metrics;
+  /** Where the stages' times go (a new one per attempt when not given). */
+  readonly stages?: Stages;
   /** The SSRF policy's resolver (tests replace it). */
   readonly resolver?: (signal: AbortSignal) => SsrfPolicy["resolve"];
 }
@@ -119,33 +131,69 @@ export async function consumeWebhooks(
   env: Env,
   options: { readonly metrics?: Metrics } = {},
 ): Promise<void> {
-  const deps: DeliveryDeps = {
-    env,
-    db: readModelFor(env, DEFAULT_ORG_SHARD),
-    now: () => Date.now(),
-    ...(options.metrics && { metrics: options.metrics }),
-  };
-  for (const message of batch.messages) {
-    try {
-      await attemptDelivery(deps, message.body.delivery);
-    } catch (error) {
-      // The delivery keeps its schedule: the cron sends its message again.
-      createLogger({ op: "webhooks.deliver" }).error("a delivery attempt failed to run", {
-        delivery: message.body.delivery,
-        error,
-      });
+  // One writer for the invocation's writes.
+  await withReadModel(env, DEFAULT_ORG_SHARD, async (db) => {
+    const deps: DeliveryDeps = {
+      env,
+      db,
+      now: () => Date.now(),
+      ...(options.metrics && { metrics: options.metrics }),
+    };
+    for (const message of batch.messages) {
+      try {
+        await attemptDelivery(deps, message.body.delivery);
+      } catch (error) {
+        // The delivery keeps its schedule: the cron sends its message again.
+        createLogger({ op: "webhooks.deliver" }).error("a delivery attempt failed to run", {
+          delivery: message.body.delivery,
+          error,
+        });
+      }
+      message.ack();
     }
-    message.ack();
+  });
+}
+
+/**
+ * The times of the stages of making deliveries (`webhooks.stage_ms`, one
+ * point each), kept too for the log line of an event's effect. Stages run
+ * side by side overlap: their times do not add up to the time taken.
+ */
+export class Stages {
+  readonly ms: Record<string, number[]> = {};
+
+  constructor(private readonly metrics?: Metrics) {}
+
+  async time<T>(stage: string, run: () => Promise<T>): Promise<T> {
+    const started = Date.now();
+    try {
+      return await run();
+    } finally {
+      this.add(stage, Date.now() - started);
+    }
+  }
+
+  add(stage: string, ms: number): void {
+    const times = this.ms[stage] ?? [];
+    times.push(ms);
+    this.ms[stage] = times;
+    this.metrics?.count("webhooks.stage_ms", { stage }, ms);
   }
 }
 
-/** Makes the delivery's next attempt, if it is due and no one else is making it. */
-export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): Promise<void> {
-  const policy = deps.policy ?? ATTEMPT_POLICY;
-  const { db } = deps;
-  const now = deps.now();
-  const token = crypto.randomUUID();
-  const claimed = await db
+/**
+ * The statement claiming the delivery's next attempt under `token`: one
+ * row, if it is due, no one else holds it, its attempts are not spent and
+ * its repository's tombstone is not in (a deletion's cleanups may have run).
+ */
+export function claimStatement(
+  db: D1Database,
+  deliveryId: string,
+  token: string,
+  now: number,
+  policy: AttemptPolicy,
+): D1PreparedStatement {
+  return db
     .prepare(
       // The attempt's number is taken with the claim: a claim that dies uses it up, so the
       // attempts stay bounded however many runs crash.
@@ -153,20 +201,63 @@ export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): P
          attempts = attempts + 1
        WHERE delivery_id = ?4 AND state = 'pending' AND next_attempt_at <= ?3
          AND (lease_until IS NULL OR lease_until <= ?3) AND attempts < ${attemptCap("?5", "?6")}
+         AND NOT EXISTS (SELECT 1 FROM repos
+                         WHERE repos.repo_id = webhook_deliveries.repo_id AND repos.deleted = 1)
        RETURNING delivery_id, repo_id, hook_id, event, private, payload_key, attempts,
-         attempt_limit, created_at`,
+         attempt_limit, created_at,
+         EXISTS (SELECT 1 FROM webhook_payloads p WHERE p.payload_key = webhook_deliveries.payload_key)
+           AS owned`,
     )
-    .bind(token, now + policy.leaseMs, now, deliveryId, policy.maxAttempts, policy.maxTotalAttempts)
-    .first<Claimed>();
+    .bind(
+      token,
+      now + policy.leaseMs,
+      now,
+      deliveryId,
+      policy.maxAttempts,
+      policy.maxTotalAttempts,
+    );
+}
+
+/** Makes the delivery's next attempt, if it is due and no one else is making it. */
+export async function attemptDelivery(deps: DeliveryDeps, deliveryId: string): Promise<void> {
+  const policy = deps.policy ?? ATTEMPT_POLICY;
+  const token = crypto.randomUUID();
+  const stages = deps.stages ?? new Stages(deps.metrics);
+  const claimed = await stages.time("claim", () =>
+    claimStatement(deps.db, deliveryId, token, deps.now(), policy).first<Claimed>(),
+  );
   if (!claimed) return;
-  const outcome = await attempt(deps, claimed, policy);
-  await record(deps, claimed, token, outcome, policy);
+  await attemptClaimed({ ...deps, stages }, claimed, token);
+}
+
+/**
+ * What a first attempt holds already: the body its event's effect stored,
+ * and its hook, looked up after its claim (or why it could not be).
+ */
+export interface Prepared {
+  readonly body: Uint8Array;
+  readonly hook: HookForDelivery | { readonly kind: "unavailable"; readonly error: unknown };
+}
+
+/** Makes the attempt `token` claimed, and records it; from what it holds when `prepared`. */
+export async function attemptClaimed(
+  deps: DeliveryDeps,
+  claimed: Claimed,
+  token: string,
+  prepared?: Prepared,
+): Promise<void> {
+  const policy = deps.policy ?? ATTEMPT_POLICY;
+  const stages = deps.stages ?? new Stages(deps.metrics);
+  const outcome = await attempt(deps, claimed, policy, stages, prepared);
+  await stages.time("record", () => record(deps, claimed, token, outcome, policy));
 }
 
 async function attempt(
   deps: DeliveryDeps,
   delivery: Claimed,
   policy: AttemptPolicy,
+  stages: Stages,
+  prepared?: Prepared,
 ): Promise<
   Outcome & {
     readonly configVersion?: number;
@@ -177,9 +268,16 @@ async function attempt(
   }
 > {
   const { env } = deps;
-  let hook: Awaited<ReturnType<ReturnType<Env["REPO"]["getByName"]>["hookForDelivery"]>>;
+  let hook: HookForDelivery;
   try {
-    hook = await env.REPO.getByName(delivery.repo_id).hookForDelivery(delivery.hook_id);
+    if (prepared?.hook.kind === "unavailable") throw prepared.hook.error;
+    hook =
+      prepared?.hook ??
+      (await stages.time(
+        "hook",
+        async (): Promise<HookForDelivery> =>
+          await env.REPO.getByName(delivery.repo_id).hookForDelivery(delivery.hook_id),
+      ));
   } catch (error) {
     // The repository object could not answer now: tried again later (the claim spent an attempt).
     return { kind: "retry", status: null, afterMs: policy.backoffMs, error: errorText(error) };
@@ -192,13 +290,17 @@ async function attempt(
   // Private when the event happened, or now: https only.
   if ((delivery.private === 1 || hook.private) && !isHttps(hook.url))
     return { kind: "failed", status: null, reason: "insecure_url", ...at };
-  const object = await env.ASSETS.get(delivery.payload_key);
-  if (!object) {
-    if (deps.now() - delivery.created_at > policy.bodyWaitMs)
-      return { kind: "failed", status: null, reason: "payload_missing", ...at };
-    return { kind: "wait", afterMs: policy.bodyRecheckMs };
+  let body = prepared?.body;
+  if (!body) {
+    const object = await stages.time("body_read", () => env.ASSETS.get(delivery.payload_key));
+    if (!object) {
+      // One made before its delivery is gone; one stored after its rows may still come.
+      if (delivery.owned === 1 || deps.now() - delivery.created_at > policy.bodyWaitMs)
+        return { kind: "failed", status: null, reason: "payload_missing", ...at };
+      return { kind: "wait", afterMs: policy.bodyRecheckMs };
+    }
+    body = new Uint8Array(await object.arrayBuffer());
   }
-  const body = new Uint8Array(await object.arrayBuffer());
   const timestamp = Math.floor(deps.now() / 1000);
   const headers = {
     "content-type": "application/json",
@@ -228,6 +330,7 @@ async function attempt(
     );
   } catch (error) {
     const durationMs = deps.now() - started;
+    stages.add("post", durationMs);
     if (error instanceof SsrfError && error.reason !== "unresolvable")
       return { kind: "failed", status: null, reason: `blocked_${error.reason}`, durationMs, ...at };
     // Unreachable for now (a timeout, a connection, a lookup that failed): tried again.
@@ -235,6 +338,7 @@ async function attempt(
   }
   const excerpt = await excerptOf(response, policy.excerptBytes, deadline);
   const durationMs = deps.now() - started;
+  stages.add("post", durationMs);
   const seen = { durationMs, excerpt, ...at };
   const { status } = response;
   if (status >= 200 && status < 300) return { kind: "done", status, ...seen };
@@ -399,10 +503,12 @@ async function record(
   // object is retried by the cron.
   if (updated > 0 && gone) await disableFor(deps, delivery.delivery_id);
   // A later wait than a message may be delayed, or a claim lost meanwhile: the cron sees to it.
-  if (updated > 0 && sendNow)
+  if (updated > 0 && sendNow) {
     await deps.env.WEBHOOKS.send({ delivery: delivery.delivery_id } satisfies DeliveryMessage, {
       delaySeconds: Math.max(0, Math.ceil((next - now) / 1000)),
     });
+    deps.metrics?.count("queue.send", { queue: "webhooks" });
+  }
 }
 
 /** What one cron run of reconciliation did, step by step. */
@@ -415,13 +521,16 @@ export interface Reconciled {
   readonly disabled: number;
   /** Deliveries past retention deleted (with their attempts, and the bodies of those sent). */
   readonly pruned: number;
+  /** Bodies made from captures past their time deleted, with their payload rows. */
+  readonly payloads: number;
 }
 
 /**
  * The cron's share, in independent steps, each bounded on its own: sends a
  * message again for due deliveries whose message is late, fails those
  * whose last attempt died with its claim, tries again to turn off hooks
- * whose receiver answered 410, and deletes deliveries past retention. A
+ * whose receiver answered 410, deletes deliveries past retention, and
+ * bodies made from captures past theirs. A
  * step that fails (a queue or a repository object unavailable) stops none
  * of the others; the failures are thrown together once all have run.
  */
@@ -451,6 +560,7 @@ export async function reconcileWebhooks(deps: DeliveryDeps): Promise<Reconciled>
     finished: late.finished + (await step("finish", () => finishDeadClaims(deps, policy), 0)),
     disabled: await step("disable", () => disableGone(deps, policy), 0),
     pruned: await step("prune", () => pruneExpired(deps, policy), 0),
+    payloads: await step("prune_payloads", () => prunePayloads(deps, policy), 0),
   };
   if (failures.length > 0)
     throw new AggregateError(failures, `webhook reconciliation: ${failures.length} failure(s)`);
@@ -505,6 +615,7 @@ async function resendLate(
     }
     try {
       await env.WEBHOOKS.send({ delivery: row.delivery_id } satisfies DeliveryMessage);
+      deps.metrics?.count("queue.send", { queue: "webhooks" });
       sent++;
     } catch (error) {
       // Each on its own: the others are still sent.
@@ -554,7 +665,8 @@ async function disableGone(deps: DeliveryDeps, policy: AttemptPolicy): Promise<n
  * bodies go first (one bulk delete; a run that fails after it finds them
  * gone next time), then the attempts and rows. An event none of whose
  * deliveries was sent never had its body stored: its rows go without an
- * R2 delete.
+ * R2 delete. Nor do those of a body a payload row owns (made from the
+ * event's capture): it goes with its row (`prunePayloads`).
  */
 async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
   const { db, env } = deps;
@@ -569,7 +681,10 @@ async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<
          SELECT payload_key, max(state != 'dropped') AS sent FROM batch GROUP BY payload_key
          HAVING count(*) = (SELECT count(*) FROM webhook_deliveries d
                             WHERE d.payload_key = batch.payload_key))
-       SELECT b.delivery_id, b.payload_key, w.sent FROM batch b JOIN whole w USING (payload_key)`,
+       SELECT b.delivery_id, b.payload_key,
+         w.sent AND NOT EXISTS (SELECT 1 FROM webhook_payloads p WHERE p.payload_key = b.payload_key)
+           AS sent
+       FROM batch b JOIN whole w USING (payload_key)`,
     )
     .bind(deps.now(), policy.pruneBatch)
     .all<{ delivery_id: string; payload_key: string; sent: number }>();
@@ -587,6 +702,39 @@ async function pruneExpired(deps: DeliveryDeps, policy: AttemptPolicy): Promise<
       )
       .bind(ids),
   ]);
+  return results.length;
+}
+
+/**
+ * Deletes the bodies made from captures longest past their time, a batch
+ * a run, whatever their deliveries (whose time is the body's): intents
+ * whose run died, bodies all of whose deliveries were dropped, bodies
+ * whose deliveries are gone. The objects go first (one bulk delete), then
+ * the rows. An intent's time is a day past its event's deadline, after
+ * which no run stores its object; an established body's never moves back.
+ */
+async function prunePayloads(deps: DeliveryDeps, policy: AttemptPolicy): Promise<number> {
+  const { db, env } = deps;
+  const now = deps.now();
+  deps.metrics?.count("d1.query", { db: "org", op: "webhooks_payloads_due" });
+  const { results } = await db
+    .prepare(
+      `SELECT event_key, payload_key FROM webhook_payloads
+       WHERE expires_at <= ? ORDER BY expires_at LIMIT ?`,
+    )
+    .bind(now, policy.pruneBatch)
+    .all<{ event_key: string; payload_key: string }>();
+  if (results.length === 0) return 0;
+  deps.metrics?.count("r2.class_a", { bucket: "fyrden-assets", op: "webhook_payloads_delete" });
+  await env.ASSETS.delete(results.map((r) => r.payload_key));
+  deps.metrics?.count("d1.query", { db: "org", op: "webhooks_payloads_prune" });
+  await db
+    .prepare(
+      `DELETE FROM webhook_payloads
+       WHERE event_key IN (SELECT value FROM json_each(?1)) AND expires_at <= ?2`,
+    )
+    .bind(JSON.stringify(results.map((r) => r.event_key)), now)
+    .run();
   return results.length;
 }
 

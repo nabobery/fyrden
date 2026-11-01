@@ -309,7 +309,9 @@ describe("agents' signing keys", () => {
         .status,
     ).toBe(403);
     // Its keys hold while its owner does: disabling the owner stops them.
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = ? WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = ?, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(Date.now(), owner.principalId)
       .run();
     expect(await verifyAgain()).toMatchObject({ verified: false, reason: "unknown_key" });

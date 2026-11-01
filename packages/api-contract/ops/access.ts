@@ -22,7 +22,7 @@ const Username = z
   .max(MAX_HANDLE_LENGTH)
   .regex(HANDLE_SHAPE)
   .describe("The user's handle.");
-const TeamSlug = z
+export const TeamSlug = z
   .string()
   .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
   .max(100)

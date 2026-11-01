@@ -60,10 +60,13 @@ async function state(target: PushTarget) {
 
 async function setToken(token: string, column: "revoked_at" | "expires_at", at: number) {
   const hex = await hashToken(token);
-  const result = await env.DIRECTORY.prepare(`UPDATE tokens SET ${column} = ? WHERE token_hash = ?`)
+  // RETURNING, not the change count: a revocation's trigger writes a row too.
+  const row = await env.DIRECTORY.prepare(
+    `UPDATE tokens SET ${column} = ? WHERE token_hash = ? RETURNING id`,
+  )
     .bind(at, hex)
-    .run();
-  if (result.meta.changes !== 1) throw new Error("token row not found");
+    .first();
+  if (!row) throw new Error("token row not found");
 }
 
 const firstPush = () => pushBody([{ old: ZERO, new: fx.c2, ref: MAIN }], { pack: fx.packC2 });

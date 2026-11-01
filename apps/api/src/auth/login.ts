@@ -113,6 +113,9 @@ async function takeChallenge(
 
 const str = (value: unknown): string => (typeof value === "string" ? value : "");
 
+/** Hooks into adding a passkey. For tests. */
+export const passkeyHooks: { beforeInsert?: () => Promise<void> } = {};
+
 export const authRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>();
 
 authRouter.get("/sign-in", signInPage);
@@ -148,10 +151,11 @@ authRouter.post("/token", async (c) => {
       "invalid_token",
       "Use a valid personal access token of yours with no scopes or repository limits.",
     );
-  const session = await startSession(c.env, record.principalId, {
+  const session = await startSession(c.env, record.principalId, record.lifecycleGen, {
     via: "token",
     ...(c.get("requestId") !== undefined && { requestId: c.get("requestId") }),
   });
+  if (!session) return refuse(c, 401, "invalid_token", "The user is suspended.");
   setSession(c, session.cookie, session.expiresAt);
   return c.json(
     { user: { id: record.principalId, handle: record.principalHandle } },
@@ -249,13 +253,16 @@ authRouter.post("/passkeys/registration", async (c) => {
   const name = str(body?.name).slice(0, 100) || null;
   const now = clock();
   let added: D1Result | undefined;
+  await passkeyHooks.beforeInsert?.();
   try {
     [added] = await c.env.DIRECTORY.batch([
       // Only while the user has fewer than its share (checked in the insert).
       c.env.DIRECTORY.prepare(
         `INSERT INTO passkeys (id, user_id, public_key, alg, sign_count, name, created_at)
          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
-         WHERE (SELECT count(*) FROM passkeys WHERE user_id = ?2) < ?8`,
+         WHERE (SELECT count(*) FROM passkeys WHERE user_id = ?2) < ?8
+           -- Only while the session that asked is live: a suspension since revoked it.
+           AND EXISTS (SELECT 1 FROM sessions WHERE id = ?9 AND revoked_at IS NULL)`,
       ).bind(
         verified.id,
         user.userId,
@@ -265,6 +272,7 @@ authRouter.post("/passkeys/registration", async (c) => {
         name,
         now,
         LOGIN_POLICY.maxPasskeysPerUser,
+        user.sessionId,
       ),
       c.env.DIRECTORY.prepare(
         `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
@@ -277,6 +285,8 @@ authRouter.post("/passkeys/registration", async (c) => {
       return refuse(c, 409, "passkey_exists", "That passkey is added already.");
     throw error;
   }
+  if ((added?.meta.changes ?? 0) === 0 && !(await sessionUser(c)))
+    return refuse(c, 401, "unauthenticated", "Sign in first.");
   if ((added?.meta.changes ?? 0) === 0)
     return refuse(
       c,
@@ -323,12 +333,19 @@ authRouter.post("/passkeys/sign-in", async (c) => {
     return refuse(c, 400, "challenge_expired", "Start again: the challenge expired or was used.");
   const stored = await c.env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT k.id, k.user_id, k.public_key, k.alg, k.sign_count FROM passkeys k
+      `SELECT k.id, k.user_id, k.public_key, k.alg, k.sign_count, p.lifecycle_gen FROM passkeys k
        JOIN principals p ON p.id = k.user_id
        WHERE k.id = ? AND p.type = 'user' AND p.disabled_at IS NULL`,
     )
     .bind(str(credential.rawId))
-    .first<{ id: string; user_id: string; public_key: string; alg: CoseAlg; sign_count: number }>();
+    .first<{
+      id: string;
+      user_id: string;
+      public_key: string;
+      alg: CoseAlg;
+      sign_count: number;
+      lifecycle_gen: number;
+    }>();
   if (!stored) return fail();
   // A discoverable passkey's assertion names its user: it must be the passkey's own.
   if (str(response.userHandle) !== base64urlEncode(new TextEncoder().encode(stored.user_id)))
@@ -360,10 +377,12 @@ authRouter.post("/passkeys/sign-in", async (c) => {
     .bind(signCount, clock(), stored.id)
     .run();
   if ((moved.meta.changes ?? 0) === 0) return fail();
-  const session = await startSession(c.env, stored.user_id, {
+  const session = await startSession(c.env, stored.user_id, stored.lifecycle_gen, {
     via: "passkey",
     ...(c.get("requestId") !== undefined && { requestId: c.get("requestId") }),
   });
+  // Suspended since the passkey was looked up.
+  if (!session) return fail();
   setSession(c, session.cookie, session.expiresAt);
   return c.json({ user: { id: stored.user_id } }, 200, NO_STORE);
 });

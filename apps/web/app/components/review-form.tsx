@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { useFetcher } from "react-router";
 
 type Answer = { ok?: string; error?: string } | undefined;
@@ -12,7 +12,16 @@ type Verdict = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
  * moves while a review is being written, its text is kept and its verdict
  * asked for again.
  */
-export function ReviewForm({ headSha, isAuthor }: { headSha: string; isAuthor: boolean }) {
+export function ReviewForm({
+  headSha,
+  isAuthor,
+  hidden,
+}: {
+  headSha: string;
+  isAuthor: boolean;
+  /** Fields the form sends besides its own (the viewer it was made for). */
+  hidden?: ReactNode;
+}) {
   const fetcher = useFetcher<Answer>();
   const id = useId();
   const [verdict, setVerdict] = useState<Verdict>("COMMENT");
@@ -62,6 +71,7 @@ export function ReviewForm({ headSha, isAuthor }: { headSha: string; isAuthor: b
       <fetcher.Form method="post">
         <input type="hidden" name="intent" value="review" />
         <input type="hidden" name="commit_id" value={reviewing} />
+        {hidden}
         <fieldset>
           <legend>
             Your review of <code>{reviewing.slice(0, 7)}</code>

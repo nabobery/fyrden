@@ -1,4 +1,6 @@
 CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
+CREATE INDEX collaborators_principal ON collaborators (principal_id);
+CREATE UNIQUE INDEX default_labels_name ON default_labels (name COLLATE NOCASE);
 CREATE INDEX event_payloads_sent ON event_payloads (sent_at) WHERE sent_at IS NOT NULL;
 CREATE INDEX members_handle ON members (handle COLLATE NOCASE);
 CREATE INDEX members_owners ON members (principal_id) WHERE role = 'owner';
@@ -14,6 +16,12 @@ CREATE TABLE collaborators (
         role TEXT NOT NULL CHECK (role IN ('read', 'triage', 'write', 'maintain', 'admin')),
         added_at INTEGER NOT NULL,
         PRIMARY KEY (repo_id, principal_id)
+      ) STRICT;
+CREATE TABLE default_labels (
+        position INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL CHECK (length(color) = 6),
+        description TEXT
       ) STRICT;
 CREATE TABLE event_payloads (
         event_key TEXT PRIMARY KEY,
@@ -39,7 +47,8 @@ CREATE TABLE org_meta (
         epoch_uuid TEXT NOT NULL,
         acl_version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL
-      , source_seq INTEGER NOT NULL DEFAULT 0) STRICT;
+      , source_seq INTEGER NOT NULL DEFAULT 0, default_labels_set INTEGER NOT NULL DEFAULT 0
+        CHECK (default_labels_set IN (0, 1)), reconcile_cursor TEXT, reconcile_pending TEXT) STRICT;
 CREATE TABLE outbox (
         source_seq INTEGER PRIMARY KEY,
         event TEXT NOT NULL CHECK (json_valid(event)),

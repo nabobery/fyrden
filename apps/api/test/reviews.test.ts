@@ -238,13 +238,15 @@ describe("what a merge reads of the reviews", () => {
       const all = sql
         .exec<{
           review_id: number;
+          reviewer_id: string;
           reviewer_root: string;
           by_agent: number;
           commit_sha: string;
           state: ReviewFact["state"];
           submitted_at: number;
         }>(
-          `SELECT r.review_id, r.reviewer_root, r.by_agent, r.commit_sha, r.state, r.submitted_at
+          `SELECT r.review_id, r.reviewer_id, r.reviewer_root, r.by_agent, r.commit_sha, r.state,
+             r.submitted_at
            FROM reviews r JOIN pull_requests p ON p.number = r.pr_number
            WHERE r.pr_number = 1 AND r.state != 'COMMENTED' AND r.dismissed_at IS NULL
              AND NOT (r.state = 'APPROVED' AND r.review_id <= p.approvals_after)`,
@@ -252,7 +254,9 @@ describe("what a merge reads of the reviews", () => {
         .toArray()
         .map(
           (row): ReviewFact => ({
+            reviewerId: row.reviewer_id,
             reviewerRoot: row.reviewer_root,
+            active: true,
             byAgent: row.by_agent === 1,
             commitSha: row.commit_sha,
             state: row.state,
@@ -261,7 +265,10 @@ describe("what a merge reads of the reviews", () => {
             dismissed: false,
           }),
         );
-      return { all, standing: r.reviews.standing(1).reviews };
+      return {
+        all,
+        standing: r.reviews.standing(1).reviews.map((review) => ({ ...review, active: true })),
+      };
     });
   /** The facts a merge reads judge as the whole history does, under every ruleset setting. */
   const judgedAsHistory = (
@@ -287,6 +294,7 @@ describe("what a merge reads of the reviews", () => {
                 authorRoot: "bob",
                 lastPush: { pusherRoot: "carol", at: lastPushAt },
                 eligibleRoots: new Set(eligible),
+                eligiblePrincipals: new Set(eligible),
               };
               expect(evaluateApprovals({ ...input, reviews: history.standing }, settings)).toEqual(
                 evaluateApprovals({ ...input, reviews: history.all }, settings),
@@ -352,6 +360,7 @@ describe("what a merge reads of the reviews", () => {
               authorRoot: "bob",
               lastPush: { pusherRoot: "carol", at: 100 },
               eligibleRoots: new Set(["alice"]),
+              eligiblePrincipals: new Set(["alice"]),
             },
             {
               required: 0,
@@ -365,6 +374,34 @@ describe("what a merge reads of the reviews", () => {
         const last = (order === "reversed" ? reviews[0] : reviews.at(-1)) as Stored;
         expect(lastPushApproved()).toBe(last.state === "APPROVED" && last.sha === undefined);
       });
+
+  it("keeps a person's own approval beside their delegated agent's later one", async () => {
+    // A delegation's reviews are the user's, by an agent: picked apart from the user's own.
+    const { standing } = await stored([
+      { root: "alice", state: "APPROVED", at: 1 },
+      { root: "alice", state: "APPROVED", at: 2, agent: true },
+    ]);
+    expect(standing.map((r) => r.byAgent).sort()).toEqual([false, true]);
+  });
+
+  it("keeps each of a person's agents' latest approval, not one per person", async () => {
+    const standing = await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (const [reviewer, at] of [
+        ["agt_a", 1],
+        ["agt_b", 2],
+      ] as const)
+        sql.exec(
+          `INSERT INTO reviews (pr_number, reviewer_id, reviewer_root, by_agent, state, commit_sha,
+             submitted_at) VALUES (1, ?, 'alice', 1, 'APPROVED', ?, ?)`,
+          reviewer,
+          fx.c2,
+          at,
+        );
+      return r.reviews.standing(1).reviews;
+    });
+    expect(standing.map((r) => r.reviewerId).sort()).toEqual(["agt_a", "agt_b"]);
+  });
 
   it("finds each reviewer's latest by seeking the index, however many it submitted", async () => {
     const dave = Array.from(
@@ -393,8 +430,8 @@ describe("what a merge reads of the reviews", () => {
     });
     // Seeks only: no sort, no scan of the reviews, whatever their number.
     expect(plan.join("\n")).not.toMatch(/TEMP B-TREE|SCAN reviews/);
-    expect(plan.join("\n")).toMatch(/reviews_standing_head/);
-    expect(plan.join("\n")).toMatch(/reviews_standing /);
+    expect(plan.join("\n")).toMatch(/reviews_by_reviewer_head/);
+    expect(plan.join("\n")).toMatch(/reviews_by_reviewer /);
     expect(rowsRead).toBeLessThan(100);
   });
 
@@ -445,7 +482,9 @@ describe("requesting reviews", () => {
     const owner_ = await env.DIRECTORY.prepare("SELECT owner_id FROM principals WHERE id = ?")
       .bind(helper.principalId)
       .first<{ owner_id: string }>();
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(owner_?.owner_id)
       .run();
     const asked = await json<{ code: string; detail: string }>(
@@ -460,12 +499,149 @@ describe("requesting reviews", () => {
     expect(await requested()).toEqual([]);
   });
 
+  it("gives a place a reviewer being deleted holds to another at the limit, quietly", async () => {
+    const asked: Who[] = [];
+    for (let i = 0; i < 15; i++) asked.push(await collaborator("pull"));
+    const request = (who: Who[]) =>
+      api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+        reviewers: who.map((w) => w.handle),
+      });
+    expect((await request(asked)).status).toBe(201);
+    const next = await collaborator("pull");
+    expect(await json<{ code: string }>(request([next]))).toMatchObject({
+      status: 422,
+      body: { code: "too_many_reviewers" },
+    });
+    // One of them is being deleted (their handle released, as the deletion leaves it).
+    const gone = asked[3] as Who;
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    // What the repository emits from here on stays in its outbox, to look at.
+    const stub = env.REPO.getByName(repo.id);
+    await inRepo(stub, (instance) => {
+      instance.sendEvents = () => Promise.reject(new Error("held for the test"));
+    });
+    const outbox = () =>
+      inRepo(stub, (r) =>
+        r.git.context.storage.sql
+          .exec<{ event: string }>("SELECT event FROM outbox ORDER BY source_seq")
+          .toArray()
+          .map((row) => row.event)
+          .join("\n"),
+      );
+    const before = (await outbox()).length;
+    expect((await request([next])).status).toBe(201);
+    const now = await requested();
+    expect(now).toContain(next.principalId);
+    expect(now).not.toContain(gone.principalId);
+    expect(now.length).toBe(15);
+    // No one is told of it; the new request is.
+    const emitted = (await outbox()).slice(before);
+    expect(emitted).toContain("review_requested");
+    expect(emitted).not.toContain("review_request_removed");
+  });
+
+  it("gives that place up too when others reach the limit while a request is being made", async () => {
+    const asked: Who[] = [];
+    for (let i = 0; i < 14; i++) asked.push(await collaborator("pull"));
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+          reviewers: asked.map((w) => w.handle),
+        })
+      ).status,
+    ).toBe(201);
+    const gone = asked[0] as Who;
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    const [mine, theirs] = [await collaborator("pull"), await collaborator("pull")];
+    // Prepared with 14 requested (one more makes 15: nothing to give up); then another request
+    // lands first, making 15.
+    await inRepo(env.REPO.getByName(repo.id), (r) => {
+      r.changeHooks.beforeChange = async (method) => {
+        if (method !== "requestReviewers") return;
+        r.changeHooks = {};
+        const added = r.reviews.request(
+          1,
+          [{ id: theirs.principalId, root: theirs.principalId, role: "read" }],
+          {
+            actor: { principal: owner.principalId, via: "api" },
+            root: owner.principalId,
+            role: "admin",
+          },
+        );
+        if (!added.ok) throw new Error(added.code);
+      };
+    });
+    const added = await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [mine.handle],
+    });
+    expect(added.status).toBe(201);
+    const now = await requested();
+    expect(now).toEqual(expect.arrayContaining([mine.principalId, theirs.principalId]));
+    expect(now).not.toContain(gone.principalId);
+    expect(now.length).toBe(15);
+  });
+
+  it("shows a requested reviewer being deleted as ghost", async () => {
+    const [gone, kept] = [await collaborator("pull"), await collaborator("pull")];
+    await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [gone.handle, kept.handle],
+    });
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    const listed = await json<{ users: { id: string; login: string }[] }>(
+      api("GET", `${path}/pulls/1/requested_reviewers`, owner.token),
+    );
+    expect(listed.body.users).toEqual(
+      expect.arrayContaining([
+        { id: gone.principalId, login: "ghost" },
+        { id: kept.principalId, login: kept.handle },
+      ]),
+    );
+  });
+
+  it("keeps a request of a reviewer being deleted below the limit, as history", async () => {
+    const [gone, other] = [await collaborator("pull"), await collaborator("pull")];
+    await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+      reviewers: [gone.handle],
+    });
+    await env.DIRECTORY.prepare(
+      `UPDATE principals SET lifecycle = 'deleting', disabled_at = 1, handle = id,
+         lifecycle_gen = lifecycle_gen + 1 WHERE id = ?`,
+    )
+      .bind(gone.principalId)
+      .run();
+    expect(
+      (
+        await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
+          reviewers: [other.handle],
+        })
+      ).status,
+    ).toBe(201);
+    expect(await requested()).toEqual([gone.principalId, other.principalId].sort());
+  });
+
   it("withdraws a request made of someone disabled since", async () => {
     const reader = await collaborator("pull");
     await api("POST", `${path}/pulls/1/requested_reviewers`, owner.token, {
       reviewers: [reader.handle],
     });
-    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET disabled_at = 1, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END WHERE id = ?",
+    )
       .bind(reader.principalId)
       .run();
     const removed = await api("DELETE", `${path}/pulls/1/requested_reviewers`, owner.token, {

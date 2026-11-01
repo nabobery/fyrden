@@ -65,10 +65,23 @@ describe("smoke", () => {
     ]);
   });
 
+  it("warns about an effect that failed for good without failing", async () => {
+    const degraded = {
+      ...healthy,
+      checks: { ...healthy.checks, effects: { ok: false, ms: 2, overdueS: 0, failed: true } },
+    };
+    const results = await runSmoke(all(fakeFetch(routes(degraded))));
+    expect(results.filter((r) => !r.ok)).toEqual([]);
+    expect(results.filter((r) => r.warning).map((r) => r.warning)).toEqual([
+      "an effect failed for good lately",
+      "an effect failed for good lately",
+    ]);
+  });
+
   it("does not warn when effects are on time, or not reported", async () => {
     const onTime = {
       ...healthy,
-      checks: { ...healthy.checks, effects: { ok: true, ms: 2, overdueS: 0 } },
+      checks: { ...healthy.checks, effects: { ok: true, ms: 2, overdueS: 0, failed: false } },
     };
     for (const health of [onTime, healthy]) {
       const results = await runSmoke(all(fakeFetch(routes(health))));

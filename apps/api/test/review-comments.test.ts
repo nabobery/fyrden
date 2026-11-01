@@ -498,3 +498,62 @@ describe("suggestions", () => {
     expect((await apply(reader, [own.id])).body.code).toBe("repo_not_found");
   });
 });
+
+describe("on a locked pull request", () => {
+  const lock = (who: Who) => api("PUT", `${path}/issues/1/lock`, who.token, {});
+  const review = (who: Who) =>
+    json<{ code?: string }>(
+      api("POST", `${path}/pulls/1/reviews`, who.token, {
+        event: "COMMENT",
+        body: "Noted.",
+        commit_id: head,
+      }),
+    );
+
+  it("takes diff comments, replies, edits, deletions and reviews only from write and above", async () => {
+    const reader = await collaborator("pull");
+    const writer = await collaborator("push");
+    const before = await onHead(reader);
+    expect(before.status).toBe(201);
+    expect((await lock(writer)).status).toBe(200);
+
+    expect((await onHead(reader)).body.code).toBe("conversation_locked");
+    expect((await comment(reader, { in_reply_to: before.body.id })).body.code).toBe(
+      "conversation_locked",
+    );
+    const edited = await json<{ code?: string }>(
+      api("PATCH", `${path}/pulls/comments/${before.body.id}`, reader.token, { body: "Mine." }),
+    );
+    expect(edited.body.code).toBe("conversation_locked");
+    const removed = await json<{ code?: string }>(
+      api("DELETE", `${path}/pulls/comments/${before.body.id}`, reader.token),
+    );
+    expect(removed.body.code).toBe("conversation_locked");
+    expect((await review(reader)).body.code).toBe("conversation_locked");
+
+    expect((await onHead(writer)).status).toBe(201);
+    expect((await comment(writer, { in_reply_to: before.body.id })).status).toBe(201);
+    expect([200, 201]).toContain((await review(writer)).status);
+  });
+
+  it("refuses a diff comment whose pull request was locked after it was prepared", async () => {
+    const reader = await collaborator("pull");
+    await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) => {
+      r.changeHooks.beforeChange = async (method) => {
+        if (method === "setConversationLock") return;
+        r.changeHooks = {};
+        const locked = r.pulls.setLock(1, true, null, {
+          actor: { principal: owner.principalId, via: "api" },
+          root: owner.principalId,
+          role: "admin",
+        });
+        expect(locked.ok).toBe(true);
+      };
+    });
+    expect((await onHead(reader)).body.code).toBe("conversation_locked");
+    const listed = await json<{ comments: unknown[] }>(
+      api("GET", `${path}/pulls/1/comments`, owner.token),
+    );
+    expect(listed.body.comments).toEqual([]);
+  });
+});

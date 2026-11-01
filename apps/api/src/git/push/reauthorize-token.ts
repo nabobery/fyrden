@@ -3,7 +3,13 @@ import {
   parseTokenRestrictions,
   readGrantLinks,
 } from "@fyrden/adapters-cloudflare/auth";
-import { isId, type PrincipalType, type RepoRole } from "@fyrden/domain";
+import {
+  atLeast,
+  isId,
+  type PrincipalType,
+  type RepoPermission,
+  type RepoRole,
+} from "@fyrden/domain";
 import { allowedWithRole } from "../../repos/directory.js";
 import type { PushDecision } from "./commit.js";
 import { ACCESS_LOST, TOKEN_REVOKED } from "./reauthorize.js";
@@ -44,14 +50,23 @@ export async function reauthorizeByToken(
   },
   /** The principal's role for a write, from the repository's own ACL snapshot. */
   roleOf: (principalId: string) => Promise<RepoRole | null>,
+  /**
+   * What the write needs: a permission (as a request would need it), and a
+   * role beyond the permission's own (closing another's issue: triage).
+   */
+  need: { readonly permission: RepoPermission; readonly minRole?: RepoRole } = {
+    permission: "contents:write",
+  },
 ): Promise<PushDecision> {
   let actChain: readonly string[] = [];
+  let checked: readonly string[] = [];
   const decide = (refusal?: string): PushDecision => ({
     ...(refusal === undefined ? {} : { refusal }),
     tokenId: accepted.tokenId,
     decidedAt: Date.now(),
     actChain,
     requestId: accepted.requestId ?? null,
+    checked,
   });
   const session = db.withSession("first-primary");
   // A write made from the web UI: a signed-in session, with the user's full rights.
@@ -67,12 +82,13 @@ export async function reauthorizeByToken(
     if (!signedIn || signedIn.user_id !== accepted.principal) return decide(TOKEN_REVOKED);
     if (signedIn.owner_id === null || signedIn.repo_state !== "active") return decide(ACCESS_LOST);
     const role = signedIn.user_id === signedIn.owner_id ? "admin" : await roleOf(signedIn.user_id);
+    checked = [signedIn.user_id];
     return allowedWithRole(
       { principalId: signedIn.user_id, principalType: "user", scopes: [], repoIds: null },
       { id: accepted.repoId },
-      "contents:write",
+      need.permission,
       role,
-    )
+    ) && atLeast(role, need.minRole ?? "read")
       ? decide()
       : decide(ACCESS_LOST);
   }
@@ -129,10 +145,14 @@ export async function reauthorizeByToken(
     : row.agent_owner_id === null
       ? []
       : [row.agent_owner_id];
-  for (const principalId of [row.principal_id, ...new Set(ceilings)])
+  checked = [row.principal_id, ...new Set(ceilings)];
+  for (const principalId of checked) {
+    const role = await roleNow(principalId);
     if (
-      !allowedWithRole(token, { id: accepted.repoId }, "contents:write", await roleNow(principalId))
+      !allowedWithRole(token, { id: accepted.repoId }, need.permission, role) ||
+      !atLeast(role, need.minRole ?? "read")
     )
       return decide(ACCESS_LOST);
+  }
   return decide();
 }

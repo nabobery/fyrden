@@ -6,6 +6,7 @@ import { accountLimits } from "../accounts/quotas.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { afterPublication } from "../search/published.js";
 import { clock, newId } from "../services.js";
 import { agentRepoLimits } from "./agent-limits.js";
 import {
@@ -17,6 +18,8 @@ import {
   type NewRepoRow,
   nameTakenError,
   newRepoStatements,
+  ownerGoneError,
+  publishHooks,
   repoQuotaError,
 } from "./directory.js";
 import { repoOutput } from "./output.js";
@@ -58,18 +61,24 @@ export async function createRepository(
 ): Promise<Output<typeof getRepo>> {
   const { metrics } = request;
   const expiresAt = request.expiresAt ?? null;
-  const { maxRepos } = await accountLimits(env, owner.id, metrics);
+  metrics.count("do.request", { class: "OrgDO", method: "defaultLabels" });
+  const [{ maxRepos }, labels] = await Promise.all([
+    accountLimits(env, owner.id, metrics),
+    env.ORG.getByName(owner.id).defaultLabels(),
+  ]);
   await checkNewRepo(env, owner, name, maxRepos, metrics, request.createdBy);
 
   const id = newId("rep");
   const networkId = newId("net");
   const epochGen = await allocateEpoch(env.DIRECTORY, id, metrics);
+  const storageAt = clock();
   metrics.count("do.request", { class: "RepoDO", method: "initGitStorage" });
   const init = await env.REPO.getByName(id).initGitStorage(
     networkId,
     `refs/heads/${INITIAL_BRANCH}`,
     { ownerId: owner.id, name, visibility: "private", epochGen, actor: request.actorId },
     request.templateId,
+    labels,
   );
   if (!init.ok) throw new Error(`initializing repository storage failed: ${init.error}`);
 
@@ -77,6 +86,7 @@ export async function createRepository(
   const db = env.DIRECTORY;
   metrics.count("d1.query", { db: "directory", op: "repo_create" }, 4);
   let refused: ReturnType<typeof heldBack>;
+  await publishHooks.before?.();
   try {
     refused = heldBack(
       await db.batch(
@@ -115,12 +125,14 @@ export async function createRepository(
   }
   // Lost a race with another create of the name or of the last repository the
   // quota allows; the new object stays unreachable and empty.
+  if (refused === "owner_gone") throw ownerGoneError(owner.handle);
   if (refused === "name_taken") throw nameTakenError(owner.handle, name);
   if (refused === "agent_quota_exceeded")
     throw agentRepoQuotaError(request.createdBy?.maxRepos ?? 0);
   if (refused) throw repoQuotaError(owner.handle, maxRepos);
   // The name may have redirected to another repository here.
   forgetResolved(owner.handle, name);
+  await afterPublication(env, { id, shard: DEFAULT_ORG_SHARD, storageAt }, metrics);
   return repoOutput(
     {
       id,

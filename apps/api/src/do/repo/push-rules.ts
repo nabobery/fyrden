@@ -1,9 +1,15 @@
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
+  type ApprovalSettings,
   applicableRules,
+  codeOwnerClaims,
+  codeOwnersWithout,
+  evaluateApprovals,
   type MergeContext,
   PRECHECK_RULES,
+  type PullRequestParameters,
   principalTypeOf,
+  pullRequestParameters,
   type RepoRole,
   type RuleActor,
   type Ruleset,
@@ -19,6 +25,7 @@ import {
   reachableCommits,
   WalkLimitError,
 } from "@fyrden/git-core";
+import type { ConfirmationNeeds, LostAccess } from "../../git/push/repo-push.js";
 import type { SignedFact } from "../../signing/verification.js";
 import type { RepoRulesets } from "./rulesets.js";
 
@@ -156,6 +163,131 @@ export function precheckPushRules(
     if (found.length > 0) refusals.set(cmd.index, refusalOf(found));
   }
   return refusals;
+}
+
+/**
+ * What a merge's rules rely on that only the account can confirm, and how
+ * to judge them again: for the merger, the active rulesets' `pull_request`
+ * rules that apply to `ref` (actor types and bypasses honoured), the roots
+ * each counts as approving when it reads approvals (some required, or one
+ * after the last push), and when it requires code owners' review, the
+ * principals, teams and memberships its owners' approvals rest on, each
+ * under its own settings; `recheck` judges the merge's rules again, from
+ * the same snapshot and with no await, without what a confirmation found
+ * lost.
+ */
+export function countedApprovals(
+  snapshot: RuleSnapshot,
+  input: {
+    readonly principal: string;
+    readonly delegated: boolean;
+    readonly ref: string;
+    readonly head: string | undefined;
+    readonly merge: MergeContext;
+  },
+): {
+  readonly needs: ConfirmationNeeds;
+  readonly recheck: (lost: LostAccess) => string | undefined;
+} {
+  const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
+  const actor = actorOf(snapshot, input.principal, input.delegated);
+  const branches = defaultBranches(snapshot.head, input.head);
+  const roots = new Set<string>();
+  const principals = new Set<string>();
+  const teams = new Set<string>();
+  const pairs = new Set<string>();
+  for (const branch of branches)
+    for (const { rule } of applicableRules(rulesets, input.ref, actor, branch)) {
+      if (rule.type !== "pull_request") continue;
+      const p = pullRequestParameters(rule);
+      const settings = approvalSettings(p);
+      if (p.required_approving_review_count > 0 || p.require_last_push_approval)
+        for (const root of evaluateApprovals(input.merge.approvals, settings).approvers)
+          roots.add(root);
+      if (p.require_code_owner_review) {
+        const claims = codeOwnerClaims(input.merge.approvals, input.merge.codeOwners, settings);
+        for (const x of claims.principals) principals.add(x);
+        for (const x of claims.teams) teams.add(x);
+        for (const x of claims.pairs) pairs.add(x);
+      }
+    }
+  return {
+    needs: {
+      roots: [...roots].sort(),
+      principals: [...principals].sort(),
+      teams: [...teams].sort(),
+      pairs: [...pairs].sort(),
+    },
+    recheck: (lost) => {
+      const { approvals, codeOwners } = input.merge;
+      const without = (set: ReadonlySet<string>) =>
+        new Set([...set].filter((r) => !lost.principals.has(r)));
+      const owners = codeOwnersWithout(codeOwners, lost);
+      const merge: MergeContext = {
+        ...input.merge,
+        approvals: {
+          ...approvals,
+          eligibleRoots: without(approvals.eligibleRoots),
+          eligiblePrincipals: without(approvals.eligiblePrincipals),
+        },
+        ...(owners && { codeOwners: owners }),
+      };
+      const found = blocking(
+        rulesets,
+        { ref: input.ref, kind: "update", pullRequest: merge },
+        actor,
+        branches,
+        "precheck",
+      );
+      return found.length === 0 ? undefined : refusalOf(found);
+    },
+  };
+}
+
+/** A `pull_request` rule's approval settings, as the domain's evaluations take them. */
+function approvalSettings(p: PullRequestParameters): ApprovalSettings {
+  return {
+    required: p.required_approving_review_count,
+    dismissStale: p.dismiss_stale_reviews_on_push,
+    requireLastPushApproval: p.require_last_push_approval,
+    allowAgentApprovals: p.allow_agent_approvals,
+  };
+}
+
+/**
+ * Whether the merger's rules for `ref` ask code owners' review: an
+ * applicable `active` rule does (`enforced`), only `evaluate` ones do, or
+ * none (a bypass, an actor type left out, no such rule); with each kind's
+ * approval settings.
+ */
+export function codeOwnerDemand(
+  snapshot: RuleSnapshot,
+  principal: string,
+  delegated: boolean,
+  ref: string,
+): CodeOwnerDemand | null {
+  const rulesets = snapshot.rulesets.filter((r) => r.enforcement !== "disabled");
+  const actor = actorOf(snapshot, principal, delegated);
+  const enforced: ApprovalSettings[] = [];
+  const evaluated: ApprovalSettings[] = [];
+  for (const branch of defaultBranches(snapshot.head, undefined))
+    for (const { ruleset, rule } of applicableRules(rulesets, ref, actor, branch)) {
+      if (rule.type !== "pull_request") continue;
+      const p = pullRequestParameters(rule);
+      if (!p.require_code_owner_review) continue;
+      (ruleset.enforcement === "active" ? enforced : evaluated).push(approvalSettings(p));
+    }
+  if (enforced.length > 0) return { demand: "enforced", enforced, evaluated };
+  return evaluated.length > 0 ? { demand: "evaluated", enforced, evaluated } : null;
+}
+
+/** What a merger's rules ask of its code owners (see `codeOwnerDemand`). */
+export interface CodeOwnerDemand {
+  readonly demand: "enforced" | "evaluated";
+  /** The approval settings of the applicable `active` rules asking for code owners. */
+  readonly enforced: readonly ApprovalSettings[];
+  /** Those of the `evaluate` rules asking for them. */
+  readonly evaluated: readonly ApprovalSettings[];
 }
 
 /** What an `evaluate` ruleset would have refused of one ref update. */

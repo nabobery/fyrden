@@ -164,6 +164,10 @@ describe("the REST API under Schemathesis", () => {
         persist,
         "--var",
         `BOOTSTRAP_SECRET:${bootstrapSecret}`,
+        // Live hints on, so their ticket is fuzzed as issued, not as the 503 of a deployment
+        // without them.
+        "--var",
+        "FYRDEN_LIVE:on",
         "--ip",
         "127.0.0.1",
         "--port",

@@ -145,6 +145,50 @@ export const getReadme = defineOperation({
   },
 });
 
+export const getCodeOwnersErrors = defineOperation({
+  id: "repos.codeowners.errors",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/codeowners/errors",
+  summary: "List CODEOWNERS errors",
+  description:
+    "The errors of the CODEOWNERS file a pull request onto a branch, tag or commit would read (`.github/`, the root, `docs/`: the first location holding a regular file), in line order. Syntax only: owners that do not exist or cannot write are not listed (a merge needing code owners' review names them when a rule's owners all fail to qualify). Each error's `source` is cut to 1,024 characters; an answer of more than 1 MiB stops early with Fyrden's `truncated: true`. 404 when the ref names no commit or no CODEOWNERS file is there.",
+  input: z.object({ owner: Owner, repo: Repo, ref: Ref }),
+  output: z.object({
+    errors: z.array(
+      z.object({
+        line: z.number().int().describe("From 1; 0 for the file as a whole."),
+        column: z
+          .number()
+          .int()
+          .describe("From 1, where the error starts; 0 for the file as a whole."),
+        kind: z.string(),
+        source: z.string().describe("The line as written (cut to 1,024 characters)."),
+        suggestion: z.string().nullable(),
+        message: z.string(),
+        path: z.string().describe("The CODEOWNERS file's path."),
+      }),
+    ),
+    truncated: z.boolean().optional().describe("Fyrden: more errors than one answer carries."),
+    file: z
+      .object({ path: z.string(), sha: z.string().describe("The file's blob SHA.") })
+      .describe(
+        "Fyrden: the file read, the one GitHub's locations make effective (errors or none).",
+      ),
+    sha: z.string().describe("Fyrden: the commit the file was read at."),
+  }),
+  permission: "contents:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_codeowners_errors",
+    title: "List CODEOWNERS errors",
+    description:
+      "The syntax errors of the CODEOWNERS file at a branch, tag or commit (default: the default branch), with line, column, kind, the line and a suggestion.",
+    readOnly: true,
+  },
+});
+
 export const getTree = defineOperation({
   id: "repos.trees.get",
   method: "GET",

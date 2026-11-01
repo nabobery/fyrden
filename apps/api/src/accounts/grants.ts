@@ -19,6 +19,7 @@ import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { ownershipChange, type RepoEntry, resolveRepo } from "../repos/directory.js";
 import { applied, invalidateChange, orgFor, userFor } from "./account.js";
+import { GHOST_LOGIN, ghostsAmong } from "./handles.js";
 
 type PermissionName = "pull" | "triage" | "push" | "maintain" | "admin";
 
@@ -150,8 +151,17 @@ export async function listCollaboratorsOperation(
   );
   const page = rows.slice(0, input.per_page);
   const last = page.at(-1);
+  const ghosts = await ghostsAmong(
+    ctx.env,
+    page.map((c) => c.id),
+    ctx.metrics,
+  );
   return {
-    collaborators: page.map((c) => ({ id: c.id, login: c.handle, permission: NAME_OF[c.role] })),
+    collaborators: page.map((c) => ({
+      id: c.id,
+      login: ghosts.has(c.id) ? GHOST_LOGIN : c.handle,
+      permission: NAME_OF[c.role],
+    })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(last.handle) : null,
   };
 }

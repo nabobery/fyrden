@@ -106,10 +106,17 @@ export const DomainEventSchema = z
   });
 export type DomainEvent = z.infer<typeof DomainEventSchema>;
 
+/**
+ * Events one envelope carries at most: far above what a source's outbox
+ * sends in one (50), and what bounds validating a malformed one (its
+ * events are not read past it).
+ */
+export const MAX_ENVELOPE_EVENTS = 1_000;
+
 export const EnvelopeSchema = z
   .strictObject({
     sourceId,
-    events: z.array(DomainEventSchema).min(1),
+    events: z.array(DomainEventSchema).min(1).max(MAX_ENVELOPE_EVENTS),
   })
   .superRefine((envelope, ctx) => {
     const seen = new Set<string>();
@@ -123,10 +130,33 @@ export const EnvelopeSchema = z
   });
 export type Envelope = z.infer<typeof EnvelopeSchema>;
 
+/**
+ * `EnvelopeSchema.safeParse`, its events validated one at a time first and
+ * stopping at the first invalid one: what validating a malformed envelope
+ * holds is one event's issues (bounded by the event's own limits), however
+ * many invalid events it carries.
+ */
+export function safeParseEnvelope(value: unknown): z.ZodSafeParseResult<Envelope> {
+  const events = (value as { events?: unknown } | null)?.events;
+  if (Array.isArray(events) && events.length <= MAX_ENVELOPE_EVENTS)
+    for (const [i, event] of events.entries()) {
+      const parsed = DomainEventSchema.safeParse(event);
+      if (!parsed.success)
+        return {
+          success: false,
+          // Where in the envelope they are; an envelope's error (it has no data of its own).
+          error: new z.ZodError(
+            parsed.error.issues.map((issue) => ({ ...issue, path: ["events", i, ...issue.path] })),
+          ) as z.ZodError<Envelope>,
+        };
+    }
+  return EnvelopeSchema.safeParse(value);
+}
+
 export function parseEnvelope(
   value: unknown,
 ): { ok: true; envelope: Envelope } | { ok: false; error: string } {
-  const parsed = EnvelopeSchema.safeParse(value);
+  const parsed = safeParseEnvelope(value);
   return parsed.success
     ? { ok: true, envelope: parsed.data }
     : { ok: false, error: z.prettifyError(parsed.error) };

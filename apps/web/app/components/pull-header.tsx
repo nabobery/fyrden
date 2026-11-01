@@ -25,8 +25,8 @@ export function BranchName({ name, fork }: { name: string; fork?: boolean }) {
 
 /**
  * A pull request's title, number, state and branches, and its pages:
- * the conversation, the files it changes and, while it conflicts, its
- * conflicts.
+ * the conversation, the files it changes, its requested reviewers, its
+ * code owners and, while it conflicts, its conflicts.
  */
 export function PullHeader({
   owner,
@@ -39,7 +39,7 @@ export function PullHeader({
   repo: string;
   pull: PullRequest;
   viewer: string | null;
-  active: "conversation" | "files" | "conflicts";
+  active: "conversation" | "files" | "conflicts" | "reviewers" | "code-owners";
 }) {
   const page = pullPage(owner, repo, pull.number);
   return (
@@ -70,6 +70,15 @@ export function PullHeader({
         </Link>
         <Link to={`${page}/files`} aria-current={active === "files" ? "page" : undefined}>
           Files changed
+        </Link>
+        <Link to={`${page}/reviewers`} aria-current={active === "reviewers" ? "page" : undefined}>
+          Reviewers
+        </Link>
+        <Link
+          to={`${page}/code-owners`}
+          aria-current={active === "code-owners" ? "page" : undefined}
+        >
+          Code owners
         </Link>
         {(pull.mergeable_state === "dirty" || active === "conflicts") && pull.state === "open" && (
           <Link to={`${page}/conflicts`} aria-current={active === "conflicts" ? "page" : undefined}>
