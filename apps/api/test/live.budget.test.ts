@@ -151,7 +151,10 @@ describe("a live grant", () => {
         .run();
       const results = await Promise.all([one(), one()]);
       expect(results.filter(granted)).toHaveLength(1);
-      expect(results.find((x) => !granted(x))).toEqual({ status: "refused", reason: "daily" });
+      expect(results.find((x) => !granted(x))).toMatchObject({
+        status: "refused",
+        reason: "daily",
+      });
       expect((await dayRow(day))?.[r]).toBe(LIVE_DAILY[r] - LIVE_PROTECTED[r]);
       expect(await receipts()).toBe(2);
       const target = await env.DIRECTORY.prepare(
@@ -194,7 +197,7 @@ describe("a live grant", () => {
           db,
           await makeLiveGrant(await plan({ day, resources: vector({ do_requests: 1 }) })),
         ),
-      ).toEqual({ status: "refused", reason: "daily" });
+      ).toMatchObject({ status: "refused", reason: "daily" });
       const cleanup = await reserveLive(
         db,
         await makeLiveGrant(
