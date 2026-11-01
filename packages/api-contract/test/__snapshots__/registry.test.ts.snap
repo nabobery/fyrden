@@ -322,6 +322,79 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/events/failed/{id}/replay": {
+      "post": {
+        "description": "Fyrden: puts an account's envelope of events that the events consumer gave up on (kept by its dead-letter queue, \`id\` the dead letter's message id) back on the events queue, once: the consumer applies it as any envelope, so what its events mean for its members' activity feeds (repositories they no longer read purged from their feeds) is journaled and delivered then. Applying it again changes nothing it already changed; one that fails again goes to the dead-letter queue as a record of its own. Refused (409 \`already_replayed\`) once replayed; (409 \`not_replayable\`) for a repository's envelope (which asks for its repository's search repair itself) or one that could not be read; (410 \`envelope_expired\`) once the envelope was kept its 14 days; (410 \`envelope_not_kept\`) for one stored without its envelope (too large, too deep or not JSON); (410 \`payload_expired\`) for one naming an event whose stored payload the account may no longer keep (an event 6 days old or more); (404 \`failure_not_found\`) for no such record; (503 \`read_model_maintenance\`) while the read model is paused, recovering or under maintenance, nothing decided; (503 \`requeue_failed\`) when the queue did not take it, the record left to replay again. Instance administrators only.",
+        "operationId": "admin.events.replay",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "The failed envelope's record id (\`events_failed.id\`).",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                    },
+                    "requeued_at": {
+                      "description": "When it was put back on the events queue, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "source_id": {
+                      "description": "The account the envelope came from (org_ or usr_ prefix).",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "source_id",
+                    "requeued_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Replay an account's failed envelope",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/organizations": {
       "post": {
         "description": "Creates an organization with a user as its first owner. Instance administrators only.",

@@ -61,7 +61,7 @@ CREATE TABLE events_failed (
   reason TEXT,
   at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
-) STRICT;
+, requeued_at INTEGER) STRICT;
 
 -- table read_model_barrier
 CREATE TABLE read_model_barrier (
