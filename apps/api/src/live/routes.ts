@@ -18,6 +18,7 @@ import { LIVE_NOW, type LiveEnvelope, makeLiveGrant } from "./budget.js";
 import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, LIVE_ADMISSION, liveAllowance, release } from "./directory.js";
 import {
+  type FundedResult,
   fund,
   LIVE_MANIFEST_REVISION,
   liveTarget,
@@ -429,9 +430,23 @@ export async function openLiveSocket(
       return temporary();
     }
     // The feed holds no turn to run (its first was never delivered, say): one granted and handed
-    // over now, after the socket (whose opening does not wait on it).
-    if (response.headers.get(LIVE_TURN_WANTED) && turn === undefined)
-      await deliverTurn(env, target, credential.principalId, metrics).catch(() => {});
+    // over now, after the socket (whose opening does not wait on it). Refused or lost, the socket
+    // would have nothing to renew it or send it hints: it is refused as its admission would be.
+    const delivered =
+      response.headers.get(LIVE_TURN_WANTED) && turn === undefined
+        ? await deliverTurn(env, target, credential.principalId, metrics).catch(
+            (): FundedResult<never> => ({ status: "refused", reason: "temporary" }),
+          )
+        : null;
+    if (delivered?.status === "refused") {
+      response.webSocket.accept();
+      if (delivered.reason === "daily") {
+        response.webSocket.close(4413, "today's allowance is spent");
+        return daily("live_budget", "Live hints have spent today's allowance.", delivered.retryAt);
+      }
+      response.webSocket.close(4412, "try again soon");
+      return temporary();
+    }
     // Given up on while it was handed over: nobody takes the socket, so it is closed at once.
     if (signal.aborted) {
       response.webSocket.accept();
@@ -465,16 +480,16 @@ export async function openLiveSocket(
   };
 }
 
-/** Grants the feed a turn and hands it to its object to prepare (refused or lost: none). */
+/** Grants the feed a turn and hands it to its object to prepare; its grant's refusal, if any. */
 async function deliverTurn(
   env: Env,
   target: Target,
   feed: string,
   metrics: Metrics | undefined,
-): Promise<void> {
+): Promise<FundedResult<void>> {
   metrics?.count("d1.query", { db: "directory", op: "live_grant" });
   const turn = await fund(env.DIRECTORY, await grantFor(target, feed, "pump"));
-  if (turn.status !== "funded") return;
+  if (turn.status !== "funded") return turn;
   metrics?.count("do.request", { class: "UserDO", method: "liveTurnV1" });
   await env.USER.getByName(feed).liveTurnV1({
     protocol: 1,
@@ -483,6 +498,7 @@ async function deliverTurn(
     quantity: 1,
     ownerId: null,
   });
+  return { status: "funded", value: undefined };
 }
 
 /**

@@ -24,7 +24,12 @@ import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import { threadId } from "../src/do/user/inbox.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
-import { canonicalVector, LIVE_DAILY, LIVE_ORDINARY_DEBT_LIMIT } from "../src/live/budget.js";
+import {
+  canonicalVector,
+  LIVE_DAILY,
+  LIVE_ESCROW_ENTRIES,
+  LIVE_ORDINARY_DEBT_LIMIT,
+} from "../src/live/budget.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import {
   LIVE_BLOCK_UNITS,
@@ -144,6 +149,14 @@ async function advance(who: Who, ms: number): Promise<void> {
 async function handledThenTurn(who: Who): Promise<void> {
   await runInDurableObject(feedOf(who), () => {});
   await runDurableObjectAlarm(feedOf(who));
+}
+
+/** Every day the ledger holds with its escrow places full (no owned unit is granted on them). */
+async function fillEscrow(): Promise<void> {
+  const held = Array.from({ length: LIVE_ESCROW_ENTRIES }, (_, i) => ({ test: i }));
+  await env.DIRECTORY.prepare("UPDATE live_budget_days SET escrow = ?")
+    .bind(JSON.stringify(held))
+    .run();
 }
 
 /** A repository of `owner`'s with one issue; its id and the issue's conversation. */
@@ -1257,6 +1270,73 @@ describe("a feed's turn", () => {
     expect(second.response.status).toBe(101);
     expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
     for (const s of [first, second]) s.ws?.close(1000, "done");
+  });
+
+  it("tells a socket to reconnect when its renewal finds no turn to authorize it", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Its turn lost with no successor (a dispatched one adopted after its accounting failed, or
+    // one whose successor the ledger refused): nothing would ever answer the renewal.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    // Closed as an expired socket is, so the client reconnects at once: its admission grants a turn.
+    expect(await socket.closed).toEqual({ code: 4401 });
+  });
+
+  it("tells a socket to reconnect when a turn running as it renews ends with no successor", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    // The renewal arrives while the turn runs, after its work (so it is left queued); then
+    // today's escrow places fill, so its successor (an owned unit) is refused.
+    feedHooks.afterTurnWork = async (feed, state) => {
+      delete feedHooks.afterTurnWork;
+      const [ws] = state.getWebSockets();
+      if (ws) void feed.webSocketMessage(ws, JSON.stringify({ t: "renew" }));
+      await fillEscrow();
+    };
+    try {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.afterTurnWork;
+    }
+    expect(await turnOf(owner)).toEqual([]);
+    expect(await socket.closed).toEqual({ code: 4401 });
+  });
+
+  it("refuses a reconnect whose feed's lost turn cannot be granted again: closed 4412", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its turn lost while its grant is still unsettled in the ledger: the admission grants none,
+    // and the replacement asked for after it finds today's escrow places full.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    await fillEscrow();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4412);
+    expect(await turnOf(owner)).toEqual([]);
+    first.ws?.close(1000, "done");
   });
 
   it("leases a socket to its renewal deadline, each renewal extending the lease", async () => {

@@ -258,6 +258,8 @@ export const feedHooks: {
   beforeAlarmWrite?: () => Promise<void>;
   /** An alarm run's ceilings (tests: lower than the alarm's own). */
   alarmLimits?: InvocationCost;
+  /** Awaited in a feed's turn after its work, before its successor is granted (tests). */
+  afterTurnWork?: (feed: UserDO, state: DurableObjectState) => Promise<void>;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -1085,7 +1087,10 @@ export class UserDO extends MigratingDO {
     // Worker grants one (see `liveTurnV1`).
     await this.#adoptTurn(null).catch(() => {});
     const holding = new LiveBudget(this.ctx.storage.sql);
-    const wanted = !holding.runnableTurn(Date.now()) && holding.turn()?.phase !== "dispatched";
+    const wanted =
+      !this.#turnRunning &&
+      !holding.runnableTurn(Date.now()) &&
+      holding.turn()?.phase !== "dispatched";
     return new Response(null, {
       status: 101,
       webSocket: client,
@@ -1222,6 +1227,16 @@ export class UserDO extends MigratingDO {
         this.ctx.storage.transactionSync(() => new LiveBudget(this.ctx.storage.sql).bringTurn(now))
       )
         await this.#arm();
+      // A turn running here prepares its successor as it ends (or names none): judged after that.
+      while (this.#turnRunning) await this.#turnRunning;
+      // No turn to authorize it (one adopted after its run was given up on or its accounting
+      // lost, or its successor refused): nothing would answer, so it is closed as an expired one
+      // is, to reconnect at once (its admission hands the feed a turn, or is refused).
+      if (
+        live.socket(id)?.phase === "open" &&
+        !new LiveBudget(this.ctx.storage.sql).runnableTurn(Date.now())
+      )
+        this.#closeSocket(id, CLOSE_EXPIRED, "no live turn: reconnect with a new ticket");
       return;
     }
     return this.#closeSocket(id, 1008, "control message refused");
@@ -1647,6 +1662,7 @@ export class UserDO extends MigratingDO {
             );
           };
           await this.#turnWork(funding, current);
+          await feedHooks.afterTurnWork?.(this, this.ctx);
           return current() && this.#live().sockets().length > 0
             ? await this.#grantTurn(current).catch(() => null)
             : null;
