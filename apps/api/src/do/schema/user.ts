@@ -645,4 +645,42 @@ export const userSchema: readonly DoMigration[] = [
       ALTER TABLE live_budget_pending ADD COLUMN dispatch_instance TEXT;
     `,
   },
+  {
+    version: 13,
+    name: "live_funding",
+    // Funded live entries: a ticket's transport (its funding's reference, so a redemption is paid
+    // for before this object wakes), and the feed's one execution turn (its grant's envelope, its
+    // phase: prepared, claimed once, then dispatched with its owner and the instance that held
+    // it; one at a time, never a queue), stamped by the grant that paid for it as recovery
+    // requires.
+    sql: `
+      ALTER TABLE live_tickets ADD COLUMN transport_json TEXT CHECK (
+        transport_json IS NULL
+        OR (json_valid(transport_json) AND json_type(transport_json) = 'object')
+      );
+
+      CREATE TABLE live_turn (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        operation_id TEXT NOT NULL,
+        envelope_json TEXT NOT NULL CHECK (
+          json_valid(envelope_json) AND json_type(envelope_json) = 'object'
+        ),
+        phase TEXT NOT NULL CHECK (phase IN ('prepared', 'claimed', 'dispatched')),
+        intended_at INTEGER NOT NULL CHECK (intended_at >= 0),
+        owner_id TEXT,
+        dispatch_instance TEXT,
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq >= 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0)
+      ) STRICT;
+      CREATE INDEX live_turn_budget
+        ON live_turn (budget_incarnation, budget_epoch, budget_seq, id);
+
+      -- A pool's spendable balances (drained ones kept apart, for replays until they expire).
+      CREATE INDEX live_budget_balances_live
+        ON live_budget_balances (kind, day, budget_seq, operation_id)
+        WHERE remaining <> '{"do_requests":0,"do_rows_read":0,"do_rows_written":0,"do_duration_ms":0,"d1_rows_read":0,"d1_rows_written":0,"queue_ops":0}';
+    `,
+  },
 ];

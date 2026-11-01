@@ -32,6 +32,7 @@ import {
   recoverLiveTargets,
   retireLiveTarget,
 } from "../src/live/recovery.js";
+import { countingExec } from "./helpers/feed.js";
 import {
   clockedD1,
   DAY,
@@ -214,6 +215,120 @@ describe("live credit in a feed's object", () => {
         false,
       ]);
       expect(JSON.parse(results[7] as string).do_requests).toBe(0);
+    });
+  });
+
+  it("holds two spendable grants a pool at most: another waits until one drains", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("pool")}`;
+      const grants = [];
+      for (let i = 0; i < 3; i++) {
+        const grant = await mint(
+          await makeLiveGrant(
+            await plan({
+              ...today(),
+              recipient: feed,
+              kind: "control",
+              producesLocal: true,
+              resources: vector({ do_requests: 10 }),
+            }),
+          ),
+        );
+        if (grant.status !== "granted") throw new Error(JSON.stringify(grant));
+        grants.push(grant.grant);
+      }
+      const [a, b, c] = grants as [LiveEnvelope, LiveEnvelope, LiveEnvelope];
+      const results = await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        const budget = new LiveBudget(state.storage.sql);
+        budget.takeEpoch(0, a.plan.incarnation);
+        const now = c.plan.validFrom;
+        const day = Math.floor(now / DAY);
+        const install = (g: LiveEnvelope) => {
+          budget.begin(
+            "install",
+            g.operationId,
+            now,
+            {
+              epoch: 0,
+              incarnation: g.plan.incarnation,
+              seq: g.seq,
+              validUntil: g.plan.validUntil,
+            },
+            now,
+          );
+          return budget.install("install", g, now);
+        };
+        return state.storage.transactionSync(() => [
+          install(a),
+          install(b),
+          // A third while two can be spent: refused, its item kept.
+          install(c),
+          // Spent across the two (15 of their 20), then the first drained: room for the third.
+          budget.spend("control", day, vector({ do_requests: 15 }), now),
+          install(c),
+          // The second's 5 and the third's 10.
+          budget.spend("control", day, vector({ do_requests: 15 }), now),
+          budget.spend("control", day, vector({ do_requests: 1 }), now),
+        ]);
+      });
+      expect(results).toEqual(["installed", "installed", "full", true, "installed", true, false]);
+    });
+  });
+
+  it("spends reading what it can spend, however many blocks drained before", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("drained")}`;
+      const grants: LiveEnvelope[] = [];
+      for (let i = 0; i < 30; i++) {
+        const grant = await mint(
+          await makeLiveGrant(
+            await plan({
+              ...today(),
+              recipient: feed,
+              kind: "control",
+              producesLocal: true,
+              resources: vector({ do_requests: 2 }),
+            }),
+          ),
+        );
+        if (grant.status !== "granted") throw new Error(JSON.stringify(grant));
+        grants.push(grant.grant);
+      }
+      const reads = await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        const budget = new LiveBudget(state.storage.sql);
+        budget.takeEpoch(0, (grants[0] as LiveEnvelope).plan.incarnation);
+        const now = (grants.at(-1) as LiveEnvelope).plan.validFrom;
+        const day = Math.floor(now / DAY);
+        // Each installed, then drained: 29 drained blocks before the last.
+        for (const g of grants) {
+          budget.begin(
+            "install",
+            g.operationId,
+            now,
+            {
+              epoch: 0,
+              incarnation: g.plan.incarnation,
+              seq: g.seq,
+              validUntil: g.plan.validUntil,
+            },
+            now,
+          );
+          expect(budget.install("install", g, now)).toBe("installed");
+          expect(budget.spend("control", day, vector({ do_requests: 2 }), now)).toBe(true);
+        }
+        // One more block, then a spend of it: what it reads, counted at the storage.
+        const last = grants.at(-1) as LiveEnvelope;
+        state.storage.sql.exec(
+          "UPDATE live_budget_balances SET remaining = ? WHERE operation_id = ?",
+          JSON.stringify(vector({ do_requests: 2 })),
+          last.operationId,
+        );
+        const counting = countingExec(state.storage.sql);
+        expect(budget.spend("control", day, vector({ do_requests: 1 }), now)).toBe(true);
+        return counting.stop().read;
+      });
+      // Its fence and the one spendable block, not the 29 drained ones.
+      expect(reads).toBeLessThanOrEqual(4);
     });
   });
 

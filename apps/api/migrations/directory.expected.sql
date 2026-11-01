@@ -384,6 +384,17 @@ CREATE TABLE live_sockets (
   expires_at INTEGER NOT NULL
 ) STRICT;
 
+-- table live_ticket_transports
+CREATE TABLE live_ticket_transports (
+  ticket_hash TEXT PRIMARY KEY CHECK (length(ticket_hash) BETWEEN 1 AND 200),
+  feed TEXT NOT NULL CHECK (length(feed) > 0),
+  credential_id TEXT NOT NULL CHECK (length(credential_id) > 0),
+  expires_at INTEGER NOT NULL CHECK (expires_at >= 0),
+  operation_id TEXT NOT NULL CHECK (length(operation_id) BETWEEN 1 AND 300),
+  claimed_at INTEGER CHECK (claimed_at IS NULL OR claimed_at >= 0),
+  claim_id TEXT
+) STRICT, WITHOUT ROWID;
+
 -- table memberships
 CREATE TABLE memberships (
   org_id TEXT NOT NULL REFERENCES principals (id),
@@ -839,6 +850,9 @@ CREATE INDEX live_sockets_feed ON live_sockets (feed);
 
 -- index live_sockets_pending
 CREATE INDEX live_sockets_pending ON live_sockets (pending_until) WHERE state = 'pending';
+
+-- index live_ticket_transports_expiry
+CREATE INDEX live_ticket_transports_expiry ON live_ticket_transports (expires_at, ticket_hash);
 
 -- index memberships_principal
 CREATE INDEX memberships_principal ON memberships (principal_id);
