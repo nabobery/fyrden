@@ -194,7 +194,12 @@ beforeEach(() => indexing(true));
 afterEach(async () => {
   await indexing(false);
   await db.prepare("DELETE FROM search_budget").run();
-  await db.prepare("UPDATE search_size SET bytes = 0, observed = 0 WHERE id = 1").run();
+  // Growth a test left reserved (its invocation's observation never ran) too: the next test's
+  // threshold counts it.
+  await db.prepare("DELETE FROM search_byte_reservations").run();
+  await db
+    .prepare("UPDATE search_size SET bytes = 0, observed = 0, bytes_reserved = 0 WHERE id = 1")
+    .run();
 });
 
 describe("search's live projection", () => {
