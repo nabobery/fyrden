@@ -459,6 +459,7 @@ async function serveListen(
   const stream = new ListenStream({
     id: listen.id,
     serverInfo: SERVER_INFO,
+    requestId: ctx.requestId,
     feed: {
       uri: own,
       socket,

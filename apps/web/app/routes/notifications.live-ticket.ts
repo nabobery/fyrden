@@ -1,5 +1,5 @@
 import { apiCall, assertSameOrigin, checkSession, readForm } from "../lib/api.server.js";
-import type { LiveTicket } from "../lib/live.js";
+import { LIVE_PAUSE_MAX_MS, type LiveTicket, nextUtcDay } from "../lib/live.js";
 import type { Route } from "./+types/notifications.live-ticket";
 
 /*
@@ -7,7 +7,9 @@ import type { Route } from "./+types/notifications.live-ticket";
  * to the session (which a browser's socket cannot name in a header), and
  * the socket opens on this origin, which forwards it to the API with the
  * session's cookie. Asked for the viewer the page was drawn for: another
- * signed in since gets nothing.
+ * signed in since gets nothing. Refused for today, the page pauses until
+ * the time the API names (the next UTC day when that is malformed);
+ * refused for now, it asks again later.
  */
 
 const answer = (ticket: LiveTicket) =>
@@ -36,11 +38,21 @@ export async function action({ request, context }: Route.ActionArgs) {
       url: `${origin}/api/notifications/live?ticket=${encodeURIComponent(ticket)}`,
     });
   }
-  if (
-    issued.status === 503 &&
-    (issued.body as { code?: unknown } | null)?.code === "live_unavailable"
-  )
-    return answer({ kind: "off" });
+  const problem = issued.body as { code?: unknown; retry_at?: unknown } | null;
+  if (issued.status === 429 && problem?.code === "live_budget") {
+    const at = problem.retry_at;
+    const now = Date.now();
+    return answer({
+      kind: "budget",
+      retryAt:
+        typeof at === "number" && Number.isSafeInteger(at) && at <= now + LIVE_PAUSE_MAX_MS
+          ? at
+          : nextUtcDay(now),
+    });
+  }
+  if (issued.status === 503 && problem?.code === "live_unavailable") return answer({ kind: "off" });
+  if (issued.status === 503 && problem?.code === "live_temporary")
+    return answer({ kind: "retry", temporary: true });
   // Signed out, a credential that may not, or not a user's: asking again changes nothing.
   if (issued.status === 401 || issued.status === 403) return answer({ kind: "stop" });
   return answer({ kind: "retry" });

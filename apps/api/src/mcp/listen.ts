@@ -1,3 +1,4 @@
+import { makeProblem } from "@fyrden/api-contract";
 import { SERVER_INFO_META_KEY, SUBSCRIPTION_ID_META_KEY } from "@modelcontextprotocol/server";
 import { LIVE_POLICY } from "../do/user/live.js";
 
@@ -20,7 +21,11 @@ import { LIVE_POLICY } from "../do/user/live.js";
  * unanswered), sends keepalive comments, and ends the stream gracefully
  * (the `subscriptions/listen` result) when the socket closes, before the
  * socket's controls run out, and at the stream's longest life: the client
- * listens again, then reads again. Closing the stream closes the socket.
+ * listens again, then reads again. A socket closed for a refusal (4413:
+ * today's allowance spent; 4412: for now) ends the stream with that
+ * refusal instead, a JSON-RPC error for the listen request saying when to
+ * listen again (nothing acknowledged when it was not yet); the bridge never
+ * listens again itself. Closing the stream closes the socket.
  */
 
 export const LISTEN_POLICY = {
@@ -69,7 +74,45 @@ export interface ListenSocket {
   send(message: string): void;
   close(code?: number, reason?: string): void;
   addEventListener(type: "message", handler: (event: { data: unknown }) => void): void;
-  addEventListener(type: "close" | "error", handler: () => void): void;
+  addEventListener(type: "close", handler: (event: { code: number }) => void): void;
+  addEventListener(type: "error", handler: () => void): void;
+}
+
+/** The object's close codes for a refusal: for now, and for today. */
+const TEMPORARY = 4412;
+const SPENT = 4413;
+const DAY = 86_400_000;
+
+/** A refusal the stream ends with. */
+interface Refusal {
+  readonly status: 429 | 503;
+  readonly code: "live_budget" | "live_temporary";
+  readonly detail: string;
+  readonly retryAfter: number;
+  readonly retryAt?: number;
+}
+
+/** The refusal a socket closed with `code` at `now` tells, if it was one. */
+function refusalOf(code: number, now: number): Refusal | null {
+  if (code === SPENT) {
+    // The next UTC day (by this clock: the close says no time).
+    const retryAt = (Math.floor(now / DAY) + 1) * DAY;
+    return {
+      status: 429,
+      code: "live_budget",
+      detail: "Live hints have spent today's allowance. Listen again tomorrow (UTC).",
+      retryAfter: Math.max(1, Math.ceil((retryAt - now) / 1000)),
+      retryAt,
+    };
+  }
+  if (code === TEMPORARY)
+    return {
+      status: 503,
+      code: "live_temporary",
+      detail: "Live hints cannot be funded right now. Listen again shortly.",
+      retryAfter: 60,
+    };
+  return null;
 }
 
 /** Time and repetition (the Worker's own; a test's by hand). */
@@ -90,6 +133,8 @@ export const workerClock: ListenClock = {
 export interface ListenStreamOptions {
   readonly id: ListenId;
   readonly serverInfo: { readonly name: string; readonly version: string };
+  /** The request's id, named in a refusal's problem. */
+  readonly requestId?: string;
   /** The feed's URI, when the stream serves it with `socket`; none: acknowledged empty, ended. */
   readonly feed?: {
     readonly uri: string;
@@ -110,6 +155,7 @@ export class ListenStream {
   readonly readable: ReadableStream<Uint8Array>;
   readonly #id: ListenId;
   readonly #serverInfo: ListenStreamOptions["serverInfo"];
+  readonly #requestId: string | undefined;
   readonly #feed: ListenStreamOptions["feed"];
   readonly #clock: ListenClock;
   readonly #encoder = new TextEncoder();
@@ -124,6 +170,8 @@ export class ListenStream {
    * over changes whose access it could not decide; readers read again on renewal). */
   #refresh = false;
   #ending = false;
+  /** The socket was closed for a refusal: the stream ends with it, not its result. */
+  #refusal: Refusal | null = null;
   #done = false;
   #cancelled = false;
   #deadline: number;
@@ -138,6 +186,7 @@ export class ListenStream {
   constructor(options: ListenStreamOptions) {
     this.#id = options.id;
     this.#serverInfo = options.serverInfo;
+    this.#requestId = options.requestId;
     this.#feed = options.feed;
     this.#clock = options.clock ?? workerClock;
     this.#openedAt = this.#clock.now();
@@ -145,7 +194,11 @@ export class ListenStream {
     if (!this.#feed) this.#ending = true;
     else {
       this.#feed.socket.addEventListener("message", (event) => this.#frame(event.data));
-      this.#feed.socket.addEventListener("close", () => this.#end(false));
+      this.#feed.socket.addEventListener("close", (event) => {
+        if (this.#ending) return;
+        this.#refusal = refusalOf(event.code, this.#clock.now());
+        this.#end(false);
+      });
       this.#feed.socket.addEventListener("error", () => this.#end(false));
     }
     // The request aborted: the body is let go too (a read waiting on it ends).
@@ -193,8 +246,15 @@ export class ListenStream {
     );
   }
 
-  /** The next message to send, in order: the acknowledgement, a hint, the end, a keepalive. */
+  /**
+   * The next message to send, in order: the acknowledgement, a hint, the end, a keepalive.
+   * Refused before it was acknowledged, the refusal alone.
+   */
   #next(): string | null {
+    if (this.#refusal && !this.#acknowledged) {
+      this.#done = true;
+      return this.#refused(this.#refusal);
+    }
     if (!this.#acknowledged) {
       this.#acknowledged = true;
       return this.#event({
@@ -220,6 +280,7 @@ export class ListenStream {
     }
     if (this.#ending) {
       this.#done = true;
+      if (this.#refusal) return this.#refused(this.#refusal);
       return this.#event({
         jsonrpc: "2.0",
         id: this.#id,
@@ -243,6 +304,32 @@ export class ListenStream {
     return `event: message\ndata: ${JSON.stringify(message)}\n\n`;
   }
 
+  /** The listen request's error for `refusal`: its problem, with the subscription's metadata. */
+  #refused(refusal: Refusal): string {
+    return this.#event({
+      jsonrpc: "2.0",
+      id: this.#id,
+      error: {
+        code: refusal.status,
+        message: refusal.detail,
+        data: {
+          ...makeProblem({
+            status: refusal.status,
+            code: refusal.code,
+            detail: refusal.detail,
+            requestId: this.#requestId,
+            retryAfter: refusal.retryAfter,
+            ...(refusal.retryAt !== undefined && { retryAt: refusal.retryAt }),
+          }),
+          _meta: {
+            [SUBSCRIPTION_ID_META_KEY]: this.#id,
+            [SERVER_INFO_META_KEY]: this.#serverInfo,
+          },
+        },
+      },
+    });
+  }
+
   #frame(data: unknown): void {
     if (this.#ending || typeof data !== "string") return;
     let frame: { t?: unknown; n?: unknown; until?: unknown };
@@ -262,9 +349,12 @@ export class ListenStream {
     }
   }
 
-  /** Acknowledges what the client took, every half window, while the minute's controls allow. */
+  /**
+   * Acknowledges what the client took, every half window, while the minute's controls allow;
+   * nothing once the stream is ending (its socket closed or closing).
+   */
   #acknowledge(): void {
-    if (this.#taken - this.#acked < LISTEN_POLICY.ackEvery) return;
+    if (this.#ending || this.#taken - this.#acked < LISTEN_POLICY.ackEvery) return;
     if (!this.#control(LISTEN_POLICY.renewReserveMinute, LISTEN_POLICY.renewReserveLife)) return;
     this.#acked = this.#taken;
     this.#send({ t: "ack", n: this.#acked });

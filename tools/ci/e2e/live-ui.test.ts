@@ -1,11 +1,14 @@
 // Live hints in a real browser against both Workers, with the deployment's
 // live hints on: an open inbox shows a thread another person notified it
 // of without being reloaded (read again after the hint, not only on
-// connecting), and the page acknowledges what it heard.
+// connecting), and the page acknowledges what it heard. A socket closed for
+// a refusal (its close stood in for: the deployment's allowance is not spent
+// here) pauses the tab's live updates for the day, through a reload, or has
+// them retried, and the page says so.
 // Needs `pnpm --filter @fyrden/web build` first (turbo does it).
 import { type Page, expect as see, type WebSocket } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startWebStack, visit, type WebStack } from "./web-stack.js";
+import { accessible, reload, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
 let page: Page;
@@ -116,5 +119,40 @@ describe("live hints", () => {
     // The read's own hint reaches this tab's socket, and the page reads itself again.
     await reread;
     await see(page.getByRole("status")).toHaveText("Marked read.");
+  }, 120_000);
+
+  it("pauses a tab's live updates for the day when its socket is refused for today, through a reload", async () => {
+    // Another tab of the same session: its own storage and socket.
+    const tab = await page.context().newPage();
+    // Refused while `refuse` holds, then the real socket.
+    let refuse = true;
+    await tab.routeWebSocket(/\/api\/notifications\/live\?/, (ws) => {
+      if (refuse) ws.close({ code: 4413, reason: "live hints spent today's allowance" });
+      else ws.connectToServer();
+    });
+    await visit(tab, `${stack.origin}/notifications`);
+    const note = tab.getByRole("status").filter({ hasText: "Live updates are paused until" });
+    await see(note).toHaveText(
+      /^Live updates are paused until .+\. You can still refresh this page\.$/,
+      { timeout: 30_000 },
+    );
+    await accessible(tab, "the inbox, its live updates paused");
+    // A socket would open now: the note after the reload is the tab's kept pause.
+    refuse = false;
+    await reload(tab);
+    await see(note).toBeVisible();
+    await tab.close();
+  }, 120_000);
+
+  it("says live updates are retried when its socket is refused for now", async () => {
+    const tab = await page.context().newPage();
+    await tab.routeWebSocket(/\/api\/notifications\/live\?/, (ws) => {
+      ws.close({ code: 4412, reason: "try again soon" });
+    });
+    await visit(tab, `${stack.origin}/notifications`);
+    await see(
+      tab.getByRole("status").filter({ hasText: "Live updates are temporarily unavailable" }),
+    ).toHaveText("Live updates are temporarily unavailable. Retrying.", { timeout: 30_000 });
+    await tab.close();
   }, 120_000);
 });

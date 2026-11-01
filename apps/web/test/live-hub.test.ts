@@ -2,26 +2,31 @@
 // page: one socket however the tab navigates, none while hidden from the
 // start, let go after a while hidden or with no page listening, stopped
 // for good when off, signed out or revoked (failing: tried again after a
-// pause); reads paced, one at a time, held during navigations and while
-// hidden.
+// pause); paused for the day whatever the tab does, then started again
+// past the pause's end only if wanted; reads paced, one at a time, held
+// during navigations and while hidden; and what the viewer is told.
 
 import { describe, expect, it } from "vitest";
-import type { LiveStream } from "../app/lib/live.js";
-import { LIVE_HUB, LiveHub } from "../app/lib/live-hub.js";
+import type { LiveBudgetPause, LiveStream } from "../app/lib/live.js";
+import { LIVE_HUB, LiveHub, type LiveHubEvents } from "../app/lib/live-hub.js";
 
-function harness({ hidden = false } = {}) {
+function harness({
+  hidden = false,
+  kept = null as LiveBudgetPause | null,
+}: {
+  hidden?: boolean;
+  kept?: LiveBudgetPause | null;
+} = {}) {
   let now = 1_000_000;
   let next = 0;
   const timers = new Map<number, { at: number; fn: () => void }>();
-  const page = { hidden, idle: true, off: 0, storage: true };
+  const page = { hidden, idle: true, off: 0, storage: true, pause: kept };
   const client = { starts: 0, stops: 0 };
   const reads: { done: () => void }[] = [];
-  let changed: (streams: readonly LiveStream[] | "all") => void = () => undefined;
-  let stopped: (why: "off" | "stop" | "revoked" | "failing") => void = () => undefined;
+  let events: LiveHubEvents | null = null;
   const hub = new LiveHub({
-    client: (c, s) => {
-      changed = c;
-      stopped = s;
+    client: (e) => {
+      events = e;
       return {
         start: () => {
           client.starts += 1;
@@ -41,7 +46,12 @@ function harness({ hidden = false } = {}) {
     markOff: (at) => {
       if (page.storage) page.off = at;
     },
+    pausedUntil: () => page.pause,
+    markPaused: (pause) => {
+      page.pause = pause;
+    },
     now: () => now,
+    random: () => 0.5,
     setTimer: (fn, ms) => {
       next += 1;
       timers.set(next, { at: now + ms, fn });
@@ -76,10 +86,16 @@ function harness({ hidden = false } = {}) {
     reads,
     advance,
     finish,
-    hint: (streams: readonly LiveStream[] | "all") => changed(streams),
-    stop: (why: "off" | "stop" | "revoked" | "failing") => stopped(why),
+    now: () => now,
+    hint: (streams: readonly LiveStream[] | "all") => events?.changed(streams),
+    stop: (why: "off" | "stop" | "revoked" | "failing") => events?.stopped(why),
+    pause: (retryAt: number) => events?.paused({ kind: "budget", retryAt }),
+    temporary: (refused: boolean) => events?.temporary(refused),
   };
 }
+
+/** How far past a pause's end the hub starts again (the random half fixed at 0.5). */
+const LATE = LIVE_HUB.resumeSpreadMs * 0.75;
 
 const want = (repo: string) => ({ current: (s: LiveStream) => s.repo === repo });
 const A: LiveStream = { repo: "rep_a", kind: "issue" };
@@ -261,6 +277,87 @@ describe("a tab's live hints", () => {
     h.advance(LIVE_HUB.offForMs);
     h.hub.visibility();
     expect(h.client.starts).toBe(2);
+  });
+
+  it("opens nothing while paused for the day, whatever the tab does, then starts again past its end", () => {
+    const h = harness();
+    const leave = h.hub.listen(want("rep_a"));
+    h.stop("failing");
+    const retryAt = h.now() + 60 * 60_000;
+    h.pause(retryAt);
+    expect(h.page.pause).toEqual({ kind: "budget", retryAt });
+    expect(h.hub.status()).toEqual({ kind: "paused", retryAt });
+    // A page arriving, a navigation, the tab hidden and shown, the failure's retry, lingering.
+    leave();
+    h.hub.listen(want("rep_b"));
+    h.hub.settled();
+    h.page.hidden = true;
+    h.hub.visibility();
+    h.page.hidden = false;
+    h.hub.visibility();
+    h.advance(LIVE_HUB.failedPauseMs);
+    h.advance(retryAt - h.now() + LATE - 1);
+    expect(h.client.starts).toBe(1);
+    expect(h.page.pause).not.toBeNull();
+    h.advance(1);
+    expect(h.client.starts).toBe(2);
+    expect(h.page.pause).toBeNull();
+    expect(h.hub.status()).toEqual({ kind: "live" });
+  });
+
+  it("starts nothing at the pause's end while hidden or unwanted, and starts once shown", () => {
+    const h = harness();
+    const leave = h.hub.listen(want("rep_a"));
+    h.pause(h.now() + 60_000);
+    h.page.hidden = true;
+    h.hub.visibility();
+    h.advance(60_000 + LATE);
+    expect(h.client.starts).toBe(1);
+    expect(h.hub.status()).toEqual({ kind: "live" });
+    h.page.hidden = false;
+    h.hub.visibility();
+    expect(h.client.starts).toBe(2);
+    const other = harness();
+    const left = other.hub.listen(want("rep_a"));
+    other.pause(other.now() + 60_000);
+    left();
+    other.advance(LIVE_HUB.lingerMs + 60_000 + LATE);
+    expect(other.client.starts).toBe(1);
+    other.hub.listen(want("rep_a"));
+    expect(other.client.starts).toBe(2);
+    leave();
+  });
+
+  it("keeps a pause the tab kept, from its first page", () => {
+    const retryAt = 1_000_000 + 30 * 60_000;
+    const h = harness({ kept: { kind: "budget", retryAt } });
+    expect(h.hub.status()).toEqual({ kind: "paused", retryAt });
+    h.hub.listen(want("rep_a"));
+    expect(h.client.starts).toBe(0);
+    h.advance(30 * 60_000 + LATE);
+    expect(h.client.starts).toBe(1);
+  });
+
+  it("tells a refusal for now until it passes, or until it stops for good", () => {
+    const h = harness();
+    const told: string[] = [];
+    h.hub.watch(() => told.push(h.hub.status().kind));
+    h.hub.listen(want("rep_a"));
+    h.temporary(true);
+    expect(h.hub.status()).toEqual({ kind: "temporary" });
+    // Failing, it is tried again: still told.
+    h.stop("failing");
+    expect(h.hub.status()).toEqual({ kind: "temporary" });
+    h.temporary(false);
+    expect(h.hub.status()).toEqual({ kind: "live" });
+    h.temporary(true);
+    h.stop("revoked");
+    expect(h.hub.status()).toEqual({ kind: "live" });
+    // A pause overrides it, and is told once.
+    h.temporary(true);
+    h.pause(h.now() + 60_000);
+    h.pause(h.now() + 60_000);
+    expect(told).toEqual(["temporary", "live", "temporary", "live", "temporary", "paused"]);
   });
 
   it("does nothing more once disposed, a read under way included", async () => {
