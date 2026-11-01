@@ -61,9 +61,10 @@ jobs:
   check:
     name: Lint, typecheck, test, dry-run
     runs-on: ubuntu-latest
-    # About 16 minutes as a rule; room for the browser's install to recover (up to 14) and for
-    # the pinned git to build when its cache misses (about 4).
-    timeout-minutes: 36
+    # About 31 minutes as a rule (the API's coverage run 20 to 31 of them); room for the
+    # browser's install to recover (up to 14) and for the pinned git to build when its cache
+    # misses (about 4).
+    timeout-minutes: 50
     env:
       GIT_VERSION: "2.53.0"
     steps:
