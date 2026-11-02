@@ -1,0 +1,39 @@
+name: Pinned git
+description: >-
+  The pinned git for tests that ask git itself (git fsck as an oracle,
+  fixtures), not the runner image's, which changes under them: built once
+  from its checked release tarball and cached, then named in
+  FYRDEN_GIT_BINARY for the job's later steps.
+inputs:
+  version:
+    description: The git release to use (one of tools/ci/interop/git-versions.txt).
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Runner image (part of the git build's cache key)
+      id: image
+      shell: bash
+      run: echo "os=$ImageOS" >> "$GITHUB_OUTPUT"
+    - name: Cached git build
+      id: git-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.cache/fyrden-git/${{ inputs.version }}
+        key: git-${{ inputs.version }}-${{ steps.image.outputs.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/interop/git-versions.txt', 'tools/ci/interop/build-git.sh') }}
+    - name: Build git from its checked release tarball
+      if: steps.git-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GIT_VERSION: ${{ inputs.version }}
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev
+        tools/ci/interop/build-git.sh "$GIT_VERSION" "$HOME/.cache/fyrden-git/$GIT_VERSION"
+    - name: The pinned git for the tests
+      shell: bash
+      env:
+        GIT_VERSION: ${{ inputs.version }}
+      run: |
+        echo "FYRDEN_GIT_BINARY=$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" >> "$GITHUB_ENV"
+        "$HOME/.cache/fyrden-git/$GIT_VERSION/bin/git" --version

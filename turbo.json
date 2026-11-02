@@ -27,9 +27,10 @@
       "dependsOn": ["transit"],
       "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
+    // A sharded run's blob report is an output too (CI merges the shards').
     "test:coverage": {
       "dependsOn": ["transit"],
-      "outputs": ["coverage/**"],
+      "outputs": ["coverage/**", ".vitest/blob/**"],
       "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     "test:shuffle": {

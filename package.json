@@ -14,7 +14,8 @@
     "lint:fix": "biome check --write .",
     "test": "turbo run test",
     "test:coverage": "turbo run test:coverage",
-    "lint:ci": "biome ci ."
+    "lint:ci": "biome ci .",
+    "hooks": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",

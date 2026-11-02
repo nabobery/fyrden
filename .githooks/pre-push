@@ -1,0 +1,7 @@
+#!/bin/sh
+# Before a push: the checks CI runs first, in about 20 seconds (lint and
+# format, then typecheck, cached by turbo). Opt in with `pnpm hooks`; skip
+# once with `git push --no-verify`.
+set -e
+pnpm lint:ci
+pnpm turbo run typecheck --output-logs=errors-only
