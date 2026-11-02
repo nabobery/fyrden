@@ -3,7 +3,8 @@
 // frames are acknowledged every half window within the socket's control
 // budgets; the socket is renewed before its deadline and again when a
 // renewal goes unanswered; the stream ends gracefully when its socket
-// closes, at its longest life and before its controls run out.
+// closes, at its longest life and before its controls run out; and with a
+// refusal (for today, or for now) when the socket is closed for one.
 
 import { describe, expect, it } from "vitest";
 import { LIVE_POLICY } from "../src/do/user/live.js";
@@ -19,7 +20,7 @@ const SERVER = { name: "fyrden", version: "test" };
 
 /** A socket that records what the stream sends, and lets the test speak for the object. */
 function fakeSocket() {
-  const handlers: Record<string, ((event: { data: unknown }) => void)[]> = {};
+  const handlers: Record<string, ((event: { data?: unknown; code?: number }) => void)[]> = {};
   const sent: unknown[] = [];
   let closed: number | null = null;
   const socket: ListenSocket = {
@@ -27,19 +28,23 @@ function fakeSocket() {
     close: (code) => {
       closed = code ?? 1005;
     },
-    addEventListener: (type: string, handler: (event: { data: unknown }) => void) => {
+    addEventListener: (
+      type: string,
+      handler: (event: { data?: unknown; code?: number }) => void,
+    ) => {
       handlers[type] = [...(handlers[type] ?? []), handler];
     },
-  };
-  const emit = (type: string, data?: unknown) => {
-    for (const handler of handlers[type] ?? []) handler({ data });
+  } as ListenSocket;
+  const emit = (type: string, event: { data?: unknown; code?: number }) => {
+    for (const handler of handlers[type] ?? []) handler(event);
   };
   return {
     socket,
     sent,
     closed: () => closed,
-    frame: (frame: unknown) => emit("message", JSON.stringify(frame)),
-    close: () => emit("close"),
+    frame: (frame: unknown) => emit("message", { data: JSON.stringify(frame) }),
+    close: (code = 1000) => emit("close", { code }),
+    error: () => emit("error", {}),
   };
 }
 
@@ -68,12 +73,13 @@ function manualClock(start = 1_000_000) {
   };
 }
 
-function open(id: string | number = "s-1", signal?: AbortSignal) {
+function open(id: string | number = "s-1", signal?: AbortSignal, start?: number) {
   const socket = fakeSocket();
-  const time = manualClock();
+  const time = manualClock(start);
   const stream = new ListenStream({
     id,
     serverInfo: SERVER,
+    requestId: "req_1",
     feed: { uri: URI, socket: socket.socket, deadline: time.now() + LIVE_POLICY.renewMs },
     clock: time.clock,
     ...(signal && { signal }),
@@ -91,6 +97,7 @@ function open(id: string | number = "s-1", signal?: AbortSignal) {
           method?: string;
           id?: unknown;
           result?: unknown;
+          error?: unknown;
           params?: unknown;
         });
   };
@@ -296,6 +303,106 @@ describe("a listen stream's writer", () => {
     await reader.cancel();
     expect(socket.closed()).toBe(1000);
     expect(time.stopped()).toBe(true);
+  });
+
+  describe("closed for a refusal", () => {
+    const now = Date.UTC(2026, 10, 1, 15, 30);
+    const tomorrow = Date.UTC(2026, 10, 2);
+    const meta = (id: unknown) => ({
+      "io.modelcontextprotocol/subscriptionId": id,
+      "io.modelcontextprotocol/serverInfo": SERVER,
+    });
+
+    it("ends with today's refusal (4413): a pending hint first, then the error, never the result", async () => {
+      const { socket, time, read } = open(7, undefined, now);
+      await read();
+      for (let n = 1; n <= LISTEN_POLICY.ackEvery; n++) socket.frame(changed(n));
+      socket.close(4413);
+      expect(time.stopped()).toBe(true);
+      expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
+      expect(await read()).toEqual({
+        jsonrpc: "2.0",
+        id: 7,
+        error: {
+          code: 429,
+          message: "Live hints have spent today's allowance. Listen again tomorrow (UTC).",
+          data: {
+            type: "about:blank",
+            status: 429,
+            code: "live_budget",
+            detail: "Live hints have spent today's allowance. Listen again tomorrow (UTC).",
+            request_id: "req_1",
+            retry_after: (tomorrow - now) / 1000,
+            retry_at: tomorrow,
+            _meta: meta(7),
+          },
+        },
+      });
+      expect(await read()).toBeNull();
+      // The hint it took acknowledged nothing, and nothing more goes to the socket.
+      time.advance(LIVE_POLICY.renewMs);
+      time.tick();
+      socket.frame(changed(LISTEN_POLICY.ackEvery + 1));
+      socket.close(1000);
+      expect(socket.sent).toEqual([]);
+    });
+
+    it("ends with a refusal for now (4412)", async () => {
+      const { socket, read } = open("s-1", undefined, now);
+      await read();
+      socket.close(4412);
+      expect(await read()).toEqual({
+        jsonrpc: "2.0",
+        id: "s-1",
+        error: {
+          code: 503,
+          message: "Live hints cannot be funded right now. Listen again shortly.",
+          data: {
+            type: "about:blank",
+            status: 503,
+            code: "live_temporary",
+            detail: "Live hints cannot be funded right now. Listen again shortly.",
+            request_id: "req_1",
+            retry_after: 60,
+            _meta: meta("s-1"),
+          },
+        },
+      });
+      expect(await read()).toBeNull();
+    });
+
+    it("acknowledges nothing when refused before it was read", async () => {
+      const { socket, time, read } = open("s-1", undefined, now);
+      socket.frame(changed(1));
+      socket.close(4413);
+      socket.error();
+      expect(await read()).toMatchObject({
+        id: "s-1",
+        error: { code: 429, data: { code: "live_budget", retry_at: tomorrow } },
+      });
+      expect(await read()).toBeNull();
+      time.tick();
+      expect(socket.sent).toEqual([]);
+    });
+
+    it("keeps its graceful end when the socket closed otherwise first", async () => {
+      const { socket, read } = open();
+      await read();
+      socket.close(1000);
+      socket.close(4413);
+      expect(await read()).toMatchObject({ result: { resultType: "complete" } });
+      expect(await read()).toBeNull();
+    });
+
+    it("still cancels when the client cancels it, refused or not", async () => {
+      const { socket, time, reader, read } = open();
+      await read();
+      socket.close(4412);
+      await reader.cancel();
+      expect(await read()).toBeNull();
+      expect(time.stopped()).toBe(true);
+      expect(socket.closed()).toBe(1000);
+    });
   });
 
   it("without a feed, acknowledges nothing honored and ends", async () => {

@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { API_RPC_VERSION, type ApiRpcContract, type HealthResult } from "@fyrden/api-contract";
 import { app } from "./app-instance.js";
+import { countedEnv } from "./counted-env.js";
 import { deepHealth } from "./health.js";
 
 /** Service-binding entrypoint used by fyrden-web (`services[].entrypoint` = "ApiRpc"). */
@@ -19,6 +20,7 @@ export class ApiRpc extends WorkerEntrypoint<Env> implements ApiRpcContract {
    * here unchanged.
    */
   override fetch(request: Request): Promise<Response> {
-    return Promise.resolve(app.fetch(request, this.env, this.ctx));
+    // Its D1 counted against the request, as the Worker's own requests' are.
+    return Promise.resolve(app.fetch(request, countedEnv(this.env), this.ctx));
   }
 }

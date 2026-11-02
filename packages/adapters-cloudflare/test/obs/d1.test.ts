@@ -67,6 +67,38 @@ describe("a counted D1 binding", () => {
     ).toEqual([[["do", "outer"], 2]]);
   });
 
+  it("writes the rows D1 reported its statements read and wrote, once, for the whole invocation", async () => {
+    const meta = { rows_read: 3, rows_written: 1 };
+    const statement = (): D1PreparedStatement =>
+      ({
+        bind: () => statement(),
+        all: async () => ({ results: [{ x: 7 }], success: true, meta }),
+        run: async () => ({ results: [], success: true, meta }),
+      }) as unknown as D1PreparedStatement;
+    const db = countedD1({
+      prepare: () => statement(),
+      batch: async (s: D1PreparedStatement[]) =>
+        s.map(() => ({ results: [], success: true, meta })),
+    } as unknown as D1Database);
+    const { dataset, points } = createFakeDataset();
+    const metrics = createMetrics(dataset);
+    const first = await measureInvocation(metrics, { where: "worker", op: "rows" }, async () => {
+      // `first` answers as D1 does (its first row, or a column of it), its rows counted too.
+      const row = await db.prepare("SELECT x").first();
+      const column = await db.prepare("SELECT x").first("x");
+      await db.prepare("UPDATE t").run();
+      await db.batch([db.prepare("A"), db.prepare("B")]);
+      return [row, column];
+    });
+    expect(first).toEqual([{ x: 7 }, 7]);
+    expect(
+      points.filter((p) => p.name === "d1.invocation_rows").map((p) => [p.blobs, p.value]),
+    ).toEqual([
+      [["worker", "rows", "read"], 15],
+      [["worker", "rows", "written"], 5],
+    ]);
+  });
+
   it("shares the count with an invocation measured inside another", async () => {
     const db = countedD1(fakeD1());
     const metrics = createMetrics(createFakeDataset().dataset);

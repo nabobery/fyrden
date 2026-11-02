@@ -1,4 +1,4 @@
-import type { LiveStream } from "./live.js";
+import type { LiveBudgetPause, LiveStream } from "./live.js";
 
 /**
  * A tab's live hints, kept across its pages: one socket for the tab while
@@ -10,7 +10,9 @@ import type { LiveStream } from "./live.js";
  * read then if the page shown wants them). The socket is let go a while
  * after the last page stops listening, or after the tab is hidden a while.
  * Off, signed out or revoked, it stays stopped; failing, it is tried again
- * after a pause.
+ * after a pause. Refused for today, it opens nothing until the time given,
+ * whatever the tab does, then again only if a page shown wants it, spread
+ * over a few minutes. What it tells the viewer is its `status()`.
  */
 
 export const LIVE_HUB = {
@@ -24,16 +26,36 @@ export const LIVE_HUB = {
   failedPauseMs: 10 * 60_000,
   /** How long a tab remembers that the deployment sends no live hints. */
   offForMs: 60 * 60_000,
+  /**
+   * How far past a daily pause's end it starts again: between half this
+   * and all of it, so tabs paused together do not all ask at once.
+   */
+  resumeSpreadMs: 5 * 60_000,
 } as const;
 
 type Stop = "off" | "stop" | "revoked" | "failing";
+type Timer = "linger" | "hidden" | "read" | "failed" | "resume";
+
+/** What the viewer is told: nothing, paused until a time, or refused for now and retrying. */
+export type LiveStatus =
+  | { readonly kind: "live" }
+  | { readonly kind: "paused"; readonly retryAt: number }
+  | { readonly kind: "temporary" };
+
+const LIVE: LiveStatus = { kind: "live" };
+const TEMPORARY: LiveStatus = { kind: "temporary" };
+
+/** What a client tells the hub. */
+export interface LiveHubEvents {
+  changed(streams: readonly LiveStream[] | "all"): void;
+  stopped(why: Stop): void;
+  paused(pause: LiveBudgetPause): void;
+  temporary(refused: boolean): void;
+}
 
 export interface LiveHubDeps {
-  /** A client whose hints and stops come to the hub. */
-  client(
-    changed: (streams: readonly LiveStream[] | "all") => void,
-    stopped: (why: Stop) => void,
-  ): { start(): void; stop(): void };
+  /** A client whose hints, stops and refusals come to the hub. */
+  client(events: LiveHubEvents): { start(): void; stop(): void };
   hidden(): boolean;
   /** No navigation under way. */
   idle(): boolean;
@@ -42,7 +64,11 @@ export interface LiveHubDeps {
   /** When the tab was last told live hints are off (0: never), and to record it. */
   offSince(): number;
   markOff(at: number): void;
+  /** The viewer's daily pause the tab kept, and to keep it (null: let it go). */
+  pausedUntil(): LiveBudgetPause | null;
+  markPaused(pause: LiveBudgetPause | null): void;
   now(): number;
+  random(): number;
   setTimer(fn: () => void, ms: number): unknown;
   clearTimer(handle: unknown): void;
 }
@@ -57,20 +83,45 @@ export class LiveHub {
   #failedAt: number | null = null;
   /** When this tab was told live hints are off (beside the tab's storage, which may fail). */
   #offAt = 0;
+  /** Refused for today: nothing starts until the "resume" timer clears it. */
+  #pause: LiveBudgetPause | null = null;
+  #temporary = false;
+  #status: LiveStatus = LIVE;
+  readonly #watchers = new Set<() => void>();
   /** Hints held for a read: everything, or these streams (checked against the page read). */
   #pendingAll = false;
   #pendingStreams: LiveStream[] = [];
   #reading = false;
   #lastRead = Number.NEGATIVE_INFINITY;
   #disposed = false;
-  #timers = new Map<"linger" | "hidden" | "read" | "failed", unknown>();
+  #timers = new Map<Timer, unknown>();
 
   constructor(deps: LiveHubDeps) {
     this.#deps = deps;
-    this.#client = deps.client(
-      (streams) => this.#changed(streams),
-      (why) => this.#stopped(why),
-    );
+    this.#client = deps.client({
+      changed: (streams) => this.#changed(streams),
+      stopped: (why) => this.#stopped(why),
+      paused: (pause) => this.#paused(pause),
+      temporary: (refused) => {
+        this.#temporary = refused;
+        this.#tell();
+      },
+    });
+    const kept = deps.pausedUntil();
+    if (kept) this.#pauseUntil(kept);
+  }
+
+  /** What the viewer is told now (the same object until it changes). */
+  status(): LiveStatus {
+    return this.#status;
+  }
+
+  /** Calls `watcher` whenever the status changes; the returned function stops it. */
+  watch(watcher: () => void): () => void {
+    this.#watchers.add(watcher);
+    return () => {
+      this.#watchers.delete(watcher);
+    };
   }
 
   /** A page's interest, kept current through `wants.current`; the returned function ends it. */
@@ -105,6 +156,7 @@ export class LiveHub {
 
   dispose(): void {
     this.#disposed = true;
+    this.#watchers.clear();
     for (const name of [...this.#timers.keys()]) this.#clear(name);
     this.#stopClient();
   }
@@ -118,6 +170,7 @@ export class LiveHub {
       (this.#wants.size > 0 || this.#timers.has("linger")) &&
       (!this.#deps.hidden() || this.#timers.has("hidden")) &&
       !this.#halted &&
+      this.#pause === null &&
       (off === 0 || now - off >= LIVE_HUB.offForMs) &&
       (this.#failedAt === null || now - this.#failedAt >= LIVE_HUB.failedPauseMs);
     if (wanted && !this.#running) {
@@ -143,6 +196,47 @@ export class LiveHub {
       // Tried again after the pause, whether or not anything happens in the tab.
       this.#set("failed", LIVE_HUB.failedPauseMs, () => this.#update());
     } else this.#halted = true;
+    // Failing, it is tried again: a refusal for now still holds.
+    if (why !== "failing") this.#temporary = false;
+    this.#tell();
+  }
+
+  #paused(pause: LiveBudgetPause): void {
+    this.#running = false;
+    this.#deps.markPaused(pause);
+    this.#pauseUntil(pause);
+  }
+
+  /** Nothing starts until `pause` ends (a failure's retry neither), then only if wanted. */
+  #pauseUntil(pause: LiveBudgetPause): void {
+    this.#pause = pause;
+    this.#temporary = false;
+    this.#failedAt = null;
+    this.#clear("failed");
+    const late = Math.round(LIVE_HUB.resumeSpreadMs * (0.5 + this.#deps.random() / 2));
+    this.#set("resume", Math.max(0, pause.retryAt - this.#deps.now()) + late, () => {
+      this.#pause = null;
+      this.#deps.markPaused(null);
+      this.#tell();
+      // Only for a page shown that listens (not for a hidden tab's or a navigation's grace).
+      if (!this.#deps.hidden() && this.#wants.size > 0) this.#update();
+    });
+    this.#tell();
+  }
+
+  /** The status for what holds now, its watchers called when it changed. */
+  #tell(): void {
+    const pause = this.#pause;
+    const status: LiveStatus = pause
+      ? this.#status.kind === "paused" && this.#status.retryAt === pause.retryAt
+        ? this.#status
+        : { kind: "paused", retryAt: pause.retryAt }
+      : this.#temporary
+        ? TEMPORARY
+        : LIVE;
+    if (status === this.#status) return;
+    this.#status = status;
+    for (const watcher of [...this.#watchers]) watcher();
   }
 
   #changed(streams: readonly LiveStream[] | "all"): void {
@@ -187,7 +281,7 @@ export class LiveHub {
       });
   }
 
-  #set(name: "linger" | "hidden" | "read" | "failed", ms: number, fn: () => void): void {
+  #set(name: Timer, ms: number, fn: () => void): void {
     this.#clear(name);
     this.#timers.set(
       name,
@@ -198,7 +292,7 @@ export class LiveHub {
     );
   }
 
-  #clear(name: "linger" | "hidden" | "read" | "failed"): void {
+  #clear(name: Timer): void {
     const handle = this.#timers.get(name);
     if (handle === undefined) return;
     this.#timers.delete(name);

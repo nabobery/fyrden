@@ -3,7 +3,7 @@ import { countedD1, createMetrics, measureInvocation } from "@fyrden/adapters-cl
 import { runMaintenance } from "../cron/maintenance.js";
 import { recheckSuppressions } from "../email/suppressions.js";
 import { DEFAULT_ORG_SHARD } from "../events/read-model.js";
-import { reaping, sweep } from "../live/directory.js";
+import { runLiveMaintenance } from "../live/maintenance.js";
 import { readModelMaintenance } from "../read-model/maintenance.js";
 import { type RecoveryState, type RestoreReceipt, recoveryStep } from "../read-model/recovery.js";
 import { runSearchPurges } from "../search/recovery.js";
@@ -88,29 +88,18 @@ export class MaintenanceDO extends DurableObject<Env> {
   }
 
   /**
-   * Tells feeds of revocations (`sweep`) and reaps live leases whose release
-   * was lost, in a request of its own: its calls to feed objects are an
-   * invocation's own.
+   * Live maintenance, funded (`runLiveMaintenance`): expired receipts and
+   * days, debt, recoveries, leases reaped and revocations told, in a request
+   * of its own: its calls to feed objects are an invocation's own.
    */
-  sweepRevocations(): Promise<void> {
+  liveMaintenance(): Promise<void> {
     if (this.#sweeping) return this.#sweeping;
     const metrics = createMetrics(this.env.METRICS);
     this.#sweeping = measureInvocation(
       metrics,
-      { where: "do", op: "sweepRevocations", doClass: "MaintenanceDO" },
+      { where: "do", op: "liveMaintenance", doClass: "MaintenanceDO" },
       async () => {
-        const now = Date.now();
-        metrics.count("d1.query", { db: "directory", op: "live_reap" }, 4);
-        await this.env.DIRECTORY.batch(reaping(this.env.DIRECTORY, now));
-        await sweep(
-          this.env.DIRECTORY,
-          (feed, dependencies) => {
-            metrics.count("do.request", { class: "UserDO", method: "revoked" });
-            return this.env.USER.getByName(feed).revoked(dependencies);
-          },
-          now,
-          metrics,
-        );
+        await runLiveMaintenance(this.env, metrics);
       },
     ).finally(() => {
       this.#sweeping = null;

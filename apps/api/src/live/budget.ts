@@ -18,7 +18,7 @@ import {
  * a new incarnation, fencing every grant made before.
  *
  * These are accounting helpers: their caller pays for its own work,
- * including theirs. Nothing in production calls them yet.
+ * including theirs.
  */
 
 const R = DISCRETIONARY_RESOURCES;
@@ -72,6 +72,7 @@ export type LiveUnit =
   | "control"
   | "renewal"
   | "pump"
+  | "org_confirmation"
   | "mark"
   | "maintenance"
   | "recovery"
@@ -85,6 +86,7 @@ const UNITS: readonly LiveUnit[] = [
   "control",
   "renewal",
   "pump",
+  "org_confirmation",
   "mark",
   "maintenance",
   "recovery",
@@ -144,7 +146,12 @@ export type LiveRefusal = "daily" | "temporary" | "expired" | "fenced" | "invali
 
 export type LiveGrantResult =
   | { readonly status: "granted"; readonly replay: boolean; readonly grant: LiveEnvelope }
-  | { readonly status: "refused"; readonly reason: LiveRefusal };
+  | {
+      readonly status: "refused";
+      readonly reason: LiveRefusal;
+      /** A daily refusal's: the start of the next UTC day, by D1's clock. */
+      readonly retryAt?: number;
+    };
 
 /** What a funded operation actually used of its reserved duration, per day. */
 export interface LiveDurationCompletion {
@@ -248,10 +255,9 @@ export function livePlanError(plan: LiveGrantPlan): string | null {
     if (i === 1 && charge.day !== (charges[0] as LiveDayCharge).day + 1) return "charge days";
     const hold = charge.duration;
     if (hold === undefined) return "duration";
-    if (hold === null) {
-      if (charge.resources.do_duration_ms !== 0) return "duration";
-      continue;
-    }
+    // No hold: any duration it pays is debited outright (a synchronous entry's fixed allowance),
+    // never settled or refunded, so it takes no place in the day's escrow.
+    if (hold === null) continue;
     if (
       typeof hold !== "object" ||
       hold === null ||
@@ -414,7 +420,10 @@ export async function reserveLive(
       const ordinaryGates = ordinary
         ? [
             ...R.map((r) => `debt_${r} + ${addedDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`),
-            `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N} ORDER BY expires_at, seq LIMIT 1)`,
+            // Maintenance's own receipts excepted: the next run removes them, and they alone never
+            // call for one.
+            `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N}
+              AND kind <> 'maintenance' ORDER BY expires_at, seq LIMIT 1)`,
             `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
           ].join("\n    AND ")
         : "1";
@@ -474,7 +483,9 @@ export async function reserveLive(
   FROM live_budget_receipts WHERE operation_id = ${b(request.operationId)} AND ${G(b)}
   ON CONFLICT (feed) DO UPDATE SET
     through_seq = excluded.through_seq,
-    next_attempt_at = min(live_recovery_targets.next_attempt_at, excluded.next_attempt_at),
+    -- Due once the last grant it covers has expired: recovery cleans through the newest
+    -- sequence, so it waits for all of them (credit valid a day among them).
+    next_attempt_at = max(live_recovery_targets.next_attempt_at, excluded.next_attempt_at),
     local_cleanup_debt = json_object(${R.map(
       (r) =>
         `'${r}', ${v("live_recovery_targets.local_cleanup_debt", r)} + ${v("excluded.local_cleanup_debt", r)}`,
@@ -551,7 +562,7 @@ export async function reserveLive(
   if (row.incarnation !== plan.incarnation) return refused("fenced");
   if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch) return refused("fenced");
   if (row.now >= plan.validFrom && first.day === row.today && row.daily === 1)
-    return refused("daily");
+    return { status: "refused", reason: "daily", retryAt: (row.today + 1) * DAY };
   return refused("temporary");
 }
 
@@ -559,7 +570,9 @@ export async function reserveLive(
  * Whether `envelope` is a grant the ledger holds for this recipient and
  * kind (the receipt by its identity, its stored plan and sequence equal,
  * unexpired and unsettled), read with D1's time, the ledger's incarnation,
- * the feed's epoch and the principal's lifecycle in one statement.
+ * the feed's epoch and the principal's lifecycle in one statement; with
+ * `ownerId`, also that the owner was admitted for this very operation and
+ * recipient and is not yet accounted (else `invalid`).
  */
 export async function validateLiveCoverage(
   db: D1Database,
@@ -568,6 +581,7 @@ export async function validateLiveCoverage(
     readonly recipientType: LiveRecipientType;
     readonly recipient: string;
     readonly kind: LiveUnit;
+    readonly ownerId?: string;
   },
 ): Promise<
   | {
@@ -594,15 +608,25 @@ export async function validateLiveCoverage(
         (SELECT incarnation FROM live_budget_state WHERE id = 1) AS incarnation,
         coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?2), 0) AS epoch,
         (SELECT lifecycle FROM principals WHERE id = ?3) AS lifecycle,
+        (SELECT count(*) FROM live_duration_owners o WHERE o.owner_id = ?4
+          AND o.operation_id = ?1 AND o.object_type = ?5 AND o.object_id = ?3
+          AND o.status <> 'accounted') AS owned,
         r.seq, r.plan, r.valid_until, r.expires_at, r.settled_at
       FROM (SELECT 1) LEFT JOIN live_budget_receipts r ON r.operation_id = ?1`,
     )
-    .bind(envelope.operationId, feedEpochSource(plan.recipient), plan.recipient)
+    .bind(
+      envelope.operationId,
+      feedEpochSource(plan.recipient),
+      plan.recipient,
+      expected.ownerId ?? null,
+      plan.recipientType,
+    )
     .first<{
       now: number;
       incarnation: string;
       epoch: number;
       lifecycle: string | null;
+      owned: number;
       seq: number | null;
       plan: string | null;
       valid_until: number | null;
@@ -618,6 +642,8 @@ export async function validateLiveCoverage(
     return { status: "refused", reason: "expired" };
   if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch)
     return { status: "refused", reason: "fenced" };
+  if (expected.ownerId !== undefined && row.owned !== 1)
+    return { status: "refused", reason: "invalid" };
   return { status: "valid", ledgerAt: row.now, epoch: row.epoch, lifecycle: row.lifecycle };
 }
 

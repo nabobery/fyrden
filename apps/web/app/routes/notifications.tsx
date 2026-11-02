@@ -11,7 +11,7 @@ import {
 } from "../lib/api.server.js";
 import { useKeptActionData } from "../lib/kept-action.js";
 import { pageLinks, pageQuery } from "../lib/pages.js";
-import { useLiveHints } from "../lib/use-live.js";
+import { LiveNote, useLiveHints } from "../lib/use-live.js";
 import { OTHER_VIEWER, sameViewer } from "../lib/viewer.server.js";
 import type { Route } from "./+types/notifications";
 
@@ -142,7 +142,7 @@ export default function Inbox({ loaderData }: Route.ComponentProps) {
   const busy = useNavigation().state !== "idle";
   const { tab, threads, degraded, pages, viewer } = loaderData;
   // Any stream: every thread of the inbox is in one.
-  useLiveHints(() => true);
+  const live = useLiveHints(() => true);
   // Marking again after a partial pass keeps that pass's time, so nothing newer is marked.
   const newest =
     result && "before" in result && result.before ? result.before : threads[0]?.updated_at;
@@ -151,6 +151,7 @@ export default function Inbox({ loaderData }: Route.ComponentProps) {
     <main>
       <h1>Inbox</h1>
       <InboxNav current={tab} />
+      <LiveNote status={live} />
       {degraded && <DegradedNote />}
       {result && "done" in result && <p role="status">{result.done}</p>}
       {result && "error" in result && (

@@ -1,14 +1,15 @@
 // What one run of live work reads and deletes is bounded whatever has built up: the lease
 // reaper, the pump's dirty streams and their causes, and the object's pruning. Each test
 // builds more than a run may take and counts what a run took.
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import type { OrgDO } from "../src/do/OrgDO.js";
+import { LIVE_TEAM_GRANTS, type OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { LIVE_POLICY, Live } from "../src/do/user/live.js";
 import { LIVE_ADMISSION, reaping } from "../src/live/directory.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "../src/live/manifest.js";
 import { api, json, user } from "./helpers/api.js";
 import { countingExec } from "./helpers/feed.js";
 
@@ -83,6 +84,25 @@ describe("the lease reaper", () => {
     await run();
     expect(await left(feed)).toBe(0);
     expect(await depsLeft(feed)).toBe(0);
+  });
+
+  it("removes tickets' counts of days before yesterday, keeping yesterday's and today's", async () => {
+    const principal = `usr_days${crypto.randomUUID().slice(0, 8)}`;
+    const now = Date.now();
+    const today = Math.floor(now / 86_400_000);
+    for (const day of [today - 3, today - 2, today - 1, today])
+      await env.DIRECTORY.prepare(
+        "INSERT INTO live_ticket_days (principal_id, day, issued) VALUES (?, ?, 1)",
+      )
+        .bind(principal, day)
+        .run();
+    await env.DIRECTORY.batch(reaping(env.DIRECTORY, now));
+    const kept = await env.DIRECTORY.prepare(
+      "SELECT day FROM live_ticket_days WHERE principal_id = ? ORDER BY day",
+    )
+      .bind(principal)
+      .all<{ day: number }>();
+    expect(kept.results.map((r) => r.day)).toEqual([today - 1, today]);
   });
 });
 
@@ -199,26 +219,6 @@ describe("a feed's live state", () => {
       expect(due).toBe(now + LIVE_POLICY.slowMs);
     });
   });
-
-  it("is cleared a page at a time when the feed retires", async () => {
-    await inLive((live, sql) => {
-      for (let i = 0; i < 1_100; i++)
-        sql.exec(
-          "INSERT INTO live_dirty (stream, repo_id, subject, seq, explicit_seq, many_seq) VALUES (?, ?, 'issue', ?, 0, 0)",
-          `r${i}\nissue`,
-          `r${i}`,
-          i + 1,
-        );
-      let steps = 0;
-      for (let more = true; more; steps++) {
-        const counter = countingExec(sql);
-        more = live.clearStep();
-        expect(counter.stop().written).toBeLessThanOrEqual(2 * LIVE_POLICY.pruneRows + 8);
-      }
-      expect(sql.exec<{ n: number }>("SELECT count(*) AS n FROM live_dirty").one().n).toBe(0);
-      expect(steps).toBe(Math.ceil(1_100 / LIVE_POLICY.pruneRows) + 1);
-    });
-  });
 });
 
 describe("a retired feed", () => {
@@ -303,5 +303,75 @@ describe("the live check of who reads an organization's repository", () => {
         alice.principalId
       ],
     ).toBe("write");
+  });
+  it("reads, for a pump's full page, within what the pump pays for its account's object", async () => {
+    const [admin, owner, alice] = [await user(true), await user(), await user()];
+    const login = uniqueId("org").slice(0, 39);
+    const org = (
+      await json<{ id: string }>(
+        api("POST", "/admin/organizations", admin.token, { login, admin: owner.handle }),
+      )
+    ).body;
+    expect(
+      (await api("PUT", `/orgs/${login}/memberships/${alice.handle}`, owner.token, {})).status,
+    ).toBe(200);
+    // A page's repositories (one a stream), each granted to the most teams the check reads
+    // through (every one probed), alice a member of each: its most rows.
+    const repos = Array.from({ length: LIVE_POLICY.dirtyPage }, (_, i) => `rep_page${i}`);
+    const stub = env.ORG.getByName(org.id);
+    await runInDurableObject(stub, (_: OrgDO, state) => {
+      for (let i = 0; i < LIVE_TEAM_GRANTS; i++) {
+        state.storage.sql.exec(
+          "INSERT INTO teams (team_id, slug, name, created_at) VALUES (?, ?, ?, 0)",
+          `tm_page${i}`,
+          `page-${i}`,
+          `Page ${i}`,
+        );
+        state.storage.sql.exec(
+          "INSERT INTO team_members (team_id, principal_id, added_at) VALUES (?, ?, 0)",
+          `tm_page${i}`,
+          alice.principalId,
+        );
+        for (const repo of repos)
+          state.storage.sql.exec(
+            "INSERT INTO team_repos (team_id, repo_id, role, added_at) VALUES (?, ?, 'read', 0)",
+            `tm_page${i}`,
+            repo,
+          );
+      }
+    });
+    // Its readers: the principal and, for an agent's credential, its owner.
+    const counted = await runInDurableObject(stub, async (instance: OrgDO, state) => {
+      const counter = countingExec(state.storage.sql);
+      const answer = await instance.confirmReadersLive(repos, [
+        alice.principalId,
+        owner.principalId,
+      ]);
+      return {
+        rows: counter.stop(),
+        role: answer.repos[repos[0] as string]?.roles[alice.principalId],
+      };
+    });
+    expect(counted.role).toBe("read");
+    // Its first call in an instance of a restored account takes the directory's newer epoch
+    // there (a write) before it confirms.
+    await env.DIRECTORY.prepare(
+      "UPDATE source_epochs SET epoch_gen = epoch_gen + 1 WHERE source_id = ?",
+    )
+      .bind(org.id)
+      .run();
+    await evictDurableObject(stub);
+    const restored = await runInDurableObject(stub, async (instance: OrgDO, state) => {
+      const counter = countingExec(state.storage.sql);
+      await instance.confirmReadersLive(repos.slice(0, 1), [alice.principalId]);
+      return counter.stop();
+    });
+    // Within what its grant was priced from (its fixture's most).
+    const observed = Object.values((LIVE_PRICES.org_confirmation as LiveManifestEntry).observed);
+    const most = (k: "do_rows_read" | "do_rows_written") => Math.max(...observed.map((o) => o[k]));
+    expect(counted.rows.read).toBeLessThanOrEqual(most("do_rows_read"));
+    expect(Math.max(counted.rows.written, restored.written)).toBeLessThanOrEqual(
+      most("do_rows_written"),
+    );
   });
 });

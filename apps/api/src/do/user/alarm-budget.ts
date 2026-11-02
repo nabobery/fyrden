@@ -20,16 +20,21 @@ export interface InvocationCost {
 /**
  * The alarm's ceilings: application limits within the platform's (1,000
  * internal calls and 50 external on Free, measured 2026-10-29; D1's
- * statements as the directory's work is bounded). Proposed.
+ * statements as the directory's work is bounded: an owned pump with its
+ * two grants beside the mandatory steps, 45). Proposed.
  */
-export const ALARM_LIMITS: InvocationCost = { d1: 40, internal: 800, external: 40 };
+export const ALARM_LIMITS: InvocationCost = { d1: 46, internal: 800, external: 40 };
 
 /**
  * Each unit's ceiling (Proposed; each pinned against its real statements by
  * the tests of the unit): the mandatory steps with their checkpoint and
  * finish, one renewal's execution, one pump unit (a credential and its
  * sockets, one account), one email candidate (its access, fence, provider
- * call and settlement), and an ordinary grant or refill batch.
+ * call and settlement), and an ordinary grant or refill batch; then what a
+ * funded operation's inline accounting makes: an owner's admission, its
+ * dispatch, its observation accepted, a bounded set of owners quarantined,
+ * one settlement page (four days), the owner's release, a day's duration
+ * debt served, and a grant's coverage validated.
  */
 export const ALARM_UNITS = {
   mandatory: { d1: 4, internal: 4, external: 0 },
@@ -37,6 +42,14 @@ export const ALARM_UNITS = {
   pump: { d1: 8, internal: 8, external: 0 },
   email: { d1: 16, internal: 12, external: 1 },
   grant: { d1: 6, internal: 1, external: 0 },
+  admitOwner: { d1: 4, internal: 1, external: 0 },
+  dispatchOwner: { d1: 2, internal: 1, external: 0 },
+  acceptObservation: { d1: 2, internal: 1, external: 0 },
+  quarantine: { d1: 2, internal: 1, external: 0 },
+  settle: { d1: 9, internal: 2, external: 0 },
+  releaseOwner: { d1: 3, internal: 1, external: 0 },
+  debtService: { d1: 3, internal: 2, external: 0 },
+  coverage: { d1: 1, internal: 1, external: 0 },
 } as const satisfies Record<string, InvocationCost>;
 
 export type AlarmUnit = keyof typeof ALARM_UNITS;

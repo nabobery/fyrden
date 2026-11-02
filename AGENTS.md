@@ -34,6 +34,7 @@ pnpm turbo run deploy:dry-run   # wrangler deploy --dry-run for both Workers
 pnpm turbo run test:e2e         # both Workers together locally, through the service binding
 pnpm --filter @fyrden/api types # regenerate worker-configuration.d.ts after editing wrangler.jsonc
 pnpm audit                      # known advisories (CI fails on high and critical)
+pnpm hooks                      # opt in: lint and typecheck before every push
 ```
 
 ## Rules

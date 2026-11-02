@@ -13,9 +13,11 @@ const SOURCES = import.meta.glob("../src/**/*.ts", {
 });
 
 /** The Durable Objects that wrap the binding to count their calls, and use it for nothing else. */
-const COUNTING = ["RepoDO", "UserDO", "OrgDO", "MaintenanceDO"].map(
-  (name) => `../src/do/${name}.ts`,
-);
+const COUNTING = [
+  ...["RepoDO", "UserDO", "OrgDO", "MaintenanceDO"].map((name) => `../src/do/${name}.ts`),
+  // The Worker's requests (both entrypoints): each one's own calls counted.
+  "../src/counted-env.ts",
+];
 
 /** Where the binding or the raw database may be named, and why. */
 const ALLOWED: Record<string, string> = {
@@ -81,7 +83,7 @@ describe("the read model's binding", () => {
       expect(reaches(source), source).toBe(false);
   });
 
-  it("is used by the Durable Objects only to count their calls", () => {
+  it("is used by the Durable Objects and the Worker's entry only to count their calls", () => {
     for (const path of COUNTING) {
       const source = code(SOURCES[path] ?? "");
       expect(source, path).toContain("ORG_READ: countedD1(env.ORG_READ)");

@@ -36,6 +36,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "minimum": -9007199254740991,
             "type": "integer",
           },
+          "retry_at": {
+            "description": "Fyrden: with a refusal that lasts until a known time (a daily allowance spent): when to try again, Unix time in milliseconds (the next UTC day's start).",
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer",
+          },
           "status": {
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
@@ -309,6 +315,79 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Reopen effects that failed for good",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/admin/events/failed/{id}/replay": {
+      "post": {
+        "description": "Fyrden: puts an account's envelope of events that the events consumer gave up on (kept by its dead-letter queue, \`id\` the dead letter's message id) back on the events queue, once: the consumer applies it as any envelope, so what its events mean for its members' activity feeds (repositories they no longer read purged from their feeds) is journaled and delivered then. Applying it again changes nothing it already changed; one that fails again goes to the dead-letter queue as a record of its own. Refused (409 \`already_replayed\`) once replayed; (409 \`not_replayable\`) for a repository's envelope (which asks for its repository's search repair itself) or one that could not be read; (410 \`envelope_expired\`) once the envelope was kept its 14 days; (410 \`envelope_not_kept\`) for one stored without its envelope (too large, too deep or not JSON); (410 \`payload_expired\`) for one naming an event whose stored payload the account may no longer keep (an event 6 days old or more); (404 \`failure_not_found\`) for no such record; (503 \`read_model_maintenance\`) while the read model is paused, recovering or under maintenance, nothing decided; (503 \`requeue_failed\`) when the queue did not take it, the record left to replay again. Instance administrators only.",
+        "operationId": "admin.events.replay",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "The failed envelope's record id (\`events_failed.id\`).",
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                    },
+                    "requeued_at": {
+                      "description": "When it was put back on the events queue, Unix time in milliseconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "source_id": {
+                      "description": "The account the envelope came from (org_ or usr_ prefix).",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "source_id",
+                    "requeued_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Replay an account's failed envelope",
         "x-fyrden-permission": "instance:admin",
         "x-fyrden-principals": [
           "user",
@@ -5179,7 +5258,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/notifications/live": {
       "post": {
-        "description": "A single-use ticket (30 seconds) to open a WebSocket at \`url\` that hints which of the caller's feed and inbox streams changed (\`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}\`, or \`"refresh":true\`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (\`{"t":"ack","n":…}\`, at most 8 unacknowledged) and renew every 10 minutes (\`{"t":"renew"}\`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in \`Authorization\`. The caller's own credentials only (a delegated token: 403 \`delegated_listing\`). While the deployment has not turned live hints on: 503 \`live_unavailable\`. A Fyrden extension.",
+        "description": "A single-use ticket (30 seconds) to open a WebSocket at \`url\` that hints which of the caller's feed and inbox streams changed (\`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}\`, or \`"refresh":true\`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (\`{"t":"ack","n":…}\`, at most 8 unacknowledged) and renew every 10 minutes (\`{"t":"renew"}\`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in \`Authorization\`. The caller's own credentials only (a delegated token: 403 \`delegated_listing\`). While the deployment has not turned live hints on: 503 \`live_unavailable\`. Live hints are paid for from the deployment's daily allowance before anything runs: once today's is spent, or the caller was issued 60 tickets today, 429 \`live_budget\` with \`retry_at\` (the next UTC day's start, Unix ms); when they cannot be paid for right now, 503 \`live_temporary\`. An upgrade refused so is still upgraded, then closed with 4413 (today's allowance spent: wait for \`retry_at\` of a new ticket's refusal, or the next UTC day) or 4412 (try again soon). A Fyrden extension.",
         "operationId": "notifications.live_ticket",
         "responses": {
           "200": {

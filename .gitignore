@@ -3,6 +3,8 @@ node_modules/
 dist/
 build/
 coverage/
+# Vitest's blob reports (a sharded run's, merged after)
+.vitest/
 *.tsbuildinfo
 
 # Cloudflare / Wrangler

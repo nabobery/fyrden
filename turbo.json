@@ -23,13 +23,18 @@
     // FYRDEN_TEST_WORKERS overrides the cap. Strict env mode would hide both
     // from the task; they change concurrency, not results, so they pass
     // through without entering the cache key.
+    // FYRDEN_GIT_BINARY names the git the tests ask (CI's pinned build): it
+    // changes what they assert against, so it enters the cache key.
     "test": {
       "dependsOn": ["transit"],
+      "env": ["FYRDEN_GIT_BINARY"],
       "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
+    // A sharded run's blob report is an output too (CI merges the shards').
     "test:coverage": {
       "dependsOn": ["transit"],
-      "outputs": ["coverage/**"],
+      "outputs": ["coverage/**", ".vitest/blob/**"],
+      "env": ["FYRDEN_GIT_BINARY"],
       "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     "test:shuffle": {
@@ -43,7 +48,8 @@
       "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
     },
     // Uses the package's own build output (the web Worker's), built once and
-    // shared with test:e2e instead of rebuilt underneath it.
+    // shared with test:e2e when both run in one workspace (CI runs them in
+    // separate jobs, each building it).
     "deploy:dry-run": {
       "dependsOn": ["transit", "^build", "build"]
     },

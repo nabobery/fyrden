@@ -1735,6 +1735,21 @@ export type AdminEffectsRepairOutput = {
   reopened: number;
 };
 
+/** Input of `admin.events.replay`: Replay an account's failed envelope. */
+export type AdminEventsReplayInput = {
+  /** The failed envelope's record id (`events_failed.id`). */
+  id: string;
+};
+
+/** Output of `admin.events.replay`. */
+export type AdminEventsReplayOutput = {
+  id: string;
+  /** The account the envelope came from (org_ or usr_ prefix). */
+  source_id: string;
+  /** When it was put back on the events queue, Unix time in milliseconds. */
+  requeued_at: number;
+};
+
 /** Input of `admin.search.backfill`: Ask search to reconcile every repository. */
 export type AdminSearchBackfillInput = {
   cursor?: string;
@@ -7966,6 +7981,7 @@ export const OPERATIONS = {
   "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
   "admin.effects.repair": { method: "POST", path: "/admin/effects/repair", pathParams: [], idempotent: true },
+  "admin.events.replay": { method: "POST", path: "/admin/events/failed/{id}/replay", pathParams: ["id"], idempotent: true },
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
   "admin.search.indexing": { method: "PUT", path: "/admin/search/indexing", pathParams: [], idempotent: true },
   "admin.search.status": { method: "GET", path: "/admin/search/status", pathParams: [], idempotent: false },
@@ -8238,6 +8254,8 @@ export interface Operations {
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
   /** Reopen effects that failed for good. Fyrden: counts the effects of `sink` journaled since `since` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless `dry_run` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only. */
   "admin.effects.repair": { input: AdminEffectsRepairInput; output: AdminEffectsRepairOutput };
+  /** Replay an account's failed envelope. Fyrden: puts an account's envelope of events that the events consumer gave up on (kept by its dead-letter queue, `id` the dead letter's message id) back on the events queue, once: the consumer applies it as any envelope, so what its events mean for its members' activity feeds (repositories they no longer read purged from their feeds) is journaled and delivered then. Applying it again changes nothing it already changed; one that fails again goes to the dead-letter queue as a record of its own. Refused (409 `already_replayed`) once replayed; (409 `not_replayable`) for a repository's envelope (which asks for its repository's search repair itself) or one that could not be read; (410 `envelope_expired`) once the envelope was kept its 14 days; (410 `envelope_not_kept`) for one stored without its envelope (too large, too deep or not JSON); (410 `payload_expired`) for one naming an event whose stored payload the account may no longer keep (an event 6 days old or more); (404 `failure_not_found`) for no such record; (503 `read_model_maintenance`) while the read model is paused, recovering or under maintenance, nothing decided; (503 `requeue_failed`) when the queue did not take it, the record left to replay again. Instance administrators only. */
+  "admin.events.replay": { input: AdminEventsReplayInput; output: AdminEventsReplayOutput };
   /** Ask search to reconcile every repository. Fyrden: asks for a reconciliation of every active repository's search projections, a page of repositories at a time (call again with `cursor` until `next_cursor` is null); `requested` counts the repositories newly asked (one already waiting is not asked again). The reconciliations run in the five-minute maintenance within search's daily allowance. Refused (409) while search indexing is off: run it once indexing is on, after which repositories made meanwhile are projected from their events (or reconciled, when published late). Instance administrators only. */
   "admin.search.backfill": { input: AdminSearchBackfillInput; output: AdminSearchBackfillOutput };
   /** Turn search indexing on or off. Fyrden: turns the deployment's search indexing on (`enabled: true`: events project issues, pull requests, labels and milestones into search, and the five-minute maintenance repairs them within search's daily allowance) or off (nothing more is projected or repaired, though an event batch or repair run already past its check may finish; what is projected stays). Projections miss what happens while it is off: after turning it on, ask for a backfill (`POST /admin/search/backfill`); each change raises the indexing generation, and searches count a repository whole only once a reconciliation under the current one certified it. Setting the state it is in changes nothing. Turning it on is refused (409 `search_not_ready`, saying why) while the read model is not running ordinary work at the executor's protocol, a recovery of it is under way, or it was restored since its last handshake. Instance administrators only. */
@@ -8440,7 +8458,7 @@ export interface Operations {
   "notifications.thread_done": { input: NotificationsThreadDoneInput; output: NotificationsThreadDoneOutput };
   /** Mark notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. Delegated tokens are refused (403 `delegated_listing`). */
   "notifications.mark": { input: NotificationsMarkInput; output: NotificationsMarkOutput };
-  /** Get a ticket for live notification hints. A single-use ticket (30 seconds) to open a WebSocket at `url` that hints which of the caller's feed and inbox streams changed (`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}`, or `"refresh":true`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (`{"t":"ack","n":…}`, at most 8 unacknowledged) and renew every 10 minutes (`{"t":"renew"}`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in `Authorization`. The caller's own credentials only (a delegated token: 403 `delegated_listing`). While the deployment has not turned live hints on: 503 `live_unavailable`. A Fyrden extension. */
+  /** Get a ticket for live notification hints. A single-use ticket (30 seconds) to open a WebSocket at `url` that hints which of the caller's feed and inbox streams changed (`{"t":"changed","n":…,"streams":[{"repo":…,"kind":"issue"|"pull"}]}`, or `"refresh":true`), only streams the credential may read; reread them through the feed and notifications APIs. Acknowledge each frame (`{"t":"ack","n":…}`, at most 8 unacknowledged) and renew every 10 minutes (`{"t":"renew"}`); a socket lasts at most 24 hours. The upgrade needs the same credential: the session's cookie from this origin, or the token in `Authorization`. The caller's own credentials only (a delegated token: 403 `delegated_listing`). While the deployment has not turned live hints on: 503 `live_unavailable`. Live hints are paid for from the deployment's daily allowance before anything runs: once today's is spent, or the caller was issued 60 tickets today, 429 `live_budget` with `retry_at` (the next UTC day's start, Unix ms); when they cannot be paid for right now, 503 `live_temporary`. An upgrade refused so is still upgraded, then closed with 4413 (today's allowance spent: wait for `retry_at` of a new ticket's refusal, or the next UTC day) or 4412 (try again soon). A Fyrden extension. */
   "notifications.live_ticket": { input: NotificationsLiveTicketInput; output: NotificationsLiveTicketOutput };
   /** Mark repository notifications as read. Marks read up to 500 threads updated at or before `last_read_at` (default now; a later time counts as now), of up to 100 repositories and kinds the caller can read, decided now. It always answers 202 with what to do next: repeat the request (with the same `last_read_at`, and a new Idempotency-Key or none) until a list with `all=false` shows none left. GitHub keeps going itself and may answer 205. One repository's threads. Delegated tokens are refused (403 `delegated_listing`). */
   "notifications.repo_mark": { input: NotificationsRepoMarkInput; output: NotificationsRepoMarkOutput };

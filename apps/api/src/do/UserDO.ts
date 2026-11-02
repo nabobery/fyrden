@@ -23,17 +23,41 @@ import {
   type Turn,
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
-import { isLiveVector, livePlanError, validateLiveCoverage } from "../live/budget.js";
+import { AuthorizationInvalidated, LIVE_AUTHORIZATION_RESULT_MS } from "../live/authorization.js";
+import type { LiveEnvelope } from "../live/budget.js";
+import {
+  isLiveVector,
+  livePlanError,
+  makeLiveGrant,
+  reserveLive,
+  validateLiveCoverage,
+} from "../live/budget.js";
 import { liveCredential } from "../live/credential.js";
-import { confirm, release } from "../live/directory.js";
+import { confirm, extendLease, LIVE_ADMISSION, release } from "../live/directory.js";
 import { beginLiveDuration, finishLiveDuration } from "../live/duration.js";
+import {
+  expectationOf,
+  type LiveFunding,
+  ownedRun,
+  planFor,
+  validateFunding,
+} from "../live/funding.js";
+import {
+  LIVE_LOW_WATER,
+  LIVE_PRICES,
+  LIVE_REQUIRED_COMPONENTS,
+  LIVE_TURN_RENEWALS,
+  type LiveManifestEntry,
+  type LiveManifestUnit,
+  liveBlockUnit,
+  liveKindOf,
+} from "../live/manifest.js";
 import { quarantineLiveOwners } from "../live/owners.js";
 import {
   LIVE_RECOVERY_DURATION,
   type LiveRecoveryReply,
   type LiveRecoveryRequest,
 } from "../live/recovery.js";
-import { randomSecret } from "../oauth/params.js";
 import { allowedWithRole, findReposById } from "../repos/directory.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { userSchema } from "./schema/user.js";
@@ -76,13 +100,65 @@ import {
   type Candidate as LiveCandidate,
   type LiveSignal,
   type LiveSocket,
-  ticketHash,
 } from "./user/live.js";
 import { LiveBudget } from "./user/live-budget.js";
 import { eligibleLiveDeadline, LIVE_BLOCKED, type LiveReadiness } from "./user/live-schedule.js";
 
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
-export const LIVE_ADMITTED = "X-Fyrden-Live-Admitted";
+export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
+
+/** On an admitted socket's 101: the feed holds no turn to run, so the Worker grants one (internal). */
+export const LIVE_TURN_WANTED = "X-Fyrden-Live-Turn-Wanted";
+
+/** What the Worker hands a live upgrade: an admitted socket with its funding, or a refusal with its transport's. */
+export type LiveBudgetV1 =
+  | {
+      readonly admitted: LiveAdmitted;
+      readonly admission: unknown;
+      /** Its end's provisions, on each day it may live on. */
+      readonly terminal: unknown;
+      /** The feed's blocks of controls and marks, when it held none (installed while its pools have room). */
+      readonly controls?: unknown;
+      readonly marks?: unknown;
+      /** The feed's next turn, when it held none (prepared, not dispatched). */
+      readonly turn?: unknown;
+    }
+  | { readonly refusal: 4412 | 4413; readonly transport: unknown };
+
+/** What one control message, one mark and one socket's end are spent at. */
+const unitPrice = (unit: LiveManifestUnit) => (LIVE_PRICES[unit] as LiveManifestEntry).resources;
+
+/** A ticket as the Worker hands it to its feed: its hash, credential, expiry and transport's reference. */
+export interface LiveTicketV1 {
+  readonly hash: string;
+  readonly credentialId: string;
+  readonly expiresAt: number;
+  readonly transport: { readonly operationId: string };
+}
+
+/** The stamp of the grant `envelope` (what recovery retires the rows it paid for by). */
+const stampOf = (envelope: LiveEnvelope) => ({
+  epoch: envelope.plan.epoch,
+  incarnation: envelope.plan.incarnation,
+  seq: envelope.seq,
+  validUntil: envelope.plan.validUntil,
+});
+
+const liveTicketShaped = (t: unknown): t is LiveTicketV1 => {
+  if (typeof t !== "object" || t === null) return false;
+  const { hash, credentialId, expiresAt, transport } = t as Partial<LiveTicketV1>;
+  return (
+    typeof hash === "string" &&
+    /^[0-9a-f]{64}$/.test(hash) &&
+    typeof credentialId === "string" &&
+    credentialId.length > 0 &&
+    Number.isSafeInteger(expiresAt) &&
+    typeof transport === "object" &&
+    transport !== null &&
+    typeof transport.operationId === "string" &&
+    transport.operationId.length > 0
+  );
+};
 
 /** What the Worker admitted: the socket, its credential and its dependencies. */
 export interface LiveAdmitted {
@@ -94,8 +170,8 @@ export interface LiveAdmitted {
   readonly dependencies: readonly string[];
 }
 
-/** Credentials a pump run serves at most (the rest wait). */
-const PUMP_CREDENTIALS = 4;
+/** Credentials a pump unit serves (the rest wait for the next turns). */
+const PUMP_CREDENTIALS = 1;
 
 /** How long an admission may take to be confirmed before its local state is forgotten. */
 const LIVE_CONFIRM_MS = 60_000;
@@ -104,9 +180,29 @@ const LIVE_CONFIRM_MS = 60_000;
 const LIVE_RETRY_MS = 60_000;
 
 /** A socket's id, from its attachment. */
+/** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
+function refillDue(
+  budget: LiveBudget,
+  kind: "control_refill" | "mark_refill",
+  now: number,
+): boolean {
+  const pending = budget.pending(kind);
+  return pending?.phase === "queued" && pending.intendedAt <= now;
+}
+
 function socketIdOf(ws: WebSocket): string | undefined {
   const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
   return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
+}
+
+/**
+ * Whether a socket's prepaid end has passed (its attachment says when, on
+ * this object's clock): nothing of it may be done then, no SQL read, its
+ * recovery retires it.
+ */
+function unpaid(ws: WebSocket, now: number): boolean {
+  const attached = ws.deserializeAttachment() as { until?: unknown } | null;
+  return typeof attached?.until === "number" && now >= attached.until;
 }
 
 /** When an alarm that could not reach the directory, or a step that failed, tries again. Proposed. */
@@ -126,7 +222,7 @@ const KINDS = ["retire", "retain", "cursors"] as const;
  * The alarm's kinds: the steps above, notification email (sent after them, see `#sendEmails`)
  * and live sockets' pump (`#pump`).
  */
-type Kind = (typeof KINDS)[number] | "email" | "live";
+type Kind = (typeof KINDS)[number] | "email";
 
 /**
  * The feed's restore generation, its principal's lifecycle and the live
@@ -156,12 +252,18 @@ export const PREFERENCE_GATE = `SELECT repo_id, NULL AS conversation FROM watch_
 export const feedHooks: {
   beforeEpochRead?: () => Promise<void>;
   beforePreferenceRead?: () => Promise<void>;
-  /** Funded live work's readiness for a feed (none in production yet: blocked). */
+  /** Funded live work's readiness for a feed, in place of its turn's (tests). */
   liveReadiness?: (feed: string) => LiveReadiness | undefined;
   /** Before the alarm is read or written while it is reconciled. */
   beforeAlarmWrite?: () => Promise<void>;
   /** An alarm run's ceilings (tests: lower than the alarm's own). */
   alarmLimits?: InvocationCost;
+  /** Awaited in a feed's turn after its work, before its successor is granted (tests). */
+  afterTurnWork?: (feed: UserDO, state: DurableObjectState) => Promise<void>;
+  /** Called in a feed's turn once its successor's grant is answered (tests). */
+  afterSuccessorGrant?: (state: DurableObjectState) => void;
+  /** Called once a socket's message, or its close, has been handled, whatever came of it (tests). */
+  afterSocketEvent?: (feed: string | undefined, event: "message" | "close") => void;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -220,15 +322,17 @@ export class UserDO extends MigratingDO {
     const live = this.#live();
     const { applied, queued, signalled } = this.ctx.storage.transactionSync(() => {
       const { signals, ...applied } = feed.apply(entries, gate);
-      // Live sockets hear of the streams changed, when the feed has any.
-      const signalled = live.counts("").feed > 0 && live.mark(signals);
+      // Live sockets hear of the streams changed, when the feed has any (as far as its marks are
+      // paid for).
+      const sockets = live.counts("").feed > 0;
+      const signalled = sockets && this.#markPaid(signals, now);
       // The email an entry carries, whatever the inbox made of it, but not for a purged repository.
       const mailable = entries.filter(
         (e) => e.recipient.email && e.occurredAt > (feed.purgedThrough(e.repoId) ?? -1),
       );
       const queued =
         emailing.size > 0 ? queueCandidates(this.ctx.storage.sql, mailable, emailing, now) : 0;
-      return { applied, queued, signalled };
+      return { applied, queued, signalled: signalled || sockets };
     });
     // Even with nothing shown changed: a tombstone may have been written.
     if (entries.length > 0) await this.#scheduleRetention(feed);
@@ -560,13 +664,12 @@ export class UserDO extends MigratingDO {
       // Overdue work waits for a retry (the schedule itself unchanged); funded live work, whose
       // readiness is unknown now, wakes nothing.
       this.#epochRetryAt = Date.now() + EPOCH_RETRY_MS;
-      this.#liveReadiness = LIVE_BLOCKED;
       await this.#arm();
       return;
     }
     const feed = this.#feed();
     const steps = {
-      retire: () => (feed.retireStep() || this.#live().clearStep() ? Date.now() : null),
+      retire: () => (feed.retireStep() ? Date.now() : null),
       retain: () => (feed.retainStep() ? Date.now() : feed.nextRetention()),
       cursors: () => (feed.expireCursorsStep() ? Date.now() : feed.nextCursorExpiry()),
     } satisfies Record<(typeof KINDS)[number], () => number | null>;
@@ -588,33 +691,21 @@ export class UserDO extends MigratingDO {
         }
       }
     }
-    if (this.#dueNow("email") && !this.#retired()) await this.#sendEmails(budget);
-    // A retired feed has no live work: a row left by a run racing the retirement goes.
-    if (this.#dueNow("live") && this.#retired()) this.#setDue("live", null);
-    if (this.#dueNow("live") && !this.#retired()) {
-      let more = false;
-      try {
-        more = await this.#pump();
-      } catch (error) {
-        createLogger({ op: "user.alarm", doClass: "UserDO" }).warn("the live pump failed", {
-          error,
-        });
-        // Not again at once: its open sockets try again a minute on.
-        this.#retryLater(
-          this.#live()
-            .sockets()
-            .filter((s) => s.phase === "open"),
-        );
+    // A live row of an earlier version's schedule: live work is the feed's turn's now.
+    this.ctx.storage.sql.exec("DELETE FROM user_schedule WHERE kind = 'live'");
+    // Notification email and funded live work take turns when both are due: the one that did
+    // not go first last time goes first (what does not fit waits for the next run, due at once).
+    const liveBudget = new LiveBudget(this.ctx.storage.sql);
+    const order = liveBudget.liveFirst()
+      ? (["live", "email"] as const)
+      : (["email", "live"] as const);
+    for (const kind of order) {
+      if (this.#retired()) break;
+      if (kind === "email" && this.#dueNow("email")) {
+        await this.#sendEmails(budget);
+        liveBudget.setLiveFirst(true);
       }
-      // Retired while the run awaited: nothing more is due.
-      this.#setDue(
-        "live",
-        this.#retired()
-          ? null
-          : more
-            ? Date.now()
-            : this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS),
-      );
+      if (kind === "live" && (await this.#liveTurn(budget))) liveBudget.setLiveFirst(false);
     }
     // By the schedule as the steps left it (calls made meanwhile left their rows).
     await this.#arm();
@@ -691,66 +782,235 @@ export class UserDO extends MigratingDO {
 
   /** Marks the principal's own changes to streams (other sockets refresh them). */
   #explicit(streams: readonly { repoId: string; subject: SubjectKind }[]): void {
-    const live = this.#live();
-    if (live.counts("").feed === 0) return;
-    live.mark(
+    if (this.#live().counts("").feed === 0) return;
+    this.#markPaid(
       streams.map((s): LiveSignal => ({ repoId: s.repoId, subject: s.subject, explicit: true })),
+      Date.now(),
     );
   }
 
-  /** The `live` kind due by what the pump has to do next. */
-  async #scheduleLive(): Promise<void> {
-    const at = this.#live().nextDue(Date.now(), LIVE_CONFIRM_MS);
-    if (at === null) return;
-    this.#schedule("live", at);
-    await this.#arm();
+  /**
+   * Marks `signals` (call within a transaction), each paid for first by one
+   * mark of today's pool and stamped with the grant that paid: marking
+   * stops at the first that cannot be (hints are then left out; the core
+   * change stands), and a pool at low water or empty has its refill queued
+   * once.
+   * Whether any was marked.
+   */
+  #markPaid(signals: readonly LiveSignal[], local: number): boolean {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const now = budget.ledgerNow(local);
+    // Right at a midnight (which day it is cannot be told): no mark, no hint.
+    const day = budget.ledgerDay(local);
+    if (day === null) return false;
+    const live = this.#live();
+    const price = liveBlockUnit("mark");
+    let marked = false;
+    let last = null;
+    for (const signal of signals) {
+      const paid = budget.spendFrom("mark", day, price, now);
+      if (!paid) break;
+      live.mark([signal], paid);
+      marked = true;
+      last = paid;
+    }
+    // Its refill queued at low water, or once nothing is left (under the pool's newest grant).
+    const stamp = last ?? budget.poolStamp("mark", day, now);
+    if (stamp && budget.unitsLeft("mark", day, price, now, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER)
+      budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
+    return marked;
   }
 
   /**
-   * A ticket for one live socket of `credentialId` (single use, for
-   * `LIVE_POLICY.ticketMs`); null for a retired feed.
+   * The feed's prepared turn brought due by what live work has to do next
+   * (none prepared: nothing is funded to do it, and nothing wakes).
    */
-  async liveTicket(credentialId: string): Promise<string | null> {
+  async #scheduleLive(): Promise<void> {
+    const at = this.#liveDueAt(Date.now());
+    if (at === null) return;
+    if (this.ctx.storage.transactionSync(() => new LiveBudget(this.ctx.storage.sql).bringTurn(at)))
+      await this.#arm();
+  }
+
+  /**
+   * Stores a ticket of one live socket, funded: its `funding` (a `ticket`
+   * grant for this feed, with its owner) checked before anything of the
+   * feed is read, then its hash, credential, expiry and transport kept
+   * (single use, until `ticket.expiresAt`). `retired` for a retired feed,
+   * `refused` for a funding or ticket that does not hold.
+   */
+  async liveTicketV1(
+    funding: unknown,
+    ticket: LiveTicketV1,
+  ): Promise<{ readonly status: "stored" | "retired" | "refused" }> {
+    const entry = LIVE_PRICES.ticket as LiveManifestEntry;
+    const checked = await validateFunding(
+      this.env.DIRECTORY,
+      funding,
+      expectationOf(entry, {
+        recipientType: "UserDO",
+        recipient: this.ctx.id.name as string,
+        kind: "ticket",
+        class: "ordinary",
+      }),
+    );
+    if (checked.status !== "valid" || !liveTicketShaped(ticket)) return { status: "refused" };
     await this.#checkEpoch();
-    if (this.#retired()) return null;
-    const ticket = randomSecret(32);
-    const hash = await ticketHash(ticket);
+    if (this.#retired()) return { status: "retired" };
+    const { envelope } = checked.funding;
     const now = Date.now();
     const live = this.#live();
-    this.ctx.storage.transactionSync(() => {
+    return this.ctx.storage.transactionSync(() => {
+      // Its grant still current here (no restore or recovery since it was checked), the ticket
+      // still to live.
+      if (!this.#current(envelope) || ticket.expiresAt <= now)
+        return { status: "refused" as const };
       live.prune(now);
-      live.storeTicket(hash, credentialId, now + LIVE_POLICY.ticketMs);
+      live.storeTicket(
+        ticket.hash,
+        ticket.credentialId,
+        ticket.expiresAt,
+        ticket.transport,
+        stampOf(envelope),
+      );
+      return { status: "stored" as const };
     });
-    return ticket;
-  }
-
-  /** Redeems a ticket once, for the credential it was issued to; whether it held. */
-  async liveRedeem(ticket: string, credentialId: string): Promise<boolean> {
-    await this.#checkEpoch();
-    if (this.#retired()) return false;
-    const hash = await ticketHash(ticket);
-    const live = this.#live();
-    return this.ctx.storage.transactionSync(() =>
-      live.redeemTicket(hash, credentialId, Date.now()),
-    );
   }
 
   /**
-   * An admitted live socket's upgrade, handed over by the Worker (the
-   * object is reached only through it): confirmed in the directory before
-   * anything is exposed, fenced against retirement and revocation after
-   * every await; refused, its lease is released.
+   * Redeems a ticket once, funded: its `funding` (the ticket's transport,
+   * with its owner) checked before anything of the feed is read, then the
+   * ticket of `hash` taken for `credentialId`, when it was issued with this
+   * very transport and is unexpired: `redeemed`; `refused` for funding
+   * that does not pay for it (or is fenced since), `unknown` for a ticket
+   * that does not hold (or a retired feed).
+   */
+  async liveRedeemV1(
+    funding: unknown,
+    hash: string,
+    credentialId: string,
+  ): Promise<"redeemed" | "refused" | "unknown"> {
+    const checked = await this.#funded(funding, "upgrade_transport");
+    if (!checked) return "refused";
+    await this.#checkEpoch();
+    if (this.#retired()) return "unknown";
+    const live = this.#live();
+    return this.ctx.storage.transactionSync(() => {
+      if (!this.#current(checked.envelope)) return "refused";
+      return live.redeemTicket(hash, credentialId, Date.now(), checked.envelope.operationId)
+        ? "redeemed"
+        : "unknown";
+    });
+  }
+
+  /** Whether `envelope`'s grant is current under the feed's fence (no restore or recovery past it). */
+  #current(envelope: LiveEnvelope): boolean {
+    const fence = new LiveBudget(this.ctx.storage.sql).fence();
+    return (
+      envelope.plan.epoch === fence.epoch &&
+      envelope.plan.incarnation === fence.incarnation &&
+      envelope.seq > fence.cleanupThrough
+    );
+  }
+
+  /** `funding` checked as paying for `kind` of this feed (before anything of it is read), or null. */
+  async #funded(funding: unknown, kind: LiveManifestUnit): Promise<LiveFunding | null> {
+    const checked = await this.#fundingCheck(funding, kind);
+    return checked.status === "valid" ? checked.funding : null;
+  }
+
+  /** `funding` checked as paying for `kind` of this feed: valid, or why not. */
+  async #fundingCheck(
+    funding: unknown,
+    kind: LiveManifestUnit,
+    /** A refusal's upgrade: its transport's grant, its owner named or not (one never admitted). */
+    anyOwner = false,
+  ): ReturnType<typeof validateFunding> {
+    const expected = expectationOf(LIVE_PRICES[kind] as LiveManifestEntry, {
+      recipientType: "UserDO",
+      recipient: this.ctx.id.name as string,
+      kind: liveKindOf(kind),
+      class: "ordinary",
+    });
+    const unowned =
+      anyOwner && typeof funding === "object" && funding !== null && "ownerId" in funding
+        ? (funding as { ownerId: unknown }).ownerId === null
+        : false;
+    const sent = Date.now();
+    const checked = await validateFunding(
+      this.env.DIRECTORY,
+      funding,
+      unowned ? { ...expected, owned: false } : expected,
+    );
+    // The ledger's clock as just read: what this object judges its credit's times by.
+    if (checked.status === "valid")
+      new LiveBudget(this.ctx.storage.sql).noteLedger(checked.ledgerAt, sent, Date.now());
+    return checked;
+  }
+
+  /**
+   * A live socket's upgrade, handed over by the Worker (the object is
+   * reached only through it), funded (`LIVE_BUDGET`). An admitted socket
+   * comes with its admission's funding, checked before anything else:
+   * confirmed in the directory before anything is exposed, fenced against
+   * retirement and revocation after every await; refused, its lease is
+   * released. A refusal comes with its transport's funding: the socket is
+   * accepted only to be closed at once with its code (4412: try again
+   * soon; 4413: today's allowance spent), no lease or socket row made.
    */
   override async fetch(request: Request): Promise<Response> {
-    const admitted = JSON.parse(
-      request.headers.get(LIVE_ADMITTED) ?? "null",
-    ) as LiveAdmitted | null;
-    if (request.headers.get("Upgrade") !== "websocket" || !admitted)
+    const budget = JSON.parse(request.headers.get(LIVE_BUDGET) ?? "null") as LiveBudgetV1 | null;
+    if (request.headers.get("Upgrade") !== "websocket" || typeof budget !== "object" || !budget)
       return new Response(null, { status: 400 });
+    if ("refusal" in budget) {
+      const code = budget.refusal;
+      // A transport fenced since (its feed restored) still pays for its refusal: its charge stands
+      // in the ledger, and a socket closed at once keeps nothing here.
+      const paid =
+        code === 4412 || code === 4413
+          ? await this.#fundingCheck(budget.transport, "upgrade_transport", true)
+          : null;
+      if (!paid || (paid.status !== "valid" && paid.reason !== "fenced"))
+        return new Response(null, { status: 400 });
+      const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+      server.accept();
+      server.close(code, code === 4413 ? "live hints spent today's allowance" : "try again soon");
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    const admitted = budget.admitted;
+    // Its admission, its end's provisions and the feed's first blocks, each checked as paying for
+    // what it is.
+    const [admission, terminal, controls, marks, turn] = admitted
+      ? await Promise.all([
+          this.#funded(budget.admission, "admission"),
+          this.#funded(budget.terminal, "terminal"),
+          budget.controls === undefined ? null : this.#funded(budget.controls, "control_block"),
+          budget.marks === undefined ? null : this.#funded(budget.marks, "mark_block"),
+          // Its owner is admitted when it runs: none named yet.
+          budget.turn === undefined
+            ? null
+            : this.#fundingCheck(budget.turn, "pump", true).then((checked) =>
+                checked.status === "valid" ? checked.funding : null,
+              ),
+        ])
+      : [null, null, null, null, null];
+    if (
+      !admitted ||
+      !admission ||
+      !terminal ||
+      (budget.controls !== undefined && !controls) ||
+      (budget.marks !== undefined && !marks)
+    ) {
+      if (admitted) await release(this.env.DIRECTORY, [admitted.socketId]);
+      return new Response(null, { status: 409 });
+    }
     await this.#checkEpoch();
     const live = this.#live();
     const refuse = async (status: number) => {
-      this.ctx.storage.transactionSync(() => live.forget(admitted.socketId));
+      this.ctx.storage.transactionSync(() => {
+        live.forget(admitted.socketId);
+        new LiveBudget(this.ctx.storage.sql).forgetTerminal(admitted.socketId);
+      });
       await release(this.env.DIRECTORY, [admitted.socketId]);
       return new Response(null, { status });
     };
@@ -758,7 +1018,30 @@ export class UserDO extends MigratingDO {
     const held = live.counts(admitted.credentialId);
     if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
       return refuse(429);
-    this.ctx.storage.transactionSync(() =>
+    // Installed only while its grants are current here, stamped with its admission's, its end
+    // provided for on each day it may live on, the feed's pools given their first blocks.
+    const installed = this.ctx.storage.transactionSync(() => {
+      const grants = [admission, terminal, controls, marks].flatMap((f) => (f ? [f.envelope] : []));
+      if (!grants.every((g) => this.#current(g))) return false;
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const now = budget.ledgerNow(Date.now());
+      if (!budget.provideTerminal(admitted.socketId, terminal.envelope, now)) return false;
+      if (controls) budget.installBlock("control", controls.envelope, now);
+      if (marks) budget.installBlock("mark", marks.envelope, now);
+      // A pool left with nothing (blocks the ledger holds but this feed never got: an admission
+      // refused after they were granted, say) has its refill queued under this admission's grant.
+      const day = budget.ledgerDay(Date.now());
+      if (day !== null)
+        for (const [kind, refill] of [
+          ["control", "control_refill"],
+          ["mark", "mark_refill"],
+        ] as const)
+          if (budget.unitsLeft(kind, day, liveBlockUnit(kind), now, 1) === 0)
+            budget.queueOnce(refill, crypto.randomUUID(), now, stampOf(admission.envelope), now);
+      // The feed's next turn when it held none: due by the admission's confirmation deadline (an
+      // admission never confirmed is forgotten by it).
+      if (turn && this.#current(turn.envelope))
+        budget.prepareTurn(turn.envelope, Date.now() + LIVE_CONFIRM_MS, now);
       live.addSocket(
         {
           id: admitted.socketId,
@@ -769,28 +1052,79 @@ export class UserDO extends MigratingDO {
         },
         admitted.dependencies,
         Date.now(),
-      ),
+        stampOf(admission.envelope),
+      );
+      return true;
+    });
+    if (!installed) return refuse(409);
+    // Its recovery is due before anything is awaited: an object stopped mid-confirmation forgets it
+    // in the feed's next turn.
+    this.ctx.storage.transactionSync(() =>
+      new LiveBudget(this.ctx.storage.sql).bringTurn(Date.now() + LIVE_CONFIRM_MS),
     );
-    // Its recovery is due before anything is awaited: an object stopped mid-confirmation forgets it.
-    this.#schedule("live", Date.now() + LIVE_CONFIRM_MS);
     await this.#arm();
     const confirmed = await confirm(this.env.DIRECTORY, admitted.socketId, Date.now()).catch(
       () => false,
     );
-    // Retired, revoked or forgotten while it was confirmed: nothing is exposed.
+    // Retired, revoked, restored past its grant or forgotten while it was confirmed: nothing is
+    // exposed.
     if (
       !confirmed ||
       this.#retired() ||
+      !this.#current(admission.envelope) ||
       live.anyRevoked(admitted.dependencies) ||
       !live.socket(admitted.socketId)
     )
       return refuse(409);
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server, [admitted.socketId]);
-    server.serializeAttachment({ v: 1, id: admitted.socketId });
+    // When its prepaid end passes, on this object's clock (read with no SQL by its callbacks).
+    const offset = new LiveBudget(this.ctx.storage.sql).ledgerNow(0);
+    server.serializeAttachment({
+      v: 1,
+      id: admitted.socketId,
+      until: terminal.envelope.plan.validUntil - offset,
+    });
     this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
     await this.#scheduleLive();
-    return new Response(null, { status: 101, webSocket: client });
+    // No turn to run, and none running to name one (one left stranded dealt with first): the
+    // Worker grants one (see `liveTurnV1`).
+    await this.#adoptTurn(null).catch(() => {});
+    const holding = new LiveBudget(this.ctx.storage.sql);
+    const wanted =
+      !this.#turnRunning &&
+      !holding.runnableTurn(Date.now()) &&
+      holding.turn()?.phase !== "dispatched";
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      ...(wanted && { headers: { [LIVE_TURN_WANTED]: "1" } }),
+    });
+  }
+
+  /**
+   * Prepares the feed's next turn from `funding` (a `pump` grant for this
+   * feed, no owner named yet: it is admitted when the turn runs), when the
+   * feed holds none it can run; whether it did.
+   */
+  async liveTurnV1(funding: unknown): Promise<boolean> {
+    const checked = await this.#fundingCheck(funding, "pump", true);
+    if (checked.status !== "valid") return false;
+    await this.#checkEpoch();
+    if (this.#retired()) return false;
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const prepared = this.ctx.storage.transactionSync(
+      () =>
+        this.#current(checked.funding.envelope) &&
+        budget.prepareTurn(
+          checked.funding.envelope,
+          Date.now() + LIVE_CONFIRM_MS,
+          budget.ledgerNow(Date.now()),
+        ),
+    );
+    if (prepared) await this.#scheduleLive();
+    await this.#arm();
+    return prepared;
   }
 
   /**
@@ -799,6 +1133,19 @@ export class UserDO extends MigratingDO {
    * its life; anything else, or past a bound, closes it.
    */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    try {
+      await this.#socketMessage(ws, message);
+    } finally {
+      feedHooks.afterSocketEvent?.(this.ctx.id.name, "message");
+    }
+  }
+
+  async #socketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    // Past its prepaid end: nothing read or spent, only closed (its rows are its recovery's).
+    if (unpaid(ws, Date.now())) {
+      ws.close(CLOSE_EXPIRED, "expired: reconnect with a new ticket");
+      return;
+    }
     // A restored object takes its epoch first; unread, nothing is applied.
     if (!(await this.#epochTaken())) return;
     const id = socketIdOf(ws);
@@ -808,9 +1155,13 @@ export class UserDO extends MigratingDO {
       ws.close(CLOSE_EXPIRED, "unknown socket");
       return;
     }
-    // State from before a restore (or another ledger incarnation): nothing it says is applied.
-    if (live.stale(id))
-      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
+    // State from before a restore (or another ledger incarnation): nothing it says is applied,
+    // and nothing of it is paid for any more (its credit went with the restore): only told to
+    // reread, its rows left to recovery.
+    if (live.stale(id)) {
+      ws.close(CLOSE_RESYNC, "restored: reread and reconnect");
+      return;
+    }
     const now = Date.now();
     // Past its deadline or its life: closed, whatever it says.
     if (socket.deadline <= now || socket.expires_at <= now)
@@ -820,6 +1171,33 @@ export class UserDO extends MigratingDO {
     const used = socket.controls_used + 1;
     const size =
       typeof message === "string" ? new TextEncoder().encode(message).length : message.byteLength;
+    // Every message pays for itself first, one control of today's pool, whatever it turns out to
+    // be; its counters move with it, and a pool at low water has its refill queued once (and the
+    // feed's turn brought due for it).
+    let refill = false;
+    const counted = this.ctx.storage.transactionSync(() => {
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const price = liveBlockUnit("control");
+      const at = budget.ledgerNow(now);
+      // Right at a midnight (which day it is cannot be told) nothing is spent: unpaid, it closes.
+      const day = budget.ledgerDay(now);
+      const paid = day === null ? null : budget.spendFrom("control", day, price, at);
+      if (!paid) return false;
+      live.update(id, {
+        controls_used: used,
+        minute_count: minute,
+        ...(fresh && { minute_start: now }),
+      });
+      if (
+        day !== null &&
+        budget.unitsLeft("control", day, price, at, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER
+      )
+        refill = budget.queueOnce("control_refill", crypto.randomUUID(), at, paid, at) === "queued";
+      return true;
+    });
+    if (refill) await this.#scheduleLive();
+    // Nothing left to pay for it: closed to come back once there is (a new admission brings it).
+    if (!counted) return this.#closeSocket(id, 4412, "try again soon");
     if (
       typeof message !== "string" ||
       size > LIVE_POLICY.controlBytes ||
@@ -827,13 +1205,6 @@ export class UserDO extends MigratingDO {
       used > LIVE_POLICY.controlsLife
     )
       return this.#closeSocket(id, 1008, "control message refused");
-    this.ctx.storage.transactionSync(() =>
-      live.update(id, {
-        controls_used: used,
-        minute_count: minute,
-        ...(fresh && { minute_start: now }),
-      }),
-    );
     let control: unknown;
     try {
       control = JSON.parse(message);
@@ -857,30 +1228,65 @@ export class UserDO extends MigratingDO {
       await this.#scheduleLive();
       return;
     }
-    if (t === "renew" && keys.length === 1) return this.#renew(id, socket, now);
+    // A renewal is queued, its request's time kept, for the feed's next turn to authorize (one
+    // early or already queued changes nothing more).
+    if (t === "renew" && keys.length === 1) {
+      const queued = this.ctx.storage.transactionSync(() =>
+        live.queueRenewal(id, crypto.randomUUID(), now),
+      );
+      if (
+        queued === "queued" &&
+        this.ctx.storage.transactionSync(() => new LiveBudget(this.ctx.storage.sql).bringTurn(now))
+      )
+        await this.#arm();
+      // A turn running here prepares its successor as it ends (or names none): judged after that.
+      while (this.#turnRunning) await this.#turnRunning;
+      // No turn to authorize it (one adopted after its run was given up on or its accounting
+      // lost, or its successor refused): nothing would answer, so it is closed as an expired one
+      // is, to reconnect at once (its admission hands the feed a turn, or is refused).
+      if (
+        live.socket(id)?.phase === "open" &&
+        !new LiveBudget(this.ctx.storage.sql).runnableTurn(Date.now())
+      )
+        this.#closeSocket(id, CLOSE_EXPIRED, "no live turn: reconnect with a new ticket");
+      return;
+    }
     return this.#closeSocket(id, 1008, "control message refused");
   }
 
-  /** A renewal: its credential checked again, its deadline moved (never past its expiry). */
-  async #renew(id: string, socket: LiveSocket, now: number): Promise<void> {
-    // Earlier than half its deadline: nothing.
-    if (now < socket.deadline - LIVE_POLICY.renewMs / 2) return;
+  /**
+   * One queued renewal, in a turn: its credential checked again, then, its
+   * request unchanged and the socket still current, its deadline moved from
+   * when it was asked (never past its expiry). Unanswered, it counts one
+   * failure (two close the socket); revoked, expired or changed, the socket
+   * closes. Given up on (the turn outlasted its bound), nothing applies and
+   * it stays queued.
+   */
+  async #renewQueued(socket: LiveSocket, current: () => boolean): Promise<void> {
+    const id = socket.socket_id;
+    const nonce = socket.renewal_nonce;
+    const generation = socket.socket_generation;
+    const requestedAt = socket.renewal_intended_at;
+    if (nonce === null || requestedAt === null) return;
     const live = this.#live();
     let credential: Awaited<ReturnType<typeof liveCredential>> | undefined;
     try {
-      credential = await liveCredential(this.env.DIRECTORY, socket.credential_id, now);
+      credential = await liveCredential(this.env.DIRECTORY, socket.credential_id, Date.now());
     } catch {
       credential = undefined;
     }
-    const current = live.socket(id);
-    if (!current) return;
-    // Restored (or another ledger incarnation) while the credential was checked: not renewed.
-    if (live.stale(id))
-      return this.#closeSocket(id, CLOSE_RESYNC, "restored: reread and reconnect");
-    // Its deadline or life passed while the credential was checked: closed, not renewed.
-    if (current.deadline <= Date.now() || current.expires_at <= Date.now())
+    if (!current()) return;
+    const now = Date.now();
+    const held = live.socket(id);
+    // Asked again, or gone, meanwhile: this answer is not its.
+    if (!held || held.renewal_nonce !== nonce || held.socket_generation !== generation) return;
+    if (live.stale(id)) {
+      for (const ws of this.ctx.getWebSockets(id))
+        ws.close(CLOSE_RESYNC, "restored: reread and reconnect");
+      return;
+    }
+    if (held.deadline <= now || held.expires_at <= now)
       return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
-    // Revoked, expired or disabled: closed; unanswered twice: closed.
     if (
       credential === null ||
       live.anyRevoked(live.depsOf(id)) ||
@@ -888,22 +1294,48 @@ export class UserDO extends MigratingDO {
     )
       return this.#closeSocket(id, CLOSE_EXPIRED, "the credential no longer holds");
     if (credential === undefined) {
-      if (current.renew_failures + 1 >= 2)
+      if (held.renew_failures + 1 >= 2)
         return this.#closeSocket(id, CLOSE_EXPIRED, "the credential could not be checked");
-      this.ctx.storage.transactionSync(() =>
-        live.update(id, { renew_failures: current.renew_failures + 1 }),
-      );
+      this.ctx.storage.transactionSync(() => {
+        live.update(id, { renew_failures: held.renew_failures + 1 });
+        live.finishRenewal(id, nonce, generation);
+      });
       return;
     }
-    const deadline = Math.min(now + LIVE_POLICY.renewMs, current.expires_at);
-    this.ctx.storage.transactionSync(() => live.update(id, { deadline, renew_failures: 0 }));
+    const deadline = Math.min(requestedAt + LIVE_POLICY.renewMs, held.expires_at);
+    // Its lease extended with it (a lease lapses unless renewals extend it); one not extended is
+    // unanswered, its deadline left as it was.
+    const leased = await extendLease(
+      this.env.DIRECTORY,
+      id,
+      Math.min(held.expires_at, deadline + LIVE_ADMISSION.leaseMarginMs),
+    ).catch(() => false);
+    if (!current()) return;
+    if (!leased) {
+      const again = live.socket(id);
+      if (!again || again.renewal_nonce !== nonce) return;
+      if (again.renew_failures + 1 >= 2)
+        return this.#closeSocket(id, CLOSE_EXPIRED, "the credential could not be checked");
+      this.ctx.storage.transactionSync(() => {
+        live.update(id, { renew_failures: again.renew_failures + 1 });
+        live.finishRenewal(id, nonce, generation);
+      });
+      return;
+    }
+    this.ctx.storage.transactionSync(() => {
+      live.update(id, { deadline, renew_failures: 0 });
+      live.finishRenewal(id, nonce, generation);
+    });
     for (const ws of this.ctx.getWebSockets(id))
       ws.send(JSON.stringify({ t: "renewed", until: deadline }));
-    await this.#scheduleLive();
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
-    await this.#socketGone(ws);
+    try {
+      await this.#socketGone(ws);
+    } finally {
+      feedHooks.afterSocketEvent?.(this.ctx.id.name, "close");
+    }
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
@@ -911,15 +1343,17 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * A socket closed or failed: forgotten and its lease released, once the
-   * object took its epoch. One already forgotten (recovery deleted it
-   * before closing it) wakes nothing: no bootstrap, no alarm.
+   * A socket closed or failed: forgotten on its terminal provision, once
+   * the object took its epoch (its lease is maintenance's to release). One
+   * already forgotten (ended here, or deleted by recovery) wakes nothing:
+   * no bootstrap, no alarm.
    */
   async #socketGone(ws: WebSocket): Promise<void> {
+    if (unpaid(ws, Date.now())) return;
     const id = socketIdOf(ws);
     if (id === undefined || !this.#live().socket(id)) return;
     if (!(await this.#epochTaken())) return;
-    await this.#forgetSocket(id);
+    this.#endSocket(id);
   }
 
   /** Whether the object took its epoch (false when the directory could not be read). */
@@ -930,18 +1364,36 @@ export class UserDO extends MigratingDO {
     );
   }
 
-  /** Closes a socket, forgets it and releases its lease. */
-  async #closeSocket(id: string, code: number, reason: string): Promise<void> {
-    for (const ws of this.ctx.getWebSockets(id)) ws.close(code, reason);
-    await this.#forgetSocket(id);
+  /**
+   * Ends a socket on today's terminal provision: forgotten, then closed with
+   * `code` (its callbacks then find nothing). One with no provision left
+   * (its prepaid days passed, or recovery took it) is only closed, its
+   * attachment marking it past its end so nothing more of it is read; its
+   * rows are its recovery's. Its lease is maintenance's to release.
+   */
+  #closeSocket(id: string, code: number, reason: string): void {
+    const ended = this.#endSocket(id);
+    for (const ws of this.ctx.getWebSockets(id)) {
+      // Its end not paid for: past it from now on, so nothing more of it reads anything.
+      if (!ended) ws.serializeAttachment({ v: 1, id, until: Date.now() });
+      ws.close(code, reason);
+    }
   }
 
-  /** Forgets a socket and releases its lease; one already forgotten (by recovery) is left to the reaper. */
-  async #forgetSocket(id: string): Promise<void> {
-    const live = this.#live();
-    if (!live.socket(id)) return;
-    this.ctx.storage.transactionSync(() => live.forget(id));
-    await release(this.env.DIRECTORY, [id]);
+  /** Forgets a socket on today's terminal provision, consumed; whether it was. */
+  #endSocket(id: string): boolean {
+    return this.ctx.storage.transactionSync(() => {
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      const local = Date.now();
+      const ended = budget.terminate(
+        id,
+        budget.ledgerDays(local),
+        unitPrice("terminal"),
+        budget.ledgerNow(local),
+      );
+      if (ended) this.#live().forget(id);
+      return ended;
+    });
   }
 
   /**
@@ -949,16 +1401,23 @@ export class UserDO extends MigratingDO {
    * socket resting on one is admitted or renewed, and every open one
    * resting on one closed; in any order, any number of times.
    */
-  async revoked(dependencies: readonly string[]): Promise<void> {
+  async revoked(dependencies: readonly string[]): Promise<readonly string[]> {
     await this.#checkEpoch();
     const live = this.#live();
-    const ids = this.ctx.storage.transactionSync(() => live.revoke(dependencies, Date.now()));
+    // Recorded, and every socket resting on one forgotten (its end's provisions with it) before it
+    // is closed; their leases are released by whoever told it (the sweep), not from here.
+    const ids = this.ctx.storage.transactionSync(() => {
+      const closing = live.revoke(dependencies, Date.now());
+      const budget = new LiveBudget(this.ctx.storage.sql);
+      for (const id of closing) {
+        live.forget(id);
+        budget.forgetTerminal(id);
+      }
+      return closing;
+    });
     for (const id of ids)
       for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_REVOKED, "revoked");
-    this.ctx.storage.transactionSync(() => {
-      for (const id of ids) live.forget(id);
-    });
-    await release(this.env.DIRECTORY, ids);
+    return ids;
   }
 
   /**
@@ -976,20 +1435,37 @@ export class UserDO extends MigratingDO {
    * it). Then prunes a page of what every socket heard of; whether more is
    * left.
    */
-  async #pump(): Promise<boolean> {
+  /**
+   * A turn's housekeeping: admissions never confirmed forgotten (their
+   * leases released), expired and slow sockets ended.
+   */
+  async #housekeep(current: () => boolean): Promise<void> {
+    const live = this.#live();
+    const now = Date.now();
+    const unconfirmed: string[] = [];
+    for (const s of live.sockets()) {
+      if (!current()) return;
+      // A confirmation that never finished (the object restarted meanwhile).
+      if (s.phase === "confirming") {
+        if (s.minute_start <= now - LIVE_CONFIRM_MS) unconfirmed.push(s.socket_id);
+      } else if (s.expires_at <= now || s.deadline <= now)
+        this.#closeSocket(s.socket_id, CLOSE_EXPIRED, "expired: renew in time or reconnect");
+      else if (s.blocked_since !== null && now - s.blocked_since >= LIVE_POLICY.slowMs)
+        this.#closeSocket(s.socket_id, CLOSE_RESYNC, "slow consumer: reread everything");
+    }
+    if (unconfirmed.length === 0 || !current()) return;
+    // Forgotten here, then their leases released together (one batch, whatever their number).
+    this.ctx.storage.transactionSync(() => {
+      for (const id of unconfirmed) live.forget(id);
+    });
+    await release(this.env.DIRECTORY, unconfirmed);
+  }
+
+  async #pump(current: () => boolean): Promise<boolean> {
     const principalId = this.ctx.id.name;
     if (principalId === undefined) return false;
     const live = this.#live();
     const now = Date.now();
-    for (const s of live.sockets()) {
-      if (s.phase === "confirming") {
-        // A confirmation that never finished (the object restarted meanwhile).
-        if (s.minute_start <= now - LIVE_CONFIRM_MS) await this.#forgetSocket(s.socket_id);
-      } else if (s.expires_at <= now || s.deadline <= now)
-        await this.#closeSocket(s.socket_id, CLOSE_EXPIRED, "expired: renew in time or reconnect");
-      else if (s.blocked_since !== null && now - s.blocked_since >= LIVE_POLICY.slowMs)
-        await this.#closeSocket(s.socket_id, CLOSE_RESYNC, "slow consumer: reread everything");
-    }
     const upTo = live.seq();
     const open = live.sockets().filter((s) => s.phase === "open");
     // A full window waits for acknowledgements (and starts the slow-consumer clock once).
@@ -1024,14 +1500,16 @@ export class UserDO extends MigratingDO {
       try {
         gate = await this.#preferences(principalId, repos, threads);
       } catch {
-        this.#retryLater(serving.flatMap(([, sockets]) => sockets));
+        if (current()) this.#retryLater(serving.flatMap(([, sockets]) => sockets));
         return false;
       }
+    if (!current()) return false;
     const metrics = createMetrics(this.env.METRICS);
     for (const [credentialId, waiting] of serving) {
       const holding = await liveCredential(this.env.DIRECTORY, credentialId, Date.now()).catch(
         () => undefined,
       );
+      if (!current()) return false;
       // Not answered: its sockets try again a minute on.
       if (holding === undefined) {
         this.#retryLater(waiting);
@@ -1061,8 +1539,10 @@ export class UserDO extends MigratingDO {
       let entries: Awaited<ReturnType<typeof findReposById>>;
       try {
         entries = await findReposById(this.env, named, metrics);
+        if (!current()) return false;
       } catch {
         // Not known which account holds what: tried again a minute on.
+        if (!current()) return false;
         this.#retryLater(sockets);
         continue;
       }
@@ -1073,10 +1553,31 @@ export class UserDO extends MigratingDO {
       const readable = new Map<string, boolean>();
       if (account !== undefined) {
         const deciding = entries.filter((e) => e.ownerId === account);
-        const answers = await new FreshAccess({ env: this.env, metrics }, {
-          principalId,
-          grantId: null,
-        } as never).decide(deciding, { live: true });
+        // The account's object's check paid for first, by a grant of its own: refused or not
+        // answered, the sockets try again a minute on.
+        const paid = await this.#grantConfirmation(account, current).catch(() => false);
+        if (!current()) return false;
+        if (!paid) {
+          this.#retryLater(sockets);
+          continue;
+        }
+        let answers: Awaited<ReturnType<FreshAccess["decide"]>>;
+        try {
+          answers = await new FreshAccess({ env: this.env, metrics }, {
+            principalId,
+            grantId: null,
+          } as never).decide(deciding, {
+            live: true,
+            // Each of its awaits checked: nothing more started once the turn can no longer apply.
+            checkpoint: () => {
+              if (!current()) throw new AuthorizationInvalidated();
+            },
+          });
+        } catch (error) {
+          if (error instanceof AuthorizationInvalidated) return false;
+          throw error;
+        }
+        if (!current()) return false;
         for (const entry of deciding) {
           const answer = answers.get(entry.id);
           // Gone: unreadable. Not known: passed over.
@@ -1100,6 +1601,377 @@ export class UserDO extends MigratingDO {
     }
     // What a run's bounds left is due at once (the alarm sets it by `Live.nextDue`).
     return this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+  }
+
+  /** Funded live work's readiness: the prepared turn's, while it can run (else blocked). */
+  #turnReadiness(local: number): LiveReadiness {
+    if (this.#retired()) return LIVE_BLOCKED;
+    const turn = new LiveBudget(this.ctx.storage.sql).runnableTurn(local);
+    return turn
+      ? {
+          status: "ready",
+          at: turn.intendedAt,
+          validUntil: turn.validUntil,
+          generation: turn.seq,
+        }
+      : LIVE_BLOCKED;
+  }
+
+  /**
+   * Runs the feed's turn when it is due and its whole work and accounting
+   * fit the run's budget (else it waits, due, for the next run), the
+   * reservation held until its work has physically ended: claimed once by
+   * this instance, run as owned work (its owner admitted, recorded
+   * dispatched here before any await, observed, settled and released),
+   * every step after an await checked against what it was claimed under
+   * (the fence, the turn itself, the feed not retired, its bound not
+   * outlasted). Then ended naming its successor while the feed has
+   * sockets: due at once when work is left, else when live work next is
+   * (before the successor lapses). One whose owner was not accounted keeps
+   * its reference for recovery. Whether it ran.
+   */
+  async #liveTurn(alarm: AlarmBudget): Promise<boolean> {
+    // One turn's work at a time here, until it has physically ended (whatever became of its row).
+    if (this.#turnRunning) return false;
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    await this.#adoptTurn(alarm);
+    const local = Date.now();
+    const ready = budget.runnableTurn(local);
+    if (!ready || ready.intendedAt > local) return false;
+    // Its own coverage needs no check here: it was checked when prepared.
+    const units = (LIVE_REQUIRED_COMPONENTS.pump ?? []).filter((u) => u !== "coverage");
+    const reservation = alarm.reserve(...units);
+    if (!reservation) return false;
+    let physical: Promise<void> = Promise.resolve();
+    let physicalDone = () => {};
+    try {
+      const envelope = this.ctx.storage.transactionSync(() =>
+        budget.claimTurn(budget.ledgerNow(local), this.#instance),
+      );
+      if (!envelope) return false;
+      // Busy from its claim: nothing adopts or replaces it while it may still run here.
+      let ended!: () => void;
+      this.#turnRunning = new Promise<void>((resolve) => {
+        ended = resolve;
+      });
+      const marker = this.#turnRunning;
+      physicalDone = () => {
+        ended();
+        if (this.#turnRunning === marker) this.#turnRunning = null;
+      };
+      const claimedUnder = budget.fence();
+      let dispatched = false;
+      const earliest = budget.ledgerEarliest(local);
+      const run = await ownedRun(
+        this.env.DIRECTORY,
+        envelope,
+        "turn",
+        async (funding, signal) => {
+          dispatched = this.ctx.storage.transactionSync(() =>
+            budget.dispatchTurn(envelope.operationId, funding.ownerId as string, this.#instance),
+          );
+          if (!dispatched) return null;
+          // Its result waited for 10 seconds: past them nothing of it applies (its work, which the
+          // platform does not cut, still holds the object until it ends).
+          const answerBy = Date.now() + LIVE_AUTHORIZATION_RESULT_MS;
+          const current = () => {
+            const fence = budget.fence();
+            const turn = budget.turn();
+            return (
+              !signal.aborted &&
+              Date.now() < answerBy &&
+              !this.#retired() &&
+              fence.epoch === claimedUnder.epoch &&
+              fence.incarnation === claimedUnder.incarnation &&
+              fence.authorizationGen === claimedUnder.authorizationGen &&
+              fence.cleanupThrough === claimedUnder.cleanupThrough &&
+              turn?.operationId === envelope.operationId &&
+              turn.phase === "dispatched"
+            );
+          };
+          await this.#turnWork(funding, current);
+          await feedHooks.afterTurnWork?.(this, this.ctx);
+          return current() && this.#live().sockets().length > 0
+            ? await this.#grantTurn(current).catch(() => null)
+            : null;
+        },
+        {
+          pendingMs: (LIVE_PRICES.pump as LiveManifestEntry).pendingMs as number,
+          ledger: { now: earliest, at: local, slack: budget.ledgerNow(local) - earliest },
+          physical: (ended) => {
+            physical = ended;
+          },
+        },
+      );
+      const now = Date.now();
+      this.ctx.storage.transactionSync(() => {
+        if (run.status === "funded" && dispatched) {
+          const successor = run.value;
+          const lapse = successor
+            ? successor.plan.validUntil - (budget.ledgerNow(now) - now) - 60_000
+            : now;
+          const next = this.#moreLive(now) ? now : this.#liveDueAt(now);
+          budget.finishTurn(envelope.operationId, budget.ledgerNow(now), {
+            ownerAccounted: run.accounted === true,
+            ...(successor && {
+              successor: { envelope: successor, intendedAt: Math.min(next ?? lapse, lapse) },
+            }),
+          });
+        } else if (!dispatched)
+          // Its owner not admitted, or recovery took it before it was dispatched: nothing of it
+          // ran, so it waits to run again (when it is still there).
+          budget.unclaimTurn(envelope.operationId, now + LIVE_RETRY_MS);
+        // Dispatched and given up on: its owner's work may still run, so it stays for recovery.
+      });
+      return true;
+    } finally {
+      void physical.finally(() => {
+        reservation.physicalComplete();
+        physicalDone();
+      });
+    }
+  }
+
+  /** The turn whose work is still physically running in this instance, if any. */
+  #turnRunning: Promise<void> | null = null;
+
+  /**
+   * A turn left claimed or dispatched with no work of it running here (an
+   * instance gone left it, or this one gave up on it, or lost its
+   * accounting's answer): one whose owner the directory never admitted
+   * runs again; one admitted but never dispatched, or already accounted,
+   * is forgotten (the directory releases the first once its window
+   * passes); one dispatched is uncertain: its owner is quarantined (its
+   * place kept) before it is forgotten, so a new turn may be prepared, and
+   * a refill it dispatched is queued again with its request. In
+   * an alarm, nothing is done when the run cannot afford it.
+   */
+  async #adoptTurn(alarm: AlarmBudget | null): Promise<void> {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const turn = budget.turn();
+    if (!turn || turn.phase === "prepared" || this.#turnRunning) return;
+    const reservation = alarm ? alarm.reserve("quarantine") : { physicalComplete: () => {} };
+    if (!reservation) return;
+    try {
+      const owner = await this.env.DIRECTORY.prepare(
+        "SELECT owner_id, status FROM live_duration_owners WHERE operation_id = ?",
+      )
+        .bind(turn.operationId)
+        .first<{ owner_id: string; status: string }>();
+      // Dispatched with its end unknown: quarantined (uncertain, its place kept). Observing or
+      // accounted, maintenance settles it; reserved, the directory releases it.
+      if (owner?.status === "dispatched")
+        await quarantineLiveOwners(this.env.DIRECTORY, [owner.owner_id]);
+      this.ctx.storage.transactionSync(() => {
+        if (budget.turn()?.operationId !== turn.operationId) return;
+        if (!owner && turn.phase === "claimed") budget.unclaimTurn(turn.operationId, Date.now());
+        else {
+          budget.dropTurn(turn.operationId);
+          // A refill it dispatched, its answer never heard: asked again by a later turn (the same
+          // request, so the same grant if it was made).
+          if (turn.ownerId !== null) budget.requeueOwnedPending(turn.ownerId, Date.now());
+        }
+      });
+    } finally {
+      reservation.physicalComplete();
+    }
+  }
+
+  /**
+   * A turn's work: its housekeeping, then one kind of work, the most
+   * urgent: queued renewals (a few, by deadline), else one queued refill,
+   * else one pump unit.
+   */
+  async #turnWork(funding: LiveFunding, current: () => boolean): Promise<void> {
+    await this.#housekeep(current);
+    if (!current()) return;
+    const live = this.#live();
+    const renewals = live.queuedRenewals().slice(0, LIVE_TURN_RENEWALS);
+    if (renewals.length > 0) {
+      for (const socket of renewals) {
+        if (!current()) return;
+        await this.#renewQueued(socket, current);
+      }
+      return;
+    }
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const refill = (["control_refill", "mark_refill"] as const).find((kind) =>
+      refillDue(budget, kind, Date.now()),
+    );
+    if (refill) return this.#refill(refill, funding, current);
+    await this.#pump(current);
+  }
+
+  /**
+   * When live work is next due: a queued refill when it was asked for (the
+   * pool it refills is running low), or what the pump and sockets need
+   * next; null for nothing.
+   */
+  #liveDueAt(now: number): number | null {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const refills = (["control_refill", "mark_refill"] as const)
+      .map((kind) => budget.pending(kind))
+      .filter((p) => p?.phase === "queued")
+      .map((p) => Math.max(now, p?.intendedAt ?? now));
+    const due = [...refills, this.#live().nextDue(now, LIVE_CONFIRM_MS)].filter(
+      (t): t is number => t !== null,
+    );
+    return due.length > 0 ? Math.min(...due) : null;
+  }
+
+  /** Whether live work is left to do at once (a renewal, a refill, or the pump's). */
+  #moreLive(now: number): boolean {
+    const live = this.#live();
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    return (
+      live.queuedRenewals().length > 0 ||
+      refillDue(budget, "control_refill", now) ||
+      refillDue(budget, "mark_refill", now) ||
+      (live.nextDue(now, LIVE_CONFIRM_MS) ?? Number.POSITIVE_INFINITY) <= now
+    );
+  }
+
+  /**
+   * One queued refill, in a turn: its exact request made once (a retry
+   * sends the same), recorded dispatched with the turn's owner, granted,
+   * then installed when it is still this refill's; refused or with no room,
+   * it goes (low water queues another).
+   */
+  async #refill(
+    kind: "control_refill" | "mark_refill",
+    funding: LiveFunding,
+    current: () => boolean,
+  ): Promise<void> {
+    const feed = this.ctx.id.name;
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const item = budget.pending(kind);
+    if (!feed || !item || item.phase !== "queued" || !funding.ownerId) return;
+    const fence = budget.fence();
+    const request =
+      item.request ??
+      (await makeLiveGrant(
+        planFor(
+          LIVE_PRICES[
+            kind === "control_refill" ? "control_block" : "mark_block"
+          ] as LiveManifestEntry,
+          {
+            incarnation: fence.incarnation,
+            epoch: fence.epoch,
+            recipientType: "UserDO",
+            recipient: feed,
+            class: "ordinary",
+            kind: kind === "control_refill" ? "control" : "mark",
+            producesLocal: true,
+          },
+          budget.ledgerEarliest(Date.now()),
+        ),
+      ));
+    const plan = funding.envelope.plan;
+    const owner = {
+      ownerId: funding.ownerId,
+      operationId: funding.envelope.operationId,
+      objectType: "UserDO" as const,
+      objectId: feed,
+      incarnation: plan.incarnation,
+      epoch: plan.epoch,
+    };
+    if (!current()) return;
+    const dispatched = this.ctx.storage.transactionSync(
+      () =>
+        budget.preparePending(kind, item.identity, request) &&
+        budget.dispatchPending(kind, item.identity, owner, this.#instance),
+    );
+    if (!dispatched) return;
+    const granted = await reserveLive(this.env.DIRECTORY, request).catch(() => null);
+    this.ctx.storage.transactionSync(() => {
+      const now = Date.now();
+      // A request no longer grantable as a new grant (its first day passed): it goes.
+      const firstDay = request.plan.charges[0]?.day ?? 0;
+      const lapsed = budget.ledgerEarliest(now) >= (firstDay + 1) * 86_400_000;
+      // Its answer lost, or the turn given up on: the same request is sent again a minute on (the
+      // same grant, if it was made).
+      const uncertain =
+        !granted || (granted.status === "refused" && granted.reason === "temporary") || !current();
+      if (uncertain && !lapsed) {
+        budget.requeuePending(kind, item.identity, now + LIVE_RETRY_MS);
+        return;
+      }
+      // Given up on, past its first day: nothing installed, it goes.
+      if (!current()) {
+        budget.finishPending(kind, item.identity);
+        return;
+      }
+      const installed =
+        granted?.status === "granted"
+          ? budget.installPending(
+              kind,
+              item.identity,
+              granted.grant,
+              budget.ledgerNow(Date.now()),
+              feed,
+              this.#instance,
+            )
+          : "refused";
+      // No room on any of its days: kept, its request asked again a minute on (the same grant,
+      // charged once) until a block drains or is retired.
+      if (installed === "full") budget.requeuePending(kind, item.identity, now + LIVE_RETRY_MS);
+      // Refused for good (today's allowance, its grant expired or fenced): it goes (low water
+      // queues another).
+      else if (installed !== "installed") budget.finishPending(kind, item.identity);
+    });
+  }
+
+  /** The feed's successor turn, granted from the ledger now (null when refused, or stopped). */
+  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | null> {
+    const feed = this.ctx.id.name;
+    if (!feed) return null;
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const fence = budget.fence();
+    const request = await makeLiveGrant(
+      planFor(
+        LIVE_PRICES.pump as LiveManifestEntry,
+        {
+          incarnation: fence.incarnation,
+          epoch: fence.epoch,
+          recipientType: "UserDO",
+          recipient: feed,
+          class: "ordinary",
+          kind: "pump",
+          producesLocal: true,
+        },
+        budget.ledgerEarliest(Date.now()),
+      ),
+    );
+    if (!current()) return null;
+    const granted = await reserveLive(this.env.DIRECTORY, request);
+    feedHooks.afterSuccessorGrant?.(this.ctx);
+    // Answered once the turn's result no longer applies: named nowhere (its charge stands).
+    return granted.status === "granted" && current() ? granted.grant : null;
+  }
+
+  /**
+   * Grants the pump's call of `account`'s object (`org_confirmation`) from the
+   * ledger now: whether it was granted (false when refused, or stopped).
+   */
+  async #grantConfirmation(account: string, current: () => boolean): Promise<boolean> {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const request = await makeLiveGrant(
+      planFor(
+        LIVE_PRICES.org_confirmation as LiveManifestEntry,
+        {
+          incarnation: budget.fence().incarnation,
+          epoch: 0,
+          recipientType: "OrgDO",
+          recipient: account,
+          class: "ordinary",
+          kind: "org_confirmation",
+          producesLocal: false,
+        },
+        budget.ledgerEarliest(Date.now()),
+      ),
+    );
+    if (!current()) return false;
+    return (await reserveLive(this.env.DIRECTORY, request)).status === "granted";
   }
 
   /** Sockets whose run could not be done (an answer missing): tried again a minute on. */
@@ -1177,7 +2049,6 @@ export class UserDO extends MigratingDO {
 
   /** `kind` due at `at` (null: nothing left of it). */
   #setDue(kind: Kind, at: number | null): void {
-    this.#changed(kind, at);
     if (at === null) this.ctx.storage.sql.exec("DELETE FROM user_schedule WHERE kind = ?", kind);
     else
       this.ctx.storage.sql.exec(
@@ -1190,7 +2061,6 @@ export class UserDO extends MigratingDO {
 
   /** `kind` due by `at`: an earlier time it is due already is kept. */
   #schedule(kind: Kind, at: number): void {
-    this.#changed(kind, at);
     this.ctx.storage.sql.exec(
       `INSERT INTO user_schedule (kind, due_at) VALUES (?, ?)
        ON CONFLICT (kind) DO UPDATE SET due_at = min(due_at, excluded.due_at)`,
@@ -1199,35 +2069,30 @@ export class UserDO extends MigratingDO {
     );
   }
 
-  /** Funded live work's readiness (blocked until funded reconciliation establishes it). */
-  #liveReadiness: LiveReadiness = LIVE_BLOCKED;
-  /** Live work held back from the alarm (by a recovery) until a live change schedules it again. */
-  #liveHeld = false;
+  /** This instance's own name, recorded with what it dispatches. */
+  readonly #instance = crypto.randomUUID();
   /** While the epoch could not be read: when overdue work is tried again. */
   #epochRetryAt: number | null = null;
   #arming: Promise<void> = Promise.resolve();
 
-  /** A schedule row changed: live work scheduled again is no longer held back. */
-  #changed(kind: Kind, at: number | null): void {
-    if (kind === "live" && at !== null) this.#liveHeld = false;
-  }
-
   /**
-   * When the alarm should ring: the earliest of the schedule's rows (live
-   * ones unless held back; while the epoch could not be read, overdue rows
-   * at the retry) and funded live work's eligible deadline; null for none.
+   * When the alarm should ring: the earliest of the schedule's rows (while
+   * the epoch could not be read, overdue rows at the retry) and funded live
+   * work's eligible deadline (its prepared turn's, while that can run);
+   * null for none.
    */
   #desiredAlarm(now: number): number | null {
     const rows = this.ctx.storage.sql
-      .exec<{ kind: Kind; due_at: number }>("SELECT kind, due_at FROM user_schedule")
+      .exec<{ kind: string; due_at: number }>(
+        "SELECT kind, due_at FROM user_schedule WHERE kind <> 'live'",
+      )
       .toArray();
     const retry = this.#epochRetryAt;
-    const times = rows
-      .filter((row) => !(row.kind === "live" && this.#liveHeld))
-      .map((row) => (retry !== null && row.due_at <= now ? retry : row.due_at));
+    const times = rows.map((row) => (retry !== null && row.due_at <= now ? retry : row.due_at));
     const feed = this.ctx.id.name;
     const readiness =
-      (feed !== undefined ? feedHooks.liveReadiness?.(feed) : undefined) ?? this.#liveReadiness;
+      (feed !== undefined ? feedHooks.liveReadiness?.(feed) : undefined) ??
+      this.#turnReadiness(now);
     const live = retry === null ? eligibleLiveDeadline(readiness, now) : null;
     if (live !== null) times.push(live);
     return times.length === 0 ? null : Math.max(Math.min(...times), now);
@@ -1352,15 +2217,10 @@ export class UserDO extends MigratingDO {
         this.ctx.storage.sql.exec("DELETE FROM email_queue");
         this.#schedule("retire", Date.now());
       });
-    // Live sockets go with it: closed, their leases released, their state forgotten (sockets at
-    // once, at most a feed's; the rest a page a step of the retirement).
-    const live = this.#live();
-    const sockets = live.sockets().map((s) => s.socket_id);
-    for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_REVOKED, "retired");
-    this.ctx.storage.transactionSync(() => {
-      for (const id of sockets) live.forget(id);
-    });
-    await release(this.env.DIRECTORY, sockets);
+    // Live sockets go with it, each on its terminal provision (at most a feed's); what else of
+    // live is left, and their leases, are recovery's and maintenance's.
+    for (const socket of this.#live().sockets())
+      this.#closeSocket(socket.socket_id, CLOSE_REVOKED, "retired");
     await this.#arm();
   }
 
@@ -1445,9 +2305,6 @@ export class UserDO extends MigratingDO {
     if (page.status === "fenced") return refuse("fenced");
     for (const id of page.closedSocketIds)
       for (const ws of this.ctx.getWebSockets(id)) ws.close(CLOSE_EXPIRED, "expired: reconnect");
-    // The alarm by non-live work alone (an earlier live one goes) until a live change schedules
-    // live work again.
-    this.#liveHeld = true;
     await this.#arm();
     // Ran past what its grant reserved: no completion (its whole hold stays charged), and its
     // acknowledgement of the local state still stands.

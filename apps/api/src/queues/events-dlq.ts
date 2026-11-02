@@ -9,9 +9,9 @@ import { isWaiting } from "./events-consumer.js";
  * after its retries. Each is stored (`events_failed`) before its dead
  * letter is acknowledged. A repository's also asks for that repository's
  * search projections to be reconciled (in the same batch); an account's
- * waits for an operator to replay it; one that cannot be read is
- * quarantined with why. For a repository whose deletion is in the read
- * model only the record is kept (its rows are being purged).
+ * waits for an operator to replay it (`events-replay.ts`); one that cannot
+ * be read is quarantined with why. For a repository whose deletion is in
+ * the read model only the record is kept (its rows are being purged).
  */
 
 export const EVENTS_DLQ = "fyrden-events-dlq";

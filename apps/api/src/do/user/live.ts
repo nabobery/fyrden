@@ -119,6 +119,35 @@ export async function ticketHash(ticket: string): Promise<string> {
   );
 }
 
+/** The grant that paid for a live row (see `LiveBudget`). */
+export interface LiveStamp {
+  readonly epoch: number;
+  readonly incarnation: string;
+  readonly seq: number;
+  readonly validUntil: number;
+}
+
+/** No grant's: a row made before marks were paid for (recovery retires it with any other). */
+const UNSTAMPED: LiveStamp = { epoch: 0, incarnation: "", seq: 0, validUntil: 0 };
+
+/**
+ * A row's stamp set to the one bound from `?first` (epoch, incarnation,
+ * valid-until, sequence) unless its own is newer under the same epoch and
+ * incarnation (sequences of another ledger incarnation or epoch say
+ * nothing of this one's): what recovery may retire it by.
+ */
+const restamp = (first: number) => {
+  const [epoch, incarnation, until, seq] = [first, first + 1, first + 2, first + 3].map(
+    (n) => `?${n}`,
+  );
+  const newer = `(budget_epoch <> ${epoch} OR budget_incarnation <> ${incarnation}
+    OR ${seq} > budget_seq)`;
+  return `budget_epoch = CASE WHEN ${newer} THEN ${epoch} ELSE budget_epoch END,
+    budget_incarnation = CASE WHEN ${newer} THEN ${incarnation} ELSE budget_incarnation END,
+    budget_valid_until = CASE WHEN ${newer} THEN ${until} ELSE budget_valid_until END,
+    budget_seq = CASE WHEN ${newer} THEN ${seq} ELSE budget_seq END`;
+};
+
 export class Live {
   constructor(private readonly sql: SqlStorage) {}
 
@@ -131,25 +160,46 @@ export class Live {
     return this.sql.exec<{ seq: number }>("SELECT seq FROM live_meta WHERE id = 1").one().seq;
   }
 
-  /** Stores a ticket (its hash) for `credentialId`, until `expiresAt`. */
-  storeTicket(hash: string, credentialId: string, expiresAt: number): void {
+  /**
+   * Stores a ticket (its hash) for `credentialId`, until `expiresAt`, with
+   * its transport's reference and the stamp of the grant that paid for it.
+   */
+  storeTicket(
+    hash: string,
+    credentialId: string,
+    expiresAt: number,
+    transport: Record<string, unknown>,
+    stamp: { epoch: number; incarnation: string; seq: number; validUntil: number },
+  ): void {
     this.sql.exec(
-      "INSERT INTO live_tickets (ticket_hash, credential_id, expires_at) VALUES (?, ?, ?)",
+      `INSERT INTO live_tickets (ticket_hash, credential_id, expires_at, transport_json,
+         budget_epoch, budget_incarnation, budget_seq, budget_valid_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       hash,
       credentialId,
       expiresAt,
+      JSON.stringify(transport),
+      stamp.epoch,
+      stamp.incarnation,
+      stamp.seq,
+      stamp.validUntil,
     );
   }
 
-  /** Redeems a ticket once: its credential, when it is that one's and unexpired. */
-  redeemTicket(hash: string, credentialId: string, now: number): boolean {
+  /**
+   * Redeems a ticket once: its credential's, unexpired, and issued with the
+   * transport `transportId` (the grant funding its redemption).
+   */
+  redeemTicket(hash: string, credentialId: string, now: number, transportId: string): boolean {
     const row = this.sql
-      .exec<{ credential_id: string; expires_at: number }>(
-        "SELECT credential_id, expires_at FROM live_tickets WHERE ticket_hash = ?",
+      .exec<{ credential_id: string; expires_at: number; transport_json: string | null }>(
+        "SELECT credential_id, expires_at, transport_json FROM live_tickets WHERE ticket_hash = ?",
         hash,
       )
       .toArray()[0];
     if (!row || row.credential_id !== credentialId) return false;
+    const transport = JSON.parse(row.transport_json ?? "null") as { operationId?: unknown } | null;
+    if (transport?.operationId !== transportId) return false;
     this.sql.exec("DELETE FROM live_tickets WHERE ticket_hash = ?", hash);
     return row.expires_at > now;
   }
@@ -207,16 +257,18 @@ export class Live {
     },
     dependencies: readonly string[],
     now: number,
+    /** The admission's grant that paid for it: what recovery retires it by. */
+    stamp: { epoch: number; incarnation: string; seq: number; validUntil: number },
   ): void {
     const progress = this.seq();
     this.sql.exec(
-      // Stamped with the budget fence it was admitted under: a restore that moves the fence makes
-      // it stale (see `stale`).
+      // Stamped with the grant it was admitted by: a restore or recovery that moves the fence past
+      // it makes it stale (see `stale`), and recovery finds it by it.
       `INSERT INTO live_local (socket_id, credential_id, phase, expires_at, deadline, sent, acked,
          refresh_pending, blocked_since, renew_failures, controls_used, minute_start, minute_count,
-         delivered_seq, retry_at, scopes, repo_ids, budget_epoch, budget_incarnation)
-       SELECT ?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?, epoch, incarnation
-       FROM live_budget_fence WHERE id = 1`,
+         delivered_seq, retry_at, scopes, repo_ids, budget_epoch, budget_incarnation, budget_seq,
+         budget_valid_until)
+       VALUES (?, ?, 'confirming', ?, ?, 0, 0, 0, NULL, 0, 0, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?)`,
       socket.id,
       socket.credentialId,
       socket.expiresAt,
@@ -225,12 +277,21 @@ export class Live {
       progress,
       JSON.stringify(socket.scopes),
       socket.repoIds ? JSON.stringify(socket.repoIds) : null,
+      stamp.epoch,
+      stamp.incarnation,
+      stamp.seq,
+      stamp.validUntil,
     );
     for (const dependency of new Set(dependencies))
       this.sql.exec(
-        "INSERT INTO live_local_deps (socket_id, dependency) VALUES (?, ?)",
+        `INSERT INTO live_local_deps (socket_id, dependency, budget_epoch, budget_incarnation,
+           budget_seq, budget_valid_until) VALUES (?, ?, ?, ?, ?, ?)`,
         socket.id,
         dependency,
+        stamp.epoch,
+        stamp.incarnation,
+        stamp.seq,
+        stamp.validUntil,
       );
   }
 
@@ -339,23 +400,30 @@ export class Live {
       .map((r) => r.socket_id);
   }
 
-  /** Marks streams changed, with their causes; whether any was marked. */
-  mark(signals: readonly LiveSignal[]): boolean {
+  /**
+   * Marks streams changed, with their causes, each row stamped by the grant
+   * that paid for the mark (a row marked again keeps the newer of its
+   * stamps); whether any was marked.
+   */
+  mark(signals: readonly LiveSignal[], stamp: LiveStamp = UNSTAMPED): boolean {
     if (signals.length === 0) return false;
+    const stamped = [stamp.epoch, stamp.incarnation, stamp.validUntil, stamp.seq] as const;
     for (const signal of signals) {
       const seq = this.#nextSeq();
       const stream = streamOf(signal.repoId, signal.subject);
       const explicit = "explicit" in signal;
       this.sql.exec(
-        `INSERT INTO live_dirty (stream, repo_id, subject, seq, explicit_seq, many_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0)
+        `INSERT INTO live_dirty (stream, repo_id, subject, seq, explicit_seq, many_seq,
+           budget_epoch, budget_incarnation, budget_valid_until, budget_seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8, ?9)
          ON CONFLICT (stream) DO UPDATE SET seq = ?4,
-           explicit_seq = max(explicit_seq, excluded.explicit_seq)`,
+           explicit_seq = max(explicit_seq, excluded.explicit_seq), ${restamp(6)}`,
         stream,
         signal.repoId,
         signal.subject,
         seq,
         explicit ? seq : 0,
+        ...stamped,
       );
       if (explicit) continue;
       if (signal.conversation === null) {
@@ -379,15 +447,17 @@ export class Live {
         continue;
       }
       this.sql.exec(
-        `INSERT INTO live_candidates (stream, conversation, direct_seq, ordinary_seq)
-         VALUES (?1, ?2, ?3, ?4)
+        `INSERT INTO live_candidates (stream, conversation, direct_seq, ordinary_seq,
+           budget_epoch, budget_incarnation, budget_valid_until, budget_seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT (stream, conversation) DO UPDATE SET
            direct_seq = max(direct_seq, excluded.direct_seq),
-           ordinary_seq = max(ordinary_seq, excluded.ordinary_seq)`,
+           ordinary_seq = max(ordinary_seq, excluded.ordinary_seq), ${restamp(5)}`,
         stream,
         signal.conversation,
         signal.direct ? seq : 0,
         signal.direct ? 0 : seq,
+        ...stamped,
       );
     }
     return true;
@@ -525,29 +595,5 @@ export class Live {
       .one();
     if (row.dirty) return now;
     return row.deadline;
-  }
-
-  /**
-   * Forgets a page of everything live (a retired feed), the first table
-   * with rows left; whether it deleted any (more may be left).
-   */
-  clearStep(): boolean {
-    for (const [table, key] of [
-      ["live_local_deps", "socket_id, dependency"],
-      ["live_local", "socket_id"],
-      ["live_tickets", "ticket_hash"],
-      ["live_dirty", "stream"],
-      ["live_candidates", "stream, conversation"],
-      ["live_revoked", "dependency"],
-    ] as const) {
-      const n = this.sql
-        .exec(
-          `DELETE FROM ${table} WHERE (${key}) IN (SELECT ${key} FROM ${table} LIMIT ?) RETURNING 1`,
-          LIVE_POLICY.pruneRows,
-        )
-        .toArray().length;
-      if (n > 0) return true;
-    }
-    return false;
   }
 }

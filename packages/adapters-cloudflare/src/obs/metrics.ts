@@ -109,6 +109,9 @@ export const METRICS = {
   "email.event": ["type"],
   "email.suppression_check": ["status"],
   "d1.invocation_statements": ["where", "op"],
+  // D1's rows one platform invocation read and wrote in all (kind = read | written), as D1
+  // reports each result's, one point each an invocation: what live work's prices are measured by.
+  "d1.invocation_rows": ["where", "op", "kind"],
   // Wall time of one stage of making webhook deliveries, in ms: an event's
   // rows, body, claim and hooks once per event; post and record once per
   // attempt the event's effect makes. The clock advances only on I/O.
@@ -151,6 +154,7 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "acl.snapshot_age_ms": "each",
   "worker.cpu_ms": "each",
   "d1.invocation_statements": "each",
+  "d1.invocation_rows": "each",
   "worker.wall_ms": "each",
   "metrics.dropped": "each",
 };

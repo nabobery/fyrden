@@ -2,9 +2,9 @@
  * Whether a feed's funded live work may wake its alarm. Intended work (a
  * queued renewal, a pump unit) is not reason enough: only readiness
  * established by funded reconciliation is (its coverage, fences, owner and
- * capacity all current), until it lapses. Unknown or blocked readiness
- * wakes nothing, and nothing is read to rediscover the work. Nothing in
- * production establishes readiness yet.
+ * capacity all current), until it lapses: a feed's prepared turn, while
+ * its grant is current and valid. Unknown or blocked readiness wakes
+ * nothing, and nothing is read to rediscover the work.
  */
 
 export type LiveReadiness =

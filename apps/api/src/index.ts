@@ -1,6 +1,7 @@
 import { createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { rearmDeletions } from "./accounts/deletion-runner.js";
 import { app } from "./app-instance.js";
+import { countedEnv } from "./counted-env.js";
 import { runEffectsCron } from "./cron/effects.js";
 import { MAINTENANCE_OBJECT } from "./cron/maintenance.js";
 import { effectQueues } from "./effects/sinks.js";
@@ -35,7 +36,8 @@ function readModelQueue(env: Env, queue: string): Queue | undefined {
 }
 
 export default {
-  fetch: app.fetch,
+  // Every D1 statement a request runs counted against it (and the rows D1 reports).
+  fetch: (request, env, ctx) => app.fetch(request, countedEnv(env), ctx),
   async queue(batch, env) {
     const held = readModelMaintenance(env) ? readModelQueue(env, batch.queue) : undefined;
     if (held) return putBack(batch, held);
@@ -86,13 +88,13 @@ export default {
     await measureInvocation(metrics, { where: "worker", op: "cron" }, async () => {
       const maintenance = env.MAINTENANCE.getByName(MAINTENANCE_OBJECT);
       metrics.count("do.request", { class: "MaintenanceDO", method: "run" }, 4);
-      // Search repairs, suppression rechecks and revocation sweeps in requests of their own, so
+      // Search repairs, suppression rechecks and live maintenance in requests of their own, so
       // their D1 calls, lookups and feed calls are an invocation's own.
       const outcomes = await Promise.allSettled([
         maintenance.run(),
         maintenance.repairSearch(),
         maintenance.recheckSuppressions(),
-        maintenance.sweepRevocations(),
+        maintenance.liveMaintenance(),
       ]);
       for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
     });

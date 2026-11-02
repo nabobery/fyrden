@@ -32,6 +32,7 @@ import {
   recoverLiveTargets,
   retireLiveTarget,
 } from "../src/live/recovery.js";
+import { countingExec } from "./helpers/feed.js";
 import {
   clockedD1,
   DAY,
@@ -217,6 +218,120 @@ describe("live credit in a feed's object", () => {
     });
   });
 
+  it("holds two spendable grants a pool at most: another waits until one drains", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("pool")}`;
+      const grants = [];
+      for (let i = 0; i < 3; i++) {
+        const grant = await mint(
+          await makeLiveGrant(
+            await plan({
+              ...today(),
+              recipient: feed,
+              kind: "control",
+              producesLocal: true,
+              resources: vector({ do_requests: 10 }),
+            }),
+          ),
+        );
+        if (grant.status !== "granted") throw new Error(JSON.stringify(grant));
+        grants.push(grant.grant);
+      }
+      const [a, b, c] = grants as [LiveEnvelope, LiveEnvelope, LiveEnvelope];
+      const results = await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        const budget = new LiveBudget(state.storage.sql);
+        budget.takeEpoch(0, a.plan.incarnation);
+        const now = c.plan.validFrom;
+        const day = Math.floor(now / DAY);
+        const install = (g: LiveEnvelope) => {
+          budget.begin(
+            "install",
+            g.operationId,
+            now,
+            {
+              epoch: 0,
+              incarnation: g.plan.incarnation,
+              seq: g.seq,
+              validUntil: g.plan.validUntil,
+            },
+            now,
+          );
+          return budget.install("install", g, now);
+        };
+        return state.storage.transactionSync(() => [
+          install(a),
+          install(b),
+          // A third while two can be spent: refused, its item kept.
+          install(c),
+          // Spent across the two (15 of their 20), then the first drained: room for the third.
+          budget.spend("control", day, vector({ do_requests: 15 }), now),
+          install(c),
+          // The second's 5 and the third's 10.
+          budget.spend("control", day, vector({ do_requests: 15 }), now),
+          budget.spend("control", day, vector({ do_requests: 1 }), now),
+        ]);
+      });
+      expect(results).toEqual(["installed", "installed", "full", true, "installed", true, false]);
+    });
+  });
+
+  it("spends reading what it can spend, however many blocks drained before", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("drained")}`;
+      const grants: LiveEnvelope[] = [];
+      for (let i = 0; i < 30; i++) {
+        const grant = await mint(
+          await makeLiveGrant(
+            await plan({
+              ...today(),
+              recipient: feed,
+              kind: "control",
+              producesLocal: true,
+              resources: vector({ do_requests: 2 }),
+            }),
+          ),
+        );
+        if (grant.status !== "granted") throw new Error(JSON.stringify(grant));
+        grants.push(grant.grant);
+      }
+      const reads = await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        const budget = new LiveBudget(state.storage.sql);
+        budget.takeEpoch(0, (grants[0] as LiveEnvelope).plan.incarnation);
+        const now = (grants.at(-1) as LiveEnvelope).plan.validFrom;
+        const day = Math.floor(now / DAY);
+        // Each installed, then drained: 29 drained blocks before the last.
+        for (const g of grants) {
+          budget.begin(
+            "install",
+            g.operationId,
+            now,
+            {
+              epoch: 0,
+              incarnation: g.plan.incarnation,
+              seq: g.seq,
+              validUntil: g.plan.validUntil,
+            },
+            now,
+          );
+          expect(budget.install("install", g, now)).toBe("installed");
+          expect(budget.spend("control", day, vector({ do_requests: 2 }), now)).toBe(true);
+        }
+        // One more block, then a spend of it: what it reads, counted at the storage.
+        const last = grants.at(-1) as LiveEnvelope;
+        state.storage.sql.exec(
+          "UPDATE live_budget_balances SET remaining = ? WHERE operation_id = ?",
+          JSON.stringify(vector({ do_requests: 2 })),
+          last.operationId,
+        );
+        const counting = countingExec(state.storage.sql);
+        expect(budget.spend("control", day, vector({ do_requests: 1 }), now)).toBe(true);
+        return counting.stop().read;
+      });
+      // Its fence and the one spendable block, not the 29 drained ones.
+      expect(reads).toBeLessThanOrEqual(4);
+    });
+  });
+
   it("cannot be spent or installed again after a restore that came after spending it", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("respend")}`;
@@ -316,7 +431,7 @@ describe("live credit in a feed's object", () => {
         .bind(`feed:${feed}`)
         .run();
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_restore");
+      await feedOf(feed).inboxThread("none");
       const after = await fenceOf(feed);
       expect(after.epoch).toBe(2);
       expect(after.authorizationGen).toBe(before.authorizationGen + 1);
@@ -343,9 +458,9 @@ describe("live credit in a feed's object", () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("inc")}`;
       const grant = await ordinaryGrant(feed);
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       const before = await fenceOf(feed);
       expect(before.incarnation).toBe(grant.plan.incarnation);
       const fresh = "f".repeat(32);
@@ -353,7 +468,7 @@ describe("live credit in a feed's object", () => {
         .bind(fresh)
         .run();
       await evictDurableObject(feedOf(feed));
-      await feedOf(feed).liveTicket("tok_inc");
+      await feedOf(feed).inboxThread("none");
       const after = await fenceOf(feed);
       expect([after.incarnation, after.authorizationGen]).toEqual([
         fresh,
@@ -372,7 +487,7 @@ describe("live credit in a feed's object", () => {
   it("keeps the feed's epoch where it was when the fence cannot move with it", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("txn")}`;
-      await feedOf(feed).liveTicket("tok_txn");
+      await feedOf(feed).inboxThread("none");
       // No alarm of its own runs into the failing fence meanwhile (the clock is real here).
       await runInDurableObject(feedOf(feed), async (_: UserDO, state) => {
         state.storage.sql.exec("DELETE FROM user_schedule");
@@ -386,7 +501,7 @@ describe("live credit in a feed's object", () => {
         .run();
       await evictDurableObject(feedOf(feed));
       const failed = await feedOf(feed)
-        .liveTicket("tok_txn")
+        .inboxThread("none")
         .then(
           () => null,
           (error: unknown) => error,
@@ -405,6 +520,36 @@ describe("live credit in a feed's object", () => {
 });
 
 describe("live recovery", () => {
+  it("leaves a target a grant postponed while its attempt was funded: nothing dispatched", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("postponed")}`;
+      const grant = await ordinaryGrant(feed, vector({ do_rows_written: 4 }));
+      await seedBalances(feed, grant, 3, grant.plan.validUntil);
+      const told: LiveRecoveryRequest[] = [];
+      const run = await recoverLiveTargets(env.DIRECTORY, {
+        limit: 10,
+        // While its attempt is funded, a fresh grant of the feed's postpones its target.
+        reserveTarget: async (target) => {
+          const funded = await recoveryCoverage(target);
+          await env.DIRECTORY.prepare(
+            "UPDATE live_recovery_targets SET next_attempt_at = ? WHERE feed = ?",
+          )
+            .bind(Date.now() + 6 * 60 * 60_000, feed)
+            .run();
+          return funded;
+        },
+        tell: (request) => {
+          told.push(request);
+          return tell(request);
+        },
+      });
+      expect(run).toEqual({ attempted: 0, retired: 0, pending: 0, failed: 0 });
+      expect(told).toEqual([]);
+      expect(await localCount(feed, "live_budget_balances")).toBe(3);
+      expect((await targetOf(feed))?.attempts).toBe(0);
+    });
+  });
+
   it("cleans a quiet feed through its target, retiring the target and its exact debt once", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("quiet")}`;
@@ -420,6 +565,15 @@ describe("live recovery", () => {
         tell,
       });
       expect(run).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      // Its own duration settled: the rest of its hold refunded, its escrow place given back.
+      expect(
+        await env.DIRECTORY.prepare(
+          `SELECT count(*) AS n FROM live_budget_receipts
+           WHERE json_extract(plan, '$.kind') = 'recovery' AND recipient = ? AND settled_at IS NULL`,
+        )
+          .bind(feed)
+          .first(),
+      ).toEqual({ n: 0 });
       expect(await localCount(feed, "live_budget_balances")).toBe(0);
       expect((await fenceOf(feed)).cleanupThrough).toBe(grant.seq);
       expect(await targetOf(feed)).toBeNull();
@@ -976,14 +1130,15 @@ describe("live recovery's maintenance", () => {
       await seedTarget("usr_backoff", inc, 0);
       const delays: number[] = [];
       for (let i = 0; i < 8; i++) {
-        clock.now += 1_000;
-        const captured = await captureLiveRecoveryTarget(env.DIRECTORY, "usr_backoff");
+        const captured = await captureLiveRecoveryTarget(db, "usr_backoff");
         if (!captured) throw new Error("no target");
         expect(await backoffLiveTarget(db, captured)).toBe(true);
-        // The same captured attempt again: nothing.
+        // The same captured attempt again: nothing; nor is it captured before it is due again.
         expect(await backoffLiveTarget(db, captured)).toBe(false);
-        const next = await captureLiveRecoveryTarget(env.DIRECTORY, "usr_backoff");
-        delays.push(((next?.nextAttemptAt as number) - clock.now) / 60_000);
+        expect(await captureLiveRecoveryTarget(db, "usr_backoff")).toBeNull();
+        const next = (await targetOf("usr_backoff"))?.next_attempt_at as number;
+        delays.push((next - clock.now) / 60_000);
+        clock.now = next;
       }
       expect(delays).toEqual([1, 2, 4, 8, 16, 32, 60, 60]);
     });

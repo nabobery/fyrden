@@ -21,6 +21,9 @@ CREATE INDEX inbox_threads_stream ON inbox_threads (repo_id, subject, updated_at
 CREATE INDEX inbox_threads_unread ON inbox_threads (subject, unread, updated_at, id);
 CREATE INDEX live_budget_balances_budget
         ON live_budget_balances (budget_incarnation, budget_epoch, budget_seq, operation_id, day);
+CREATE INDEX live_budget_balances_live
+        ON live_budget_balances (kind, day, budget_seq, operation_id)
+        WHERE remaining <> '{"do_requests":0,"do_rows_read":0,"do_rows_written":0,"do_duration_ms":0,"d1_rows_read":0,"d1_rows_written":0,"queue_ops":0}';
 CREATE INDEX live_budget_balances_pool ON live_budget_balances (kind, day, budget_seq);
 CREATE INDEX live_budget_completions_budget
         ON live_budget_completions (budget_incarnation, budget_epoch, budget_seq, operation_id);
@@ -40,6 +43,8 @@ CREATE INDEX live_revoked_at ON live_revoked (at);
 CREATE INDEX live_revoked_budget ON live_revoked (budget_incarnation, budget_epoch, budget_seq, dependency);
 CREATE INDEX live_tickets_budget ON live_tickets (budget_incarnation, budget_epoch, budget_seq, ticket_hash);
 CREATE INDEX live_tickets_expiry ON live_tickets (expires_at, ticket_hash);
+CREATE INDEX live_turn_budget
+        ON live_turn (budget_incarnation, budget_epoch, budget_seq, id);
 CREATE INDEX purge_marks_until ON purge_marks (until_at);
 CREATE TABLE email_queue (
         event_key TEXT PRIMARY KEY,
@@ -202,7 +207,7 @@ CREATE TABLE live_budget_fence (
         incarnation TEXT NOT NULL,
         authorization_gen INTEGER NOT NULL CHECK (authorization_gen >= 0),
         cleanup_through INTEGER NOT NULL CHECK (cleanup_through >= 0)
-      ) STRICT;
+      , ledger_offset_ms INTEGER NOT NULL DEFAULT 0, ledger_sampled_at INTEGER NOT NULL DEFAULT 0, ledger_uncertainty_ms INTEGER NOT NULL DEFAULT 0, alarm_live_first INTEGER NOT NULL DEFAULT 0) STRICT;
 CREATE TABLE live_budget_pending (
         kind TEXT PRIMARY KEY CHECK (kind IN ('install', 'control_refill', 'mark_refill', 'renewal')),
         operation_id TEXT NOT NULL UNIQUE,
@@ -299,7 +304,25 @@ CREATE TABLE live_tickets (
         ticket_hash TEXT PRIMARY KEY,
         credential_id TEXT NOT NULL,
         expires_at INTEGER NOT NULL
-      , budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0), budget_incarnation TEXT NOT NULL DEFAULT '', budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0), budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0)) STRICT, WITHOUT ROWID;
+      , budget_epoch INTEGER NOT NULL DEFAULT 0 CHECK (budget_epoch >= 0), budget_incarnation TEXT NOT NULL DEFAULT '', budget_seq INTEGER NOT NULL DEFAULT 0 CHECK (budget_seq >= 0), budget_valid_until INTEGER NOT NULL DEFAULT 0 CHECK (budget_valid_until >= 0), transport_json TEXT CHECK (
+        transport_json IS NULL
+        OR (json_valid(transport_json) AND json_type(transport_json) = 'object')
+      )) STRICT, WITHOUT ROWID;
+CREATE TABLE live_turn (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        operation_id TEXT NOT NULL,
+        envelope_json TEXT NOT NULL CHECK (
+          json_valid(envelope_json) AND json_type(envelope_json) = 'object'
+        ),
+        phase TEXT NOT NULL CHECK (phase IN ('prepared', 'claimed', 'dispatched')),
+        intended_at INTEGER NOT NULL CHECK (intended_at >= 0),
+        owner_id TEXT,
+        dispatch_instance TEXT,
+        budget_epoch INTEGER NOT NULL CHECK (budget_epoch >= 0),
+        budget_incarnation TEXT NOT NULL,
+        budget_seq INTEGER NOT NULL CHECK (budget_seq >= 0),
+        budget_valid_until INTEGER NOT NULL CHECK (budget_valid_until >= 0)
+      ) STRICT;
 CREATE TABLE purge_marks (
         repo_id TEXT PRIMARY KEY,
         until_at INTEGER NOT NULL,

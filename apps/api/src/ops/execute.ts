@@ -65,6 +65,8 @@ export class OperationError extends Error {
     readonly currentVersion?: number,
     /** With a 429 or a 503: seconds to wait before trying again. */
     readonly retryAfter?: number,
+    /** With a refusal lasting until a known time: when to try again (Unix ms). */
+    readonly retryAt?: number,
   ) {
     super(detail);
   }
@@ -75,7 +77,10 @@ function fail(
   status: number,
   code: string,
   detail: string,
-  extra: Pick<ProblemInit, "missingPermission" | "resync" | "currentVersion" | "retryAfter"> = {},
+  extra: Pick<
+    ProblemInit,
+    "missingPermission" | "resync" | "currentVersion" | "retryAfter" | "retryAt"
+  > = {},
 ): OpResult {
   return {
     ok: false,
@@ -257,6 +262,7 @@ export async function executeOperation(
       ...(error.resync !== undefined && { resync: error.resync }),
       ...(error.currentVersion !== undefined && { currentVersion: error.currentVersion }),
       ...(error.retryAfter !== undefined && { retryAfter: error.retryAfter }),
+      ...(error.retryAt !== undefined && { retryAt: error.retryAt }),
     });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);

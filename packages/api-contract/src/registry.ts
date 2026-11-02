@@ -14,6 +14,7 @@ import {
   createUser,
   deleteUser,
   repairEffects,
+  replayFailedEvents,
   suspendUser,
   unsuspendUser,
 } from "../ops/admin.js";
@@ -298,6 +299,7 @@ export const registry = defineRegistry([
   redeliverHookDelivery,
   resealHookSecrets,
   repairEffects,
+  replayFailedEvents,
   backfillSearch,
   setSearchIndexing,
   getSearchStatus,

@@ -47,6 +47,8 @@ describe("D1 directory schema", () => {
       "live_recovery_targets",
       "live_socket_deps",
       "live_sockets",
+      "live_ticket_days",
+      "live_ticket_transports",
       "memberships",
       "oauth_clients",
       "oauth_requests",

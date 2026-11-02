@@ -93,6 +93,7 @@ import {
   markRepoNotificationsReadOperation,
   setNotificationThreadSubscriptionOperation,
 } from "../notifications/operations.js";
+import { replayFailedEventsOperation } from "../queues/events-replay.js";
 import {
   getReadModelExportOperation,
   getReadModelExportPageOperation,
@@ -623,6 +624,9 @@ export const handlers: Handlers = {
 
   // Effects that failed for good, reopened by an operator (effects/repair).
   "admin.effects.repair": repairEffectsOperation,
+
+  // Accounts' envelopes the events consumer gave up on, replayed (queues/events-replay).
+  "admin.events.replay": replayFailedEventsOperation,
 
   // The read model's maintenance: its writers paused and resumed, and its export (read-model).
   "admin.read_model.pause": pauseReadModelOperation,

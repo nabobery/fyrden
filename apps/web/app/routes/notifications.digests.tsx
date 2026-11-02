@@ -5,7 +5,7 @@ import { apiCall, bodyOf, signedInUser, signInUrl } from "../lib/api.server.js";
 import { digestPage, digestTitle, windowLabel } from "../lib/digests.js";
 import { pageLinks } from "../lib/pages.js";
 import { problemCode } from "../lib/pulls.js";
-import { useLiveHints } from "../lib/use-live.js";
+import { LiveNote, useLiveHints } from "../lib/use-live.js";
 import type { Route } from "./+types/notifications.digests";
 
 /*
@@ -79,11 +79,12 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
 export default function Digests({ loaderData }: Route.ComponentProps) {
   const { digests, degraded, partial, expired, pages } = loaderData;
-  useLiveHints(() => true);
+  const live = useLiveHints(() => true);
   return (
     <main>
       <h1>Inbox</h1>
       <InboxNav current="digests" />
+      <LiveNote status={live} />
       <p className="muted">
         Activity in repositories you watch: past a repository's first 100 watchers, its activity
         comes gathered every 15 minutes. Oldest first; later pages are newer.

@@ -5,7 +5,9 @@
  * for a ticket, opens the socket, refreshes once on every (re)connect,
  * acknowledges frames cumulatively, renews before the deadline, and
  * reconnects with back-off, within the server's control allowance (20 a
- * minute, 200 a socket's life, renewals kept room for). Everything it
+ * minute, 200 a socket's life, renewals kept room for). Refused for today
+ * (the deployment's allowance spent), it pauses until the next UTC day;
+ * refused for now, it backs off as for a refused socket. Everything it
  * needs from the browser is passed in, so it runs under test as it does
  * in a page.
  */
@@ -16,6 +18,12 @@ export interface LiveStream {
   readonly kind: "issue" | "pull";
 }
 
+/** Live hints refused for today: asked for again from `retryAt` (Unix ms, the next UTC day). */
+export type LiveBudgetPause = {
+  readonly kind: "budget";
+  readonly retryAt: number;
+};
+
 /** What asking for a ticket answered. */
 export type LiveTicket =
   | { readonly kind: "ticket"; readonly url: string }
@@ -23,8 +31,20 @@ export type LiveTicket =
   | { readonly kind: "off" }
   /** Not signed in, or not allowed: no point asking again. */
   | { readonly kind: "stop" }
-  /** Refused for now (a limit, an outage): ask again later. */
-  | { readonly kind: "retry" };
+  /**
+   * Refused for now (a limit, an outage): ask again later. `temporary`: the
+   * deployment could not take live hints just now (worth telling the viewer).
+   */
+  | { readonly kind: "retry"; readonly temporary?: true }
+  | LiveBudgetPause;
+
+const DAY = 86_400_000;
+
+/** The start of the UTC day after `now`. */
+export const nextUtcDay = (now: number) => (Math.floor(now / DAY) + 1) * DAY;
+
+/** The furthest a daily pause reaches: the next UTC day, with room for clocks that disagree. */
+export const LIVE_PAUSE_MAX_MS = 2 * DAY;
 
 /** The socket as the client drives it (a browser `WebSocket` adapts to it). */
 export interface LiveSocket {
@@ -45,6 +65,10 @@ export interface LiveDeps {
   changed(streams: readonly LiveStream[] | "all"): void;
   /** The client stopped for good (off, signed out, revoked, or failing). */
   stopped?(why: "off" | "stop" | "revoked" | "failing"): void;
+  /** Today's live hints are spent: the client stopped, to start again from `pause.retryAt`. */
+  paused?(pause: LiveBudgetPause): void;
+  /** Refused for now and trying again (`true`), or a socket steady since (`false`). */
+  temporary?(refused: boolean): void;
   now(): number;
   random(): number;
   setTimer(fn: () => void, ms: number): unknown;
@@ -89,12 +113,23 @@ export const LIVE_CLIENT = {
    */
   refusedBackoffMs: 30_000,
   maxRefused: 2,
+  /**
+   * How long a socket stays open before a refusal for now is taken as over
+   * (a refused socket is closed as soon as it opens).
+   */
+  steadyMs: 5_000,
 } as const;
 
 /** The server's close codes. */
 const EXPIRED = 4401;
 const REVOKED = 4403;
 const RESYNC = 4409;
+/** Refused for now: try again soon. */
+const TEMPORARY = 4412;
+/** Refused for today: the deployment's allowance (or the principal's day) is spent. */
+const SPENT = 4413;
+
+type Timer = "ack" | "renew" | "reconnect" | "steady";
 
 type Frame =
   | { t: "changed"; n: number; streams?: LiveStream[]; refresh?: boolean }
@@ -117,7 +152,9 @@ export class LiveClient {
   #recent: number[] = [];
   #deadline = 0;
   #renewing = false;
-  #timers = new Map<"ack" | "renew" | "reconnect", unknown>();
+  /** A refusal for now was told, and no socket has been steady since. */
+  #temporary = false;
+  #timers = new Map<Timer, unknown>();
 
   constructor(deps: LiveDeps) {
     this.#deps = deps;
@@ -155,7 +192,12 @@ export class LiveClient {
       this.#halt(ticket.kind);
       return;
     }
+    if (ticket.kind === "budget") {
+      this.#pause(ticket.retryAt);
+      return;
+    }
     if (ticket.kind === "retry") {
+      if (ticket.temporary) this.#tell(true);
       this.#failed();
       return;
     }
@@ -172,6 +214,7 @@ export class LiveClient {
           this.#openedAt = this.#deps.now();
           this.#deadline = this.#openedAt + LIVE_CLIENT.renewMs;
           this.#scheduleRenew();
+          if (this.#temporary) this.#set("steady", LIVE_CLIENT.steadyMs, () => this.#tell(false));
           // What changed before the socket listened is read now.
           this.#deps.changed("all");
         },
@@ -183,6 +226,7 @@ export class LiveClient {
           this.#socket = null;
           this.#clear("ack");
           this.#clear("renew");
+          this.#clear("steady");
           this.#closed(code);
         },
       });
@@ -199,7 +243,23 @@ export class LiveClient {
       this.#halt("revoked");
       return;
     }
+    // Today's allowance spent: nothing more until the next UTC day, and no failure.
+    if (code === SPENT) {
+      this.#pause(nextUtcDay(this.#deps.now()));
+      return;
+    }
     const opened = this.#openedAt;
+    // Refused for now (each such socket was admitted): backed off as a refused one, never at once.
+    if (code === TEMPORARY) {
+      if (opened !== null && this.#deps.now() - opened >= LIVE_CLIENT.stableMs) {
+        this.#failures = 0;
+        this.#refused = 0;
+      }
+      this.#tell(true);
+      this.#refused += 1;
+      this.#failed();
+      return;
+    }
     if (opened === null) {
       this.#refused += 1;
       this.#failed();
@@ -241,7 +301,23 @@ export class LiveClient {
 
   #halt(why: "off" | "stop" | "revoked" | "failing"): void {
     this.stop();
+    // Failing, it is started again later: a refusal for now holds until a socket is steady.
+    if (why !== "failing") this.#temporary = false;
     this.#deps.stopped?.(why);
+  }
+
+  /** Stops until `retryAt`: no socket, control or reconnect before (the hub starts it again). */
+  #pause(retryAt: number): void {
+    this.stop();
+    this.#temporary = false;
+    this.#deps.paused?.({ kind: "budget", retryAt });
+  }
+
+  /** Tells whether a refusal for now holds, when that changed. */
+  #tell(refused: boolean): void {
+    if (this.#temporary === refused) return;
+    this.#temporary = refused;
+    this.#deps.temporary?.(refused);
   }
 
   #message(data: string): void {
@@ -257,6 +333,8 @@ export class LiveClient {
       this.#renewing = false;
       this.#deadline = this.#deps.now() + LIVE_CLIENT.renewMs;
       this.#scheduleRenew();
+      // What the server passed over before the renewal (access it could not decide) is read now.
+      this.#deps.changed("all");
       return;
     }
     if (frame.t !== "changed" || !Number.isSafeInteger(frame.n) || frame.n <= this.#received)
@@ -343,7 +421,7 @@ export class LiveClient {
     socket?.close(code, reason);
   }
 
-  #set(name: "ack" | "renew" | "reconnect", ms: number, fn: () => void): void {
+  #set(name: Timer, ms: number, fn: () => void): void {
     this.#clear(name);
     this.#timers.set(
       name,
@@ -354,7 +432,7 @@ export class LiveClient {
     );
   }
 
-  #clear(name: "ack" | "renew" | "reconnect"): void {
+  #clear(name: Timer): void {
     const handle = this.#timers.get(name);
     if (handle === undefined) return;
     this.#timers.delete(name);

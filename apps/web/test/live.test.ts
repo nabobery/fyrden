@@ -1,16 +1,20 @@
 // The live hints client against a fake socket and clock: it refreshes on
-// every (re)connect, passes on what changed, acknowledges cumulatively
-// within the server's allowance, renews before its deadline, reconnects as
-// each close asks, and stops for good when there is no point going on;
+// every (re)connect and renewal, passes on what changed, acknowledges
+// cumulatively within the server's allowance, renews before its deadline,
+// reconnects as each close asks, pauses until the next UTC day when today's
+// allowance is spent, and stops for good when there is no point going on;
 // and the page's ticket route, which asks the API as the session.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_CLIENT,
+  LIVE_PAUSE_MAX_MS,
+  type LiveBudgetPause,
   LiveClient,
   type LiveSocketEvents,
   type LiveStream,
   type LiveTicket,
+  nextUtcDay,
 } from "../app/lib/live.js";
 import { action as ticketAction } from "../app/routes/notifications.live-ticket.js";
 import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
@@ -65,6 +69,8 @@ function harness(tickets: LiveTicket[] = [], unopenable = 0) {
   const sockets: Opened[] = [];
   const changes: (readonly LiveStream[] | "all")[] = [];
   const stops: string[] = [];
+  const pauses: LiveBudgetPause[] = [];
+  const temporaries: boolean[] = [];
   let asked = 0;
   const client = new LiveClient({
     ticket: async () => {
@@ -87,6 +93,8 @@ function harness(tickets: LiveTicket[] = [], unopenable = 0) {
     },
     changed: (streams) => changes.push(streams),
     stopped: (why) => stops.push(why),
+    paused: (pause) => pauses.push(pause),
+    temporary: (refused) => temporaries.push(refused),
     now: clock.now,
     random: () => 0.5,
     setTimer: clock.setTimer,
@@ -107,6 +115,8 @@ function harness(tickets: LiveTicket[] = [], unopenable = 0) {
     sockets,
     changes,
     stops,
+    pauses,
+    temporaries,
     flush,
     last,
     frame,
@@ -163,6 +173,9 @@ describe("the live hints client", () => {
     // The server's clock an hour ahead: its deadline is not this clock's.
     const until = h.clock.now() + 60 * 60_000;
     h.last().events.message(JSON.stringify({ t: "renewed", until }));
+    // A renewal reads everything again, as a connect does (the server passed over what it
+    // could not decide).
+    expect(h.changes).toEqual(["all", "all"]);
     h.clock.advance(renewAt - 1);
     expect(h.last().sent).toHaveLength(2);
     h.clock.advance(1);
@@ -324,6 +337,104 @@ describe("the live hints client", () => {
     expect(h.sockets).toHaveLength(2);
   });
 
+  it.each([
+    ["once open", true],
+    ["before it opened", false],
+  ])("pauses until the next UTC day on 4413 %s, no failure counted", async (_, opens) => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    if (opens) {
+      h.last().events.open();
+      h.frame(1, [A]);
+    }
+    const at = h.clock.now();
+    h.last().events.close(4413);
+    expect(h.pauses).toEqual([{ kind: "budget", retryAt: nextUtcDay(at) }]);
+    expect(h.stops).toEqual([]);
+    // Nothing acknowledged, renewed or reconnected: no timer is left.
+    expect(h.clock.pending()).toEqual([]);
+    h.clock.advance(LIVE_CLIENT.renewMs * 10);
+    await h.flush();
+    expect(h.sockets).toHaveLength(1);
+    expect(h.last().sent).toEqual([]);
+    expect(h.asked()).toBe(1);
+    // Started again (the hub's, at the deadline), it connects at once: no back-off was counted.
+    h.client.start();
+    await h.flush();
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it("pauses on a ticket refused for today, with nothing opened or retried", async () => {
+    const h = harness([{ kind: "budget", retryAt: 1_793_404_800_000 }]);
+    h.client.start();
+    await h.flush();
+    expect(h.pauses).toEqual([{ kind: "budget", retryAt: 1_793_404_800_000 }]);
+    expect(h.sockets).toEqual([]);
+    expect(h.clock.pending()).toEqual([]);
+    expect(h.stops).toEqual([]);
+  });
+
+  it("backs off a socket refused for now (4412) as a refused one, never at once, and gives up after two", async () => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    // Upgraded, then closed at once.
+    h.last().events.open();
+    h.last().events.close(4412);
+    expect(h.temporaries).toEqual([true]);
+    expect(h.clock.pending()).toEqual([LIVE_CLIENT.refusedBackoffMs * 0.75]);
+    h.clock.advance(LIVE_CLIENT.refusedBackoffMs * 0.75 - 1);
+    await h.flush();
+    expect(h.sockets).toHaveLength(1);
+    h.clock.advance(1);
+    await h.flush();
+    h.last().events.close(4412);
+    expect(h.clock.pending()).toEqual([]);
+    expect(h.sockets).toHaveLength(LIVE_CLIENT.maxRefused);
+    expect(h.stops).toEqual(["failing"]);
+    expect(h.pauses).toEqual([]);
+  });
+
+  it("backs off a stable socket closed for now (4412) too, its earlier failures forgotten", async () => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    h.last().events.close(1006);
+    h.clock.advance(LIVE_CLIENT.refusedBackoffMs);
+    await h.flush();
+    h.last().events.open();
+    h.clock.advance(LIVE_CLIENT.stableMs);
+    h.last().events.close(4412);
+    expect(h.clock.pending()).toEqual([LIVE_CLIENT.refusedBackoffMs * 0.75]);
+    expect(h.stops).toEqual([]);
+  });
+
+  it("tells a refusal for now until a socket stays open a while", async () => {
+    const h = harness([{ kind: "retry", temporary: true }]);
+    h.client.start();
+    await h.flush();
+    expect(h.temporaries).toEqual([true]);
+    h.clock.advance(750);
+    await h.flush();
+    // A socket refused as it opened is not steady.
+    h.last().events.open();
+    h.last().events.close(4412);
+    h.clock.advance(LIVE_CLIENT.refusedBackoffMs);
+    await h.flush();
+    expect(h.temporaries).toEqual([true]);
+    h.last().events.open();
+    h.clock.advance(LIVE_CLIENT.steadyMs - 1);
+    expect(h.temporaries).toEqual([true]);
+    h.clock.advance(1);
+    expect(h.temporaries).toEqual([true, false]);
+    // An ordinary refused ticket is not one to tell.
+    const plain = harness([{ kind: "retry" }]);
+    plain.client.start();
+    await plain.flush();
+    expect(plain.temporaries).toEqual([]);
+  });
+
   it("closes its socket and does nothing more once stopped", async () => {
     const h = harness();
     h.client.start();
@@ -373,12 +484,50 @@ describe("a page's ticket", () => {
   it.each([
     [503, { code: "live_unavailable" }, "off"],
     [503, { code: "unavailable" }, "retry"],
-    [429, { code: "rate_limited" }, "retry"],
+    [429, { code: "rate_limited", retry_at: 1_793_404_800_000 }, "retry"],
+    [503, { code: "live_budget", retry_at: 1_793_404_800_000 }, "retry"],
     [401, { code: "unauthorized" }, "stop"],
     [403, { code: "delegated_listing" }, "stop"],
   ])("answers %i (%o) as %s", async (status, body, kind) => {
     const { context } = issuing(status, body);
     expect(await (await ask(context)).json()).toEqual({ kind });
+  });
+
+  it("answers a refusal for now as a retry worth telling", async () => {
+    const { context } = issuing(503, { code: "live_temporary", retry_after: 60 });
+    expect(await (await ask(context)).json()).toEqual({ kind: "retry", temporary: true });
+  });
+
+  describe("refused for today", () => {
+    const now = Date.UTC(2026, 10, 1, 15, 30);
+    const tomorrow = Date.UTC(2026, 10, 2);
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("pauses until the time the API names", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      const { context } = issuing(429, {
+        code: "live_budget",
+        retry_at: tomorrow,
+        retry_after: 30_600,
+      });
+      expect(await (await ask(context)).json()).toEqual({ kind: "budget", retryAt: tomorrow });
+    });
+
+    it.each([
+      ["none", undefined],
+      ["a string", String(tomorrow)],
+      ["a fraction", tomorrow + 0.5],
+      ["past the safe integers", 2 ** 60],
+      ["too far ahead", now + LIVE_PAUSE_MAX_MS + 1],
+    ])("pauses until the next UTC day when its time is %s", async (_, retryAt) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(now);
+      const { context } = issuing(429, { code: "live_budget", retry_at: retryAt });
+      expect(await (await ask(context)).json()).toEqual({ kind: "budget", retryAt: tomorrow });
+    });
   });
 
   it("is asked for again later when the session could not be checked", async () => {

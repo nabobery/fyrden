@@ -23,18 +23,50 @@ import type { RepoDO } from "../src/do/RepoDO.js";
 import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import { threadId } from "../src/do/user/inbox.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
+import { LiveBudget } from "../src/do/user/live-budget.js";
+import {
+  canonicalVector,
+  LIVE_DAILY,
+  LIVE_ESCROW_ENTRIES,
+  LIVE_ORDINARY_DEBT_LIMIT,
+  makeLiveGrant,
+} from "../src/live/budget.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
+import { planFor } from "../src/live/funding.js";
+import {
+  LIVE_BLOCK_UNITS,
+  LIVE_LOW_WATER,
+  LIVE_PRICES,
+  type LiveManifestEntry,
+  liveBlockUnit,
+} from "../src/live/manifest.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
-import { entry } from "./helpers/feed.js";
+import { countingExec, entry } from "./helpers/feed.js";
+import { handled, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   delete feedHooks.beforeEpochRead;
+  // Each test spends its own day's allowance, as if it ran alone: what this file's tests grant
+  // together passes a day's (Proposed) allowance. What its grants leave owed, and its turns left
+  // unused (holding the day's escrow places), maintenance clears in production.
+  await env.DIRECTORY.batch([
+    // Its sockets' leases too (they lapse minutes after their sockets go): the deployment's
+    // allowance is each test's own.
+    env.DIRECTORY.prepare("DELETE FROM live_socket_deps"),
+    env.DIRECTORY.prepare("DELETE FROM live_sockets"),
+    env.DIRECTORY.prepare("DELETE FROM live_budget_days"),
+    env.DIRECTORY.prepare(
+      `UPDATE live_budget_state SET debt_do_requests = 0, debt_do_rows_read = 0,
+         debt_do_rows_written = 0, debt_do_duration_ms = 0, debt_d1_rows_read = 0,
+         debt_d1_rows_written = 0, debt_queue_ops = 0 WHERE id = 1`,
+    ),
+  ]);
 });
 
 const ORIGIN = "https://fyrden.test";
@@ -96,6 +128,46 @@ async function open(token: string, vars: Record<string, string> = LIVE) {
 }
 
 const feedOf = (who: Who) => env.USER.getByName(who.principalId);
+
+/**
+ * What a socket sent has been handled (a round trip after it), then the
+ * feed's turn run: a renewal is queued by its message and authorized by
+ * the turn.
+ */
+/**
+ * Moves this isolate's clock `ms` on, and the feed's object's idea of the
+ * ledger's clock with it (D1's own clock in tests does not move: as if it
+ * had, so what the object grants starts where D1 is).
+ */
+async function advance(who: Who, ms: number): Promise<void> {
+  vi.setSystemTime(Date.now() + ms);
+  await runInDurableObject(feedOf(who), (_: UserDO, state) =>
+    state.storage.sql.exec(
+      "UPDATE live_budget_fence SET ledger_offset_ms = ledger_offset_ms - ?",
+      ms,
+    ),
+  );
+}
+
+/** The checks of `who`'s own account (its repositories' owner) the ledger granted. */
+async function confirmations(who: Who): Promise<number> {
+  const row = await env.DIRECTORY.prepare(
+    `SELECT count(*) AS n FROM live_budget_receipts
+     WHERE kind = 'org_confirmation' AND recipient_type = 'OrgDO'
+       AND recipient = ?`,
+  )
+    .bind(who.principalId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/** Every day the ledger holds with its escrow places full (no owned unit is granted on them). */
+async function fillEscrow(): Promise<void> {
+  const held = Array.from({ length: LIVE_ESCROW_ENTRIES }, (_, i) => ({ test: i }));
+  await env.DIRECTORY.prepare("UPDATE live_budget_days SET escrow = ?")
+    .bind(JSON.stringify(held))
+    .run();
+}
 
 /** A repository of `owner`'s with one issue; its id and the issue's conversation. */
 async function repoWithIssue(owner: Who): Promise<{ id: string; conversation: string }> {
@@ -212,11 +284,13 @@ describe("a live socket", () => {
     await evictDurableObject(feedOf(owner));
     socket.ws?.send(JSON.stringify({ t: "ack", n: 1 }));
     expect(await socket.closed).toEqual({ code: 4409 });
+    // Told to reread, nothing of it spent or applied: its credit went with the restore, so its
+    // rows are its recovery's to retire.
     expect(
       await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
         state.storage.sql.exec("SELECT count(*) AS n FROM live_local").one(),
       ),
-    ).toEqual({ n: 0 });
+    ).toEqual({ n: 1 });
   });
 
   it("wakes nothing when a socket it already forgot closes", async () => {
@@ -229,8 +303,10 @@ describe("a live socket", () => {
       await state.storage.deleteAlarm();
     });
     await evictDurableObject(feedOf(owner));
+    const closed = handled(owner, "close");
     socket.ws?.close(1000, "done");
     await socket.closed;
+    await closed();
     const [alarm, leases] = await Promise.all([
       runInDurableObject(feedOf(owner), (_: UserDO, state) => state.storage.getAlarm()),
       env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
@@ -242,15 +318,200 @@ describe("a live socket", () => {
     expect(leases).toEqual({ n: 1 });
   });
 
-  it("writes nothing to the live ledger: grants are not wired yet", async () => {
+  it("is funded before anything is woken: its transport, ticket and admission granted, their owners released", async () => {
     const owner = await user();
-    const socket = await open(owner.token);
-    expect(socket.response.status).toBe(101);
-    const count = (table: string) =>
-      env.DIRECTORY.prepare(`SELECT count(*) AS n FROM ${table}`).first<{ n: number }>();
-    expect(await count("live_budget_receipts")).toEqual({ n: 0 });
-    expect(await count("live_recovery_targets")).toEqual({ n: 0 });
-    socket.ws?.close(1000, "done");
+    const count = async (sql: string, ...values: unknown[]) =>
+      (
+        await env.DIRECTORY.prepare(sql)
+          .bind(...values)
+          .first<{ n: number }>()
+      )?.n;
+    const receipts = () =>
+      count(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE json_extract(plan, '$.recipient') = ?",
+        owner.principalId,
+      );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    expect(await receipts()).toBe(2);
+    const upgrade = () =>
+      call(
+        new Request(
+          `${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`,
+          {
+            headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+          },
+        ),
+      );
+    const opened = await upgrade();
+    expect(opened.status).toBe(101);
+    // Its admission, its end's provisions, the feed's first blocks of controls and marks, and its
+    // first turn.
+    expect(await receipts()).toBe(7);
+    // Every owner accounted and released: none held.
+    expect(
+      await count(
+        "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ?",
+        owner.principalId,
+      ),
+    ).toBe(0);
+    // Its transport claimed once: the ticket does not open another.
+    expect((await upgrade()).status).toBe(401);
+    opened.webSocket?.accept();
+    opened.webSocket?.close(1000, "done");
+  });
+
+  it("is refused for its funding by an upgrade closed with why: 4413 for today, 4412 for now", async () => {
+    const today = async () =>
+      (
+        await env.DIRECTORY.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{
+          d: number;
+        }>()
+      )?.d as number;
+    const refusedWith = async (spend: () => Promise<unknown>, undo: () => Promise<unknown>) => {
+      const owner = await user();
+      const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+      await spend();
+      try {
+        const response = await call(
+          new Request(
+            `${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`,
+            { headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` } },
+          ),
+        );
+        expect(response.status).toBe(101);
+        const ws = response.webSocket as WebSocket;
+        const closed = new Promise<number>((resolve) =>
+          ws.addEventListener("close", (event) => resolve(event.code)),
+        );
+        ws.accept();
+        // No socket of it was made.
+        expect(
+          await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
+            .bind(owner.principalId)
+            .first(),
+        ).toEqual({ n: 0 });
+        return await closed;
+      } finally {
+        await undo();
+      }
+    };
+    const day = await today();
+    const spent = await env.DIRECTORY.prepare(
+      "SELECT do_requests FROM live_budget_days WHERE day = ?",
+    )
+      .bind(day)
+      .first<{ do_requests: number }>();
+    // Today's requests spent: a definitive refusal.
+    expect(
+      await refusedWith(
+        () =>
+          env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+            .bind(LIVE_DAILY.do_requests, day)
+            .run(),
+        () =>
+          env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+            .bind(spent?.do_requests ?? 0, day)
+            .run(),
+      ),
+    ).toBe(4413);
+    // Ordinary work blocked by what cleanup owes: for now only.
+    // (An admission leaves directory rows to clean up: debt of them past what ordinary work may.)
+    const debt = await env.DIRECTORY.prepare(
+      "SELECT debt_d1_rows_written AS n FROM live_budget_state WHERE id = 1",
+    ).first<{ n: number }>();
+    expect(
+      await refusedWith(
+        () =>
+          env.DIRECTORY.prepare(
+            "UPDATE live_budget_state SET debt_d1_rows_written = ? WHERE id = 1",
+          )
+            .bind(LIVE_ORDINARY_DEBT_LIMIT.d1_rows_written)
+            .run(),
+        () =>
+          env.DIRECTORY.prepare(
+            "UPDATE live_budget_state SET debt_d1_rows_written = ? WHERE id = 1",
+          )
+            .bind(debt?.n ?? 0)
+            .run(),
+      ),
+    ).toBe(4412);
+  });
+
+  it("is refused for now (4412), not as a stranger, when its feed was restored since its ticket", async () => {
+    const owner = await user();
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    // A restore since: the feed's epoch moved past the one its transport was granted under.
+    await env.DIRECTORY.prepare(
+      `INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)
+       ON CONFLICT (source_id) DO UPDATE SET epoch_gen = epoch_gen + 1`,
+    )
+      .bind(`feed:${owner.principalId}`)
+      .run();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4412);
+  });
+
+  it("is issued 60 tickets a principal a UTC day, then refused until the next (by the ledger's day)", async () => {
+    const owner = await user();
+    const day = (
+      await env.DIRECTORY.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{
+        d: number;
+      }>()
+    )?.d as number;
+    await env.DIRECTORY.prepare(
+      "INSERT INTO live_ticket_days (principal_id, day, issued) VALUES (?, ?, 60)",
+    )
+      .bind(owner.principalId, day)
+      .run();
+    const refused = await ticketFor(owner.token);
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({
+      code: "live_budget",
+      retry_at: (day + 1) * 86_400_000,
+    });
+    // Refused before its transport was paid for: nothing granted for it.
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE json_extract(plan, '$.recipient') = ?",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
+  });
+
+  it("is answered with the life its ticket has left", async () => {
+    const owner = await user();
+    const issued = (await (await ticketFor(owner.token)).json()) as { expires_in: number };
+    expect(issued.expires_in).toBeGreaterThan(0);
+    expect(issued.expires_in).toBeLessThanOrEqual(LIVE_POLICY.ticketMs / 1000);
+  });
+
+  it("stores no ticket its funding does not pay for", async () => {
+    const owner = await user();
+    const stored = await feedOf(owner).liveTicketV1(
+      { protocol: 1, revision: 1, envelope: null, quantity: 1, ownerId: "own_forged" },
+      {
+        hash: "a".repeat(64),
+        credentialId: "tok_forged",
+        expiresAt: Date.now() + 30_000,
+        transport: { operationId: "op_forged" },
+      },
+    );
+    expect(stored).toEqual({ status: "refused" });
+    const rows = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT count(*) AS n FROM live_tickets").one(),
+    );
+    expect(rows).toEqual({ n: 0 });
   });
 
   it("is not offered while the deployment has not turned live hints on", async () => {
@@ -285,10 +546,34 @@ describe("a live socket", () => {
       n: 1,
       streams: [{ repo: mine.id, kind: "issue" }],
     });
+    // Its account's check was paid for by a grant of its own.
+    expect(await confirmations(owner)).toBe(1);
     // Only the hidden repository changes: no frame.
     await feedOf(owner).applyFeed([change(owner, hidden, 2)]);
     await runDurableObjectAlarm(feedOf(owner));
     expect(socket.frames).toEqual([]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("asks its account's check only once it is paid for: refused, its sockets try again a minute on", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    // Today's object rows read spent: the turn (granted before) runs, its confirmation is refused.
+    await env.DIRECTORY.prepare(
+      "UPDATE live_budget_days SET do_rows_read = ? WHERE day = CAST(unixepoch() / 86400 AS INTEGER)",
+    )
+      .bind(LIVE_DAILY.do_rows_read)
+      .run();
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    const before = Date.now();
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(socket.frames).toEqual([]);
+    expect(await confirmations(owner)).toBe(0);
+    const retryAt = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec<{ at: number }>("SELECT retry_at AS at FROM live_local").one(),
+    );
+    expect(retryAt.at).toBeGreaterThanOrEqual(before + 60_000);
     socket.ws?.close(1000, "done");
   });
 
@@ -303,7 +588,7 @@ describe("a live socket", () => {
     expect(first.streams.map((x) => x.repo)).toEqual(
       repos.slice(0, LIVE_POLICY.dirtyPage).map((r) => r.id),
     );
-    socket.ws?.send(JSON.stringify({ t: "ack", n: first.n }));
+    await say(owner, socket, { t: "ack", n: first.n });
     await runDurableObjectAlarm(feedOf(owner));
     const second = (await socket.next()) as { streams: { repo: string }[] };
     expect(second.streams.map((x) => x.repo)).toEqual(
@@ -339,7 +624,7 @@ describe("a live socket", () => {
     await runDurableObjectAlarm(feedOf(owner));
     const first = (await socket.next()) as { n: number; streams: { repo: string }[] };
     expect(first.streams.map((x) => x.repo)).toEqual([own.id]);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: first.n }));
+    await say(owner, socket, { t: "ack", n: first.n });
     await runDurableObjectAlarm(feedOf(owner));
     expect(
       ((await socket.next()) as { streams: { repo: string }[] }).streams.map((x) => x.repo),
@@ -457,7 +742,7 @@ describe("a live socket", () => {
     expect(await again.closed).toEqual({ code: 1008 });
   });
 
-  it("is refused past the deployment's allowance", async () => {
+  it("is refused past the deployment's allowance for now (4412), past its principal's day until tomorrow (4413)", async () => {
     const owner = await user();
     const vars = { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" };
     // The allowance counts every open lease: with one already open (any test's), none more.
@@ -467,9 +752,24 @@ describe("a live socket", () => {
     )
       .bind(uniqueId("lsk"), uniqueId("t"), Date.now() + 60_000)
       .run();
-    const refused = await open(owner.token, vars);
-    expect(refused.response.status).toBe(503);
-    expect(refused.response.headers.get("Retry-After")).toBe("60");
+    const full = await open(owner.token, vars);
+    expect(full.response.status).toBe(101);
+    expect(await full.closed).toEqual({ code: 4412 });
+    // The principal's admissions for the day (this Worker's) spent.
+    const other = await user();
+    await env.DIRECTORY.prepare(
+      "INSERT INTO live_admissions (principal_id, day, n) VALUES (?, ?, ?)",
+    )
+      .bind(other.principalId, Math.floor(Date.now() / 86_400_000), LIVE_ADMISSION.perDay)
+      .run();
+    const spent = await open(other.token);
+    expect(spent.response.status).toBe(101);
+    expect(await spent.closed).toEqual({ code: 4413 });
+    expect(
+      await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed IN (?, ?)")
+        .bind(owner.principalId, other.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
   });
 
   it("is admitted again after its principal is unsuspended, a delivery for the old authority aside", async () => {
@@ -513,7 +813,7 @@ describe("a live socket", () => {
     // The ninth waits: eight are unacknowledged.
     await pump(9);
     expect(socket.frames).toEqual([]);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 8 }));
+    await say(owner, socket, { t: "ack", n: 8 });
     await pump(10);
     expect(await socket.next()).toEqual({
       t: "changed",
@@ -537,18 +837,20 @@ describe("a live socket", () => {
     const token = await scopedToken(owner.principalId, []);
     const socket = await open(token);
     // Early: nothing.
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    await say(owner, socket, { t: "renew" });
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 6 * 60_000);
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    await advance(owner, 6 * 60_000);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "renewed" });
     await env.DIRECTORY.prepare(
       "UPDATE tokens SET revoked_at = ? WHERE id = (SELECT credential_id FROM live_sockets WHERE feed = ?)",
     )
       .bind(Date.now(), owner.principalId)
       .run();
-    vi.setSystemTime(Date.now() + 6 * 60_000);
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    await advance(owner, 6 * 60_000);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.closed).toEqual({ code: 4401 });
   });
 
@@ -640,6 +942,758 @@ describe("a live socket", () => {
   });
 });
 
+describe("a feed's live credit", () => {
+  /** What the feed's object holds of live credit now: its pools' of today (the ledger's day). */
+  const credit = (who: Who) =>
+    runInDurableObject(feedOf(who), (_: UserDO, state) => {
+      const sql = state.storage.sql;
+      const today = Math.floor(new LiveBudget(sql).ledgerNow(Date.now()) / 86_400_000);
+      const rows = (q: string, ...bind: unknown[]) =>
+        sql.exec(q, ...bind).toArray() as Record<string, unknown>[];
+      const pool = (kind: string) =>
+        rows(
+          "SELECT remaining FROM live_budget_balances WHERE kind = ? AND day = ?",
+          kind,
+          today,
+        ).map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests);
+      return {
+        controls: pool("control"),
+        marks: pool("mark"),
+        terminal: rows("SELECT socket_id, day FROM live_budget_terminal").length,
+        pending: rows("SELECT kind FROM live_budget_pending ORDER BY kind").map((r) => r.kind),
+        dirty: rows("SELECT budget_seq FROM live_dirty").map((r) => r.budget_seq),
+      };
+    });
+  /** Sets every control (or mark) balance of the feed to `units` whole units. */
+  const leave = (who: Who, kind: "control" | "mark", units: number) =>
+    runInDurableObject(feedOf(who), (_: UserDO, state) => {
+      const unit = liveBlockUnit(kind);
+      const left = Object.fromEntries(
+        Object.entries(unit).map(([r, v]) => [r, (v as number) * units]),
+      );
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET remaining = ? WHERE kind = ?",
+        JSON.stringify(canonicalVector(left as never)),
+        kind,
+      );
+    });
+  /** Sends an acknowledgement nothing was sent for (a control that changes nothing), handled. */
+  const ack = (who: Who, socket: Awaited<ReturnType<typeof open>>) =>
+    say(who, socket, { t: "ack", n: 0 });
+
+  it("is installed with a socket: its end on each day it may live on, and the feed's first blocks", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const held = await credit(owner);
+    expect(held.controls).toEqual([LIVE_BLOCK_UNITS]);
+    expect(held.marks).toEqual([LIVE_BLOCK_UNITS]);
+    // Its end provided for today, and tomorrow when its life reaches past midnight.
+    expect(held.terminal).toBeGreaterThanOrEqual(1);
+    // A second socket brings none: the feed holds its blocks still (refills top them up), nothing
+    // more granted for them.
+    const blockReceipts = () =>
+      env.DIRECTORY.prepare(
+        `SELECT count(*) AS n FROM live_budget_receipts
+         WHERE recipient = ? AND kind IN ('control', 'mark')`,
+      )
+        .bind(owner.principalId)
+        .first<{ n: number }>()
+        .then((r) => r?.n);
+    expect(await blockReceipts()).toBe(2);
+    const second = await open(owner.token);
+    const third = await open(owner.token);
+    expect([second.response.status, third.response.status]).toEqual([101, 101]);
+    expect([second.ws !== null, third.ws !== null]).toEqual([true, true]);
+    expect(await blockReceipts()).toBe(2);
+    expect((await credit(owner)).controls).toEqual([LIVE_BLOCK_UNITS]);
+    expect((await credit(owner)).marks).toEqual([LIVE_BLOCK_UNITS]);
+    for (const s of [socket, second, third]) s.ws?.close(1000, "done");
+  });
+
+  it("queues refills for pools left empty, the ledger holding blocks the feed never got", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its blocks gone from the feed (an admission refused after they were granted, say).
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_budget_balances"),
+    );
+    first.ws?.close(1000, "done");
+    const second = await open(owner.token);
+    const pending = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql
+        .exec<{ kind: string }>("SELECT kind FROM live_budget_pending ORDER BY kind")
+        .toArray()
+        .map((r) => r.kind),
+    );
+    expect(pending).toEqual(["control_refill", "mark_refill"]);
+    second.ws?.close(1000, "done");
+  });
+
+  it("pays for each control from the feed's pool, and queues one refill at low water", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    await ack(owner, socket);
+    expect((await credit(owner)).controls).toEqual([LIVE_BLOCK_UNITS - 1]);
+    await leave(owner, "control", LIVE_LOW_WATER + 2);
+    await ack(owner, socket);
+    expect((await credit(owner)).pending).toEqual([]);
+    await ack(owner, socket);
+    expect((await credit(owner)).pending).toEqual(["control_refill"]);
+    // Queued once; nothing granted or authorized inline for it.
+    await ack(owner, socket);
+    const held = await credit(owner);
+    expect(held.pending).toEqual(["control_refill"]);
+    expect(held.controls).toEqual([LIVE_LOW_WATER - 1]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("closes a socket whose control nothing is left to pay for, on its terminal provision", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    await leave(owner, "control", 0);
+    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+    expect(await socket.closed).toEqual({ code: 4412 });
+    const held = await credit(owner);
+    expect(held.terminal).toBe(0);
+    // Forgotten here; its lease is maintenance's to release.
+    expect(
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT count(*) AS n FROM live_local").one(),
+      ),
+    ).toEqual({ n: 0 });
+  });
+
+  it("ends a socket past midnight on the next day's provision, yesterday's credit unusable", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Its provisions, and the ledger's clock as the object judges it.
+    const { offset, provisions } = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
+      offset: state.storage.sql
+        .exec<{ o: number }>("SELECT ledger_offset_ms AS o FROM live_budget_fence")
+        .one().o,
+      provisions: state.storage.sql
+        .exec<{ day: number; until: number }>(
+          "SELECT day, budget_valid_until AS until FROM live_budget_terminal ORDER BY day",
+        )
+        .toArray(),
+    }));
+    // Two minutes into the next day (on the ledger's clock), when its provision there still holds;
+    // an admission in a day's first minutes has none past the next midnight, so it is past its
+    // prepaid end there instead.
+    const next = (provisions[0]?.day ?? 0) + 1;
+    const target = next * 86_400_000 + 120_000;
+    const covered = provisions.some((p) => p.day === next && p.until > target + 60_000);
+    vi.setSystemTime(target - offset);
+    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+    // Past its renewal deadline: closed, on that day's provision when it has one.
+    expect(await socket.closed).toEqual({ code: 4401 });
+    expect((await credit(owner)).terminal).toBe(covered ? 0 : provisions.length);
+    // No control of any day spent for it: every block it was given whole.
+    const blocks = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql
+        .exec("SELECT remaining FROM live_budget_balances WHERE kind = 'control'")
+        .toArray()
+        .map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests),
+    );
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.every((units) => units === LIVE_BLOCK_UNITS)).toBe(true);
+  });
+
+  it("pays for each mark, stamped with its grant; once marks run out the change still applies", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    let held = await credit(owner);
+    expect(held.marks).toEqual([LIVE_BLOCK_UNITS - 1]);
+    expect(held.dirty.every((seq) => (seq as number) > 0)).toBe(true);
+    await leave(owner, "mark", 0);
+    const applied = await feedOf(owner).applyFeed([change(owner, repo, 2)]);
+    expect(applied.changed).toBeGreaterThan(0);
+    held = await credit(owner);
+    // Nothing marked for it (no hint), and a refill queued.
+    expect(held.pending).toContain("mark_refill");
+    socket.ws?.close(1000, "done");
+  });
+
+  it("does nothing for a socket past its prepaid end: closed, nothing read or spent", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const before = await credit(owner);
+    vi.setSystemTime(Date.now() + 2 * 86_400_000);
+    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+    expect(await socket.closed).toEqual({ code: 4401 });
+    // Its rows as they were (its close's callback finding nothing to do either): its
+    // recovery's to retire.
+    const after = await credit(owner);
+    expect(after.terminal).toBe(before.terminal);
+    expect(
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT count(*) AS n FROM live_local").one(),
+      ),
+    ).toEqual({ n: 1 });
+  });
+
+  it("is left to recovery when the feed retires: its sockets end on their provisions", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await feedOf(owner).retire();
+    expect(await socket.closed).toEqual({ code: 4403 });
+    await runDurableObjectAlarm(feedOf(owner));
+    const held = await credit(owner);
+    // The feed's own rows go a step at a time; live's stay for recovery.
+    expect(held.dirty.length).toBeGreaterThan(0);
+    expect(held.terminal).toBe(0);
+  });
+});
+
+describe("a feed's turn", () => {
+  const turnOf = (who: Who) =>
+    runInDurableObject(feedOf(who), (_: UserDO, state) =>
+      state.storage.sql
+        .exec<{ phase: string; intended_at: number }>("SELECT phase, intended_at FROM live_turn")
+        .toArray(),
+    );
+
+  it("wakes nothing for live work while none is prepared, and runs one when it is", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
+    // Its turn gone (its grant spent, say): a change marked wakes no alarm.
+    const prepared = await runInDurableObject(feedOf(owner), async (_: UserDO, state) => {
+      const row = state.storage.sql.exec("SELECT * FROM live_turn").one();
+      state.storage.sql.exec("DELETE FROM live_turn");
+      await state.storage.deleteAlarm();
+      return row;
+    });
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    // Only the feed's own retention is due (days away), nothing of live.
+    const alarm = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.getAlarm(),
+    );
+    expect(alarm === null || alarm > Date.now() + 60 * 60_000).toBe(true);
+    // Prepared again: the next change brings it due, and its run sends the hint.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const columns = Object.keys(prepared);
+      state.storage.sql.exec(
+        `INSERT INTO live_turn (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+        ...Object.values(prepared),
+      );
+    });
+    await feedOf(owner).applyFeed([change(owner, repo, 2)]);
+    expect(
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => state.storage.getAlarm()),
+    ).toBeLessThanOrEqual(Date.now());
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "changed" });
+    // It named its successor: the feed has a socket still.
+    expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("renews a socket from when it asked, however late its turn runs", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    const asked = Date.now();
+    await say(owner, socket, { t: "renew" });
+    await advance(owner, 2 * 60_000);
+    await runDurableObjectAlarm(feedOf(owner));
+    const renewed = (await socket.next()) as { until: number };
+    expect(renewed.until).toBeGreaterThanOrEqual(asked + LIVE_POLICY.renewMs);
+    expect(renewed.until).toBeLessThan(asked + LIVE_POLICY.renewMs + 60_000);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("grants and installs a queued refill, its pool given another block", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Down to low water: a control queues the refill.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const unit = liveBlockUnit("control");
+      const left = Object.fromEntries(
+        Object.entries(unit).map(([r, v]) => [r, (v as number) * (LIVE_LOW_WATER + 1)]),
+      );
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET remaining = ? WHERE kind = 'control'",
+        JSON.stringify(canonicalVector(left as never)),
+      );
+    });
+    await say(owner, socket, { t: "ack", n: 0 });
+    // Queued, it brings the feed's turn due at once (its row, written with the message: the
+    // alarm itself may still be being rewritten).
+    const [due] = await turnOf(owner);
+    expect(due?.phase).toBe("prepared");
+    expect(due?.intended_at).toBeLessThanOrEqual(Date.now());
+    await runDurableObjectAlarm(feedOf(owner));
+    const after = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
+      pending: state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+      blocks: state.storage.sql
+        .exec("SELECT DISTINCT operation_id FROM live_budget_balances WHERE kind = 'control'")
+        .toArray().length,
+    }));
+    expect(after).toEqual({ pending: [], blocks: 2 });
+    socket.ws?.close(1000, "done");
+  });
+
+  it("keeps a refill granted while its pool is full, and asks again for the same grant", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Two spendable blocks today (the admission's and another), together down to low water.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const unit = liveBlockUnit("control");
+      const left = Object.fromEntries(
+        Object.entries(unit).map(([r, v]) => [r, (v as number) * (LIVE_LOW_WATER / 2)]),
+      );
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET remaining = ? WHERE kind = 'control'",
+        JSON.stringify(canonicalVector(left as never)),
+      );
+      state.storage.sql.exec(
+        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         SELECT 'op_other', day, kind, remaining, budget_epoch, budget_incarnation, budget_seq,
+           budget_valid_until FROM live_budget_balances WHERE kind = 'control'`,
+      );
+    });
+    await say(owner, socket, { t: "ack", n: 0 });
+    await runDurableObjectAlarm(feedOf(owner));
+    const refills = () =>
+      env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE kind = 'control' AND recipient = ?",
+      )
+        .bind(owner.principalId)
+        .first<{ n: number }>()
+        .then((r) => r?.n ?? 0);
+    const kept = () =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql
+          .exec<{ phase: string; asked: number }>(
+            "SELECT phase, request_json IS NOT NULL AS asked FROM live_budget_pending WHERE kind = 'control_refill'",
+          )
+          .toArray(),
+      );
+    // Granted (one charge), no room: kept with its request, to ask again a minute on.
+    const charged = await refills();
+    expect(await kept()).toEqual([{ phase: "queued", asked: 1 }]);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 61_000);
+    await runDurableObjectAlarm(feedOf(owner));
+    // The same grant again: charged once, still kept while the pool is full.
+    expect(await refills()).toBe(charged);
+    expect(await kept()).toEqual([{ phase: "queued", asked: 1 }]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("asks again a refill an instance gone left dispatched, once its turn is dealt with", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // A refill dispatched by an instance gone with its turn, its answer never heard.
+    await runInDurableObject(feedOf(owner), async (_: UserDO, state) => {
+      const budget = new LiveBudget(state.storage.sql);
+      const fence = budget.fence();
+      const request = await makeLiveGrant(
+        planFor(
+          LIVE_PRICES.control_block as LiveManifestEntry,
+          {
+            incarnation: fence.incarnation,
+            epoch: fence.epoch,
+            recipientType: "UserDO",
+            recipient: owner.principalId,
+            class: "ordinary",
+            kind: "control",
+            producesLocal: true,
+          },
+          budget.ledgerEarliest(Date.now()),
+        ),
+      );
+      state.storage.sql.exec(
+        "UPDATE live_turn SET phase = 'dispatched', owner_id = 'own_gone', dispatch_instance = 'gone', intended_at = 0",
+      );
+      state.storage.sql.exec(
+        `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+           budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase)
+         SELECT 'control_refill', 'refill_gone', 0, authorization_gen, epoch, incarnation, 1, ?1,
+           'queued' FROM live_budget_fence WHERE id = 1`,
+        Date.now() + 600_000,
+      );
+      budget.preparePending("control_refill", "refill_gone", request);
+      state.storage.sql.exec(
+        `UPDATE live_budget_pending SET phase = 'dispatched', owner_id = 'own_gone',
+           dispatch_instance = 'gone' WHERE kind = 'control_refill'`,
+      );
+      return state.storage.setAlarm(Date.now());
+    });
+    // The turn is dealt with (forgotten: its owner never admitted, the refill queued again); a
+    // new socket hands the feed another, whose next turn asks for the refill and installs it.
+    await runDurableObjectAlarm(feedOf(owner));
+    const second = await open(owner.token);
+    for (let i = 0; i < 2; i++) {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+      await runDurableObjectAlarm(feedOf(owner));
+    }
+    const after = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
+      pending: state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+      refilled: state.storage.sql
+        .exec("SELECT DISTINCT operation_id FROM live_budget_balances WHERE kind = 'control'")
+        .toArray().length,
+    }));
+    expect(after).toEqual({ pending: [], refilled: 2 });
+    socket.ws?.close(1000, "done");
+    second.ws?.close(1000, "done");
+  });
+
+  it("gives up on a turn's result 10 seconds on: nothing of it applies, its successor among it", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // Its work answered 11 seconds after it was dispatched (the ledger's clock moved with it).
+    feedHooks.afterTurnWork = (_feed, state) => {
+      vi.setSystemTime(Date.now() + 11_000);
+      state.storage.sql.exec(
+        "UPDATE live_budget_fence SET ledger_offset_ms = ledger_offset_ms - 11000",
+      );
+      return Promise.resolve();
+    };
+    try {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0"),
+      );
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.setAlarm(Date.now()),
+      );
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.afterTurnWork;
+    }
+    expect(await turnOf(owner)).toEqual([]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("names no successor whose grant was answered past its turn's 10 seconds", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // The successor's grant answered 11 seconds after the turn was dispatched.
+    feedHooks.afterSuccessorGrant = (state) => {
+      vi.setSystemTime(Date.now() + 11_000);
+      state.storage.sql.exec(
+        "UPDATE live_budget_fence SET ledger_offset_ms = ledger_offset_ms - 11000",
+      );
+    };
+    try {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.afterSuccessorGrant;
+    }
+    expect(await turnOf(owner)).toEqual([]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("forgets every admission never confirmed in one turn, their leases released together", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const stale = Array.from({ length: LIVE_POLICY.perFeed }, (_, i) => `lsk_stale${i}`);
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      for (const id of stale)
+        state.storage.sql.exec(
+          `INSERT INTO live_local (socket_id, credential_id, phase, expires_at, deadline, sent, acked,
+             refresh_pending, blocked_since, renew_failures, controls_used, minute_start,
+             minute_count, delivered_seq, retry_at, scopes, repo_ids)
+           VALUES (?1, 'tok_x', 'confirming', ?2, ?2, 0, 0, 0, NULL, 0, 0, ?3, 0, 0, 0, '[]', NULL)`,
+          id,
+          Date.now() + 60 * 60_000,
+          Date.now() - 2 * 60_000,
+        );
+      state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+      return state.storage.setAlarm(Date.now());
+    });
+    await runDurableObjectAlarm(feedOf(owner));
+    const left = await runInDurableObject(
+      feedOf(owner),
+      (_: UserDO, state) =>
+        state.storage.sql
+          .exec<{ n: number }>(
+            "SELECT count(*) AS n FROM live_local WHERE socket_id LIKE 'lsk_stale%'",
+          )
+          .one().n,
+    );
+    expect(left).toBe(0);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("runs again a turn an instance gone claimed but never had admitted", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    // Claimed by another instance, which stopped before its owner was admitted.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec(
+        "UPDATE live_turn SET phase = 'claimed', dispatch_instance = 'gone', intended_at = 0",
+      ),
+    );
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.setAlarm(Date.now()),
+    );
+    await runDurableObjectAlarm(feedOf(owner));
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "changed" });
+    socket.ws?.close(1000, "done");
+  });
+
+  it("is handed a turn by an admission that finds it holding none it can run", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its turn lost (never delivered, say) while its grant is still unspent in the ledger.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    const second = await open(owner.token);
+    expect(second.response.status).toBe(101);
+    expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
+    for (const s of [first, second]) s.ws?.close(1000, "done");
+  });
+
+  it("tells a socket to reconnect when its renewal finds no turn to authorize it", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Its turn lost with no successor (a dispatched one adopted after its accounting failed, or
+    // one whose successor the ledger refused): nothing would ever answer the renewal.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    // Closed as an expired socket is, so the client reconnects at once: its admission grants a turn.
+    expect(await socket.closed).toEqual({ code: 4401 });
+  });
+
+  it("tells a socket to reconnect when a turn running as it renews ends with no successor", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    // The renewal arrives while the turn runs, after its work (so it is left queued); then
+    // today's escrow places fill, so its successor (an owned unit) is refused.
+    feedHooks.afterTurnWork = async (feed, state) => {
+      delete feedHooks.afterTurnWork;
+      const [ws] = state.getWebSockets();
+      if (ws) void feed.webSocketMessage(ws, JSON.stringify({ t: "renew" }));
+      await fillEscrow();
+    };
+    try {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+      await runDurableObjectAlarm(feedOf(owner));
+    } finally {
+      delete feedHooks.afterTurnWork;
+    }
+    expect(await turnOf(owner)).toEqual([]);
+    expect(await socket.closed).toEqual({ code: 4401 });
+  });
+
+  it("refuses a reconnect whose feed's lost turn cannot be granted again: closed 4412", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its turn lost while its grant is still unsettled in the ledger: the admission grants none,
+    // and the replacement asked for after it finds today's escrow places full.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    await fillEscrow();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4412);
+    expect(await turnOf(owner)).toEqual([]);
+    first.ws?.close(1000, "done");
+  });
+
+  it("leases a socket to its renewal deadline, each renewal extending the lease", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const lease = () =>
+      env.DIRECTORY.prepare("SELECT expires_at AS at FROM live_sockets WHERE feed = ?")
+        .bind(owner.principalId)
+        .first<{ at: number }>()
+        .then((r) => r?.at as number);
+    const first = await lease();
+    expect(first).toBeLessThanOrEqual(
+      Date.now() + LIVE_POLICY.renewMs + LIVE_ADMISSION.leaseMarginMs,
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "renewed" });
+    expect(await lease()).toBeGreaterThan(first);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("names no successor once the feed has no socket", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const closed = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    expect(await socket.closed).not.toBeNull();
+    // Its close heard, then its turn run: nothing left for another.
+    await closed();
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+      return state.storage.setAlarm(Date.now());
+    });
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await turnOf(owner)).toEqual([]);
+  });
+});
+
+describe("live work's rows in a feed's object", () => {
+  /** Counts the rows the feed's object reads and writes while `fn` runs. */
+  async function rows(who: Who, fn: () => Promise<unknown>) {
+    const sql = await runInDurableObject(feedOf(who), (_: UserDO, state) => state.storage.sql);
+    const count = countingExec(sql);
+    let counted: { read: number; written: number } | undefined;
+    try {
+      await fn();
+    } finally {
+      counted = count.stop();
+    }
+    return counted;
+  }
+  const measured: Record<string, { read: number; written: number }> = {};
+  const note = (unit: string, r: { read: number; written: number }) => {
+    const was = measured[unit] ?? { read: 0, written: 0 };
+    measured[unit] = {
+      read: Math.max(was.read, r.read),
+      written: Math.max(was.written, r.written),
+    };
+  };
+
+  it("is within each unit's observed rows", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    // A ticket stored.
+    let issued: { ticket: string } | undefined;
+    note(
+      "ticket",
+      await rows(owner, async () => {
+        issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+      }),
+    );
+    // Its upgrade: the redemption and the admission with its provisions, blocks and turn.
+    let socket: Awaited<ReturnType<typeof open>> | undefined;
+    note(
+      "admission",
+      await rows(owner, async () => {
+        socket = await open(owner.token);
+      }),
+    );
+    // A control.
+    note("control", await rows(owner, () => say(owner, socket, { t: "ack", n: 0 })));
+    // A mark: a change applied with and without live sockets, its difference the mark's.
+    const marked = await rows(owner, () => feedOf(owner).applyFeed([change(owner, repo, 1)]));
+    // A turn running the pump.
+    note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
+    // A renewal's turn.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    await say(owner, socket, { t: "renew" });
+    note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
+    // The socket's end.
+    note(
+      "terminal",
+      await rows(owner, async () => {
+        const closed = handled(owner, "close");
+        socket?.ws?.close(1000, "done");
+        await socket?.closed;
+        await closed();
+      }),
+    );
+    // The pump's most: a page of changed streams (and more), a credential's most sockets.
+    const busy = await user();
+    const busyRepos: { id: string; conversation: string }[] = [];
+    for (let i = 0; i < LIVE_POLICY.dirtyPage + 2; i++) busyRepos.push(await repoWithIssue(busy));
+    const busySockets: Awaited<ReturnType<typeof open>>[] = [];
+    for (let i = 0; i < LIVE_POLICY.perCredential; i++) busySockets.push(await open(busy.token));
+    await feedOf(busy).applyFeed(busyRepos.map((r) => change(busy, r, 1)));
+    note("pump", await rows(busy, () => runDurableObjectAlarm(feedOf(busy))));
+    // A mark of a stream already holding its most causes.
+    const many = await rows(busy, () =>
+      feedOf(busy).applyFeed(
+        Array.from({ length: LIVE_POLICY.candidatesPerStream + 1 }, (_, i) => ({
+          ...change(busy, busyRepos[0] as never, 10 + i),
+          conversation: `c${i}`,
+        })) as never,
+      ),
+    );
+    note("mark", {
+      read: Math.ceil(many.read / (LIVE_POLICY.candidatesPerStream + 1)),
+      written: Math.ceil(many.written / (LIVE_POLICY.candidatesPerStream + 1)),
+    });
+    for (const s of busySockets) s.ws?.close(1000, "done");
+    // A transport whose admission is refused: its redemption and the refusal's upgrade.
+    const refusedOwner = await user();
+    await env.DIRECTORY.prepare(
+      `INSERT INTO live_sockets (socket_id, ticket_id, feed, credential_id, state, pending_until,
+         expires_at) VALUES (?, ?, 'usr_x', 'tok_x', 'open', 0, ?)`,
+    )
+      .bind(uniqueId("lsk"), uniqueId("t"), Date.now() + 60_000)
+      .run();
+    note(
+      "upgrade_transport",
+      await rows(refusedOwner, async () => {
+        const refused = await open(refusedOwner.token, { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" });
+        await refused.closed;
+      }),
+    );
+    const bare = await user();
+    const bareRepo = await repoWithIssue(bare);
+    const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));
+    note("mark", {
+      read: Math.max(0, marked.read - unmarked.read),
+      written: Math.max(0, marked.written - unmarked.written),
+    });
+    expect(issued?.ticket).toBeDefined();
+    // What was measured (for the manifest's observations), when asked.
+    if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));
+    for (const [unit, r] of Object.entries(measured)) {
+      const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
+      const observed = Object.values(entry.observed);
+      const most = (k: "do_rows_read" | "do_rows_written") =>
+        Math.max(...observed.map((o) => o[k]));
+      expect({ unit, read: r.read, written: r.written }).toEqual({
+        unit,
+        read: Math.min(r.read, most("do_rows_read")),
+        written: Math.min(r.written, most("do_rows_written")),
+      });
+    }
+  });
+});
+
 describe("a live socket's authority", () => {
   const sweepNow = () =>
     sweep(env.DIRECTORY, (feed, deps) => env.USER.getByName(feed).revoked(deps), Date.now());
@@ -692,7 +1746,8 @@ describe("a live socket's authority", () => {
     );
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 6 * 60_000);
-    stale.ws?.send(JSON.stringify({ t: "renew" }));
+    await say(owner, stale, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await stale.closed).toEqual({ code: 4401 });
     fresh.ws?.close(1000, "done");
   });
@@ -808,6 +1863,8 @@ describe("a live socket's protocol", () => {
 
   it("forgets an admission whose confirmation never finished", async () => {
     const owner = await user();
+    // A socket of its own (which gives the feed its turn), then one left confirming.
+    const socket = await open(owner.token);
     await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
       state.storage.sql.exec(
         `INSERT INTO live_local (socket_id, credential_id, phase, expires_at, deadline, sent, acked,
@@ -817,17 +1874,16 @@ describe("a live socket's protocol", () => {
         Date.now() + 60 * 60_000,
         Date.now() - 2 * 60_000,
       );
-      state.storage.sql.exec(
-        "INSERT INTO user_schedule (kind, due_at) VALUES ('live', 0) ON CONFLICT (kind) DO UPDATE SET due_at = 0",
-      );
+      state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
       return state.storage.setAlarm(Date.now());
     });
     await runDurableObjectAlarm(feedOf(owner));
     expect(
       await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
-        state.storage.sql.exec("SELECT count(*) AS n FROM live_local").one(),
+        state.storage.sql.exec("SELECT socket_id FROM live_local").toArray(),
       ),
-    ).toEqual({ n: 0 });
+    ).not.toContainEqual({ socket_id: "lsk_stale" });
+    socket.ws?.close(1000, "done");
   });
 
   it("owes a slower socket the mention it has not heard of, though a later comment was unsubscribed", async () => {
@@ -837,21 +1893,23 @@ describe("a live socket's protocol", () => {
       await open(owner.token),
       await open(await scopedToken(owner.principalId, [])),
     ];
+    // One credential a turn: a turn for each.
     const apply = async (e: FeedEntry) => {
       await feedOf(owner).applyFeed([e]);
+      await runDurableObjectAlarm(feedOf(owner));
       await runDurableObjectAlarm(feedOf(owner));
     };
     // The slow socket's window fills; the fast one acknowledges as it goes.
     for (let v = 1; v <= 8; v++) {
       await apply(change(owner, repo, v));
       const frame = (await fast.next()) as { n: number };
-      fast.ws?.send(JSON.stringify({ t: "ack", n: frame.n }));
+      await say(owner, fast, { t: "ack", n: frame.n });
       await slow.next();
     }
     // A mention: the fast socket hears of it; the slow one is full.
     await apply(change(owner, repo, 9));
     const heard = (await fast.next()) as { n: number };
-    fast.ws?.send(JSON.stringify({ t: "ack", n: heard.n }));
+    await say(owner, fast, { t: "ack", n: heard.n });
     // Then a comment in the same conversation, unsubscribed before the next run.
     const comment = change(owner, repo, 10);
     await feedOf(owner).applyFeed([
@@ -863,7 +1921,7 @@ describe("a live socket's protocol", () => {
     )
       .bind(owner.principalId, repo.id, repo.conversation, Date.now())
       .run();
-    slow.ws?.send(JSON.stringify({ t: "ack", n: 8 }));
+    await say(owner, slow, { t: "ack", n: 8 });
     await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.setAlarm(Date.now()),
     );

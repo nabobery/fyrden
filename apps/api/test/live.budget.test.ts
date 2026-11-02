@@ -96,6 +96,15 @@ describe("a live grant", () => {
       const day = testDay(1);
       const { db } = at(day);
       const price = LIVE_DAILY[r] - LIVE_PROTECTED[r] > 0 ? 1 : 0;
+      // Ordinary duration leaves the day's reserve to cleanup too.
+      const reserve =
+        r === "do_duration_ms"
+          ? ((
+              await env.DIRECTORY.prepare(
+                "SELECT duration_reserve_ms AS n FROM live_budget_state WHERE id = 1",
+              ).first<{ n: number }>()
+            )?.n ?? 0)
+          : 0;
       // All but one of the ordinary part spent.
       const fill = await reserveLive(
         db,
@@ -104,17 +113,17 @@ describe("a live grant", () => {
             day,
             class: "cleanup",
             kind: "maintenance",
-            resources: vector({ [r]: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price }),
+            resources: vector({ [r]: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price - reserve }),
             ...(r === "do_duration_ms" && {
               charges: [
                 {
                   day,
-                  resources: vector({ [r]: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price }),
+                  resources: vector({ [r]: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price - reserve }),
                   duration: {
                     day,
                     from: day * DAY,
                     until: (day + 1) * DAY,
-                    ms: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price,
+                    ms: LIVE_DAILY[r] - LIVE_PROTECTED[r] - price - reserve,
                   },
                 },
               ],
@@ -151,8 +160,13 @@ describe("a live grant", () => {
         .run();
       const results = await Promise.all([one(), one()]);
       expect(results.filter(granted)).toHaveLength(1);
-      expect(results.find((x) => !granted(x))).toEqual({ status: "refused", reason: "daily" });
-      expect((await dayRow(day))?.[r]).toBe(LIVE_DAILY[r] - LIVE_PROTECTED[r]);
+      // Past the day's allowance: daily; ordinary duration past what leaves the reserve: temporary
+      // (the reserve is cleanup's, and may yet be given back).
+      expect(results.find((x) => !granted(x))).toMatchObject({
+        status: "refused",
+        reason: reserve > 0 ? "temporary" : "daily",
+      });
+      expect((await dayRow(day))?.[r]).toBe(LIVE_DAILY[r] - LIVE_PROTECTED[r] - reserve);
       expect(await receipts()).toBe(2);
       const target = await env.DIRECTORY.prepare(
         "SELECT through_seq, local_cleanup_debt FROM live_recovery_targets WHERE feed = 'usr_last_credit'",
@@ -194,7 +208,7 @@ describe("a live grant", () => {
           db,
           await makeLiveGrant(await plan({ day, resources: vector({ do_requests: 1 }) })),
         ),
-      ).toEqual({ status: "refused", reason: "daily" });
+      ).toMatchObject({ status: "refused", reason: "daily" });
       const cleanup = await reserveLive(
         db,
         await makeLiveGrant(

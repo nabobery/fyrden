@@ -15,11 +15,13 @@ import { createApp } from "../src/app.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
 import { LIVE_POLICY } from "../src/do/user/live.js";
+import { LIVE_DAILY } from "../src/live/budget.js";
 import { sweep } from "../src/live/directory.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { dpopKey } from "./helpers/dpop.js";
 import { entry } from "./helpers/feed.js";
+import { until } from "./helpers/live-sockets.js";
 import { scopedToken } from "./helpers/principals.js";
 
 afterEach(() => {
@@ -158,14 +160,11 @@ const socketsOf = async (who: Who) => ({
   ),
 });
 
-/**
- * The feed's sockets once its object has handled a close: each round trip to the object runs
- * after events it already received (a bounded number of them, no timer).
- */
-async function released(who: Who) {
+/** `who`'s sockets once the object forgot every one (their leases are maintenance's to release). */
+async function forgotten(who: Who) {
   for (let i = 0; i < 100; i++) {
     const now = await socketsOf(who);
-    if (now.leases === 0 && now.local === 0) return now;
+    if (now.local === 0) return now;
     await runInDurableObject(feedOf(who), () => {});
   }
   return socketsOf(who);
@@ -299,6 +298,31 @@ describe("a listen stream", () => {
     });
     // The socket was there before the acknowledgement: a change right after it is heard.
     expect(await socketsOf(owner)).toEqual({ leases: 1, local: 1 });
+    // Paid for as a ticket's redemption is: its transport, its admission with its end's provisions,
+    // the feed's first blocks and its first turn granted, the transport's owner released.
+    expect(
+      await env.DIRECTORY.prepare(
+        `SELECT json_extract(plan, '$.kind') AS kind FROM live_budget_receipts
+         WHERE json_extract(plan, '$.recipient') = ? ORDER BY kind`,
+      )
+        .bind(owner.principalId)
+        .all()
+        .then((r) => r.results),
+    ).toEqual([
+      { kind: "admission" },
+      { kind: "control" },
+      { kind: "mark" },
+      { kind: "pump" },
+      { kind: "terminal" },
+      { kind: "upgrade_transport" },
+    ]);
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ?",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
     await pump(owner, hidden, 1);
     await pump(owner, mine, 1);
     expect(await stream.next()).toMatchObject(updated(owner));
@@ -334,14 +358,15 @@ describe("a listen stream", () => {
     expect(await socketsOf(owner)).toEqual({ leases: 0, local: 0 });
   });
 
-  it("closes its socket when the client cancels it, the lease released", async () => {
+  it("closes its socket when the client cancels it, the object forgetting it", async () => {
     const owner = await user();
     const stream = await listen([feedUri(owner)], bearer(owner.token));
     await stream.next();
     expect((await socketsOf(owner)).leases).toBe(1);
     await stream.cancel();
-    // The object hears the close; its lease goes with it.
-    expect(await released(owner)).toEqual({ leases: 0, local: 0 });
+    // The object hears the close and forgets it on its terminal provision; its lease is left for
+    // maintenance to release.
+    expect(await forgotten(owner)).toEqual({ leases: 1, local: 0 });
   });
 
   it("shares the live sockets' caps: a credential's sixth is refused, nothing admitted for it", async () => {
@@ -361,6 +386,38 @@ describe("a listen stream", () => {
     });
     expect((await socketsOf(owner)).leases).toBe(LIVE_POLICY.perCredential);
     for (const stream of streams) stream.abort.abort();
+  });
+
+  it("is refused before acknowledgement once today's allowance is spent, saying when it is back", async () => {
+    const owner = await user();
+    const { day } = (await env.DIRECTORY.prepare(
+      "SELECT CAST(unixepoch() / 86400 AS INTEGER) AS day",
+    ).first<{ day: number }>()) as { day: number };
+    // The day's row exists once anything was granted today: a listen grants its transport.
+    const first = await listen([feedUri(owner)], bearer(owner.token));
+    await first.next();
+    first.abort.abort();
+    const spent = await env.DIRECTORY.prepare(
+      "SELECT do_requests AS n FROM live_budget_days WHERE day = ?",
+    )
+      .bind(day)
+      .first<{ n: number }>();
+    await env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+      .bind(LIVE_DAILY.do_requests, day)
+      .run();
+    try {
+      const refused = await listen([feedUri(owner)], bearer(owner.token));
+      expect(await refused.next()).toMatchObject({
+        id: "listen-1",
+        error: {
+          data: { status: 429, code: "live_budget", retry_at: (day + 1) * 86_400_000 },
+        },
+      });
+    } finally {
+      await env.DIRECTORY.prepare("UPDATE live_budget_days SET do_requests = ? WHERE day = ?")
+        .bind(spent?.n ?? 0, day)
+        .run();
+    }
   });
 
   it("is refused to a delegated or a DPoP-bound token, as live sockets are", async () => {
@@ -392,7 +449,7 @@ describe("a listen stream", () => {
     await sweep(env.DIRECTORY, (feed, deps) => env.USER.getByName(feed).revoked(deps), Date.now());
     graceful(await stream.next());
     expect(await stream.next()).toBeNull();
-    expect((await socketsOf(owner)).leases).toBe(0);
+    expect((await socketsOf(owner)).local).toBe(0);
   });
 
   it("acknowledges only what its reader took: one that stops reading ends after the slow-consumer deadline", async () => {
@@ -400,11 +457,21 @@ describe("a listen stream", () => {
     const repo = await repoWithIssue(owner);
     const stream = await listen([feedUri(owner)], bearer(owner.token));
     await stream.next();
-    // Read as they come: acknowledged, so more than a window's worth arrives.
+    // Read as they come: acknowledged (every half window taken), so more than a window's worth
+    // arrives; each acknowledgement applied before what depends on it.
+    const ackedThrough = (n: number) =>
+      until(
+        owner,
+        (sql) => sql.exec<{ acked: number }>("SELECT acked FROM live_local").one().acked >= n,
+        `acknowledged through ${n}`,
+      );
+    const half = LIVE_POLICY.window / 2;
     for (let v = 1; v <= LIVE_POLICY.window + 4; v++) {
+      await ackedThrough(Math.floor((v - 1) / half) * half - half);
       await pump(owner, repo, v);
       expect(await stream.next()).toMatchObject(updated(owner));
     }
+    await ackedThrough(LIVE_POLICY.window + 4);
     // No longer read: the socket's window fills, its frames held by the object, not the Worker.
     for (let v = 20; v < 40; v++) await pump(owner, repo, v);
     const held = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
@@ -425,7 +492,7 @@ describe("a listen stream", () => {
     expect(await stream.next()).toMatchObject(updated(owner));
     graceful(await stream.next());
     expect(await stream.next()).toBeNull();
-    expect((await socketsOf(owner)).leases).toBe(0);
+    expect((await socketsOf(owner)).local).toBe(0);
   });
 
   it("can be opened again after it ended, and the feed read from there", async () => {
@@ -434,7 +501,7 @@ describe("a listen stream", () => {
     const first = await listen([feedUri(owner)], bearer(owner.token));
     await first.next();
     await first.cancel();
-    expect(await released(owner)).toEqual({ leases: 0, local: 0 });
+    expect(await forgotten(owner)).toEqual({ leases: 1, local: 0 });
     const again = await listen([feedUri(owner)], bearer(owner.token));
     expect(await again.next()).toMatchObject({
       method: "notifications/subscriptions/acknowledged",

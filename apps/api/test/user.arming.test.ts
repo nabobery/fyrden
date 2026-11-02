@@ -48,10 +48,10 @@ describe("a feed's alarm", () => {
     // An alarm earlier than anything scheduled, and an entry that is not the alarm (a cold
     // object's first call takes its epoch, then arms).
     const { stub, now } = await feed({ retain: 30 }, Date.now() + 1_000);
-    await runInDurableObject(stub, (instance: UserDO) => instance.liveTicket("tok_arm"));
+    await runInDurableObject(stub, (instance: UserDO) => instance.inboxThread("none"));
     expect(await alarmOf(stub)).toBe(now + 30 * MINUTE);
     const empty = await feed({}, Date.now() + 1_000);
-    await runInDurableObject(empty.stub, (instance: UserDO) => instance.liveTicket("tok_arm"));
+    await runInDurableObject(empty.stub, (instance: UserDO) => instance.inboxThread("none"));
     expect(await alarmOf(empty.stub)).toBeNull();
   });
 

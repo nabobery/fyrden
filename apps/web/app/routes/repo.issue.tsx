@@ -50,7 +50,7 @@ import { isMetaIntent, META_DONE } from "../lib/subject-meta.js";
 import { metaCall } from "../lib/subject-meta.server.js";
 import { pageUrl } from "../lib/target.js";
 import type { Repo } from "../lib/types.js";
-import { useLiveHints } from "../lib/use-live.js";
+import { LiveNote, useLiveHints } from "../lib/use-live.js";
 import type { Route } from "./+types/repo.issue";
 
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
@@ -451,7 +451,7 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
   if (loaderData.viewerKnown) known.current = loaderData.viewer;
   const viewer = known.current;
   // Read again when this repository's issues change (unsent text is kept across it).
-  useLiveHints((s) => s.repo === repoId && s.kind === "issue");
+  const live = useLiveHints((s) => s.repo === repoId && s.kind === "issue");
   const isAuthor = viewer !== null && issue.user.id === viewer;
   const push = permissions?.push === true;
   const triage = permissions?.triage === true;
@@ -535,6 +535,7 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
           Your session could not be checked just now; your drafts are kept.
         </p>
       )}
+      <LiveNote status={live} />
 
       <section className="panel" aria-labelledby="issue-description">
         <h2 id="issue-description" className="visually-hidden">

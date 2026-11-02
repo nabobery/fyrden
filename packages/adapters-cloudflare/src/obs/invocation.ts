@@ -111,6 +111,9 @@ export class SubrequestTally {
    * limit is the internal calls' (D1 queries among them).
    */
   d1 = 0;
+  /** D1's rows read and written by them, as D1 reports each result's (none: not reported). */
+  d1RowsRead = 0;
+  d1RowsWritten = 0;
 }
 
 /** Points written outside any invocation that the platform refused, reported by the next invocation. */
@@ -285,6 +288,15 @@ export class Invocation {
     // The platform invocation's D1 statements, all of them, once: how near it came to D1's limit.
     if (this.#outermost && this.tally.d1 > 0)
       this.#metrics.count("d1.invocation_statements", { where, op }, this.tally.d1);
+    // And the rows they read and wrote, as D1 reported them: what the invocation cost D1.
+    if (this.#outermost && this.tally.d1RowsRead > 0)
+      this.#metrics.count("d1.invocation_rows", { where, op, kind: "read" }, this.tally.d1RowsRead);
+    if (this.#outermost && this.tally.d1RowsWritten > 0)
+      this.#metrics.count(
+        "d1.invocation_rows",
+        { where, op, kind: "written" },
+        this.tally.d1RowsWritten,
+      );
     if (doClass !== undefined) {
       this.#metrics.count(
         "do.active_ms",
@@ -343,6 +355,16 @@ export function d1StatementsRun(): number {
  * the current invocation (none: not counted): its statements, and, where
  * the bindings count (`binding`), its internal call.
  */
+/** Adds D1's reported rows of a result (`meta.rows_read`, `meta.rows_written`) to the tally. */
+export function countD1Rows(
+  meta: { rows_read?: unknown; rows_written?: unknown } | undefined,
+): void {
+  const invocation = scope.getStore();
+  if (!invocation || !meta) return;
+  if (typeof meta.rows_read === "number") invocation.tally.d1RowsRead += meta.rows_read;
+  if (typeof meta.rows_written === "number") invocation.tally.d1RowsWritten += meta.rows_written;
+}
+
 export function countD1Statements(n = 1): void {
   const invocation = scope.getStore();
   if (!invocation) return;
