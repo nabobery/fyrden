@@ -814,8 +814,12 @@ export class UserDO extends MigratingDO {
       marked = true;
       last = paid;
     }
-    // Its refill queued at low water, or once nothing is left (under the pool's newest grant).
-    const stamp = last ?? budget.poolStamp("mark", day, now);
+    // Its refill queued at low water, or once nothing is left (under the pool's newest grant; with
+    // every block of it expired and a stream to mark, under the feed's turn, which runs it).
+    const stamp =
+      last ??
+      budget.poolStamp("mark", day, now) ??
+      (signals.length > 0 ? budget.turnStamp(now) : null);
     if (stamp && budget.unitsLeft("mark", day, price, now, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER)
       budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
     return marked;

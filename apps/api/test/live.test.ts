@@ -1116,6 +1116,41 @@ describe("a feed's live credit", () => {
     socket.ws?.close(1000, "done");
   });
 
+  it("queues a refill under the feed's turn once every mark block has expired, and a turn installs it", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    // Every mark block past its validity on the ledger's clock (none spendable, none to queue a
+    // refill under).
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET budget_valid_until = ? WHERE kind = 'mark'",
+        new LiveBudget(state.storage.sql).ledgerNow(Date.now()) - 1,
+      ),
+    );
+    // A delivery with nothing to mark (the change applied before, again) buys nothing.
+    const first = change(owner, repo, 1);
+    await feedOf(owner).applyFeed([first]);
+    expect((await credit(owner)).pending).toContain("mark_refill");
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_budget_pending WHERE kind = 'mark_refill'"),
+    );
+    await feedOf(owner).applyFeed([first]);
+    expect((await credit(owner)).pending).not.toContain("mark_refill");
+    // A change to mark queues its refill.
+    await feedOf(owner).applyFeed([change(owner, repo, 2)]);
+    expect((await credit(owner)).pending).toContain("mark_refill");
+    // The feed's turn, brought due for it, grants and installs the refill.
+    await runDurableObjectAlarm(feedOf(owner));
+    const held = await credit(owner);
+    expect(held.pending).not.toContain("mark_refill");
+    expect(held.marks).toContain(LIVE_BLOCK_UNITS);
+    // The next change is marked again.
+    await feedOf(owner).applyFeed([change(owner, repo, 3)]);
+    expect((await credit(owner)).marks).toContain(LIVE_BLOCK_UNITS - 1);
+    socket.ws?.close(1000, "done");
+  });
+
   it("does nothing for a socket past its prepaid end: closed, nothing read or spent", async () => {
     const owner = await user();
     const socket = await open(owner.token);

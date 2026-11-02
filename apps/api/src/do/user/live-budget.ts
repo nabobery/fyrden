@@ -956,6 +956,23 @@ export class LiveBudget {
   }
 
   /**
+   * The stamp of the feed's turn while its grant is current and valid at
+   * `now` (what a refill is queued under when its pool holds no current
+   * grant at all: the turn is what will run it), or null.
+   */
+  turnStamp(now: number): LiveFundingStamp | null {
+    const turn = this.turn();
+    if (!turn) return null;
+    const stamp = {
+      epoch: turn.envelope.plan.epoch,
+      incarnation: turn.envelope.plan.incarnation,
+      seq: turn.envelope.seq,
+      validUntil: turn.envelope.plan.validUntil,
+    };
+    return this.#fenced(stamp) || now >= stamp.validUntil ? null : stamp;
+  }
+
+  /**
    * The stamp of the newest current grant of today's `kind` pool, drained
    * or not (what a refill asked for an empty pool is queued under), or null.
    */
