@@ -35,9 +35,10 @@ export interface GitSandbox {
 
 /**
  * The git binary the tests run against: `git` on PATH unless
- * FYRDEN_GIT_BINARY names another. CI's interoperability jobs set it to git
- * built from a release pinned in `tools/ci/interop/git-versions.txt`
- * (by version and tarball SHA-256); the unit test jobs use the runner's git.
+ * FYRDEN_GIT_BINARY names another. CI's test and interoperability jobs set
+ * it to git built from a release pinned in `tools/ci/interop/git-versions.txt`
+ * (by version and tarball SHA-256), not the runner image's, which changes
+ * under them.
  */
 export const gitBinary = process.env.FYRDEN_GIT_BINARY ?? "git";
 

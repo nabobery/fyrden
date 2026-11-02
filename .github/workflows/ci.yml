@@ -133,8 +133,8 @@ jobs:
           name: api-blob-${{ matrix.shard }}
           path: apps/api/.vitest/blob/
           include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 1
+          if-no-files-found: error
+          retention-days: 3
 
   # The shards' reports merged: the API's whole coverage, as one run of it gives.
   api-coverage:
@@ -152,9 +152,12 @@ jobs:
           pattern: api-blob-*
           path: apps/api/.vitest/blob
           merge-multiple: true
+      # Every shard's report, or nothing merged (Vitest merges whatever it finds).
       - name: Merge the shards' reports and coverage
         working-directory: apps/api
-        run: pnpm exec vitest run --merge-reports --coverage
+        run: |
+          for shard in 1 2 3 4; do test -f ".vitest/blob/blob-$shard-4.json"; done
+          pnpm exec vitest run --merge-reports --coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-api
