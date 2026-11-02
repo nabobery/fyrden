@@ -45,6 +45,7 @@ import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
+import { handled, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -146,11 +147,6 @@ async function advance(who: Who, ms: number): Promise<void> {
       ms,
     ),
   );
-}
-
-async function handledThenTurn(who: Who): Promise<void> {
-  await runInDurableObject(feedOf(who), () => {});
-  await runDurableObjectAlarm(feedOf(who));
 }
 
 /** The checks of `who`'s own account (its repositories' owner) the ledger granted. */
@@ -307,8 +303,10 @@ describe("a live socket", () => {
       await state.storage.deleteAlarm();
     });
     await evictDurableObject(feedOf(owner));
+    const closed = handled(owner, "close");
     socket.ws?.close(1000, "done");
     await socket.closed;
+    await closed();
     const [alarm, leases] = await Promise.all([
       runInDurableObject(feedOf(owner), (_: UserDO, state) => state.storage.getAlarm()),
       env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
@@ -590,7 +588,7 @@ describe("a live socket", () => {
     expect(first.streams.map((x) => x.repo)).toEqual(
       repos.slice(0, LIVE_POLICY.dirtyPage).map((r) => r.id),
     );
-    socket.ws?.send(JSON.stringify({ t: "ack", n: first.n }));
+    await say(owner, socket, { t: "ack", n: first.n });
     await runDurableObjectAlarm(feedOf(owner));
     const second = (await socket.next()) as { streams: { repo: string }[] };
     expect(second.streams.map((x) => x.repo)).toEqual(
@@ -626,7 +624,7 @@ describe("a live socket", () => {
     await runDurableObjectAlarm(feedOf(owner));
     const first = (await socket.next()) as { n: number; streams: { repo: string }[] };
     expect(first.streams.map((x) => x.repo)).toEqual([own.id]);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: first.n }));
+    await say(owner, socket, { t: "ack", n: first.n });
     await runDurableObjectAlarm(feedOf(owner));
     expect(
       ((await socket.next()) as { streams: { repo: string }[] }).streams.map((x) => x.repo),
@@ -815,7 +813,7 @@ describe("a live socket", () => {
     // The ninth waits: eight are unacknowledged.
     await pump(9);
     expect(socket.frames).toEqual([]);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 8 }));
+    await say(owner, socket, { t: "ack", n: 8 });
     await pump(10);
     expect(await socket.next()).toEqual({
       t: "changed",
@@ -839,11 +837,11 @@ describe("a live socket", () => {
     const token = await scopedToken(owner.principalId, []);
     const socket = await open(token);
     // Early: nothing.
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
+    await say(owner, socket, { t: "renew" });
     vi.useFakeTimers({ toFake: ["Date"] });
     await advance(owner, 6 * 60_000);
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
-    await handledThenTurn(owner);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "renewed" });
     await env.DIRECTORY.prepare(
       "UPDATE tokens SET revoked_at = ? WHERE id = (SELECT credential_id FROM live_sockets WHERE feed = ?)",
@@ -851,8 +849,8 @@ describe("a live socket", () => {
       .bind(Date.now(), owner.principalId)
       .run();
     await advance(owner, 6 * 60_000);
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
-    await handledThenTurn(owner);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.closed).toEqual({ code: 4401 });
   });
 
@@ -980,11 +978,8 @@ describe("a feed's live credit", () => {
       );
     });
   /** Sends an acknowledgement nothing was sent for (a control that changes nothing), handled. */
-  const ack = async (who: Who, socket: Awaited<ReturnType<typeof open>>) => {
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-    // A round trip after it: the object handled the message before this answers.
-    await runInDurableObject(feedOf(who), () => {});
-  };
+  const ack = (who: Who, socket: Awaited<ReturnType<typeof open>>) =>
+    say(who, socket, { t: "ack", n: 0 });
 
   it("is installed with a socket: its end on each day it may live on, and the feed's first blocks", async () => {
     const owner = await user();
@@ -1205,8 +1200,7 @@ describe("a feed's turn", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     await advance(owner, 6 * 60_000);
     const asked = Date.now();
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
-    await runInDurableObject(feedOf(owner), () => {});
+    await say(owner, socket, { t: "renew" });
     await advance(owner, 2 * 60_000);
     await runDurableObjectAlarm(feedOf(owner));
     const renewed = (await socket.next()) as { until: number };
@@ -1229,7 +1223,7 @@ describe("a feed's turn", () => {
         JSON.stringify(canonicalVector(left as never)),
       );
     });
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+    await say(owner, socket, { t: "ack", n: 0 });
     // Queued, it brings the feed's turn due at once (its row, written with the message: the
     // alarm itself may still be being rewritten).
     const [due] = await turnOf(owner);
@@ -1266,8 +1260,8 @@ describe("a feed's turn", () => {
            budget_valid_until FROM live_budget_balances WHERE kind = 'control'`,
       );
     });
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-    await handledThenTurn(owner);
+    await say(owner, socket, { t: "ack", n: 0 });
+    await runDurableObjectAlarm(feedOf(owner));
     const refills = () =>
       env.DIRECTORY.prepare(
         "SELECT count(*) AS n FROM live_budget_receipts WHERE kind = 'control' AND recipient = ?",
@@ -1553,8 +1547,8 @@ describe("a feed's turn", () => {
     );
     vi.useFakeTimers({ toFake: ["Date"] });
     await advance(owner, 6 * 60_000);
-    socket.ws?.send(JSON.stringify({ t: "renew" }));
-    await handledThenTurn(owner);
+    await say(owner, socket, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "renewed" });
     expect(await lease()).toBeGreaterThan(first);
     socket.ws?.close(1000, "done");
@@ -1563,14 +1557,15 @@ describe("a feed's turn", () => {
   it("names no successor once the feed has no socket", async () => {
     const owner = await user();
     const socket = await open(owner.token);
+    const closed = handled(owner, "close");
     socket.ws?.close(1000, "done");
     expect(await socket.closed).not.toBeNull();
+    // Its close heard, then its turn run: nothing left for another.
+    await closed();
     await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
       state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
       return state.storage.setAlarm(Date.now());
     });
-    // Its close heard, then its turn run: nothing left for another.
-    await runInDurableObject(feedOf(owner), () => {});
     await runDurableObjectAlarm(feedOf(owner));
     expect(await turnOf(owner)).toEqual([]);
   });
@@ -1581,13 +1576,13 @@ describe("live work's rows in a feed's object", () => {
   async function rows(who: Who, fn: () => Promise<unknown>) {
     const sql = await runInDurableObject(feedOf(who), (_: UserDO, state) => state.storage.sql);
     const count = countingExec(sql);
+    let counted: { read: number; written: number } | undefined;
     try {
       await fn();
-      await runInDurableObject(feedOf(who), () => {});
     } finally {
-      // biome-ignore lint/correctness/noUnsafeFinally: the count is the point
-      return count.stop();
+      counted = count.stop();
     }
+    return counted;
   }
   const measured: Record<string, { read: number; written: number }> = {};
   const note = (unit: string, r: { read: number; written: number }) => {
@@ -1618,12 +1613,7 @@ describe("live work's rows in a feed's object", () => {
       }),
     );
     // A control.
-    note(
-      "control",
-      await rows(owner, async () => {
-        socket?.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-      }),
-    );
+    note("control", await rows(owner, () => say(owner, socket, { t: "ack", n: 0 })));
     // A mark: a change applied with and without live sockets, its difference the mark's.
     const marked = await rows(owner, () => feedOf(owner).applyFeed([change(owner, repo, 1)]));
     // A turn running the pump.
@@ -1631,15 +1621,16 @@ describe("live work's rows in a feed's object", () => {
     // A renewal's turn.
     vi.useFakeTimers({ toFake: ["Date"] });
     await advance(owner, 6 * 60_000);
-    socket?.ws?.send(JSON.stringify({ t: "renew" }));
-    await runInDurableObject(feedOf(owner), () => {});
+    await say(owner, socket, { t: "renew" });
     note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
     // The socket's end.
     note(
       "terminal",
       await rows(owner, async () => {
+        const closed = handled(owner, "close");
         socket?.ws?.close(1000, "done");
         await socket?.closed;
+        await closed();
       }),
     );
     // The pump's most: a page of changed streams (and more), a credential's most sockets.
@@ -1755,8 +1746,8 @@ describe("a live socket's authority", () => {
     );
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 6 * 60_000);
-    stale.ws?.send(JSON.stringify({ t: "renew" }));
-    await handledThenTurn(owner);
+    await say(owner, stale, { t: "renew" });
+    await runDurableObjectAlarm(feedOf(owner));
     expect(await stale.closed).toEqual({ code: 4401 });
     fresh.ws?.close(1000, "done");
   });
@@ -1912,13 +1903,13 @@ describe("a live socket's protocol", () => {
     for (let v = 1; v <= 8; v++) {
       await apply(change(owner, repo, v));
       const frame = (await fast.next()) as { n: number };
-      fast.ws?.send(JSON.stringify({ t: "ack", n: frame.n }));
+      await say(owner, fast, { t: "ack", n: frame.n });
       await slow.next();
     }
     // A mention: the fast socket hears of it; the slow one is full.
     await apply(change(owner, repo, 9));
     const heard = (await fast.next()) as { n: number };
-    fast.ws?.send(JSON.stringify({ t: "ack", n: heard.n }));
+    await say(owner, fast, { t: "ack", n: heard.n });
     // Then a comment in the same conversation, unsubscribed before the next run.
     const comment = change(owner, repo, 10);
     await feedOf(owner).applyFeed([
@@ -1930,7 +1921,7 @@ describe("a live socket's protocol", () => {
     )
       .bind(owner.principalId, repo.id, repo.conversation, Date.now())
       .run();
-    slow.ws?.send(JSON.stringify({ t: "ack", n: 8 }));
+    await say(owner, slow, { t: "ack", n: 8 });
     await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.setAlarm(Date.now()),
     );

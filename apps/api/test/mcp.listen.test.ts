@@ -21,6 +21,7 @@ import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { dpopKey } from "./helpers/dpop.js";
 import { entry } from "./helpers/feed.js";
+import { until } from "./helpers/live-sockets.js";
 import { scopedToken } from "./helpers/principals.js";
 
 afterEach(() => {
@@ -159,10 +160,6 @@ const socketsOf = async (who: Who) => ({
   ),
 });
 
-/**
- * The feed's sockets once its object has handled a close: each round trip to the object runs
- * after events it already received (a bounded number of them, no timer).
- */
 /** `who`'s sockets once the object forgot every one (their leases are maintenance's to release). */
 async function forgotten(who: Who) {
   for (let i = 0; i < 100; i++) {
@@ -460,11 +457,21 @@ describe("a listen stream", () => {
     const repo = await repoWithIssue(owner);
     const stream = await listen([feedUri(owner)], bearer(owner.token));
     await stream.next();
-    // Read as they come: acknowledged, so more than a window's worth arrives.
+    // Read as they come: acknowledged (every half window taken), so more than a window's worth
+    // arrives; each acknowledgement applied before what depends on it.
+    const ackedThrough = (n: number) =>
+      until(
+        owner,
+        (sql) => sql.exec<{ acked: number }>("SELECT acked FROM live_local").one().acked >= n,
+        `acknowledged through ${n}`,
+      );
+    const half = LIVE_POLICY.window / 2;
     for (let v = 1; v <= LIVE_POLICY.window + 4; v++) {
+      await ackedThrough(Math.floor((v - 1) / half) * half - half);
       await pump(owner, repo, v);
       expect(await stream.next()).toMatchObject(updated(owner));
     }
+    await ackedThrough(LIVE_POLICY.window + 4);
     // No longer read: the socket's window fills, its frames held by the object, not the Worker.
     for (let v = 20; v < 40; v++) await pump(owner, repo, v);
     const held = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>

@@ -262,6 +262,8 @@ export const feedHooks: {
   afterTurnWork?: (feed: UserDO, state: DurableObjectState) => Promise<void>;
   /** Called in a feed's turn once its successor's grant is answered (tests). */
   afterSuccessorGrant?: (state: DurableObjectState) => void;
+  /** Called once a socket's message, or its close, has been handled, whatever came of it (tests). */
+  afterSocketEvent?: (feed: string | undefined, event: "message" | "close") => void;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -1131,6 +1133,14 @@ export class UserDO extends MigratingDO {
    * its life; anything else, or past a bound, closes it.
    */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    try {
+      await this.#socketMessage(ws, message);
+    } finally {
+      feedHooks.afterSocketEvent?.(this.ctx.id.name, "message");
+    }
+  }
+
+  async #socketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     // Past its prepaid end: nothing read or spent, only closed (its rows are its recovery's).
     if (unpaid(ws, Date.now())) {
       ws.close(CLOSE_EXPIRED, "expired: reconnect with a new ticket");
@@ -1321,7 +1331,11 @@ export class UserDO extends MigratingDO {
   }
 
   override async webSocketClose(ws: WebSocket): Promise<void> {
-    await this.#socketGone(ws);
+    try {
+      await this.#socketGone(ws);
+    } finally {
+      feedHooks.afterSocketEvent?.(this.ctx.id.name, "close");
+    }
   }
 
   override async webSocketError(ws: WebSocket): Promise<void> {
