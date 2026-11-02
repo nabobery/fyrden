@@ -29,7 +29,9 @@ import {
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
+  type LiveEnvelope,
   makeLiveGrant,
+  reserveLive,
 } from "../src/live/budget.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { planFor } from "../src/live/funding.js";
@@ -1188,7 +1190,9 @@ describe("a feed's turn", () => {
   const turnOf = (who: Who) =>
     runInDurableObject(feedOf(who), (_: UserDO, state) =>
       state.storage.sql
-        .exec<{ phase: string; intended_at: number }>("SELECT phase, intended_at FROM live_turn")
+        .exec<{ phase: string; intended_at: number; operation_id: string }>(
+          "SELECT phase, intended_at, operation_id FROM live_turn",
+        )
         .toArray(),
     );
 
@@ -1499,6 +1503,79 @@ describe("a feed's turn", () => {
     expect(second.response.status).toBe(101);
     expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
     for (const s of [first, second]) s.ws?.close(1000, "done");
+  });
+
+  it("runs no turn its grant paid less for than today's price: the feed is handed a new one", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // A turn granted before the price rose (a deploy since): the ledger charged it the old price
+    // (66 rows written a day), and it is the feed's prepared turn.
+    await runInDurableObject(feedOf(owner), async (_: UserDO, state) => {
+      const budget = new LiveBudget(state.storage.sql);
+      const fence = budget.fence();
+      const priced = planFor(
+        LIVE_PRICES.pump as LiveManifestEntry,
+        {
+          incarnation: fence.incarnation,
+          epoch: fence.epoch,
+          recipientType: "UserDO",
+          recipient: owner.principalId,
+          class: "ordinary",
+          kind: "pump",
+          producesLocal: true,
+        },
+        budget.ledgerEarliest(Date.now()),
+      );
+      const cheaper = {
+        ...priced,
+        charges: priced.charges.map((c) => ({
+          ...c,
+          resources: { ...c.resources, do_rows_written: 66 },
+        })),
+      };
+      const granted = await reserveLive(env.DIRECTORY, await makeLiveGrant(cheaper));
+      if (granted.status !== "granted") throw new Error(granted.reason);
+      state.storage.sql.exec(
+        `UPDATE live_turn SET operation_id = ?, envelope_json = ?, budget_seq = ?,
+           budget_valid_until = ?, phase = 'prepared', owner_id = NULL, dispatch_instance = NULL`,
+        granted.grant.operationId,
+        JSON.stringify(granted.grant),
+        granted.grant.seq,
+        granted.grant.plan.validUntil,
+      );
+    });
+    // Not runnable: a renewal finds nothing to authorize it and closes the socket to reconnect.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await advance(owner, 6 * 60_000);
+    await say(owner, socket, { t: "renew" });
+    expect(await socket.closed).toEqual({ code: 4401 });
+    // The reconnect's admission hands the feed a fresh grant at today's price, which runs and
+    // names its successor.
+    const again = await open(owner.token);
+    const paid = await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const row = state.storage.sql
+        .exec<{ envelope_json: string; phase: string }>(
+          "SELECT envelope_json, phase FROM live_turn",
+        )
+        .one();
+      const envelope = JSON.parse(row.envelope_json) as LiveEnvelope;
+      return { phase: row.phase, written: envelope.plan.charges[0]?.resources.do_rows_written };
+    });
+    expect(paid).toEqual({
+      phase: "prepared",
+      written: (LIVE_PRICES.pump as LiveManifestEntry).resources.do_rows_written,
+    });
+    const [fresh] = await turnOf(owner);
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+      return state.storage.setAlarm(Date.now());
+    });
+    await runDurableObjectAlarm(feedOf(owner));
+    const [successor] = await turnOf(owner);
+    expect(successor?.phase).toBe("prepared");
+    expect(successor?.operation_id).toBeDefined();
+    expect(successor?.operation_id).not.toBe(fresh?.operation_id);
+    again.ws?.close(1000, "done");
   });
 
   it("tells a socket to reconnect when its renewal finds no turn to authorize it", async () => {

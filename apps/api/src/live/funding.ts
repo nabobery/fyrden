@@ -46,8 +46,13 @@ import {
 const R = DISCRETIONARY_RESOURCES;
 const DAY = 86_400_000;
 
-/** The manifest live work is priced by: a funding of another revision is refused. */
-export const LIVE_MANIFEST_REVISION = 1;
+/**
+ * The manifest live work is priced by: a funding of another revision is
+ * refused. Raised whenever its prices change (2: marks, tickets and the pump
+ * measured again, prunes bounded), so a funding in flight across a deploy
+ * never pays old prices for new work.
+ */
+export const LIVE_MANIFEST_REVISION = 2;
 
 export type FundedResult<T> =
   | {
@@ -200,6 +205,26 @@ export function fundingShapeError(
       return `less do_duration_ms than its price on day ${day}`;
   }
   return null;
+}
+
+/**
+ * Whether `envelope`'s grant pays for one run of `entry`'s unit at today's
+ * prices for `target` (its shape alone): a grant made before a price rose
+ * (a deploy since) does not, and pays for nothing of it.
+ */
+export function paysToday(
+  envelope: LiveEnvelope,
+  entry: LiveManifestEntry,
+  target: Pick<LiveFundingExpectation, "recipientType" | "recipient" | "kind" | "class">,
+): boolean {
+  const funding: LiveFunding = {
+    protocol: 1,
+    revision: LIVE_MANIFEST_REVISION,
+    envelope,
+    quantity: 1,
+    ownerId: entry.duration === "owner" ? "owner" : null,
+  };
+  return fundingShapeError(funding, expectationOf(entry, target)) === null;
 }
 
 /**

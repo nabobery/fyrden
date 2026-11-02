@@ -7,7 +7,18 @@ import {
   type LiveEnvelope,
   type LiveGrantRequest,
 } from "../../live/budget.js";
+import { paysToday } from "../../live/funding.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "../../live/manifest.js";
 import type { LiveOwnerRef } from "../../live/owners.js";
+
+/** Whether a turn's grant pays for a turn at today's prices (one made before a rise does not). */
+const turnPaid = (envelope: LiveEnvelope) =>
+  paysToday(envelope, LIVE_PRICES.pump as LiveManifestEntry, {
+    recipientType: "UserDO",
+    recipient: envelope.plan.recipient,
+    kind: "pump",
+    class: "ordinary",
+  });
 
 /*
  * Live budgets in a feed's object (call within its transactions): the fence
@@ -319,6 +330,12 @@ export class LiveBudget {
     const plan = envelope.plan;
     const stamp = { epoch: plan.epoch, incarnation: plan.incarnation, seq: envelope.seq };
     if (this.#fenced(stamp) || now < plan.validFrom || now >= plan.validUntil) return false;
+    if (!turnPaid(envelope)) return false;
+    // A prepared turn its grant pays too little for today (granted before a price rose) can never
+    // run: it gives way like an expired one.
+    const held = this.turn();
+    if (held?.phase === "prepared" && !turnPaid(held.envelope))
+      this.sql.exec("DELETE FROM live_turn WHERE id = 1 AND operation_id = ?", held.operationId);
     return (
       this.sql.exec(
         // A prepared turn that can no longer run (expired, or fenced since) gives way; one held
@@ -359,7 +376,8 @@ export class LiveBudget {
     const now = this.ledgerNow(local);
     if (
       this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) ||
-      now >= plan.validUntil
+      now >= plan.validUntil ||
+      !turnPaid(turn.envelope)
     )
       return null;
     return {
@@ -406,7 +424,8 @@ export class LiveBudget {
     if (
       this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) ||
       now < plan.validFrom ||
-      now >= plan.validUntil
+      now >= plan.validUntil ||
+      !turnPaid(turn.envelope)
     )
       return null;
     // Claimed by this instance: another finding it claimed knows it was not its own.

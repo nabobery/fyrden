@@ -397,7 +397,7 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   owner's whole accounting reserved with it.
  */
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 1_130, do_rows_written: 87, d1_rows_read: 661, d1_rows_written: 29 },
+  { do_rows_read: 1_131, do_rows_written: 87, d1_rows_read: 661, d1_rows_written: 29 },
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",
