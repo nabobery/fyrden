@@ -17,8 +17,12 @@
 export const LIVE_POLICY = {
   /** How long a ticket can be redeemed. */
   ticketMs: 30_000,
-  /** How long a renewal keeps a socket (never past its absolute expiry). */
-  renewMs: 10 * 60_000,
+  /**
+   * How long a renewal keeps a socket (never past its absolute expiry); one is
+   * taken in the second half only. Each renewal is a turn of the feed's, so
+   * this sets how many a socket costs a day (about 50 from a browser).
+   */
+  renewMs: 30 * 60_000,
   /** A socket's longest life (its credential's expiry if sooner). */
   lifeMs: 24 * 60 * 60_000,
   /** Frames sent and not acknowledged at most. */
@@ -36,8 +40,6 @@ export const LIVE_POLICY = {
   streamsPerFrame: 20,
   /** Conversations a dirty stream keeps as causes at most. */
   candidatesPerStream: 20,
-  /** How long an access decision stands. */
-  decisionMs: 10 * 60_000,
   /** How long a revoked dependency is kept (a socket's longest life). */
   revokedMs: 24 * 60 * 60_000,
   /** Dirty streams one pump unit reads at most (its progress stops at the page's end). */

@@ -85,7 +85,7 @@ export const LIVE_CLIENT = {
    */
   ackAfterMs: 60_000,
   /** The server's renewal period, and how long before its deadline to renew. */
-  renewMs: 10 * 60_000,
+  renewMs: 30 * 60_000,
   renewBeforeMs: 90_000,
   /** How long to wait for `renewed` before asking again. */
   renewRetryMs: 30_000,

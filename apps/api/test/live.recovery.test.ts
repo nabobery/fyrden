@@ -10,6 +10,7 @@ import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserDO } from "../src/do/UserDO.js";
+import { LIVE_POLICY } from "../src/do/user/live.js";
 import { LIVE_RECOVERY_ROWS, LiveBudget } from "../src/do/user/live-budget.js";
 import {
   expireLiveReceipts,
@@ -226,7 +227,9 @@ describe("live credit in a feed's object", () => {
         const grant = await mint(
           await makeLiveGrant(
             await plan({
-              ...today(),
+              // Valid past a renewal period (one lapsing sooner holds no place), from noon.
+              day: today().day,
+              validMs: LIVE_POLICY.renewMs + 60_000,
               recipient: feed,
               kind: "control",
               producesLocal: true,

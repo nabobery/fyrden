@@ -168,12 +168,13 @@ describe("a listen stream's writer", () => {
     const { socket, time, read } = open();
     await read();
     const start = time.now();
-    time.advance(LIVE_POLICY.renewMs / 2 - 60_000);
+    time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs - 60_000);
     time.tick();
     expect(socket.sent).toEqual([]);
-    time.advance(60_000 + LISTEN_POLICY.renewMarginMs);
+    time.advance(60_000);
     time.tick();
     expect(socket.sent).toEqual([{ t: "renew" }]);
+    const asked = time.now();
     time.advance(30_000);
     time.tick();
     expect(socket.sent).toHaveLength(1);
@@ -187,10 +188,40 @@ describe("a listen stream's writer", () => {
     expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
     time.tick();
     expect(socket.sent).toHaveLength(2);
-    time.advance(until - LIVE_POLICY.renewMs / 2 + LISTEN_POLICY.renewMarginMs - time.now());
+    // Its next deadline counted from when it was first asked, on the bridge's clock.
+    const next = asked + LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs;
+    time.advance(next - 1 - time.now());
+    time.tick();
+    expect(socket.sent).toHaveLength(2);
+    time.advance(1);
     time.tick();
     expect(socket.sent).toHaveLength(3);
     expect(time.now() - start).toBeLessThan(LISTEN_POLICY.lifeMs);
+  });
+
+  it("renews on its own clock, however far the object's runs ahead, and never past the object's deadline", async () => {
+    const { socket, time, read } = open();
+    await read();
+    const ahead = 4 * 60_000;
+    // Each renewal answered at once with a deadline on a clock 4 minutes ahead: the stream
+    // still renews before the socket's real deadline, renewal after renewal.
+    for (let i = 1; i <= 3; i++) {
+      time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs);
+      time.tick();
+      expect(socket.sent).toHaveLength(i);
+      socket.frame({ t: "renewed", until: time.now() + ahead + LIVE_POLICY.renewMs });
+      expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
+    }
+    // A deadline sooner than a renewal period (the credential expires): renewed before it.
+    time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs);
+    time.tick();
+    expect(socket.sent).toHaveLength(4);
+    const expiry = time.now() + 10 * 60_000;
+    socket.frame({ t: "renewed", until: expiry });
+    expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
+    time.advance(expiry - LISTEN_POLICY.renewBeforeMs - time.now());
+    time.tick();
+    expect(socket.sent).toHaveLength(5);
   });
 
   it("keeps acknowledgements within a minute's controls, leaving room for renewals", async () => {

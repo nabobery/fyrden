@@ -10,6 +10,7 @@ import {
 import { paysToday } from "../../live/funding.js";
 import { LIVE_PRICES, type LiveManifestEntry } from "../../live/manifest.js";
 import type { LiveOwnerRef } from "../../live/owners.js";
+import { LIVE_POLICY } from "./live.js";
 
 /**
  * Whether a turn's grant pays for a turn of its kind (a pump, or one of
@@ -124,7 +125,9 @@ type Stamped = Record<string, string | number> & {
 /**
  * The grants a pool of credit (a kind's, a day's) holds at most that can be
  * spent: its current block and one installed successor. Another refill
- * waits until one drains or is retired, so spending reads two at most.
+ * waits until one drains or is retired, so spending reads two at most. A
+ * block lapsing within a socket's renewal period holds no place: its
+ * replacement is installed beside it (spent after it, the older first).
  */
 export const LIVE_POOL_GRANTS = 2;
 
@@ -496,7 +499,8 @@ export class LiveBudget {
 
   /**
    * The days of `plan`'s whose pool of `balance` credit has room for it
-   * (fewer than its most spendable grants), once a few of each pool's
+   * (fewer than its most spendable grants, a block lapsing within a
+   * renewal period not counted), once a few of each pool's
    * expired balances are removed (an expired grant is never installed
    * again: its balance protects nothing more, and leaving it would slow
    * every spend of its day).
@@ -526,7 +530,7 @@ export class LiveBudget {
                LIMIT ?4)`,
               balance,
               charge.day,
-              now,
+              now + LIVE_POLICY.renewMs,
               LIVE_POOL_GRANTS,
             )
             .one().n < LIVE_POOL_GRANTS,
@@ -959,16 +963,20 @@ export class LiveBudget {
     this.sql.exec("DELETE FROM live_budget_terminal WHERE socket_id = ?", socketId);
   }
 
-  /** Whole `unit`s left of today's `kind` credit (`day` must be `now`'s), counted to `atMost`. */
+  /**
+   * Whole `unit`s left of today's `kind` credit (`day` must be `now`'s), counted to `atMost`;
+   * with `horizon`, only of blocks still valid that long after `now`.
+   */
   unitsLeft(
     kind: "control" | "mark",
     day: number,
     unit: ResourceVector,
     now: number,
     atMost: number,
+    horizon = 0,
   ): number {
     if (day !== Math.floor(now / DAY)) return 0;
-    const rows = this.#spendable(kind, day, now);
+    const rows = this.#spendable(kind, day, now + horizon);
     let units = 0;
     for (const row of rows) {
       const remaining = JSON.parse(row.remaining) as Record<string, number>;

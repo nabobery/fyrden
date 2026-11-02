@@ -209,6 +209,20 @@ function refillDue(
   return pending?.phase === "queued" && pending.intendedAt <= now;
 }
 
+/**
+ * Whether `kind`'s pool of today (`day`, the ledger's at `at`) is at low
+ * water: a refill is wanted. A control's counts only blocks still valid at a
+ * socket's next renewal: a quiet socket spends a block's controls slower
+ * than it expires.
+ */
+function poolLow(budget: LiveBudget, kind: "control" | "mark", day: number, at: number): boolean {
+  const horizon = kind === "control" ? LIVE_POLICY.renewMs : 0;
+  return (
+    budget.unitsLeft(kind, day, liveBlockUnit(kind), at, LIVE_LOW_WATER + 1, horizon) <=
+    LIVE_LOW_WATER
+  );
+}
+
 function socketIdOf(ws: WebSocket): string | undefined {
   const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
   return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
@@ -845,7 +859,7 @@ export class UserDO extends MigratingDO {
       last ??
       budget.poolStamp("mark", day, now) ??
       (signals.length > 0 ? budget.turnStamp(now) : null);
-    if (stamp && budget.unitsLeft("mark", day, price, now, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER)
+    if (stamp && poolLow(budget, "mark", day, now))
       budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
     return marked;
   }
@@ -1217,10 +1231,7 @@ export class UserDO extends MigratingDO {
         minute_count: minute,
         ...(fresh && { minute_start: now }),
       });
-      if (
-        day !== null &&
-        budget.unitsLeft("control", day, price, at, LIVE_LOW_WATER + 1) <= LIVE_LOW_WATER
-      )
+      if (day !== null && poolLow(budget, "control", day, at))
         refill = budget.queueOnce("control_refill", crypto.randomUUID(), at, paid, at) === "queued";
       return true;
     });
@@ -2042,8 +2053,15 @@ export class UserDO extends MigratingDO {
             )
           : "refused";
       // No room on any of its days: kept, its request asked again a minute on (the same grant,
-      // charged once) until a block drains or is retired.
-      if (installed === "full") budget.requeuePending(kind, item.identity, now + LIVE_RETRY_MS);
+      // charged once) until a block drains or is retired, while its pool is still at low water;
+      // filled meanwhile (admissions installed blocks of their own), it goes unused.
+      const ledgerAt = budget.ledgerNow(Date.now());
+      const day = budget.ledgerDay(Date.now());
+      const balance = kind === "control_refill" ? "control" : "mark";
+      if (installed === "full" && day !== null && !poolLow(budget, balance, day, ledgerAt))
+        budget.finishPending(kind, item.identity);
+      else if (installed === "full")
+        budget.requeuePending(kind, item.identity, now + LIVE_RETRY_MS);
       // Refused for good (today's allowance, its grant expired or fenced): it goes (low water
       // queues another).
       else if (installed !== "installed") budget.finishPending(kind, item.identity);

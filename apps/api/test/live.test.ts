@@ -53,6 +53,9 @@ import { handled, runTurns, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
+/** A while into a socket's renewal period's second half, when a renewal is taken. */
+const RENEW_LATE = Math.ceil(LIVE_POLICY.renewMs * 0.6);
+
 afterEach(async () => {
   vi.useRealTimers();
   delete feedHooks.beforeEpochRead;
@@ -843,7 +846,7 @@ describe("a live socket", () => {
     // Early: nothing.
     await say(owner, socket, { t: "renew" });
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "renewed" });
@@ -852,7 +855,7 @@ describe("a live socket", () => {
     )
       .bind(Date.now(), owner.principalId)
       .run();
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.closed).toEqual({ code: 4401 });
@@ -1051,6 +1054,37 @@ describe("a feed's live credit", () => {
     socket.ws?.close(1000, "done");
   });
 
+  it("refills a pool whose block expires before the socket's next renewal, however full it is", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    /** Sets the admission's control block to end `ms` after the ledger's now. */
+    const endsIn = (ms: number) =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        const at = new LiveBudget(state.storage.sql).ledgerNow(Date.now());
+        state.storage.sql.exec(
+          `UPDATE live_budget_balances SET budget_valid_until = ?
+           WHERE kind = 'control' AND budget_seq = (
+             SELECT min(budget_seq) FROM live_budget_balances WHERE kind = 'control')`,
+          at + ms,
+        );
+      });
+    // A quiet socket spends a block slower than it expires: its admission's block, nearly
+    // full, lapses within a renewal period.
+    await endsIn(60_000);
+    await ack(owner, socket);
+    expect((await credit(owner)).pending).toEqual(["control_refill"]);
+    await runDurableObjectAlarm(feedOf(owner));
+    expect((await credit(owner)).controls.sort()).toEqual([LIVE_BLOCK_UNITS - 1, LIVE_BLOCK_UNITS]);
+    // Past the first block's end, the socket's controls are paid from the second.
+    await endsIn(-1);
+    await ack(owner, socket);
+    const held = await credit(owner);
+    expect(held.controls.sort()).toEqual([LIVE_BLOCK_UNITS - 1, LIVE_BLOCK_UNITS - 1]);
+    expect(held.pending).toEqual([]);
+    expect(socket.ws?.readyState).toBe(WebSocket.OPEN);
+    socket.ws?.close(1000, "done");
+  });
+
   it("closes a socket whose control nothing is left to pay for, on its terminal provision", async () => {
     const owner = await user();
     const socket = await open(owner.token);
@@ -1239,7 +1273,7 @@ describe("a feed's turn", () => {
     const owner = await user();
     const socket = await open(owner.token);
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     const asked = Date.now();
     await say(owner, socket, { t: "renew" });
     await advance(owner, 2 * 60_000);
@@ -1327,6 +1361,79 @@ describe("a feed's turn", () => {
     // The same grant again: charged once, still kept while the pool is full.
     expect(await refills()).toBe(charged);
     expect(await kept()).toEqual([{ phase: "queued", asked: 1 }]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("lets a refill go unused when its pool was filled meanwhile, rather than asking again", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Two blocks at low water together: a control queues the refill.
+    const setBoth = (units: number) =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        const unit = liveBlockUnit("control");
+        const left = Object.fromEntries(
+          Object.entries(unit).map(([r, v]) => [r, (v as number) * units]),
+        );
+        state.storage.sql.exec(
+          "UPDATE live_budget_balances SET remaining = ? WHERE kind = 'control'",
+          JSON.stringify(canonicalVector(left as never)),
+        );
+      });
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec(
+        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         SELECT 'op_other', day, kind, remaining, budget_epoch, budget_incarnation, budget_seq,
+           budget_valid_until FROM live_budget_balances WHERE kind = 'control'`,
+      ),
+    );
+    await setBoth(LIVE_LOW_WATER / 2);
+    await say(owner, socket, { t: "ack", n: 0 });
+    // Before its turn, both are full again (admissions installed blocks of their own, say): no
+    // room, and nothing low, so it goes rather than costing a turn a minute.
+    await setBoth(LIVE_BLOCK_UNITS);
+    await runDurableObjectAlarm(feedOf(owner));
+    const pending = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+    );
+    expect(pending).toEqual([]);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("installs a refill beside two blocks lapsing before the next renewal, on today too, at once", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Two full blocks today (the admission's and another) that both lapse within a renewal
+    // period: neither holds a place, so the refill is not refused for room.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const at = new LiveBudget(state.storage.sql).ledgerNow(Date.now());
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET budget_valid_until = ? WHERE kind = 'control'",
+        at + 60_000,
+      );
+      state.storage.sql.exec(
+        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+           budget_incarnation, budget_seq, budget_valid_until)
+         SELECT 'op_other', day, kind, remaining, budget_epoch, budget_incarnation, budget_seq,
+           budget_valid_until FROM live_budget_balances WHERE kind = 'control'`,
+      );
+    });
+    await say(owner, socket, { t: "ack", n: 0 });
+    await runDurableObjectAlarm(feedOf(owner));
+    const pool = await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      const sql = state.storage.sql;
+      const today = Math.floor(new LiveBudget(sql).ledgerNow(Date.now()) / 86_400_000);
+      return {
+        pending: sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+        today: sql
+          .exec(
+            "SELECT count(*) AS n FROM live_budget_balances WHERE kind = 'control' AND day = ?",
+            today,
+          )
+          .one().n,
+      };
+    });
+    expect(pool).toEqual({ pending: [], today: 3 });
     socket.ws?.close(1000, "done");
   });
 
@@ -1559,7 +1666,7 @@ describe("a feed's turn", () => {
     });
     // Not runnable: a renewal finds nothing to authorize it and closes the socket to reconnect.
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     expect(await socket.closed).toEqual({ code: 4401 });
     // The reconnect's admission hands the feed a fresh grant at today's price, which runs and
@@ -1600,7 +1707,7 @@ describe("a feed's turn", () => {
       state.storage.sql.exec("DELETE FROM live_turn"),
     );
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     socket.ws?.send(JSON.stringify({ t: "renew" }));
     // Closed as an expired socket is, so the client reconnects at once: its admission grants a turn.
     expect(await socket.closed).toEqual({ code: 4401 });
@@ -1610,7 +1717,7 @@ describe("a feed's turn", () => {
     const owner = await user();
     const socket = await open(owner.token);
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     // The renewal arrives while the turn runs, after its work (so it is left queued); then
     // today's escrow places fill, so its successor (an owned unit) is refused.
     feedHooks.afterTurnWork = async (feed, state) => {
@@ -1671,7 +1778,7 @@ describe("a feed's turn", () => {
       Date.now() + LIVE_POLICY.renewMs + LIVE_ADMISSION.leaseMarginMs,
     );
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "renewed" });
@@ -1973,7 +2080,7 @@ describe("live work's rows in a feed's object", () => {
       noteEnd();
       // A renewal.
       vi.useFakeTimers({ toFake: ["Date"] });
-      await advance(idle, 6 * 60_000);
+      await advance(idle, RENEW_LATE);
       await say(idle, idleSocket, { t: "renew" });
       await turn(idle);
       // A refill: a control at low water queues it.
@@ -2001,7 +2108,7 @@ describe("live work's rows in a feed's object", () => {
       const bot: Who = { principalId: agent.id, token: agent.own, handle: agent.handle };
       const botSocket = await open(agent.own, ROOMY);
       vi.useFakeTimers({ toFake: ["Date"] });
-      await advance(bot, 6 * 60_000);
+      await advance(bot, RENEW_LATE);
       await say(bot, botSocket, { t: "renew" });
       await turn(bot);
       botSocket.ws?.close(1000, "done");
@@ -2021,7 +2128,7 @@ describe("live work's rows in a feed's object", () => {
       measuring = true;
       await turn(crowd);
       noteEnd();
-      await advance(crowd, 6 * 60_000);
+      await advance(crowd, RENEW_LATE);
       const renewing = [crowdSockets[0], crowdSockets[1]];
       for (const s of renewing) await say(crowd, s, { t: "renew" });
       const kind = await runInDurableObject(feedOf(crowd), (_: UserDO, state) => {
@@ -2231,7 +2338,7 @@ describe("live work's rows in a feed's object", () => {
     note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
     // A renewal's turn.
     vi.useFakeTimers({ toFake: ["Date"] });
-    await advance(owner, 6 * 60_000);
+    await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
     // The socket's end.
@@ -2500,7 +2607,7 @@ describe("a live socket's authority", () => {
       ),
     );
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 6 * 60_000);
+    vi.setSystemTime(Date.now() + RENEW_LATE);
     await say(owner, stale, { t: "renew" });
     await runDurableObjectAlarm(feedOf(owner));
     expect(await stale.closed).toEqual({ code: 4401 });
@@ -2611,7 +2718,8 @@ describe("a live socket's protocol", () => {
     expect(await socket.closed).toEqual({ code: 1008 });
     const late = await open(owner.token);
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(Date.now() + 11 * 60_000);
+    // Past its deadline (a renewal period and a minute on).
+    vi.setSystemTime(Date.now() + LIVE_POLICY.renewMs + 60_000);
     late.ws?.send(JSON.stringify({ t: "renew" }));
     expect(await late.closed).toEqual({ code: 4401 });
   });
