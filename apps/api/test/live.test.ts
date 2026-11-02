@@ -49,7 +49,7 @@ import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
-import { handled, say } from "./helpers/live-sockets.js";
+import { handled, runTurns, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -808,7 +808,7 @@ describe("a live socket", () => {
     const socket = await open(owner.token);
     const pump = async (version: number) => {
       await feedOf(owner).applyFeed([change(owner, repo, version)]);
-      await runDurableObjectAlarm(feedOf(owner));
+      await runTurns(owner);
     };
     for (let v = 1; v <= 8; v++) {
       await pump(v);
@@ -831,8 +831,8 @@ describe("a live socket", () => {
     await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.setAlarm(Date.now()),
     );
-    await runDurableObjectAlarm(feedOf(owner));
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
+    await runTurns(owner);
     expect(await socket.closed).toEqual({ code: 4409 });
   });
 
@@ -877,11 +877,11 @@ describe("a live socket", () => {
     )
       .bind(owner.principalId, repo.id, repo.conversation, Date.now())
       .run();
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(socket.frames).toEqual([]);
     // A mention goes through an unsubscribe.
     await feedOf(owner).applyFeed([change(owner, repo, 2)]);
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(await socket.next()).toMatchObject({ t: "changed", n: 1 });
     // An ignored repository: nothing at all.
     await env.DIRECTORY.prepare(
@@ -891,7 +891,7 @@ describe("a live socket", () => {
       .bind(owner.principalId, repo.id, Date.now())
       .run();
     await feedOf(owner).applyFeed([change(owner, repo, 3)]);
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(socket.frames).toEqual([]);
     socket.ws?.close(1000, "done");
   });
@@ -901,12 +901,12 @@ describe("a live socket", () => {
     const repo = await repoWithIssue(owner);
     const socket = await open(owner.token);
     await feedOf(owner).applyFeed([change(owner, repo, 1)]);
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(await socket.next()).toMatchObject({ n: 1 });
     expect(await feedOf(owner).markInboxThread(threadId(repo.id, repo.conversation), false)).toBe(
       true,
     );
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(await socket.next()).toMatchObject({
       n: 2,
       streams: [{ repo: repo.id, kind: "issue" }],
@@ -1701,6 +1701,74 @@ describe("a feed's turn", () => {
     expect(await turnOf(owner)).toEqual([]);
   });
 
+  it("names a pump for a slow consumer whose end nothing is left to pay for, which forgets it", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // Its first turn: nothing else due, a turn of renewals only named after it.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+      return state.storage.setAlarm(Date.now());
+    });
+    await runDurableObjectAlarm(feedOf(owner));
+    // Full past the slow-consumer limit, its terminal provisions gone.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_budget_terminal");
+      state.storage.sql.exec(
+        "UPDATE live_local SET sent = acked + ?, blocked_since = ?",
+        LIVE_POLICY.window,
+        Date.now() - LIVE_POLICY.slowMs - 1,
+      );
+    });
+    const left = () =>
+      runInDurableObject(
+        feedOf(owner),
+        (_: UserDO, state) =>
+          state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM live_local").one().n,
+      );
+    for (let i = 0; i < 4 && (await left()) > 0; i++) {
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+      await runDurableObjectAlarm(feedOf(owner));
+    }
+    expect(await socket.closed).toEqual({ code: 4409 });
+    expect(await left()).toBe(0);
+  });
+
+  it("names a turn of renewals only when nothing else is due, and a pump once a change waits", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    const kindOf = () =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        const row = state.storage.sql
+          .exec<{ envelope_json: string }>("SELECT envelope_json FROM live_turn")
+          .toArray()[0];
+        return row ? (JSON.parse(row.envelope_json) as LiveEnvelope).plan.kind : null;
+      });
+    const due = () =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+        state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
+        return state.storage.setAlarm(Date.now());
+      });
+    // Its first turn (the admission's, a pump): nothing to deliver, so its successor renews only.
+    await due();
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await kindOf()).toBe("renewal");
+    // A change marked: the cheap turn cannot pay for its delivery, so it names a pump after it.
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await due();
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(socket.frames).toEqual([]);
+    expect(await kindOf()).toBe("pump");
+    // The pump delivers it.
+    await due();
+    await runDurableObjectAlarm(feedOf(owner));
+    expect(await socket.next()).toMatchObject({ t: "changed" });
+    socket.ws?.close(1000, "done");
+  });
+
   it("names no successor once the feed has no socket", async () => {
     const owner = await user();
     const socket = await open(owner.token);
@@ -1841,7 +1909,13 @@ describe("live work's rows in a feed's object", () => {
     };
     // Socket ends within a turn, each its terminal provision's.
     let closed: Rows = { read: 0, written: 0, d1Read: 0, d1Written: 0 };
+    // What terminal provisions paid for, in all: taken out of the alarm a turn is compared with.
+    const paidByEnds: Rows = { read: 0, written: 0, d1Read: 0, d1Written: 0 };
     feedHooks.turnClose = (used) => {
+      paidByEnds.read += used.do_rows_read;
+      paidByEnds.written += used.do_rows_written;
+      paidByEnds.d1Read += used.d1_rows_read;
+      paidByEnds.d1Written += used.d1_rows_written;
       if (!measuring) return;
       closed = {
         read: Math.max(closed.read, used.do_rows_read),
@@ -1861,7 +1935,34 @@ describe("live work's rows in a feed's object", () => {
         state.storage.sql.exec("UPDATE live_turn SET intended_at = 0");
         return state.storage.setAlarm(Date.now());
       });
-      turns.push(await rows(who, () => runDurableObjectAlarm(feedOf(who))));
+      const before = done.length;
+      const ends = { ...paidByEnds };
+      const gross = await rows(who, () => runDurableObjectAlarm(feedOf(who)));
+      turns.push(gross);
+      // Its sockets' ends, paid by their terminal provisions, are not the turn's.
+      const whole = {
+        read: gross.read - (paidByEnds.read - ends.read),
+        written: gross.written - (paidByEnds.written - ends.written),
+        d1Read: gross.d1Read - (paidByEnds.d1Read - ends.d1Read),
+        d1Written: gross.d1Written - (paidByEnds.d1Written - ends.d1Written),
+      };
+      // An alarm that ran one turn: its whole (its claim and end, the alarm around it) and what that
+      // turn's grant paid, compared below.
+      if (measuring && done.length === before + 1)
+        wholes.push({ whole, paid: (done.at(-1) as { paid: TurnRows }).paid });
+    };
+    const wholes: { whole: Rows; paid: TurnRows }[] = [];
+    /** What a turn used outside its meter (its whole less what its meter counted): its end. */
+    const noteEnd = () => {
+      const whole = turns.at(-1) as Rows;
+      const metered = done.at(-1)?.used as TurnRows;
+      const was = steps.end ?? { read: 0, written: 0, d1Read: 0, d1Written: 0 };
+      steps.end = {
+        read: Math.max(was.read, whole.read - metered.do_rows_read),
+        written: Math.max(was.written, whole.written - metered.do_rows_written),
+        d1Read: Math.max(was.d1Read, whole.d1Read - metered.d1_rows_read),
+        d1Written: Math.max(was.d1Written, whole.d1Written - metered.d1_rows_written),
+      };
     };
     try {
       // A turn with nothing to do: its own end.
@@ -1869,7 +1970,7 @@ describe("live work's rows in a feed's object", () => {
       const idleSocket = await open(idle.token, ROOMY);
       measuring = true;
       await turn(idle);
-      steps.end = turns.at(-1) as Rows;
+      noteEnd();
       // A renewal.
       vi.useFakeTimers({ toFake: ["Date"] });
       await advance(idle, 6 * 60_000);
@@ -1905,6 +2006,42 @@ describe("live work's rows in a feed's object", () => {
       await turn(bot);
       botSocket.ws?.close(1000, "done");
       measuring = false;
+      // A feed with its most sockets (four credentials' five): its housekeeping at its most; and two
+      // of them renewing in a turn of renewals only, both answered (it has room for them).
+      const crowd = await user();
+      const crowdSockets: Awaited<ReturnType<typeof open>>[] = [];
+      const crowdTokens = [
+        crowd.token,
+        ...(await Promise.all([1, 2, 3].map(() => scopedToken(crowd.principalId, [])))),
+      ];
+      for (const token of crowdTokens)
+        for (let i = 0; i < LIVE_POLICY.perCredential; i++)
+          crowdSockets.push(await open(token, ROOMY));
+      expect(await openSockets(crowd)).toBe(LIVE_POLICY.perFeed);
+      measuring = true;
+      await turn(crowd);
+      noteEnd();
+      await advance(crowd, 6 * 60_000);
+      const renewing = [crowdSockets[0], crowdSockets[1]];
+      for (const s of renewing) await say(crowd, s, { t: "renew" });
+      const kind = await runInDurableObject(feedOf(crowd), (_: UserDO, state) => {
+        const row = state.storage.sql
+          .exec<{ envelope_json: string }>("SELECT envelope_json FROM live_turn")
+          .one();
+        return (JSON.parse(row.envelope_json) as LiveEnvelope).plan.kind;
+      });
+      expect(kind).toBe("renewal");
+      await turn(crowd);
+      for (const s of renewing) expect(await s?.next()).toMatchObject({ t: "renewed" });
+      // All of them past their deadline with nothing left to pay for their ends: its housekeeping
+      // at its most (each end looked for, none found), their rows forgotten by the turns after.
+      await runInDurableObject(feedOf(crowd), (_: UserDO, state) => {
+        state.storage.sql.exec("DELETE FROM live_budget_terminal");
+        state.storage.sql.exec("UPDATE live_local SET deadline = 0");
+      });
+      for (let i = 0; i < 6; i++) await turn(crowd);
+      measuring = false;
+      for (const s of crowdSockets) s.ws?.close(1000, "done");
       // A delivery at its most (a full page at full causes) for a credential's most sockets beside
       // admissions never confirmed (their leases and dependencies in the directory too), once with
       // every conversation unsubscribed; a full page to prune. (A feed of four credentials' sockets:
@@ -2038,6 +2175,15 @@ describe("live work's rows in a feed's object", () => {
         d1Written: Math.min(r.d1Written, most.d1_rows_written),
       });
     }
+    // Each alarm that ran one turn, measured whole, within what that turn's grant paid.
+    expect(wholes.length).toBeGreaterThan(0);
+    for (const { whole, paid } of wholes)
+      expect(whole).toEqual({
+        read: Math.min(whole.read, paid.do_rows_read),
+        written: Math.min(whole.written, paid.do_rows_written),
+        d1Read: Math.min(whole.d1Read, paid.d1_rows_read),
+        d1Written: Math.min(whole.d1Written, paid.d1_rows_written),
+      });
     // Each turn within what its grant paid (its end, after its work, included).
     expect(done.length).toBeGreaterThan(0);
     const end = LIVE_TURN_STEPS.end;
@@ -2505,8 +2651,8 @@ describe("a live socket's protocol", () => {
     // One credential a turn: a turn for each.
     const apply = async (e: FeedEntry) => {
       await feedOf(owner).applyFeed([e]);
-      await runDurableObjectAlarm(feedOf(owner));
-      await runDurableObjectAlarm(feedOf(owner));
+      await runTurns(owner);
+      await runTurns(owner);
     };
     // The slow socket's window fills; the fast one acknowledges as it goes.
     for (let v = 1; v <= 8; v++) {
@@ -2534,7 +2680,7 @@ describe("a live socket's protocol", () => {
     await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.setAlarm(Date.now()),
     );
-    await runDurableObjectAlarm(feedOf(owner));
+    await runTurns(owner);
     expect(await slow.next()).toMatchObject({ t: "changed", n: 9 });
     expect(fast.frames).toEqual([]);
   });

@@ -11,14 +11,20 @@ import { paysToday } from "../../live/funding.js";
 import { LIVE_PRICES, type LiveManifestEntry } from "../../live/manifest.js";
 import type { LiveOwnerRef } from "../../live/owners.js";
 
-/** Whether a turn's grant pays for a turn at today's prices (one made before a rise does not). */
-const turnPaid = (envelope: LiveEnvelope) =>
-  paysToday(envelope, LIVE_PRICES.pump as LiveManifestEntry, {
+/**
+ * Whether a turn's grant pays for a turn of its kind (a pump, or one of
+ * renewals only) at today's prices (one made before a rise does not).
+ */
+const turnPaid = (envelope: LiveEnvelope) => {
+  const kind = envelope.plan.kind;
+  if (kind !== "pump" && kind !== "renewal") return false;
+  return paysToday(envelope, LIVE_PRICES[kind] as LiveManifestEntry, {
     recipientType: "UserDO",
     recipient: envelope.plan.recipient,
-    kind: "pump",
+    kind,
     class: "ordinary",
   });
+};
 
 /*
  * Live budgets in a feed's object (call within its transactions): the fence

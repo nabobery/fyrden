@@ -110,6 +110,13 @@ export interface LiveManifestEntry {
   readonly components: readonly AlarmUnit[];
   /** The fixtures it was measured on, each with the most it was observed to use. */
   readonly observed: Readonly<Record<string, ResourceVector>>;
+  /**
+   * A turn's composition, when the unit is a feed's turn: its rows priced
+   * as its end and its costliest kind of work (`work`: alternatives, each a
+   * list of steps), every step at its most as the meter checks it, and no
+   * less than its measured whole turn with the margin (`measured`).
+   */
+  readonly turn?: LiveTurnComposition;
   /** The Durable Object requests one admission may make (entries, callbacks, child calls). */
   readonly requests: number;
   /**
@@ -200,7 +207,10 @@ export function liveManifestError(
     const fixtures = Object.values(entry.observed);
     if (fixtures.length === 0) return `${unit}: no fixture observed`;
     if (!fixtures.every(isLiveVector)) return `${unit}: an observation is not a live vector`;
-    const price = livePrice(fixtures, entry.requests, entry.duration, entry.maxQuantity);
+    const price = {
+      ...livePrice(fixtures, entry.requests, entry.duration, entry.maxQuantity),
+      ...(entry.turn && liveTurnRows(entry.turn, fixtures)),
+    };
     for (const counter of R)
       if (entry.resources[counter] !== price[counter])
         return `${unit}: ${counter} is ${entry.resources[counter]}, its price by the rule ${price[counter]}`;
@@ -393,8 +403,13 @@ export const LIVE_TURN_RENEWALS = 2;
  * What each step of a feed's turn uses at most (rows in the feed's object
  * and in D1), measured by the live suite's fixtures: the turn starts a step
  * only while what it used, the step's most and its own end fit its grant
- * (see `TurnMeter`). `end`: the turn with no work at all (its claim,
- * dispatch, successor's grant and accounting); `forget`: one admission
+ * (see `TurnMeter`). `end`: what a turn uses outside its meter (its claim,
+ * dispatch, successor's grant and accounting, and the alarm's own reads
+ * around it, which grow with the feed's sockets: an idle turn's whole at a
+ * feed's most sockets, less what its meter counted); `housekeep`: its
+ * sockets looked over (expired and slow ones ended on their provisions, each
+ * looked for), at a feed's most sockets, the step every turn runs first;
+ * `forget`: one admission
  * never confirmed, forgotten with its lease released; `renewal`: one queued
  * renewal authorized; `refill`: one refill granted and installed;
  * `delivery`: one credential's page delivered to its sockets (its
@@ -405,14 +420,16 @@ export const LIVE_TURN_RENEWALS = 2;
  * ledger running on D1's own clock.
  */
 export const LIVE_TURN_STEPS = {
-  end: { do_rows_read: 104, do_rows_written: 7, d1_rows_read: 103, d1_rows_written: 23 },
+  // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC.
+  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 146, d1_rows_written: 25 },
+  housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
   forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
   renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
   refill: { do_rows_read: 43, do_rows_written: 15, d1_rows_read: 74, d1_rows_written: 9 },
   delivery: { do_rows_read: 496, do_rows_written: 20, d1_rows_read: 954, d1_rows_written: 6 },
-  // Its reads its bound, not one run's (they vary with what its index scans pass): about five a
-  // row it deletes (76 a page), its sockets' progress scanned (20), and a few.
-  prune: { do_rows_read: 420, do_rows_written: 76, d1_rows_read: 0, d1_rows_written: 0 },
+  // Its reads its bound, not one run's (they vary with what its index scans pass, 318 to 420
+  // seen): about five a row it deletes (76 a page), its sockets' progress scanned (20), and more.
+  prune: { do_rows_read: 440, do_rows_written: 76, d1_rows_read: 0, d1_rows_written: 0 },
 } as const;
 
 const TURN_COUNTERS = [
@@ -438,19 +455,52 @@ export const LIVE_TURN_STEP_MOST = Object.fromEntries(
   ]),
 ) as Record<keyof typeof LIVE_TURN_STEPS, Record<(typeof TURN_COUNTERS)[number], number>>;
 
+/** A turn's kinds of work, each a list of steps (see `LiveManifestEntry.turn`). */
+export interface LiveTurnComposition {
+  readonly work: readonly (readonly (keyof typeof LIVE_TURN_STEPS)[])[];
+}
+
 /**
- * The most a metered turn may use: its end twice (what it used before a
- * step counts against its grant, and its end is kept for after), and its
- * costliest kind of work (a delivery and a prune, a refill, or its
- * renewals), each step at its most as the meter checks it.
+ * A turn's rows at most: its end, its housekeeping and its costliest kind
+ * of work, each step at its most as the meter checks it (the margin taken
+ * once a step), and no less than its observations (a measured whole turn)
+ * by the rule.
  */
-function turnMost(): Record<(typeof TURN_COUNTERS)[number], number> {
+export function liveTurnRows(
+  turn: LiveTurnComposition,
+  observed: readonly ResourceVector[],
+): Record<(typeof TURN_COUNTERS)[number], number> {
   const s = LIVE_TURN_STEP_MOST;
-  return turnRows(
-    (r) =>
-      2 * s.end[r] +
-      Math.max(s.delivery[r] + s.prune[r], s.refill[r], LIVE_TURN_RENEWALS * s.renewal[r]),
+  const most = (r: (typeof TURN_COUNTERS)[number]) => Math.max(0, ...observed.map((o) => o[r]));
+  return turnRows((r) =>
+    Math.max(
+      most(r) === 0 ? 0 : Math.ceil(1.25 * most(r)) + 2,
+      s.end[r] +
+        s.housekeep[r] +
+        Math.max(...turn.work.map((steps) => steps.reduce((n, step) => n + s[step][r], 0))),
+    ),
   );
+}
+
+/** A feed's turn of `turn`'s composition: its rows by `liveTurnRows`, the rest by the rule. */
+function turnUnit(
+  turn: LiveTurnComposition,
+  measured: Partial<ResourceVector>,
+  entry: Omit<LiveManifestEntry, "resources" | "observed" | "components" | "turn"> &
+    Partial<Pick<LiveManifestEntry, "components">>,
+): LiveManifestEntry {
+  const observed = vector(measured);
+  const rows = liveTurnRows(turn, [observed]);
+  return {
+    components: [],
+    ...entry,
+    turn,
+    observed: { [MEASURED]: observed },
+    resources: {
+      ...livePrice([observed], entry.requests, entry.duration, entry.maxQuantity),
+      ...rows,
+    },
+  };
 }
 
 /**
@@ -465,24 +515,50 @@ function turnMost(): Record<(typeof TURN_COUNTERS)[number], number> {
  */
 /** The pump turn as measured whole (a full delivery and prune, its alarm's reads around it). */
 const PUMP_MEASURED = {
-  do_rows_read: 1_135,
+  do_rows_read: 1_197,
   do_rows_written: 87,
   d1_rows_read: 661,
   d1_rows_written: 29,
 };
 
-LIVE_PRICES.pump = estimated(
-  turnRows((r) => Math.max(PUMP_MEASURED[r], turnMost()[r])),
+const TURN_ENTRY = {
+  validity: { maxMs: 30 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 30_000,
+  maxQuantity: 1,
+  requests: 8,
+  directoryCleanupDebt: vector({ d1_rows_written: 2 }),
+  localCleanupDebt: vector({ do_rows_written: 2 }),
+  dayCleanupDebt: ZERO,
+} as const;
+
+const RENEWALS = Array.from({ length: LIVE_TURN_RENEWALS }, () => "renewal" as const);
+
+LIVE_PRICES.pump = turnUnit(
+  { work: [["delivery", "prune"], ["refill"], RENEWALS] },
+  PUMP_MEASURED,
   {
-    validity: { maxMs: 30 * 60_000, days: 2 },
-    duration: "owner",
-    pendingMs: 30_000,
-    maxQuantity: 1,
-    requests: 8,
-    directoryCleanupDebt: vector({ d1_rows_written: 2 }),
-    localCleanupDebt: vector({ do_rows_written: 2 }),
-    dayCleanupDebt: ZERO,
+    ...TURN_ENTRY,
     components: LIVE_REQUIRED_COMPONENTS.pump as readonly AlarmUnit[],
+  },
+);
+
+/**
+ * - `renewal`: a feed's turn granted when nothing but renewals is due (no
+ *   change to deliver, refill or page to prune): its end and its renewals,
+ *   its meter leaving anything else (a change marked since) to a pump turn
+ *   after it.
+ */
+LIVE_PRICES.renewal = turnUnit(
+  { work: [RENEWALS] },
+  {},
+  {
+    ...TURN_ENTRY,
+    // Each of its renewals' statements reserved in the alarm.
+    components: [
+      ...(LIVE_REQUIRED_COMPONENTS.renewal as readonly AlarmUnit[]),
+      ...RENEWALS.slice(1),
+    ],
   },
 );
 

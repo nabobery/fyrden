@@ -370,7 +370,7 @@ export async function liveTarget(
            AS tickets,
          (${day} + 1) * ${DAY} AS tomorrow,
          EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_recipient
-           WHERE recipient = ?2 AND kind = 'pump' AND settled_at IS NULL
+           WHERE recipient = ?2 AND kind IN ('pump', 'renewal') AND settled_at IS NULL
              AND valid_until > ${LIVE_NOW} + 300000
              AND json_array_length(released_owners) = 0
              AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)

@@ -532,6 +532,42 @@ export class Live {
   }
 
   /**
+   * Whether the feed has live work beyond renewals: an admission still
+   * being confirmed (to forget, if it never is), a socket past its deadline
+   * or life, or a slow consumer past its limit (to end, or forget when
+   * nothing is left to pay for its end), a
+   * change an open socket has not heard of, or anything a prune would delete
+   * (so its next turn is a pump, not one of renewals only).
+   */
+  hasPumpWork(now: number): boolean {
+    const lowest =
+      this.sql.exec<{ p: number | null }>("SELECT min(delivered_seq) AS p FROM live_local").one()
+        .p ?? this.seq();
+    return (
+      this.sql
+        .exec<{ more: number }>(
+          `SELECT EXISTS (SELECT 1 FROM live_local WHERE phase = 'confirming'
+               OR deadline <= ?2 OR expires_at <= ?2
+               OR (blocked_since IS NOT NULL AND blocked_since <= ?4))
+             OR EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq
+               WHERE seq > (SELECT min(delivered_seq) FROM live_local WHERE phase = 'open'))
+             OR EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq WHERE seq <= ?1)
+             OR EXISTS (SELECT 1 FROM live_candidates INDEXED BY live_candidates_last
+               WHERE max(direct_seq, ordinary_seq) <= ?1)
+             OR EXISTS (SELECT 1 FROM live_tickets INDEXED BY live_tickets_expiry
+               WHERE expires_at <= ?2)
+             OR EXISTS (SELECT 1 FROM live_revoked INDEXED BY live_revoked_at WHERE at <= ?3)
+             AS more`,
+          lowest,
+          now,
+          now - LIVE_POLICY.revokedMs,
+          now - LIVE_POLICY.slowMs,
+        )
+        .one().more === 1
+    );
+  }
+
+  /**
    * Deletes what every socket has heard of (dirty rows and causes at or
    * below the lowest progress, a socket being confirmed's included; all of
    * them with no socket), expired tickets, and revocations past a socket's

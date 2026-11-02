@@ -45,7 +45,6 @@ import {
 import {
   LIVE_LOW_WATER,
   LIVE_PRICES,
-  LIVE_REQUIRED_COMPONENTS,
   LIVE_TURN_RENEWALS,
   LIVE_TURN_STEP_MOST,
   type LIVE_TURN_STEPS,
@@ -1410,9 +1409,10 @@ export class UserDO extends MigratingDO {
       // Exempt only when a terminal provision paid for it: a lookup that found none is the turn's.
       const used = meter.exempt(() => this.#closeNow(id, code, reason));
       if (used) feedHooks.turnClose?.(used);
-      // Its end not paid for (its provisions gone): forgotten at the turn's own cost, so it neither
+      // Its end not paid for (its provisions gone): forgotten after the turn's work, at its own cost
+      // while it has room (else a later turn's: a pump, as the feed has such sockets), so it neither
       // keeps the feed's turns going nor is closed again by every turn.
-      else this.ctx.storage.transactionSync(() => this.#live().forget(id));
+      else this.#unpaidEnds.push(id);
       return;
     }
     this.#closeNow(id, code, reason);
@@ -1470,30 +1470,16 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * One pump run: forgets admissions never confirmed and closes expired and
-   * slow sockets; then reads a page of the streams changed (`dirtyPage`)
-   * and, for each credential (at most `PUMP_CREDENTIALS` a run, the
-   * furthest behind first), checks it again on the directory's primary (no
-   * longer holding: its sockets close) and decides afresh, through one
-   * owning account's bounded check, the page's repositories of that account
-   * that its token may name; then sends each of its open sockets with room
-   * in its window one frame naming the streams it may read now with a
-   * cause its current preferences let through. A stream whose repository's
-   * answer is not known is passed over; one past the page, or of another
-   * account, waits for the next run (the socket's progress stops before
-   * it). Then prunes a page of what every socket heard of; whether more is
-   * left.
+   * A turn's housekeeping: expired and slow sockets ended (on their terminal
+   * provisions); the admissions whose confirmation never finished, to
+   * forget once the turn's work is done (see `#forget`).
    */
-  /**
-   * A turn's housekeeping: admissions never confirmed forgotten (their
-   * leases released), expired and slow sockets ended.
-   */
-  async #housekeep(current: () => boolean, meter: TurnMeter): Promise<void> {
+  #housekeep(current: () => boolean): string[] {
     const live = this.#live();
     const now = Date.now();
     const unconfirmed: string[] = [];
     for (const s of live.sockets()) {
-      if (!current()) return;
+      if (!current()) return [];
       // A confirmation that never finished (the object restarted meanwhile).
       if (s.phase === "confirming") {
         if (s.minute_start <= now - LIVE_CONFIRM_MS) unconfirmed.push(s.socket_id);
@@ -1502,9 +1488,18 @@ export class UserDO extends MigratingDO {
       else if (s.blocked_since !== null && now - s.blocked_since >= LIVE_POLICY.slowMs)
         this.#closeSocket(s.socket_id, CLOSE_RESYNC, "slow consumer: reread everything");
     }
+    return unconfirmed;
+  }
+
+  /**
+   * Admissions whose confirmation never finished, forgotten after the turn's
+   * work (a hint is more urgent): as many as the turn still has room for
+   * (the rest the next turn's), forgotten here, then their leases released
+   * together (one batch).
+   */
+  async #forget(unconfirmed: string[], current: () => boolean, meter: TurnMeter): Promise<void> {
+    const live = this.#live();
     if (unconfirmed.length === 0 || !current()) return;
-    // As many as the turn still has room for (the rest the next turn's): forgotten here, then their
-    // leases released together (one batch).
     let fitting = 0;
     while (
       fitting < unconfirmed.length &&
@@ -1526,7 +1521,19 @@ export class UserDO extends MigratingDO {
     );
   }
 
-  /** One credential's page delivered to its sockets (the turn's `delivery` step). */
+  /**
+   * One credential's page delivered to its sockets (the turn's `delivery`
+   * step): reads a page of the streams changed (`dirtyPage`) and, for each
+   * credential (at most `PUMP_CREDENTIALS` a run, the furthest behind
+   * first), checks it again on the directory's primary (no longer holding:
+   * its sockets close) and decides afresh, through one owning account's
+   * bounded check, the page's repositories of that account that its token
+   * may name; then sends each of its open sockets with room in its window one
+   * frame naming the streams it may read now with a cause its current
+   * preferences let through. A stream whose repository's answer is not known
+   * is passed over; one past the page, or of another account, waits for the
+   * next run (the socket's progress stops before it).
+   */
   async #deliver(current: () => boolean): Promise<boolean> {
     const principalId = this.ctx.id.name;
     if (principalId === undefined) return false;
@@ -1704,8 +1711,12 @@ export class UserDO extends MigratingDO {
     const local = Date.now();
     const ready = budget.runnableTurn(local);
     if (!ready || ready.intendedAt > local) return false;
-    // Its own coverage needs no check here: it was checked when prepared.
-    const units = (LIVE_REQUIRED_COMPONENTS.pump ?? []).filter((u) => u !== "coverage");
+    // Its own coverage needs no check here: it was checked when prepared. Its kind's components (a
+    // pump's, or a turn of renewals only).
+    const kind = budget.turn()?.envelope.plan.kind === "renewal" ? "renewal" : "pump";
+    const units = (LIVE_PRICES[kind] as LiveManifestEntry).components.filter(
+      (u) => u !== "coverage",
+    );
     const reservation = alarm.reserve(...units);
     if (!reservation) return false;
     let physical: Promise<void> = Promise.resolve();
@@ -1759,6 +1770,7 @@ export class UserDO extends MigratingDO {
           const paid = turnBudget(envelope, budget.ledgerDay(Date.now()));
           const meter = new TurnMeter(this.ctx.storage.sql, paid, LIVE_TURN_STEP_MOST.end);
           this.#meter = meter;
+          this.#unpaidEnds = [];
           try {
             await this.#turnWork(funding, current, meter);
             await feedHooks.afterTurnWork?.(this, this.ctx);
@@ -1773,7 +1785,7 @@ export class UserDO extends MigratingDO {
           }
         },
         {
-          pendingMs: (LIVE_PRICES.pump as LiveManifestEntry).pendingMs as number,
+          pendingMs: (LIVE_PRICES[kind] as LiveManifestEntry).pendingMs as number,
           ledger: { now: earliest, at: local, slack: budget.ledgerNow(local) - earliest },
           physical: (ended) => {
             physical = ended;
@@ -1811,6 +1823,8 @@ export class UserDO extends MigratingDO {
 
   /** The running turn's meter, while its work runs (a socket's end is exempt from it). */
   #meter: TurnMeter | null = null;
+  /** Sockets the running turn closed with nothing left to pay for their end: its to forget. */
+  #unpaidEnds: string[] = [];
 
   /** The turn whose work is still physically running in this instance, if any. */
   #turnRunning: Promise<void> | null = null;
@@ -1860,11 +1874,25 @@ export class UserDO extends MigratingDO {
   /**
    * A turn's work: its housekeeping, then one kind of work, the most
    * urgent: queued renewals (a few, by deadline), else one queued refill,
-   * else one pump unit.
+   * else one pump unit; then admissions never confirmed forgotten as it
+   * still has room.
    */
   async #turnWork(funding: LiveFunding, current: () => boolean, meter: TurnMeter): Promise<void> {
-    await this.#housekeep(current, meter);
+    const unconfirmed = await this.#metered(meter, "housekeep", () => this.#housekeep(current));
     if (!current()) return;
+    await this.#mainWork(funding, current, meter);
+    await this.#forget(unconfirmed, current, meter);
+    // Sockets ended with nothing left to pay for: their rows forgotten as the turn has room.
+    for (const id of this.#unpaidEnds.splice(0)) {
+      if (!current() || !meter.fits(LIVE_TURN_STEP_MOST.forget)) break;
+      await this.#metered(meter, "forget", () =>
+        this.ctx.storage.transactionSync(() => this.#live().forget(id)),
+      );
+    }
+  }
+
+  /** A turn's one kind of work, the most urgent (see `#turnWork`). */
+  async #mainWork(funding: LiveFunding, current: () => boolean, meter: TurnMeter): Promise<void> {
     const live = this.#live();
     const renewals = live.queuedRenewals().slice(0, LIVE_TURN_RENEWALS);
     if (renewals.length > 0) {
@@ -2022,22 +2050,32 @@ export class UserDO extends MigratingDO {
     });
   }
 
-  /** The feed's successor turn, granted from the ledger now (null when refused, or stopped). */
+  /**
+   * The feed's successor turn, granted from the ledger now (null when
+   * refused, or stopped): a pump when it has live work beyond renewals (a
+   * change to deliver, a refill, a page to prune), else a turn of renewals
+   * only, priced for nothing more (its meter leaves anything marked since to
+   * the pump after it).
+   */
   async #grantTurn(current: () => boolean): Promise<LiveEnvelope | null> {
     const feed = this.ctx.id.name;
     if (!feed) return null;
     const budget = new LiveBudget(this.ctx.storage.sql);
     const fence = budget.fence();
+    const refill = (["control_refill", "mark_refill"] as const).some(
+      (kind) => budget.pending(kind)?.phase === "queued",
+    );
+    const kind = refill || this.#live().hasPumpWork(Date.now()) ? "pump" : "renewal";
     const request = await makeLiveGrant(
       planFor(
-        LIVE_PRICES.pump as LiveManifestEntry,
+        LIVE_PRICES[kind] as LiveManifestEntry,
         {
           incarnation: fence.incarnation,
           epoch: fence.epoch,
           recipientType: "UserDO",
           recipient: feed,
           class: "ordinary",
-          kind: "pump",
+          kind,
           producesLocal: true,
         },
         budget.ledgerEarliest(Date.now()),
