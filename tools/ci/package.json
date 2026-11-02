@@ -20,7 +20,7 @@
     "@fyrden/domain": "workspace:*",
     "@fyrden/sdk": "workspace:*",
     "@fyrden/testing": "workspace:*",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@types/node": "catalog:",
     "@vitest/coverage-istanbul": "catalog:",
     "typescript": "catalog:",
