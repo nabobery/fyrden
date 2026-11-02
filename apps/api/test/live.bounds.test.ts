@@ -7,7 +7,7 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { LIVE_TEAM_GRANTS, type OrgDO } from "../src/do/OrgDO.js";
 import type { UserDO } from "../src/do/UserDO.js";
-import { LIVE_POLICY, Live } from "../src/do/user/live.js";
+import { LIVE_POLICY, LIVE_TICKET_PRUNE, Live } from "../src/do/user/live.js";
 import { LIVE_ADMISSION, reaping } from "../src/live/directory.js";
 import { LIVE_PRICES, type LiveManifestEntry } from "../src/live/manifest.js";
 import { api, json, user } from "./helpers/api.js";
@@ -132,7 +132,8 @@ describe("a feed's live state", () => {
 
   it("prunes a page of each kind a call, saying whether more is left, its reads bounded", async () => {
     await inLive((live, sql) => {
-      const many = 1_200;
+      // No page's multiple: every kind's last page is short, so none needs an empty call.
+      const many = 124;
       const now = Date.now();
       for (let i = 0; i < many; i++) {
         sql.exec(
@@ -158,6 +159,11 @@ describe("a feed's live state", () => {
         ["live_dirty", "live_candidates", "live_tickets", "live_revoked"].map(
           (t) => sql.exec<{ n: number }>(`SELECT count(*) AS n FROM ${t}`).one().n,
         );
+      // Expired tickets only, as ticket storage prunes: the other kinds stay.
+      expect(live.prune(now, LIVE_TICKET_PRUNE)).toBe(true);
+      expect(counts()).toEqual([many, many, many - LIVE_TICKET_PRUNE.tickets, many]);
+      const pages = LIVE_POLICY.prunePage;
+      const rows = pages.dirty + pages.candidates + pages.tickets + pages.revoked;
       let calls = 0;
       for (let more = true; more; calls++) {
         const counter = countingExec(sql);
@@ -165,12 +171,13 @@ describe("a feed's live state", () => {
         const { read } = counter.stop();
         // Each kind's page through its index (SQLite counts about five rows read a row it
         // deletes: the lookup, the row and its index entries), and a few to find the progress.
-        expect(read).toBeLessThanOrEqual(4 * 5 * LIVE_POLICY.pruneRows + 16);
-        const [dirty] = counts();
-        if (more) expect(dirty).toBeGreaterThan(0);
+        expect(read).toBeLessThanOrEqual(5 * rows + 16);
+        if (more) expect(counts().some((n) => n > 0)).toBe(true);
       }
       expect(counts()).toEqual([0, 0, 0, 0]);
-      expect(calls).toBe(Math.ceil(many / LIVE_POLICY.pruneRows));
+      // The smallest page sets the calls (each kind's own page a call, its last one short).
+      const smallest = Math.min(pages.dirty, pages.candidates, pages.revoked);
+      expect(calls).toBe(Math.ceil(many / smallest));
     });
   });
 

@@ -22,7 +22,7 @@ import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { feedHooks, type UserDO } from "../src/do/UserDO.js";
 import { threadId } from "../src/do/user/inbox.js";
-import { LIVE_POLICY } from "../src/do/user/live.js";
+import { LIVE_POLICY, LIVE_TICKET_PRUNE } from "../src/do/user/live.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
 import {
   canonicalVector,
@@ -1607,31 +1607,110 @@ describe("a feed's turn", () => {
 });
 
 describe("live work's rows in a feed's object", () => {
-  /** Counts the rows the feed's object reads and writes while `fn` runs. */
-  async function rows(who: Who, fn: () => Promise<unknown>) {
+  type Rows = { read: number; written: number; d1Read: number; d1Written: number };
+  /**
+   * Counts the rows the feed's object reads and writes while `fn` runs, and
+   * the D1 rows its invocations (the object's, the Worker's) recorded as read
+   * and written (their `d1.invocation_rows` points).
+   */
+  async function rows(who: Who, fn: () => Promise<unknown>): Promise<Rows> {
     const sql = await runInDurableObject(feedOf(who), (_: UserDO, state) => state.storage.sql);
+    const dataset = env.METRICS as unknown as { writeDataPoint: (point: unknown) => void };
+    const write = dataset.writeDataPoint;
+    const d1 = { d1Read: 0, d1Written: 0 };
+    dataset.writeDataPoint = (point: unknown) => {
+      const p = point as { indexes?: string[]; blobs?: string[]; doubles?: number[] };
+      if (p.indexes?.[0] === "d1.invocation_rows") {
+        if (p.blobs?.[2] === "read") d1.d1Read += p.doubles?.[0] ?? 0;
+        if (p.blobs?.[2] === "written") d1.d1Written += p.doubles?.[0] ?? 0;
+      }
+      write.call(dataset, point);
+    };
     const count = countingExec(sql);
     let counted: { read: number; written: number } | undefined;
     try {
       await fn();
     } finally {
       counted = count.stop();
+      dataset.writeDataPoint = write;
     }
-    return counted;
+    return { ...counted, ...d1 };
   }
-  const measured: Record<string, { read: number; written: number }> = {};
-  const note = (unit: string, r: { read: number; written: number }) => {
-    const was = measured[unit] ?? { read: 0, written: 0 };
+  /** What `a` used past `b` (the same work without live's part), counter by counter. */
+  const past = (a: Rows, b: Rows): Rows => ({
+    read: Math.max(0, a.read - b.read),
+    written: Math.max(0, a.written - b.written),
+    d1Read: Math.max(0, a.d1Read - b.d1Read),
+    d1Written: Math.max(0, a.d1Written - b.d1Written),
+  });
+  const measured: Record<string, Rows> = {};
+  /** Room in the deployment for the fixtures' sockets (others' leases may still hold places). */
+  const ROOMY = { ...LIVE, FYRDEN_LIVE_SOCKETS: "500" };
+  const openSockets = (who: Who) =>
+    runInDurableObject(
+      feedOf(who),
+      (_: UserDO, state) =>
+        state.storage.sql
+          .exec<{ n: number }>("SELECT count(*) AS n FROM live_local WHERE phase = 'open'")
+          .one().n,
+    );
+  /**
+   * Rows of each kind `page` says a prune deletes, left prunable in `who`'s
+   * feed (heard of by every socket, expired, or long past): what a prune of
+   * a full page finds.
+   */
+  const prunable = (
+    who: Who,
+    page: { dirty: number; candidates: number; tickets: number; revoked: number },
+  ) =>
+    runInDurableObject(feedOf(who), (_: UserDO, state) => {
+      const sql = state.storage.sql;
+      for (let i = 0; i < page.dirty; i++)
+        sql.exec(
+          "INSERT INTO live_dirty (stream, repo_id, subject, seq, explicit_seq, many_seq) VALUES (?, ?, 'issue', 0, 0, 0)",
+          `old${i}\nissue`,
+          `old${i}`,
+        );
+      for (let i = 0; i < page.candidates; i++)
+        sql.exec(
+          "INSERT INTO live_candidates (stream, conversation, direct_seq, ordinary_seq) VALUES (?, ?, 0, 0)",
+          `old${i % Math.max(1, page.dirty)}\nissue`,
+          `c${i}`,
+        );
+      for (let i = 0; i < page.tickets; i++)
+        sql.exec(
+          "INSERT INTO live_tickets (ticket_hash, credential_id, expires_at) VALUES (?, 'tok_old', 0)",
+          `old${i}`,
+        );
+      for (let i = 0; i < page.revoked; i++)
+        sql.exec("INSERT INTO live_revoked (dependency, at) VALUES (?, 0)", `credential:old${i}`);
+    });
+  /** `who`'s mark pool, every block of it left with `units` marks. */
+  const marksLeft = (who: Who, units: number) =>
+    runInDurableObject(feedOf(who), (_: UserDO, state) => {
+      const left = Object.fromEntries(
+        Object.entries(liveBlockUnit("mark")).map(([r, v]) => [r, (v as number) * units]),
+      );
+      state.storage.sql.exec(
+        "UPDATE live_budget_balances SET remaining = ? WHERE kind = 'mark'",
+        JSON.stringify(canonicalVector(left as never)),
+      );
+    });
+  const note = (unit: string, r: Rows) => {
+    const was = measured[unit] ?? { read: 0, written: 0, d1Read: 0, d1Written: 0 };
     measured[unit] = {
       read: Math.max(was.read, r.read),
       written: Math.max(was.written, r.written),
+      d1Read: Math.max(was.d1Read, r.d1Read),
+      d1Written: Math.max(was.d1Written, r.d1Written),
     };
   };
 
   it("is within each unit's observed rows", async () => {
     const owner = await user();
     const repo = await repoWithIssue(owner);
-    // A ticket stored.
+    // A ticket stored, pruning a full page of expired tickets as it is.
+    await prunable(owner, LIVE_TICKET_PRUNE);
     let issued: { ticket: string } | undefined;
     note(
       "ticket",
@@ -1668,27 +1747,127 @@ describe("live work's rows in a feed's object", () => {
         await closed();
       }),
     );
-    // The pump's most: a page of changed streams (and more), a credential's most sockets.
+    // The pump's most: a page of changed streams (and more), each holding its most causes, for a
+    // credential's most sockets on a feed with its most, and a full page to prune.
     const busy = await user();
     const busyRepos: { id: string; conversation: string }[] = [];
     for (let i = 0; i < LIVE_POLICY.dirtyPage + 2; i++) busyRepos.push(await repoWithIssue(busy));
     const busySockets: Awaited<ReturnType<typeof open>>[] = [];
-    for (let i = 0; i < LIVE_POLICY.perCredential; i++) busySockets.push(await open(busy.token));
+    const busyTokens = [
+      busy.token,
+      ...(await Promise.all([1, 2, 3].map(() => scopedToken(busy.principalId, [])))),
+    ];
+    for (const token of busyTokens)
+      for (let i = 0; i < LIVE_POLICY.perCredential; i++)
+        busySockets.push(await open(token, ROOMY));
+    expect(await openSockets(busy)).toBe(LIVE_POLICY.perFeed);
     await feedOf(busy).applyFeed(busyRepos.map((r) => change(busy, r, 1)));
-    note("pump", await rows(busy, () => runDurableObjectAlarm(feedOf(busy))));
-    // A mark of a stream already holding its most causes.
-    const many = await rows(busy, () =>
-      feedOf(busy).applyFeed(
-        Array.from({ length: LIVE_POLICY.candidatesPerStream + 1 }, (_, i) => ({
-          ...change(busy, busyRepos[0] as never, 10 + i),
-          conversation: `c${i}`,
-        })) as never,
-      ),
-    );
-    note("mark", {
-      read: Math.ceil(many.read / (LIVE_POLICY.candidatesPerStream + 1)),
-      written: Math.ceil(many.written / (LIVE_POLICY.candidatesPerStream + 1)),
+    // Each changed stream's other causes, as marks of other conversations leave them.
+    await runInDurableObject(feedOf(busy), (_: UserDO, state) => {
+      const sql = state.storage.sql;
+      for (const { stream, seq } of sql
+        .exec<{ stream: string; seq: number }>("SELECT stream, seq FROM live_dirty")
+        .toArray())
+        for (let i = 1; i < LIVE_POLICY.candidatesPerStream; i++)
+          sql.exec(
+            "INSERT INTO live_candidates (stream, conversation, direct_seq, ordinary_seq) VALUES (?, ?, 0, ?)",
+            stream,
+            `other${i}`,
+            seq,
+          );
     });
+    await prunable(busy, LIVE_POLICY.prunePage);
+    note("pump", await rows(busy, () => runDurableObjectAlarm(feedOf(busy))));
+    // A mark of a stream already holding its most causes, on a feed with its most sockets, and
+    // one at its pool's low water (its refill queued): each the same change applied to a feed
+    // made the same way without sockets taken out.
+    const causeOf = (
+      who: Who,
+      repo: { id: string; conversation: string },
+      i: number,
+      version = 100 + i,
+    ) =>
+      entry({
+        version,
+        thread: 1,
+        subject: "issue",
+        repoId: repo.id,
+        principal: who.principalId,
+        conversation: `cause${i}`,
+        kind: "mention",
+        reasons: ["mentioned"],
+        member: null,
+        eventKey: `${repo.id}:${uniqueId("ev")}`,
+      });
+    const crowd = await user();
+    const crowdRepo = await repoWithIssue(crowd);
+    const crowdSockets: Awaited<ReturnType<typeof open>>[] = [];
+    const tokens = [
+      crowd.token,
+      ...(await Promise.all([1, 2, 3].map(() => scopedToken(crowd.principalId, [])))),
+    ];
+    for (const token of tokens)
+      for (let i = 0; i < LIVE_POLICY.perCredential; i++)
+        crowdSockets.push(await open(token, ROOMY));
+    expect(await openSockets(crowd)).toBe(LIVE_POLICY.perFeed);
+    const plain = await user();
+    const plainRepo = await repoWithIssue(plain);
+    for (const [who, repo] of [
+      [crowd, crowdRepo],
+      [plain, plainRepo],
+    ] as const) {
+      await marksLeft(who, LIVE_BLOCK_UNITS);
+      for (let i = 0; i < LIVE_POLICY.candidatesPerStream; i++)
+        await feedOf(who).applyFeed([causeOf(who, repo, i)]);
+    }
+    const causes = await runInDurableObject(
+      feedOf(crowd),
+      (_: UserDO, state) =>
+        state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM live_candidates").one().n,
+    );
+    expect(causes).toBe(LIVE_POLICY.candidatesPerStream);
+    const markOf = async (i: number, version = 100 + i) => {
+      const marked = await rows(crowd, () =>
+        feedOf(crowd).applyFeed([causeOf(crowd, crowdRepo, i, version)]),
+      );
+      const unmarked = await rows(plain, () =>
+        feedOf(plain).applyFeed([causeOf(plain, plainRepo, i, version)]),
+      );
+      return past(marked, unmarked);
+    };
+    // Past its most causes (the stream is then marked as having many), with marks to spare.
+    await marksLeft(crowd, LIVE_BLOCK_UNITS);
+    note("mark", await markOf(LIVE_POLICY.candidatesPerStream));
+    // One of its causes changed again (its row updated), with marks to spare.
+    await marksLeft(crowd, LIVE_BLOCK_UNITS);
+    // (Versions only grow: the thread's later changes each newer than the last.)
+    note("mark", await markOf(0, 200));
+    // At low water: its refill queued with it.
+    await marksLeft(crowd, LIVE_LOW_WATER + 1);
+    note("mark", await markOf(LIVE_POLICY.candidatesPerStream + 1, 300));
+    const queued = await runInDurableObject(feedOf(crowd), (_: UserDO, state) =>
+      state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+    );
+    expect(queued).toEqual([{ kind: "mark_refill" }]);
+    // One of its causes changed again at low water: the cause's row updated and the refill queued.
+    await runInDurableObject(feedOf(crowd), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_budget_pending"),
+    );
+    await marksLeft(crowd, LIVE_LOW_WATER + 1);
+    note("mark", await markOf(0, 400));
+    expect(
+      await runInDurableObject(feedOf(crowd), (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT kind FROM live_budget_pending").toArray(),
+      ),
+    ).toEqual([{ kind: "mark_refill" }]);
+    // The same with every socket's window full (each a socket the mark's scheduling looks at).
+    await runInDurableObject(feedOf(crowd), (_: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_budget_pending");
+      state.storage.sql.exec("UPDATE live_local SET sent = acked + ?", LIVE_POLICY.window);
+    });
+    await marksLeft(crowd, LIVE_LOW_WATER + 1);
+    note("mark", await markOf(1, 500));
+    for (const s of crowdSockets) s.ws?.close(1000, "done");
     for (const s of busySockets) s.ws?.close(1000, "done");
     // A transport whose admission is refused: its redemption and the refusal's upgrade.
     const refusedOwner = await user();
@@ -1708,22 +1887,21 @@ describe("live work's rows in a feed's object", () => {
     const bare = await user();
     const bareRepo = await repoWithIssue(bare);
     const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));
-    note("mark", {
-      read: Math.max(0, marked.read - unmarked.read),
-      written: Math.max(0, marked.written - unmarked.written),
-    });
+    note("mark", past(marked, unmarked));
     expect(issued?.ticket).toBeDefined();
     // What was measured (for the manifest's observations), when asked.
     if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));
     for (const [unit, r] of Object.entries(measured)) {
       const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
       const observed = Object.values(entry.observed);
-      const most = (k: "do_rows_read" | "do_rows_written") =>
+      const most = (k: "do_rows_read" | "do_rows_written" | "d1_rows_read" | "d1_rows_written") =>
         Math.max(...observed.map((o) => o[k]));
-      expect({ unit, read: r.read, written: r.written }).toEqual({
+      expect({ unit, ...r }).toEqual({
         unit,
         read: Math.min(r.read, most("do_rows_read")),
         written: Math.min(r.written, most("do_rows_written")),
+        d1Read: Math.min(r.d1Read, most("d1_rows_read")),
+        d1Written: Math.min(r.d1Written, most("d1_rows_written")),
       });
     }
   });

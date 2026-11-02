@@ -233,8 +233,12 @@ function estimated(
 /**
  * The prices of live work's units, from measurements: each unit's rows in
  * the feed's object by the live suite's fixtures (its most cases among
- * them: a pump over a full page with a credential's most sockets, a mark
- * of a stream at its most causes), and D1's rows per invocation on Workers
+ * them: a pump over a full page of streams each at its most causes, for a
+ * credential's most sockets on a feed with its most, with a full page to
+ * prune, its D1 counted too; a mark of a stream at its most causes, or one
+ * of its causes changed again, on a feed with its most sockets (their
+ * windows full) and at its pool's low water, the feed's own work for the
+ * same change taken out), and D1's rows per invocation on Workers
  * Free (2026-11-01: an upgrade's whole D1 priced on its transport, the
  * admission's, terminal's and blocks' grants within it; a turn's on the
  * pump; maintenance's, its recoveries' within it). A recovery's rows are
@@ -242,7 +246,8 @@ function estimated(
  * Proposed.
  *
  * - `ticket`: the issuance's counter and transport rows, one call of the
- *   feed's object and its ticket's row, its owner's accounting; leaving
+ *   feed's object and its ticket's row (with a page of expired tickets
+ *   pruned), its owner's accounting; leaving
  *   the ticket's local row and the directory's rows to clean up.
  * - `upgrade_transport`: the whole upgrade attempt, owned: the transport's
  *   claim, the redemption's call of the feed's object, the admission's
@@ -264,7 +269,7 @@ function estimated(
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
   ticket: estimated(
-    { do_rows_read: 26, do_rows_written: 4, d1_rows_read: 191, d1_rows_written: 35 },
+    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 191, d1_rows_written: 35 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -326,7 +331,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   mark: estimated(
-    { do_rows_read: 25, do_rows_written: 20 },
+    { do_rows_read: 101, do_rows_written: 13 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -387,11 +392,12 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   sockets ended), then one kind of work (up to `LIVE_TURN_RENEWALS`
  *   queued renewals, one refill's grant and installation, or one pump
  *   unit: one credential's sockets, one owning account's page, its call of
- *   that account's object paid for by a grant of its own), and its
- *   successor's grant; its owner's whole accounting reserved with it.
+ *   that account's object paid for by a grant of its own, then a page of
+ *   what every socket heard of pruned), and its successor's grant; its
+ *   owner's whole accounting reserved with it.
  */
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 429, do_rows_written: 51, d1_rows_read: 132, d1_rows_written: 24 },
+  { do_rows_read: 1_130, do_rows_written: 87, d1_rows_read: 661, d1_rows_written: 29 },
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",

@@ -96,6 +96,7 @@ import {
   CLOSE_REVOKED,
   type DirtyStream,
   LIVE_POLICY,
+  LIVE_TICKET_PRUNE,
   Live,
   type Candidate as LiveCandidate,
   type LiveSignal,
@@ -869,7 +870,7 @@ export class UserDO extends MigratingDO {
       // still to live.
       if (!this.#current(envelope) || ticket.expiresAt <= now)
         return { status: "refused" as const };
-      live.prune(now);
+      live.prune(now, LIVE_TICKET_PRUNE);
       live.storeTicket(
         ticket.hash,
         ticket.credentialId,
