@@ -331,7 +331,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   mark: estimated(
-    { do_rows_read: 101, do_rows_written: 13 },
+    { do_rows_read: 103, do_rows_written: 13 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -386,6 +386,73 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
   });
 }
 
+/** Queued renewals one turn runs at most. */
+export const LIVE_TURN_RENEWALS = 2;
+
+/**
+ * What each step of a feed's turn uses at most (rows in the feed's object
+ * and in D1), measured by the live suite's fixtures: the turn starts a step
+ * only while what it used, the step's most and its own end fit its grant
+ * (see `TurnMeter`). `end`: the turn with no work at all (its claim,
+ * dispatch, successor's grant and accounting); `forget`: one admission
+ * never confirmed, forgotten with its lease released; `renewal`: one queued
+ * renewal authorized; `refill`: one refill granted and installed;
+ * `delivery`: one credential's page delivered to its sockets (its
+ * credential, repositories, preferences and account checked); `prune`: one
+ * page pruned. A refill granted across a midnight, its pool's expired
+ * balances removed on both days, was measured apart (an isolated probe at
+ * 23:50 UTC: 43 and 15 object rows, 74 and 9 D1 rows), the fixtures'
+ * ledger running on D1's own clock.
+ */
+export const LIVE_TURN_STEPS = {
+  end: { do_rows_read: 104, do_rows_written: 7, d1_rows_read: 103, d1_rows_written: 23 },
+  forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
+  renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
+  refill: { do_rows_read: 43, do_rows_written: 15, d1_rows_read: 74, d1_rows_written: 9 },
+  delivery: { do_rows_read: 496, do_rows_written: 20, d1_rows_read: 954, d1_rows_written: 6 },
+  // Its reads its bound, not one run's (they vary with what its index scans pass): about five a
+  // row it deletes (76 a page), its sockets' progress scanned (20), and a few.
+  prune: { do_rows_read: 420, do_rows_written: 76, d1_rows_read: 0, d1_rows_written: 0 },
+} as const;
+
+const TURN_COUNTERS = [
+  "do_rows_read",
+  "do_rows_written",
+  "d1_rows_read",
+  "d1_rows_written",
+] as const;
+const turnRows = (f: (r: (typeof TURN_COUNTERS)[number]) => number) =>
+  Object.fromEntries(TURN_COUNTERS.map((r) => [r, f(r)])) as Record<
+    (typeof TURN_COUNTERS)[number],
+    number
+  >;
+
+/**
+ * Each step's most as a turn's meter checks it: its measurement with the
+ * manifest's margin, ceil(1.25 x most) + 2, as every price takes it.
+ */
+export const LIVE_TURN_STEP_MOST = Object.fromEntries(
+  Object.entries(LIVE_TURN_STEPS).map(([step, rows]) => [
+    step,
+    turnRows((r) => (rows[r] === 0 ? 0 : Math.ceil(1.25 * rows[r]) + 2)),
+  ]),
+) as Record<keyof typeof LIVE_TURN_STEPS, Record<(typeof TURN_COUNTERS)[number], number>>;
+
+/**
+ * The most a metered turn may use: its end twice (what it used before a
+ * step counts against its grant, and its end is kept for after), and its
+ * costliest kind of work (a delivery and a prune, a refill, or its
+ * renewals), each step at its most as the meter checks it.
+ */
+function turnMost(): Record<(typeof TURN_COUNTERS)[number], number> {
+  const s = LIVE_TURN_STEP_MOST;
+  return turnRows(
+    (r) =>
+      2 * s.end[r] +
+      Math.max(s.delivery[r] + s.prune[r], s.refill[r], LIVE_TURN_RENEWALS * s.renewal[r]),
+  );
+}
+
 /**
  * - `pump`: a feed's execution turn, one alarm's live work, owned: its
  *   housekeeping (confirmations never finished forgotten, expired and slow
@@ -396,8 +463,16 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   what every socket heard of pruned), and its successor's grant; its
  *   owner's whole accounting reserved with it.
  */
+/** The pump turn as measured whole (a full delivery and prune, its alarm's reads around it). */
+const PUMP_MEASURED = {
+  do_rows_read: 1_135,
+  do_rows_written: 87,
+  d1_rows_read: 661,
+  d1_rows_written: 29,
+};
+
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 1_131, do_rows_written: 87, d1_rows_read: 661, d1_rows_written: 29 },
+  turnRows((r) => Math.max(PUMP_MEASURED[r], turnMost()[r])),
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",
@@ -468,9 +543,6 @@ LIVE_PRICES.recovery = estimated(
     dayCleanupDebt: ZERO,
   },
 );
-
-/** Queued renewals one turn runs at most. */
-export const LIVE_TURN_RENEWALS = 2;
 
 LIVE_PRICES.control_block = blockOf(LIVE_PRICES.control as LiveManifestEntry);
 

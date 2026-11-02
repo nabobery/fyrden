@@ -47,6 +47,8 @@ import {
   LIVE_PRICES,
   LIVE_REQUIRED_COMPONENTS,
   LIVE_TURN_RENEWALS,
+  LIVE_TURN_STEP_MOST,
+  type LIVE_TURN_STEPS,
   type LiveManifestEntry,
   type LiveManifestUnit,
   liveBlockUnit,
@@ -104,6 +106,7 @@ import {
 } from "./user/live.js";
 import { LiveBudget } from "./user/live-budget.js";
 import { eligibleLiveDeadline, LIVE_BLOCKED, type LiveReadiness } from "./user/live-schedule.js";
+import { TurnMeter, type TurnRows, times } from "./user/turn-meter.js";
 
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
 export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
@@ -182,6 +185,22 @@ const LIVE_RETRY_MS = 60_000;
 
 /** A socket's id, from its attachment. */
 /** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
+/**
+ * What a turn's grant paid for, in rows, on `day` (the ledger's day it runs
+ * on); with the day not known (right at a midnight), the least of its days.
+ */
+function turnBudget(envelope: LiveEnvelope, day: number | null): TurnRows {
+  const charges = envelope.plan.charges.filter((c) => day === null || c.day === day);
+  const least = (r: keyof TurnRows) =>
+    charges.length === 0 ? 0 : Math.min(...charges.map((c) => c.resources[r]));
+  return {
+    do_rows_read: least("do_rows_read"),
+    do_rows_written: least("do_rows_written"),
+    d1_rows_read: least("d1_rows_read"),
+    d1_rows_written: least("d1_rows_written"),
+  };
+}
+
 function refillDue(
   budget: LiveBudget,
   kind: "control_refill" | "mark_refill",
@@ -263,6 +282,12 @@ export const feedHooks: {
   afterTurnWork?: (feed: UserDO, state: DurableObjectState) => Promise<void>;
   /** Called in a feed's turn once its successor's grant is answered (tests). */
   afterSuccessorGrant?: (state: DurableObjectState) => void;
+  /** Called once a turn's step ran: what it used, for `count` items (tests: its measurement). */
+  turnStep?: (step: keyof typeof LIVE_TURN_STEPS, used: TurnRows, count: number) => void;
+  /** Called once a turn's metered work ended, before its end: what it used, what its grant paid (tests). */
+  turnDone?: (used: TurnRows, paid: TurnRows) => void;
+  /** Called once a socket's end ran within a turn (on its terminal provision): what it used (tests). */
+  turnClose?: (used: TurnRows) => void;
   /** Called once a socket's message, or its close, has been handled, whatever came of it (tests). */
   afterSocketEvent?: (feed: string | undefined, event: "message" | "close") => void;
 } = {};
@@ -1374,15 +1399,34 @@ export class UserDO extends MigratingDO {
    * `code` (its callbacks then find nothing). One with no provision left
    * (its prepaid days passed, or recovery took it) is only closed, its
    * attachment marking it past its end so nothing more of it is read; its
-   * rows are its recovery's. Its lease is maintenance's to release.
+   * rows are its recovery's, except within a turn, which forgets them at its
+   * own cost (so the socket keeps no turn going). Its lease is maintenance's
+   * to release.
    */
   #closeSocket(id: string, code: number, reason: string): void {
+    // Within a turn, a socket's end is its terminal provision's to pay for, not the turn's.
+    const meter = this.#meter;
+    if (meter) {
+      // Exempt only when a terminal provision paid for it: a lookup that found none is the turn's.
+      const used = meter.exempt(() => this.#closeNow(id, code, reason));
+      if (used) feedHooks.turnClose?.(used);
+      // Its end not paid for (its provisions gone): forgotten at the turn's own cost, so it neither
+      // keeps the feed's turns going nor is closed again by every turn.
+      else this.ctx.storage.transactionSync(() => this.#live().forget(id));
+      return;
+    }
+    this.#closeNow(id, code, reason);
+  }
+
+  /** Ends and closes a socket (see `#closeSocket`): whether a terminal provision paid for it. */
+  #closeNow(id: string, code: number, reason: string): boolean {
     const ended = this.#endSocket(id);
     for (const ws of this.ctx.getWebSockets(id)) {
       // Its end not paid for: past it from now on, so nothing more of it reads anything.
       if (!ended) ws.serializeAttachment({ v: 1, id, until: Date.now() });
       ws.close(code, reason);
     }
+    return ended;
   }
 
   /** Forgets a socket on today's terminal provision, consumed; whether it was. */
@@ -1444,7 +1488,7 @@ export class UserDO extends MigratingDO {
    * A turn's housekeeping: admissions never confirmed forgotten (their
    * leases released), expired and slow sockets ended.
    */
-  async #housekeep(current: () => boolean): Promise<void> {
+  async #housekeep(current: () => boolean, meter: TurnMeter): Promise<void> {
     const live = this.#live();
     const now = Date.now();
     const unconfirmed: string[] = [];
@@ -1459,14 +1503,31 @@ export class UserDO extends MigratingDO {
         this.#closeSocket(s.socket_id, CLOSE_RESYNC, "slow consumer: reread everything");
     }
     if (unconfirmed.length === 0 || !current()) return;
-    // Forgotten here, then their leases released together (one batch, whatever their number).
-    this.ctx.storage.transactionSync(() => {
-      for (const id of unconfirmed) live.forget(id);
-    });
-    await release(this.env.DIRECTORY, unconfirmed);
+    // As many as the turn still has room for (the rest the next turn's): forgotten here, then their
+    // leases released together (one batch).
+    let fitting = 0;
+    while (
+      fitting < unconfirmed.length &&
+      meter.fits(times(LIVE_TURN_STEP_MOST.forget, fitting + 1))
+    )
+      fitting++;
+    const forgetting = unconfirmed.slice(0, fitting);
+    if (forgetting.length === 0) return;
+    await this.#metered(
+      meter,
+      "forget",
+      async () => {
+        this.ctx.storage.transactionSync(() => {
+          for (const id of forgetting) live.forget(id);
+        });
+        await release(this.env.DIRECTORY, forgetting);
+      },
+      forgetting.length,
+    );
   }
 
-  async #pump(current: () => boolean): Promise<boolean> {
+  /** One credential's page delivered to its sockets (the turn's `delivery` step). */
+  async #deliver(current: () => boolean): Promise<boolean> {
     const principalId = this.ctx.id.name;
     if (principalId === undefined) return false;
     const live = this.#live();
@@ -1485,7 +1546,7 @@ export class UserDO extends MigratingDO {
     for (const s of [...ready].sort((a, b) => a.delivered_seq - b.delivered_seq))
       byCredential.set(s.credential_id, [...(byCredential.get(s.credential_id) ?? []), s]);
     const serving = [...byCredential].slice(0, PUMP_CREDENTIALS);
-    if (serving.length === 0) return this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+    if (serving.length === 0) return false;
     const lowest = Math.min(
       ...serving.flatMap(([, sockets]) => sockets.map((s) => s.delivered_seq)),
     );
@@ -1605,7 +1666,7 @@ export class UserDO extends MigratingDO {
       }
     }
     // What a run's bounds left is due at once (the alarm sets it by `Live.nextDue`).
-    return this.ctx.storage.transactionSync(() => live.prune(Date.now()));
+    return true;
   }
 
   /** Funded live work's readiness: the prepared turn's, while it can run (else blocked). */
@@ -1694,11 +1755,22 @@ export class UserDO extends MigratingDO {
               turn.phase === "dispatched"
             );
           };
-          await this.#turnWork(funding, current);
-          await feedHooks.afterTurnWork?.(this, this.ctx);
-          return current() && this.#live().sockets().length > 0
-            ? await this.#grantTurn(current).catch(() => null)
-            : null;
+          // Its work metered against its grant: each step only while it still fits.
+          const paid = turnBudget(envelope, budget.ledgerDay(Date.now()));
+          const meter = new TurnMeter(this.ctx.storage.sql, paid, LIVE_TURN_STEP_MOST.end);
+          this.#meter = meter;
+          try {
+            await this.#turnWork(funding, current, meter);
+            await feedHooks.afterTurnWork?.(this, this.ctx);
+            // Its work done: what it used, its end (the successor's grant among it) still to come.
+            feedHooks.turnDone?.(meter.used(), paid);
+            return current() && this.#live().sockets().length > 0
+              ? await this.#grantTurn(current).catch(() => null)
+              : null;
+          } finally {
+            if (this.#meter === meter) this.#meter = null;
+            meter.stop();
+          }
         },
         {
           pendingMs: (LIVE_PRICES.pump as LiveManifestEntry).pendingMs as number,
@@ -1736,6 +1808,9 @@ export class UserDO extends MigratingDO {
       });
     }
   }
+
+  /** The running turn's meter, while its work runs (a socket's end is exempt from it). */
+  #meter: TurnMeter | null = null;
 
   /** The turn whose work is still physically running in this instance, if any. */
   #turnRunning: Promise<void> | null = null;
@@ -1787,15 +1862,15 @@ export class UserDO extends MigratingDO {
    * urgent: queued renewals (a few, by deadline), else one queued refill,
    * else one pump unit.
    */
-  async #turnWork(funding: LiveFunding, current: () => boolean): Promise<void> {
-    await this.#housekeep(current);
+  async #turnWork(funding: LiveFunding, current: () => boolean, meter: TurnMeter): Promise<void> {
+    await this.#housekeep(current, meter);
     if (!current()) return;
     const live = this.#live();
     const renewals = live.queuedRenewals().slice(0, LIVE_TURN_RENEWALS);
     if (renewals.length > 0) {
       for (const socket of renewals) {
-        if (!current()) return;
-        await this.#renewQueued(socket, current);
+        if (!current() || !meter.fits(LIVE_TURN_STEP_MOST.renewal)) return;
+        await this.#metered(meter, "renewal", () => this.#renewQueued(socket, current));
       }
       return;
     }
@@ -1803,8 +1878,29 @@ export class UserDO extends MigratingDO {
     const refill = (["control_refill", "mark_refill"] as const).find((kind) =>
       refillDue(budget, kind, Date.now()),
     );
-    if (refill) return this.#refill(refill, funding, current);
-    await this.#pump(current);
+    if (refill) {
+      if (meter.fits(LIVE_TURN_STEP_MOST.refill))
+        await this.#metered(meter, "refill", () => this.#refill(refill, funding, current));
+      return;
+    }
+    if (meter.fits(LIVE_TURN_STEP_MOST.delivery))
+      await this.#metered(meter, "delivery", () => this.#deliver(current));
+    if (!current() || !meter.fits(LIVE_TURN_STEP_MOST.prune)) return;
+    await this.#metered(meter, "prune", () =>
+      this.ctx.storage.transactionSync(() => this.#live().prune(Date.now())),
+    );
+  }
+
+  /** Runs `fn` as the turn's `step` (for `count` items), told to the tests' hook. */
+  async #metered<T>(
+    meter: TurnMeter,
+    step: keyof typeof LIVE_TURN_STEPS,
+    fn: () => Promise<T> | T,
+    count = 1,
+  ): Promise<T> {
+    const { value, used } = await meter.step(fn);
+    feedHooks.turnStep?.(step, used, count);
+    return value;
   }
 
   /**
