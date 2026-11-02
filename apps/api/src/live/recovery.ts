@@ -103,7 +103,7 @@ export async function dueLiveRecoveryFeeds(
   return results.map((r) => r.feed);
 }
 
-/** A feed's target under the ledger's incarnation, as it is now. */
+/** A feed's target under the ledger's incarnation, as it is now, while it is due. */
 export async function captureLiveRecoveryTarget(
   db: D1Database,
   feed: string,
@@ -111,8 +111,10 @@ export async function captureLiveRecoveryTarget(
   const row = await db
     .withSession("first-primary")
     .prepare(
+      // Still due: one a grant postponed since it was selected covers live state now.
       `SELECT feed, incarnation, through_seq, attempts, next_attempt_at FROM live_recovery_targets
-       WHERE feed = ? AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)`,
+       WHERE feed = ? AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+         AND next_attempt_at <= ${N}`,
     )
     .bind(feed)
     .first<{

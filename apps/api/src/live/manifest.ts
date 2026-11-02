@@ -58,6 +58,8 @@ export const LIVE_BLOCK_MS = 6 * 60 * 60_000;
 export const LIVE_REQUIRED_COMPONENTS: Partial<Record<LiveManifestUnit, readonly AlarmUnit[]>> = {
   pump: [
     "pump",
+    // Its successor's grant, and its account confirmation's.
+    "grant",
     "grant",
     "coverage",
     "admitOwner",
@@ -384,11 +386,12 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
  *   housekeeping (confirmations never finished forgotten, expired and slow
  *   sockets ended), then one kind of work (up to `LIVE_TURN_RENEWALS`
  *   queued renewals, one refill's grant and installation, or one pump
- *   unit: one credential's sockets, one owning account's page), and its
+ *   unit: one credential's sockets, one owning account's page, its call of
+ *   that account's object paid for by a grant of its own), and its
  *   successor's grant; its owner's whole accounting reserved with it.
  */
 LIVE_PRICES.pump = estimated(
-  { do_rows_read: 418, do_rows_written: 51, d1_rows_read: 132, d1_rows_written: 24 },
+  { do_rows_read: 429, do_rows_written: 51, d1_rows_read: 132, d1_rows_written: 24 },
   {
     validity: { maxMs: 30 * 60_000, days: 2 },
     duration: "owner",
@@ -399,6 +402,29 @@ LIVE_PRICES.pump = estimated(
     localCleanupDebt: vector({ do_rows_written: 2 }),
     dayCleanupDebt: ZERO,
     components: LIVE_REQUIRED_COMPONENTS.pump as readonly AlarmUnit[],
+  },
+);
+
+/**
+ * - `org_confirmation`: a pump unit's call of its owning account's object
+ *   (`confirmReadersLive`), granted by the turn just before it, only when it
+ *   has an account to ask: what that object reads at most (a full page of
+ *   repositories, each granted to the most teams it reads through, every
+ *   one probed, for a credential's readers) and writes (the restore
+ *   generation it takes first in an instance of a restored account), both
+ *   measured by the live suite's fixtures; the grant's own D1 (at most a
+ *   turn's, which makes one) and the call's entry.
+ */
+LIVE_PRICES.org_confirmation = estimated(
+  { do_rows_read: 4_100, do_rows_written: 1, d1_rows_read: 132, d1_rows_written: 24 },
+  {
+    validity: { maxMs: 60_000, days: 2 },
+    duration: "synchronous",
+    maxQuantity: 1,
+    requests: 1,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
   },
 );
 

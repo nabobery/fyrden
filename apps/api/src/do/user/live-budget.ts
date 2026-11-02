@@ -470,12 +470,13 @@ export class LiveBudget {
   }
 
   /**
-   * Whether a day of `plan`'s already holds its most spendable grants of
-   * `balance` credit, once a few of the pool's expired balances are removed
-   * (an expired grant is never installed again: its balance protects
-   * nothing more, and leaving it would slow every spend of its day).
+   * The days of `plan`'s whose pool of `balance` credit has room for it
+   * (fewer than its most spendable grants), once a few of each pool's
+   * expired balances are removed (an expired grant is never installed
+   * again: its balance protects nothing more, and leaving it would slow
+   * every spend of its day).
    */
-  #poolFull(balance: "control" | "mark", plan: LiveEnvelope["plan"], now: number): boolean {
+  #roomyDays(balance: "control" | "mark", plan: LiveEnvelope["plan"], now: number): number[] {
     for (const charge of plan.charges)
       this.sql.exec(
         `DELETE FROM live_budget_balances WHERE (operation_id, day) IN (
@@ -487,23 +488,45 @@ export class LiveBudget {
         now,
         LIVE_EXPIRED_PRUNE,
       );
-    return plan.charges.some(
-      (charge) =>
-        this.sql
-          .exec<{ n: number }>(
-            `SELECT count(*) AS n FROM (SELECT 1 FROM live_budget_balances b
-               INDEXED BY live_budget_balances_live JOIN live_budget_fence f ON f.id = 1
-             WHERE b.kind = ?1 AND b.day = ?2 AND b.remaining <> '${EMPTY}'
-               AND b.budget_epoch = f.epoch AND b.budget_incarnation = f.incarnation
-               AND b.budget_seq > f.cleanup_through AND b.budget_valid_until > ?3
-             LIMIT ?4)`,
-            balance,
-            charge.day,
-            now,
-            LIVE_POOL_GRANTS,
-          )
-          .one().n >= LIVE_POOL_GRANTS,
-    );
+    return plan.charges
+      .filter(
+        (charge) =>
+          this.sql
+            .exec<{ n: number }>(
+              `SELECT count(*) AS n FROM (SELECT 1 FROM live_budget_balances b
+                 INDEXED BY live_budget_balances_live JOIN live_budget_fence f ON f.id = 1
+               WHERE b.kind = ?1 AND b.day = ?2 AND b.remaining <> '${EMPTY}'
+                 AND b.budget_epoch = f.epoch AND b.budget_incarnation = f.incarnation
+                 AND b.budget_seq > f.cleanup_through AND b.budget_valid_until > ?3
+               LIMIT ?4)`,
+              balance,
+              charge.day,
+              now,
+              LIVE_POOL_GRANTS,
+            )
+            .one().n < LIVE_POOL_GRANTS,
+      )
+      .map((charge) => charge.day);
+  }
+
+  /** Installs `grant`'s block into `balance`'s pool on `days` (each a day it is charged to). */
+  #installOn(balance: "control" | "mark", grant: LiveEnvelope, days: readonly number[]): void {
+    const plan = grant.plan;
+    for (const charge of plan.charges)
+      if (days.includes(charge.day))
+        this.sql.exec(
+          `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
+             budget_incarnation, budget_seq, budget_valid_until)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+          grant.operationId,
+          charge.day,
+          balance,
+          JSON.stringify(canonicalVector(charge.resources)),
+          plan.epoch,
+          plan.incarnation,
+          grant.seq,
+          plan.validUntil,
+        );
   }
 
   install(
@@ -534,21 +557,9 @@ export class LiveBudget {
       .toArray().length;
     if (pending === 0) return "refused";
     const balance = kind === "mark_refill" ? "mark" : "control";
-    if (this.#poolFull(balance, plan, now)) return "full";
-    for (const charge of plan.charges)
-      this.sql.exec(
-        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
-           budget_incarnation, budget_seq, budget_valid_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-        grant.operationId,
-        charge.day,
-        balance,
-        JSON.stringify(canonicalVector(charge.resources)),
-        plan.epoch,
-        plan.incarnation,
-        grant.seq,
-        plan.validUntil,
-      );
+    const days = this.#roomyDays(balance, plan, now);
+    if (days.length < plan.charges.length) return "full";
+    this.#installOn(balance, grant, days);
     this.sql.exec(
       "DELETE FROM live_budget_pending WHERE kind = ? AND operation_id = ?",
       kind,
@@ -703,6 +714,21 @@ export class LiveBudget {
     );
   }
 
+  /**
+   * Puts back as queued every installation dispatched under `ownerId` (its
+   * turn dealt with: nothing of it runs any more), each with its exact
+   * request kept, due at `retryAt`.
+   */
+  requeueOwnedPending(ownerId: string, retryAt: number): number {
+    return this.sql.exec(
+      `UPDATE live_budget_pending SET phase = 'queued', owner_id = NULL, dispatch_instance = NULL,
+         intended_at = ?2
+       WHERE phase = 'dispatched' AND owner_id = ?1`,
+      ownerId,
+      retryAt,
+    ).rowsWritten;
+  }
+
   /** Forgets the turn (one an instance gone left claimed or dispatched, once dealt with). */
   dropTurn(operationId: string): boolean {
     return (
@@ -791,22 +817,11 @@ export class LiveBudget {
     )
       return "refused";
     const balance = kind === "mark_refill" ? "mark" : "control";
-    // Its item stays queued: the pool installs it once a block drains or is retired.
-    if (this.#poolFull(balance, plan, now)) return "full";
-    for (const charge of plan.charges)
-      this.sql.exec(
-        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
-           budget_incarnation, budget_seq, budget_valid_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-        grant.operationId,
-        charge.day,
-        balance,
-        JSON.stringify(canonicalVector(charge.resources)),
-        plan.epoch,
-        plan.incarnation,
-        grant.seq,
-        plan.validUntil,
-      );
+    // Installed on each of its days with room (a full one's charge stands); with none, its item
+    // stays queued: the pool installs it once a block drains or is retired.
+    const days = this.#roomyDays(balance, plan, now);
+    if (days.length === 0) return "full";
+    this.#installOn(balance, grant, days);
     this.finishPending(kind, identity);
     return "installed";
   }
@@ -814,9 +829,9 @@ export class LiveBudget {
   /**
    * Installs a block an entry was granted with (an admission's first
    * blocks, its funding checked by the caller): into `balance`'s pool on
-   * each day it is charged to, while it is current and valid; `full` when a
-   * day already holds its most spendable grants (it is then not installed:
-   * its charge stands).
+   * each day it is charged to whose pool has room, while it is current and
+   * valid; `full` when no day has (it is then not installed: its charge
+   * stands).
    */
   installBlock(
     balance: "control" | "mark",
@@ -842,21 +857,9 @@ export class LiveBudget {
       now >= plan.validUntil
     )
       return "refused";
-    if (this.#poolFull(balance, plan, now)) return "full";
-    for (const charge of plan.charges)
-      this.sql.exec(
-        `INSERT INTO live_budget_balances (operation_id, day, kind, remaining, budget_epoch,
-           budget_incarnation, budget_seq, budget_valid_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-        grant.operationId,
-        charge.day,
-        balance,
-        JSON.stringify(canonicalVector(charge.resources)),
-        plan.epoch,
-        plan.incarnation,
-        grant.seq,
-        plan.validUntil,
-      );
+    const days = this.#roomyDays(balance, plan, now);
+    if (days.length === 0) return "full";
+    this.#installOn(balance, grant, days);
     return "installed";
   }
 

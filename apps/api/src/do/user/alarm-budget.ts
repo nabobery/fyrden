@@ -20,9 +20,10 @@ export interface InvocationCost {
 /**
  * The alarm's ceilings: application limits within the platform's (1,000
  * internal calls and 50 external on Free, measured 2026-10-29; D1's
- * statements as the directory's work is bounded). Proposed.
+ * statements as the directory's work is bounded: an owned pump with its
+ * two grants beside the mandatory steps, 45). Proposed.
  */
-export const ALARM_LIMITS: InvocationCost = { d1: 40, internal: 800, external: 40 };
+export const ALARM_LIMITS: InvocationCost = { d1: 46, internal: 800, external: 40 };
 
 /**
  * Each unit's ceiling (Proposed; each pinned against its real statements by

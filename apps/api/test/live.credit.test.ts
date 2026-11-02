@@ -81,6 +81,38 @@ describe("a pool of controls", () => {
       });
     }));
 
+  it("takes a block on a day with room though its next day's pool is full, the full day left out", () =>
+    isolated(async () => {
+      const feed = `usr_${uniqueId("roomy")}`;
+      // An evening's blocks: each charged to today and tomorrow.
+      const evening = (Math.floor(Date.now() / DAY) + 5) * DAY + 21 * 3_600_000;
+      const [a, b, c] = [
+        await block(feed, evening),
+        await block(feed, evening + 1),
+        await block(feed, evening + 2),
+      ];
+      const out = await runInDurableObject(env.USER.getByName(feed), (_: UserDO, state) => {
+        const budget = new LiveBudget(state.storage.sql);
+        budget.takeEpoch(0, a.plan.incarnation);
+        const now = evening + 10;
+        const day = Math.floor(now / DAY);
+        budget.installBlock("control", a, now);
+        budget.installBlock("control", b, now);
+        // Today's first block spent whole: today has room, tomorrow still holds both untouched.
+        for (let i = 0; i < LIVE_BLOCK_UNITS; i++) budget.spend("control", day, UNIT, now);
+        const third = budget.installBlock("control", c, now);
+        const days = state.storage.sql
+          .exec<{ day: number }>(
+            "SELECT day FROM live_budget_balances WHERE operation_id = ? ORDER BY day",
+            c.operationId,
+          )
+          .toArray()
+          .map((r) => r.day);
+        return { third, days, today: day };
+      });
+      expect(out).toEqual({ third: "installed", days: [out.today], today: out.today });
+    }));
+
   it("is installed on each day a block is charged to: one before the evening, two across midnight", () =>
     isolated(async () => {
       const feed = `usr_${uniqueId("days")}`;

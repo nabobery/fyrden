@@ -18,7 +18,7 @@ import {
  * a new incarnation, fencing every grant made before.
  *
  * These are accounting helpers: their caller pays for its own work,
- * including theirs. Nothing in production calls them yet.
+ * including theirs.
  */
 
 const R = DISCRETIONARY_RESOURCES;
@@ -72,6 +72,7 @@ export type LiveUnit =
   | "control"
   | "renewal"
   | "pump"
+  | "org_confirmation"
   | "mark"
   | "maintenance"
   | "recovery"
@@ -85,6 +86,7 @@ const UNITS: readonly LiveUnit[] = [
   "control",
   "renewal",
   "pump",
+  "org_confirmation",
   "mark",
   "maintenance",
   "recovery",

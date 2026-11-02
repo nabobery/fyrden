@@ -520,6 +520,36 @@ describe("live credit in a feed's object", () => {
 });
 
 describe("live recovery", () => {
+  it("leaves a target a grant postponed while its attempt was funded: nothing dispatched", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("postponed")}`;
+      const grant = await ordinaryGrant(feed, vector({ do_rows_written: 4 }));
+      await seedBalances(feed, grant, 3, grant.plan.validUntil);
+      const told: LiveRecoveryRequest[] = [];
+      const run = await recoverLiveTargets(env.DIRECTORY, {
+        limit: 10,
+        // While its attempt is funded, a fresh grant of the feed's postpones its target.
+        reserveTarget: async (target) => {
+          const funded = await recoveryCoverage(target);
+          await env.DIRECTORY.prepare(
+            "UPDATE live_recovery_targets SET next_attempt_at = ? WHERE feed = ?",
+          )
+            .bind(Date.now() + 6 * 60 * 60_000, feed)
+            .run();
+          return funded;
+        },
+        tell: (request) => {
+          told.push(request);
+          return tell(request);
+        },
+      });
+      expect(run).toEqual({ attempted: 0, retired: 0, pending: 0, failed: 0 });
+      expect(told).toEqual([]);
+      expect(await localCount(feed, "live_budget_balances")).toBe(3);
+      expect((await targetOf(feed))?.attempts).toBe(0);
+    });
+  });
+
   it("cleans a quiet feed through its target, retiring the target and its exact debt once", async () => {
     await isolated(async () => {
       const feed = `usr_${uniqueId("quiet")}`;
@@ -1100,14 +1130,15 @@ describe("live recovery's maintenance", () => {
       await seedTarget("usr_backoff", inc, 0);
       const delays: number[] = [];
       for (let i = 0; i < 8; i++) {
-        clock.now += 1_000;
-        const captured = await captureLiveRecoveryTarget(env.DIRECTORY, "usr_backoff");
+        const captured = await captureLiveRecoveryTarget(db, "usr_backoff");
         if (!captured) throw new Error("no target");
         expect(await backoffLiveTarget(db, captured)).toBe(true);
-        // The same captured attempt again: nothing.
+        // The same captured attempt again: nothing; nor is it captured before it is due again.
         expect(await backoffLiveTarget(db, captured)).toBe(false);
-        const next = await captureLiveRecoveryTarget(env.DIRECTORY, "usr_backoff");
-        delays.push(((next?.nextAttemptAt as number) - clock.now) / 60_000);
+        expect(await captureLiveRecoveryTarget(db, "usr_backoff")).toBeNull();
+        const next = (await targetOf("usr_backoff"))?.next_attempt_at as number;
+        delays.push((next - clock.now) / 60_000);
+        clock.now = next;
       }
       expect(delays).toEqual([1, 2, 4, 8, 16, 32, 60, 60]);
     });

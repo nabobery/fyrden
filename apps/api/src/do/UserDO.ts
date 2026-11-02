@@ -23,7 +23,7 @@ import {
   type Turn,
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
-import { AuthorizationInvalidated } from "../live/authorization.js";
+import { AuthorizationInvalidated, LIVE_AUTHORIZATION_RESULT_MS } from "../live/authorization.js";
 import type { LiveEnvelope } from "../live/budget.js";
 import {
   isLiveVector,
@@ -260,6 +260,8 @@ export const feedHooks: {
   alarmLimits?: InvocationCost;
   /** Awaited in a feed's turn after its work, before its successor is granted (tests). */
   afterTurnWork?: (feed: UserDO, state: DurableObjectState) => Promise<void>;
+  /** Called in a feed's turn once its successor's grant is answered (tests). */
+  afterSuccessorGrant?: (state: DurableObjectState) => void;
 } = {};
 
 /** Refuses a purge of more repositories than one call takes (see `PURGE_REPOS`). */
@@ -1537,6 +1539,14 @@ export class UserDO extends MigratingDO {
       const readable = new Map<string, boolean>();
       if (account !== undefined) {
         const deciding = entries.filter((e) => e.ownerId === account);
+        // The account's object's check paid for first, by a grant of its own: refused or not
+        // answered, the sockets try again a minute on.
+        const paid = await this.#grantConfirmation(account, current).catch(() => false);
+        if (!current()) return false;
+        if (!paid) {
+          this.#retryLater(sockets);
+          continue;
+        }
         let answers: Awaited<ReturnType<FreshAccess["decide"]>>;
         try {
           answers = await new FreshAccess({ env: this.env, metrics }, {
@@ -1647,11 +1657,15 @@ export class UserDO extends MigratingDO {
             budget.dispatchTurn(envelope.operationId, funding.ownerId as string, this.#instance),
           );
           if (!dispatched) return null;
+          // Its result waited for 10 seconds: past them nothing of it applies (its work, which the
+          // platform does not cut, still holds the object until it ends).
+          const answerBy = Date.now() + LIVE_AUTHORIZATION_RESULT_MS;
           const current = () => {
             const fence = budget.fence();
             const turn = budget.turn();
             return (
               !signal.aborted &&
+              Date.now() < answerBy &&
               !this.#retired() &&
               fence.epoch === claimedUnder.epoch &&
               fence.incarnation === claimedUnder.incarnation &&
@@ -1714,7 +1728,8 @@ export class UserDO extends MigratingDO {
    * runs again; one admitted but never dispatched, or already accounted,
    * is forgotten (the directory releases the first once its window
    * passes); one dispatched is uncertain: its owner is quarantined (its
-   * place kept) before it is forgotten, so a new turn may be prepared. In
+   * place kept) before it is forgotten, so a new turn may be prepared, and
+   * a refill it dispatched is queued again with its request. In
    * an alarm, nothing is done when the run cannot afford it.
    */
   async #adoptTurn(alarm: AlarmBudget | null): Promise<void> {
@@ -1736,7 +1751,12 @@ export class UserDO extends MigratingDO {
       this.ctx.storage.transactionSync(() => {
         if (budget.turn()?.operationId !== turn.operationId) return;
         if (!owner && turn.phase === "claimed") budget.unclaimTurn(turn.operationId, Date.now());
-        else budget.dropTurn(turn.operationId);
+        else {
+          budget.dropTurn(turn.operationId);
+          // A refill it dispatched, its answer never heard: asked again by a later turn (the same
+          // request, so the same grant if it was made).
+          if (turn.ownerId !== null) budget.requeueOwnedPending(turn.ownerId, Date.now());
+        }
       });
     } finally {
       reservation.physicalComplete();
@@ -1878,9 +1898,12 @@ export class UserDO extends MigratingDO {
               this.#instance,
             )
           : "refused";
-      // Refused for good (today's allowance, its grant expired or fenced), or no room: it goes
-      // (low water queues another).
-      if (installed !== "installed") budget.finishPending(kind, item.identity);
+      // No room on any of its days: kept, its request asked again a minute on (the same grant,
+      // charged once) until a block drains or is retired.
+      if (installed === "full") budget.requeuePending(kind, item.identity, now + LIVE_RETRY_MS);
+      // Refused for good (today's allowance, its grant expired or fenced): it goes (low water
+      // queues another).
+      else if (installed !== "installed") budget.finishPending(kind, item.identity);
     });
   }
 
@@ -1907,7 +1930,34 @@ export class UserDO extends MigratingDO {
     );
     if (!current()) return null;
     const granted = await reserveLive(this.env.DIRECTORY, request);
-    return granted.status === "granted" ? granted.grant : null;
+    feedHooks.afterSuccessorGrant?.(this.ctx);
+    // Answered once the turn's result no longer applies: named nowhere (its charge stands).
+    return granted.status === "granted" && current() ? granted.grant : null;
+  }
+
+  /**
+   * Grants the pump's call of `account`'s object (`org_confirmation`) from the
+   * ledger now: whether it was granted (false when refused, or stopped).
+   */
+  async #grantConfirmation(account: string, current: () => boolean): Promise<boolean> {
+    const budget = new LiveBudget(this.ctx.storage.sql);
+    const request = await makeLiveGrant(
+      planFor(
+        LIVE_PRICES.org_confirmation as LiveManifestEntry,
+        {
+          incarnation: budget.fence().incarnation,
+          epoch: 0,
+          recipientType: "OrgDO",
+          recipient: account,
+          class: "ordinary",
+          kind: "org_confirmation",
+          producesLocal: false,
+        },
+        budget.ledgerEarliest(Date.now()),
+      ),
+    );
+    if (!current()) return false;
+    return (await reserveLive(this.env.DIRECTORY, request)).status === "granted";
   }
 
   /** Sockets whose run could not be done (an answer missing): tried again a minute on. */
