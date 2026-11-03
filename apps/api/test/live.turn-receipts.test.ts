@@ -8,6 +8,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import {
+  LIVE_ORDINARY_DEBT_LIMIT,
   LIVE_TURN_RECEIPT_LOOK,
   LIVE_TURN_RECEIPT_PAGE,
   type LiveEnvelope,
@@ -241,6 +242,26 @@ describe("a feed's turn receipts", () => {
       expect(await kept(...backlog)).toEqual([true, ...backlog.slice(1).map(() => false)]);
       // Their debt went with them, the new grant's came.
       expect(await d1Debt()).toBe(debt - LIVE_TURN_RECEIPT_PAGE * DIRECTORY_DEBT + DIRECTORY_DEBT);
+    }));
+
+  it("let a turn through the ordinary debt limit when it retires as much as it owes", () =>
+    isolated(async () => {
+      const noon = testDay(7) * DAY + DAY / 2;
+      const first = await grant("usr_limit", noon);
+      await run(first);
+      // The ledger at its ordinary limit of directory rows written.
+      const limit = LIVE_ORDINARY_DEBT_LIMIT.d1_rows_written;
+      await env.DIRECTORY.prepare(
+        "UPDATE live_budget_state SET debt_d1_rows_written = ? WHERE id = 1",
+      )
+        .bind(limit)
+        .run();
+      // Another feed's turn retires nothing of it: refused.
+      await expect(grant("usr_unlimited", noon + 2 * MINUTE)).rejects.toThrow("temporary");
+      // The feed's next turn owes what it retires (the first's receipt): granted, still at it.
+      const second = await grant("usr_limit", noon + 2 * MINUTE);
+      expect(await kept(first, second)).toEqual([false, true]);
+      expect(await d1Debt()).toBe(limit);
     }));
 
   it("are looked for among a few newest only: turns that never ran, or another incarnation's, cost later grants nothing more", () =>

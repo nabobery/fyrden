@@ -295,7 +295,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   // Its D1 as measured on Free (422 read, 67 written), its turn's grant removing a full page of
-  // the feed's done turns (111 read and 2 written more, a ledger probe), and its five grants'
+  // the feed's done turns (at most 111 read and 2 written more, a ledger probe), and its five grants'
   // receipts written to the overdue index too (five written more).
   upgrade_transport: estimated(
     { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 533, d1_rows_written: 74 },
@@ -428,7 +428,7 @@ export const LIVE_TURN_RENEWALS = 2;
 export const LIVE_TURN_STEPS = {
   // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC
   // (146 read, 25 written), the successor's grant now reading the feed's done turns (155 read at
-  // 20 sockets) and removing a full page of them (111 read and 2 written more, a ledger probe),
+  // 20 sockets) and removing a full page of them (at most 111 read and 2 written more, a ledger probe),
   // its receipt written to the overdue index too (one written more).
   end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 266, d1_rows_written: 28 },
   housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
@@ -526,7 +526,7 @@ function turnUnit(
 /**
  * The pump turn as measured whole (a full delivery and prune, its alarm's reads around it; 712
  * D1 rows read and 31 written, its receipts in the overdue index), with its successor's grant
- * removing a full page of done turns (111 read, 2 written).
+ * removing a full page of done turns (at most 111 read, 2 written).
  */
 const PUMP_MEASURED = {
   do_rows_read: 1_197,

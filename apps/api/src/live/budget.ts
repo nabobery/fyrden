@@ -443,15 +443,23 @@ function doneTurns(plan: LiveGrantPlan, b: (value: string | number) => string, a
     ORDER BY c.valid_until DESC, c.seq DESC LIMIT ${LIVE_TURN_RECEIPT_PAGE}`;
 }
 
-/** The directory debt of `plan`'s feed's done turn receipts (see `doneTurns`), taken off. */
-function retiredDebt(
-  plan: LiveGrantPlan,
-  r: DiscretionaryResource,
-  b: (value: string | number) => string,
-): string {
-  if (!isTurn(plan)) return "0";
-  return `coalesce((SELECT sum(${v("directory_cleanup_debt", r)}) FROM live_budget_receipts
-    WHERE seq IN (${doneTurns(plan, b, N)})), 0)`;
+/**
+ * The directory debt of `plan`'s feed's done turn receipts (see `doneTurns`),
+ * taken off: each resource's, summed once a statement (a table `retired`,
+ * of one row, that `retiredDebt` reads), or nothing for any other plan.
+ */
+function retiring(plan: LiveGrantPlan, b: (value: string | number) => string): string {
+  if (!isTurn(plan)) return "";
+  return `WITH retired AS MATERIALIZED (SELECT ${R.map(
+    (r) => `coalesce(sum(${v("directory_cleanup_debt", r)}), 0) AS ${r}`,
+  ).join(", ")}
+    FROM live_budget_receipts WHERE seq IN (${doneTurns(plan, b, N)}))
+`;
+}
+
+/** `r`'s part of what `retiring` takes off (its statement's `retired`), or nothing. */
+function retiredDebt(plan: LiveGrantPlan, r: DiscretionaryResource): string {
+  return isTurn(plan) ? `(SELECT ${r} FROM retired)` : "0";
 }
 
 /** Whether each charge fits its day (all of it, and ordinary work outside the protected part). */
@@ -524,16 +532,18 @@ export async function reserveLive(
       const ordinaryGates = ordinary
         ? [
             ...R.map(
-              (r) => `debt_${r} + ${addedDebt(plan, r, b)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
+              // After what it retires: a turn that owes no more than it takes off is let through.
+              (r) =>
+                `debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
             ),
             // Expired receipts once they call for cleanup (maintenance's own never do).
             `NOT ${liveReceiptsOverdue(N)}`,
             `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
           ].join("\n    AND ")
         : "1";
-      return `UPDATE live_budget_state
+      return `${retiring(plan, b)}UPDATE live_budget_state
   SET grant_seq = grant_seq + 1, last_mint = ${b(mint)}, last_mint_at = ${N},
-    ${R.map((r) => `debt_${r} = debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r, b)}`).join(",\n    ")}
+    ${R.map((r) => `debt_${r} = debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r)}`).join(",\n    ")}
   WHERE id = 1 AND incarnation = ${b(plan.incarnation)} AND grant_seq < ${MAX}
     AND ${plan.validFrom} <= ${N} AND ${N} < ${plan.validUntil}
     AND ${first.day} = ${D}

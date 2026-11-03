@@ -1983,6 +1983,22 @@ describe("live work's rows in a feed's object", () => {
         JSON.stringify(canonicalVector(left as never)),
       );
     });
+  /** Each unit's rows within the most its manifest entry observed. */
+  const withinObserved = (units: Record<string, Rows>) => {
+    for (const [unit, r] of Object.entries(units)) {
+      const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
+      const observed = Object.values(entry.observed);
+      const most = (k: "do_rows_read" | "do_rows_written" | "d1_rows_read" | "d1_rows_written") =>
+        Math.max(...observed.map((o) => o[k]));
+      expect({ unit, ...r }).toEqual({
+        unit,
+        read: Math.min(r.read, most("do_rows_read")),
+        written: Math.min(r.written, most("do_rows_written")),
+        d1Read: Math.min(r.d1Read, most("d1_rows_read")),
+        d1Written: Math.min(r.d1Written, most("d1_rows_written")),
+      });
+    }
+  };
   const note = (unit: string, r: Rows) => {
     const was = measured[unit] ?? { read: 0, written: 0, d1Read: 0, d1Written: 0 };
     measured[unit] = {
@@ -2308,7 +2324,7 @@ describe("live work's rows in a feed's object", () => {
         d1_rows_written: Math.min(whole.d1_rows_written, paid.d1_rows_written),
       });
     }
-  });
+  }, 90_000);
 
   it("is within each unit's observed rows", async () => {
     const owner = await user();
@@ -2537,8 +2553,15 @@ describe("live work's rows in a feed's object", () => {
     const bareRepo = await repoWithIssue(bare);
     const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));
     note("mark", past(marked, unmarked));
-    // A revocation page's tell at its most: a feed with its most sockets, all resting on the
-    // dependency revoked (the principal's), closed and forgotten with their ends' provisions.
+    expect(issued?.ticket).toBeDefined();
+    // What was measured (for the manifest's observations), when asked.
+    if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));
+    withinObserved(measured);
+  }, 90_000);
+
+  it("is within a revocation page's observed rows, a feed's most sockets closed by its tell", async () => {
+    // A feed with its most sockets, all resting on the dependency revoked (the principal's), closed
+    // and forgotten with their ends' provisions. Its own test: opening twenty sockets takes a while.
     const revokedFeed = await user();
     for (const token of [
       revokedFeed.token,
@@ -2554,29 +2577,14 @@ describe("live work's rows in a feed's object", () => {
         .one(),
     );
     let closed: readonly string[] = [];
-    note(
-      "revocation_page",
-      await rows(revokedFeed, async () => {
+    const page = {
+      revocation_page: await rows(revokedFeed, async () => {
         closed = await feedOf(revokedFeed).revoked([principal.dependency]);
       }),
-    );
+    };
     expect(closed).toHaveLength(LIVE_POLICY.perFeed);
-    expect(issued?.ticket).toBeDefined();
-    // What was measured (for the manifest's observations), when asked.
-    if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));
-    for (const [unit, r] of Object.entries(measured)) {
-      const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
-      const observed = Object.values(entry.observed);
-      const most = (k: "do_rows_read" | "do_rows_written" | "d1_rows_read" | "d1_rows_written") =>
-        Math.max(...observed.map((o) => o[k]));
-      expect({ unit, ...r }).toEqual({
-        unit,
-        read: Math.min(r.read, most("do_rows_read")),
-        written: Math.min(r.written, most("do_rows_written")),
-        d1Read: Math.min(r.d1Read, most("d1_rows_read")),
-        d1Written: Math.min(r.d1Written, most("d1_rows_written")),
-      });
-    }
+    if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(page));
+    withinObserved(page);
   });
 });
 

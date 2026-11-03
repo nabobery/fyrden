@@ -1781,7 +1781,6 @@ export class UserDO extends MigratingDO {
           const paid = turnBudget(envelope, budget.ledgerDay(Date.now()));
           const meter = new TurnMeter(this.ctx.storage.sql, paid, LIVE_TURN_STEP_MOST.end);
           this.#meter = meter;
-          this.#unpaidEnds = [];
           try {
             await this.#turnWork(funding, current, meter);
             await feedHooks.afterTurnWork?.(this, this.ctx);
@@ -1834,7 +1833,7 @@ export class UserDO extends MigratingDO {
 
   /** The running turn's meter, while its work runs (a socket's end is exempt from it). */
   #meter: TurnMeter | null = null;
-  /** Sockets the running turn closed with nothing left to pay for their end: its to forget. */
+  /** Sockets turns closed with nothing left to pay for their end: the next turn's to forget. */
   #unpaidEnds: string[] = [];
 
   /** The turn whose work is still physically running in this instance, if any. */
@@ -1893,9 +1892,11 @@ export class UserDO extends MigratingDO {
     if (!current()) return;
     await this.#mainWork(funding, current, meter);
     await this.#forget(unconfirmed, current, meter);
-    // Sockets ended with nothing left to pay for: their rows forgotten as the turn has room.
-    for (const id of this.#unpaidEnds.splice(0)) {
+    // Sockets ended with nothing left to pay for: their rows forgotten as the turn has room, one
+    // at a time (those it has no room for, or ended after this, are a later turn's).
+    while (this.#unpaidEnds.length > 0) {
       if (!current() || !meter.fits(LIVE_TURN_STEP_MOST.forget)) break;
+      const id = this.#unpaidEnds.shift() as string;
       await this.#metered(meter, "forget", () =>
         this.ctx.storage.transactionSync(() => this.#live().forget(id)),
       );
