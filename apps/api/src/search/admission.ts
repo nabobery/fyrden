@@ -25,22 +25,49 @@ export const ADMISSION = {
  * How much a batch's projections may grow the database, reserved before
  * they are written: `factor` times their rows' bytes (their JSON, a bound
  * on the text indexed), and `entity` bytes more each (its rows, keys and
- * index entries, and the index's merges a write may set off). Measured
- * (test/search.growth.test.ts, which pins it): a batch grew the database by
- * at most two thirds of what this reserves (a body of distinct terms about
- * three times its JSON; a small edit after an index of large documents up to
- * seven pages, by the order before it), over short, repetitive, distinct-term, three- and four-byte and
- * combining text, the longest titles, a hundred labels, inserts,
- * replacements, deletions, batches of ten and small edits.
+ * index entries), with the merges the batch's write may set the index
+ * doing (`AUTOMERGE`). Measured (test/search.growth.test.ts, which pins it):
+ * a batch grew the database by at most two thirds of what this reserves (a
+ * body of distinct terms about three times its JSON), over short,
+ * repetitive, distinct-term, three- and four-byte and combining text, the
+ * longest titles, a hundred labels, inserts, replacements, deletions,
+ * batches of ten and small edits after an index of many large documents.
  */
 export const GROWTH = { factor: 4, entity: 65_536 };
 
-/** The bytes `rows` (projected entities' rows; a deletion's null) may grow the database by. */
-export function growthOf(rows: readonly (Record<string, unknown> | null)[]): number {
+/**
+ * The merges an index does of its own with a write (FTS5's automerge): each
+ * time the leaf pages it has written pass a multiple of `unit` (64), it
+ * merges about `unit` leaf pages a level of the index (SQLite's target: it
+ * stops between terms, so a long posting list may take it a little past),
+ * whatever the write's own size (a small edit after large documents was
+ * measured to grow the index by 168 pages). Each level holds about four
+ * times what the one below does, so an index as large as the size threshold
+ * (about 89,600 pages of 4 KiB) has about 9 levels: `levels` is one more.
+ * An allowance, measured against, not a proven bound: a crisis merge (once
+ * a level holds 16 segments) has none.
+ */
+export const AUTOMERGE = { unit: 64, levels: 10, page: 4_096 };
+
+/**
+ * The bytes `rows` (projected entities' rows; a deletion's null) may grow
+ * the database by, `indexed` of them (all, unless said) written to a
+ * full-text index: the batch's merges are theirs alone.
+ */
+export function growthOf(
+  rows: readonly (Record<string, unknown> | null)[],
+  indexed: readonly (Record<string, unknown> | null)[] = rows,
+): number {
+  const own = (row: Record<string, unknown> | null) =>
+    row ? GROWTH.factor * utf8(JSON.stringify(row)) : 0;
   let bytes = 0;
-  for (const row of rows)
-    bytes += GROWTH.entity + (row ? GROWTH.factor * utf8(JSON.stringify(row)) : 0);
-  return bytes;
+  for (const row of rows) bytes += GROWTH.entity + own(row);
+  if (indexed.length === 0) return bytes;
+  // The batch is one write: the leaves it writes pass at most one multiple of `unit` more than
+  // they fill.
+  const leaves = Math.ceil(indexed.reduce((n, row) => n + own(row), 0) / AUTOMERGE.page);
+  const units = 1 + Math.floor(leaves / AUTOMERGE.unit);
+  return bytes + units * AUTOMERGE.unit * AUTOMERGE.levels * AUTOMERGE.page;
 }
 
 const encoder = new TextEncoder();

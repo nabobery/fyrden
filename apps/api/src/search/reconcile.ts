@@ -771,7 +771,9 @@ async function differences(
         .bind(repoId, pass.gen, JSON.stringify(looked)),
     );
   if (grown.length > 0) {
-    statements.unshift(...growthStatements(db, token, day, growthOf(grown)));
+    statements.unshift(
+      ...growthStatements(db, token, day, growthOf(grown, kind === "subjects" ? grown : [])),
+    );
     // Writes its growth was refused for (an addition, or a deletion's new row) leave the pass
     // partial (its revision not covered), as removals alone at the size threshold do.
     statements.push(
