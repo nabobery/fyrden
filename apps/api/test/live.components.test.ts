@@ -47,8 +47,16 @@ async function cost<T>(now: number, work: (db: D1Database) => Promise<T>) {
   return { result, used: { d1: count.queries, internal: count.calls, external: 0 } };
 }
 
-/** A grant for `recipient`, valid from noon of `day` (across its midnight, on both days). */
-async function granted(day: number, recipient: string, acrossMidnight = false) {
+/**
+ * A grant for `recipient`, valid from noon of `day` (across its midnight, on both days): a
+ * pump's by default, or `kind`'s, producing local state with `local`.
+ */
+async function granted(
+  day: number,
+  recipient: string,
+  acrossMidnight = false,
+  { kind, local = false }: { kind?: "renewal" | "control"; local?: boolean } = {},
+) {
   const from = acrossMidnight ? (day + 1) * DAY - MINUTE : day * DAY + DAY / 2;
   const charges: LiveDayCharge[] = acrossMidnight
     ? [
@@ -82,6 +90,11 @@ async function granted(day: number, recipient: string, acrossMidnight = false) {
       validMs: acrossMidnight ? 2 * MINUTE : MINUTE,
       recipient,
       charges,
+      ...(kind && { kind }),
+      ...(local && {
+        producesLocal: true,
+        localCleanupDebt: vector({ do_rows_written: 2 }),
+      }),
     }),
   );
   return { request, from };
@@ -131,8 +144,14 @@ describe("an alarm's components", () => {
       const day = testDay(3);
       const measured: Partial<Record<AlarmUnit, unknown>> = {};
       const settles: { d1: number; internal: number }[] = [];
-      // A grant over two days.
-      const { request, from } = await granted(day, "usr_component", true);
+      // A feed's turn's grant over two days (its target registered, its done turns looked for).
+      const turn = await granted(day, "usr_turn_component", true, { kind: "renewal", local: true });
+      measured.turnGrant = (await cost(turn.from, (db) => reserveLive(db, turn.request))).used;
+      // An ordinary grant over two days: a block's, producing local state.
+      const { request, from } = await granted(day, "usr_component", true, {
+        kind: "control",
+        local: true,
+      });
       const grant = await cost(from, (db) => reserveLive(db, request));
       measured.grant = grant.used;
       if (grant.result.status !== "granted") throw new Error("not granted");
@@ -222,7 +241,7 @@ describe("an alarm's components", () => {
     const tally = { d1: 0, internal: 0, external: 0 };
     const owned: AlarmUnit[] = [
       "pump",
-      "grant",
+      "turnGrant",
       "coverage",
       "admitOwner",
       "dispatchOwner",

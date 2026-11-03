@@ -58,8 +58,8 @@ export const LIVE_BLOCK_MS = 6 * 60 * 60_000;
 export const LIVE_REQUIRED_COMPONENTS: Partial<Record<LiveManifestUnit, readonly AlarmUnit[]>> = {
   pump: [
     "pump",
-    // Its successor's grant, and its account confirmation's.
-    "grant",
+    // Its successor's grant (a turn's), and its account confirmation's.
+    "turnGrant",
     "grant",
     "coverage",
     "admitOwner",
@@ -70,7 +70,7 @@ export const LIVE_REQUIRED_COMPONENTS: Partial<Record<LiveManifestUnit, readonly
   ],
   renewal: [
     "renewal",
-    "grant",
+    "turnGrant",
     "coverage",
     "admitOwner",
     "dispatchOwner",
@@ -291,8 +291,10 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       dayCleanupDebt: ZERO,
     },
   ),
+  // Its D1 as measured on Free (422 read, 67 written), its turn's grant removing a full page of
+  // the feed's done turns (111 read and 2 written more, a ledger probe).
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 422, d1_rows_written: 67 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 533, d1_rows_written: 69 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -420,8 +422,10 @@ export const LIVE_TURN_RENEWALS = 2;
  * ledger running on D1's own clock.
  */
 export const LIVE_TURN_STEPS = {
-  // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC.
-  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 146, d1_rows_written: 25 },
+  // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC
+  // (146 read, 25 written), the successor's grant now reading the feed's done turns (155 read at
+  // 20 sockets) and removing a full page of them (111 read and 2 written more, a ledger probe).
+  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 266, d1_rows_written: 27 },
   housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
   forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
   renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
@@ -513,12 +517,15 @@ function turnUnit(
  *   what every socket heard of pruned), and its successor's grant; its
  *   owner's whole accounting reserved with it.
  */
-/** The pump turn as measured whole (a full delivery and prune, its alarm's reads around it). */
+/**
+ * The pump turn as measured whole (a full delivery and prune, its alarm's reads around it; 712
+ * D1 rows read and 29 written), with its successor's grant removing a full page of done turns.
+ */
 const PUMP_MEASURED = {
   do_rows_read: 1_197,
   do_rows_written: 87,
-  d1_rows_read: 661,
-  d1_rows_written: 29,
+  d1_rows_read: 823,
+  d1_rows_written: 31,
 };
 
 const TURN_ENTRY = {

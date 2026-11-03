@@ -56,6 +56,12 @@ export const LIVE_ORDINARY_DEBT_LIMIT: ResourceVector = {
 
 /** Unsettled duration holds a day at most; receipts and days a cleanup call removes at most. */
 export const LIVE_ESCROW_ENTRIES = 64;
+/** A feed's turns: their state is one turn at a time, their receipts removed by later turns. */
+const LIVE_TURN_KINDS = ["pump", "renewal"];
+/** A feed's done turn receipts a turn's grant removes at most (the newest first). */
+export const LIVE_TURN_RECEIPT_PAGE = 2;
+/** The newest receipts of each turn kind past their validity a turn's grant looks at. */
+export const LIVE_TURN_RECEIPT_LOOK = 4;
 export const LIVE_RECEIPT_PAGE = 32;
 export const LIVE_DAY_PAGE = 8;
 
@@ -339,15 +345,84 @@ function statement(
 /** `json_extract` of a vector column or parameter, as an integer. */
 const v = (x: string, r: DiscretionaryResource) => `CAST(json_extract(${x}, '$.${r}') AS INTEGER)`;
 
+/** Whether `plan` is a feed's turn (its state one turn at a time). */
+const isTurn = (plan: LiveGrantPlan) =>
+  plan.recipientType === "UserDO" && LIVE_TURN_KINDS.includes(plan.kind);
+
+/**
+ * The local debt `plan` adds to its feed's recovery target: a turn's only
+ * while the target does not already owe its turn state.
+ */
+function addedLocal(
+  plan: LiveGrantPlan,
+  r: DiscretionaryResource,
+  b: (value: string | number) => string,
+): string {
+  const local = plan.localCleanupDebt[r];
+  if (!isTurn(plan) || local === 0) return String(local);
+  return `(CASE WHEN EXISTS (SELECT 1 FROM live_recovery_targets WHERE feed = ${b(plan.recipient)}
+      AND incarnation = ${b(plan.incarnation)} AND turn_debt = 1) THEN 0 ELSE ${local} END)`;
+}
+
 /** The ordinary-debt and day-debt each charge would add: for days without a row yet. */
-function addedDebt(plan: LiveGrantPlan, r: DiscretionaryResource): string {
+function addedDebt(
+  plan: LiveGrantPlan,
+  r: DiscretionaryResource,
+  b: (value: string | number) => string,
+): string {
   const newDays = plan.charges
     .map(
       (c) =>
         `(CASE WHEN EXISTS (SELECT 1 FROM live_budget_days WHERE day = ${c.day}) THEN 0 ELSE ${plan.dayCleanupDebt[r]} END)`,
     )
     .join(" + ");
-  return `(${plan.directoryCleanupDebt[r] + plan.localCleanupDebt[r]} + ${newDays})`;
+  return `(${plan.directoryCleanupDebt[r]} + ${addedLocal(plan, r, b)} + ${newDays})`;
+}
+
+/**
+ * A page of `plan`'s feed's earlier turns' receipts that are done by `at`:
+ * their validity over (no replay of one can be granted again), their owner
+ * released, and nothing of them left in escrow (no refund still to come).
+ * A turn's grant removes them, their directory debt with them, so a feed
+ * always on owes a turn or two of receipts rather than days of them. Only
+ * the newest few of each turn kind past their validity are looked at (an
+ * index range each, newest first): one never done (its turn never ran) is
+ * passed over by later turns and left to its expiry, read at most a few
+ * times. The order is the index's (validity, then sequence), so every
+ * statement of a batch selects the same receipts.
+ */
+function doneTurns(plan: LiveGrantPlan, b: (value: string | number) => string, at: string): string {
+  const newest = (
+    kind: string,
+  ) => `SELECT * FROM (SELECT r.seq, r.valid_until FROM live_budget_receipts r
+      INDEXED BY live_budget_receipts_recipient
+    WHERE r.recipient = ${b(plan.recipient)} AND r.kind = '${kind}' AND r.settled_at IS NULL
+      AND r.valid_until <= ${at}
+    ORDER BY r.valid_until DESC, r.seq DESC LIMIT ${LIVE_TURN_RECEIPT_LOOK})`;
+  // Eligibility past the window (the index's columns alone bound it): another incarnation's, or
+  // another recipient type's, is passed over like one never done.
+  return `SELECT c.seq FROM (${newest("pump")} UNION ALL ${newest("renewal")}) c
+    JOIN live_budget_receipts r ON r.seq = c.seq
+    WHERE r.recipient_type = 'UserDO' AND r.incarnation = ${b(plan.incarnation)}
+      AND json_array_length(r.released_owners) > 0
+      AND NOT EXISTS (SELECT 1 FROM live_duration_owners o WHERE o.operation_id = r.operation_id)
+      -- Its id in a charged day's escrow text (ids are unique and of one shape: found only
+      -- when held there), read without walking the day's entries.
+      AND NOT EXISTS (SELECT 1 FROM json_each(r.plan, '$.charges') ch
+        JOIN live_budget_days d ON d.day = json_extract(ch.value, '$.day')
+        WHERE instr(d.escrow, r.operation_id) > 0)
+    ORDER BY c.valid_until DESC, c.seq DESC LIMIT ${LIVE_TURN_RECEIPT_PAGE}`;
+}
+
+/** The directory debt of `plan`'s feed's done turn receipts (see `doneTurns`), taken off. */
+function retiredDebt(
+  plan: LiveGrantPlan,
+  r: DiscretionaryResource,
+  b: (value: string | number) => string,
+): string {
+  if (!isTurn(plan)) return "0";
+  return `coalesce((SELECT sum(${v("directory_cleanup_debt", r)}) FROM live_budget_receipts
+    WHERE seq IN (${doneTurns(plan, b, N)})), 0)`;
 }
 
 /** Whether each charge fits its day (all of it, and ordinary work outside the protected part). */
@@ -419,7 +494,9 @@ export async function reserveLive(
         : "1";
       const ordinaryGates = ordinary
         ? [
-            ...R.map((r) => `debt_${r} + ${addedDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`),
+            ...R.map(
+              (r) => `debt_${r} + ${addedDebt(plan, r, b)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
+            ),
             // Maintenance's own receipts excepted: the next run removes them, and they alone never
             // call for one.
             `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N}
@@ -429,7 +506,7 @@ export async function reserveLive(
         : "1";
       return `UPDATE live_budget_state
   SET grant_seq = grant_seq + 1, last_mint = ${b(mint)}, last_mint_at = ${N},
-    ${R.map((r) => `debt_${r} = debt_${r} + ${addedDebt(plan, r)}`).join(",\n    ")}
+    ${R.map((r) => `debt_${r} = debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r, b)}`).join(",\n    ")}
   WHERE id = 1 AND incarnation = ${b(plan.incarnation)} AND grant_seq < ${MAX}
     AND ${plan.validFrom} <= ${N} AND ${N} < ${plan.validUntil}
     AND ${first.day} = ${D}
@@ -477,20 +554,35 @@ export async function reserveLive(
       statement(
         db,
         (b) => `INSERT INTO live_recovery_targets
-    (feed, incarnation, through_seq, next_attempt_at, attempts, local_cleanup_debt)
+    (feed, incarnation, through_seq, next_attempt_at, attempts, local_cleanup_debt, turn_debt)
   SELECT ${b(plan.recipient)}, ${b(plan.incarnation)}, seq, ${plan.validUntil}, 0,
-    ${b(vectorJson(plan.localCleanupDebt))}
+    ${b(vectorJson(plan.localCleanupDebt))}, ${isTurn(plan) ? 1 : 0}
   FROM live_budget_receipts WHERE operation_id = ${b(request.operationId)} AND ${G(b)}
   ON CONFLICT (feed) DO UPDATE SET
     through_seq = excluded.through_seq,
     -- Due once the last grant it covers has expired: recovery cleans through the newest
     -- sequence, so it waits for all of them (credit valid a day among them).
     next_attempt_at = max(live_recovery_targets.next_attempt_at, excluded.next_attempt_at),
-    local_cleanup_debt = json_object(${R.map(
-      (r) =>
-        `'${r}', ${v("live_recovery_targets.local_cleanup_debt", r)} + ${v("excluded.local_cleanup_debt", r)}`,
-    ).join(", ")})
+    -- A turn's state owed once (the ledger's debt was added the same way).
+    local_cleanup_debt = CASE WHEN excluded.turn_debt = 1 AND live_recovery_targets.turn_debt = 1
+      THEN live_recovery_targets.local_cleanup_debt
+      ELSE json_object(${R.map(
+        (r) =>
+          `'${r}', ${v("live_recovery_targets.local_cleanup_debt", r)} + ${v("excluded.local_cleanup_debt", r)}`,
+      ).join(", ")}) END,
+    turn_debt = max(live_recovery_targets.turn_debt, excluded.turn_debt)
   WHERE live_recovery_targets.incarnation = excluded.incarnation`,
+      ),
+    );
+  // Their receipts go once the transition took their debt off (by its own time, the same
+  // receipts: nothing of the batch between changes which are done).
+  if (isTurn(plan))
+    statements.push(
+      statement(
+        db,
+        (b) => `DELETE FROM live_budget_receipts
+  WHERE seq IN (${doneTurns(plan, b, "(SELECT last_mint_at FROM live_budget_state WHERE id = 1)")})
+    AND ${M(b)}`,
       ),
     );
   // What happened, and if nothing did, why: read in the same batch.

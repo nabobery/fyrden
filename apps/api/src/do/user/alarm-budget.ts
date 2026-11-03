@@ -21,7 +21,7 @@ export interface InvocationCost {
  * The alarm's ceilings: application limits within the platform's (1,000
  * internal calls and 50 external on Free, measured 2026-10-29; D1's
  * statements as the directory's work is bounded: an owned pump with its
- * two grants beside the mandatory steps, 45). Proposed.
+ * two grants (its successor's a turn's) beside the mandatory steps, 46). Proposed.
  */
 export const ALARM_LIMITS: InvocationCost = { d1: 46, internal: 800, external: 40 };
 
@@ -30,7 +30,8 @@ export const ALARM_LIMITS: InvocationCost = { d1: 46, internal: 800, external: 4
  * the tests of the unit): the mandatory steps with their checkpoint and
  * finish, one renewal's execution, one pump unit (a credential and its
  * sockets, one account), one email candidate (its access, fence, provider
- * call and settlement), and an ordinary grant or refill batch; then what a
+ * call and settlement), an ordinary grant or refill batch, and a feed's
+ * turn's grant (its feed's done turn receipts removed with it); then what a
  * funded operation's inline accounting makes: an owner's admission, its
  * dispatch, its observation accepted, a bounded set of owners quarantined,
  * one settlement page (four days), the owner's release, a day's duration
@@ -42,6 +43,8 @@ export const ALARM_UNITS = {
   pump: { d1: 8, internal: 8, external: 0 },
   email: { d1: 16, internal: 12, external: 1 },
   grant: { d1: 6, internal: 1, external: 0 },
+  // A feed's turn's grant: a grant's, and its feed's done turn receipts removed.
+  turnGrant: { d1: 7, internal: 1, external: 0 },
   admitOwner: { d1: 4, internal: 1, external: 0 },
   dispatchOwner: { d1: 2, internal: 1, external: 0 },
   acceptObservation: { d1: 2, internal: 1, external: 0 },

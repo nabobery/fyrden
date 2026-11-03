@@ -364,7 +364,8 @@ CREATE TABLE live_recovery_targets (
       AND json_extract(local_cleanup_debt, '$.queue_ops') = 0,
       0
     ))
-) STRICT, WITHOUT ROWID;
+, turn_debt INTEGER NOT NULL DEFAULT 0
+  CHECK (turn_debt IN (0, 1))) STRICT, WITHOUT ROWID;
 
 -- table live_socket_deps
 CREATE TABLE live_socket_deps (
