@@ -67,6 +67,10 @@ afterEach(async () => {
     // allowance is each test's own.
     env.DIRECTORY.prepare("DELETE FROM live_socket_deps"),
     env.DIRECTORY.prepare("DELETE FROM live_sockets"),
+    // Its revocations and their targets: one left failing, due again a minute on, would take a
+    // later test's sweep's deliveries ahead of its own.
+    env.DIRECTORY.prepare("DELETE FROM revocation_targets"),
+    env.DIRECTORY.prepare("DELETE FROM revocations"),
     env.DIRECTORY.prepare("DELETE FROM live_budget_days"),
     env.DIRECTORY.prepare(
       `UPDATE live_budget_state SET debt_do_requests = 0, debt_do_rows_read = 0,
