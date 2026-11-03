@@ -56,13 +56,15 @@ export const LIVE_ORDINARY_DEBT_LIMIT: ResourceVector = {
 
 /** Unsettled duration holds a day at most; receipts and days a cleanup call removes at most. */
 export const LIVE_ESCROW_ENTRIES = 64;
+export const LIVE_RECEIPT_PAGE = 32;
+export const LIVE_DAY_PAGE = 8;
+
 /** A feed's turns: their state is one turn at a time, their receipts removed by later turns. */
 const LIVE_TURN_KINDS = ["pump", "renewal"];
 /** A feed's done turn receipts a turn's grant removes at most (the newest first). */
 export const LIVE_TURN_RECEIPT_PAGE = 2;
 /** The newest receipts of each turn kind past their validity a turn's grant looks at. */
 export const LIVE_TURN_RECEIPT_LOOK = 4;
-export const LIVE_RECEIPT_PAGE = 32;
 
 /**
  * When expired receipts call for cleanup (Proposed): a page of them
@@ -72,20 +74,23 @@ export const LIVE_RECEIPT_PAGE = 32;
  */
 export const LIVE_RECEIPTS_OVERDUE = { page: 16, graceMs: 2 * 60 * 60_000 } as const;
 
+/** Receipts other than maintenance's own (its runs', its revocation pages'): the overdue index's. */
+const NOT_MAINTENANCE = "kind NOT IN ('maintenance', 'revocation_page')";
+
 /**
  * Whether expired receipts call for cleanup now (`LIVE_RECEIPTS_OVERDUE`),
- * maintenance's own excepted (the next run removes them, and they alone
- * never call for one): one SQL condition, read through an index of the
- * others only (a page at most, whatever maintenance's own left).
+ * maintenance's own excepted (its runs' and revocation pages': the next
+ * run removes them, and they alone never call for one): one SQL condition,
+ * read through an index of the others only (a page at most, whatever
+ * maintenance's own left).
  */
 export function liveReceiptsOverdue(now: string = LIVE_NOW): string {
   const { page, graceMs } = LIVE_RECEIPTS_OVERDUE;
   return `(EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
-      WHERE expires_at <= ${now} - ${graceMs} AND kind <> 'maintenance')
+      WHERE expires_at <= ${now} - ${graceMs} AND ${NOT_MAINTENANCE})
     OR (SELECT count(*) FROM (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
-      WHERE expires_at <= ${now} AND kind <> 'maintenance' LIMIT ${page})) >= ${page})`;
+      WHERE expires_at <= ${now} AND ${NOT_MAINTENANCE} LIMIT ${page})) >= ${page})`;
 }
-export const LIVE_DAY_PAGE = 8;
 
 /** D1's clock in milliseconds (tests replace the marked expression). */
 export const LIVE_NOW = "/*LIVE_NOW*/(unixepoch() * 1000)";
@@ -103,6 +108,7 @@ export type LiveUnit =
   | "org_confirmation"
   | "mark"
   | "maintenance"
+  | "revocation_page"
   | "recovery"
   | "settlement";
 
@@ -117,6 +123,7 @@ const UNITS: readonly LiveUnit[] = [
   "org_confirmation",
   "mark",
   "maintenance",
+  "revocation_page",
   "recovery",
   "settlement",
 ];

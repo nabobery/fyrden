@@ -267,6 +267,8 @@ export async function sweep(
   limits: {
     readonly deliveries?: number;
     readonly revocations?: number;
+    /** Dependency rows the expansion scans at most. */
+    readonly scan?: number;
     /** Whether to go on to the next group of deliveries (false once the caller gave up). */
     readonly proceed?: () => boolean;
   } = {},
@@ -282,7 +284,7 @@ export async function sweep(
   let scanned = 0;
   let expanded = 0;
   for (const revocation of open) {
-    const room = LIVE_ADMISSION.scanRows - scanned;
+    const room = (limits.scan ?? LIVE_ADMISSION.scanRows) - scanned;
     if (room <= 0) break;
     const { results: rows } = await primary
       .prepare(

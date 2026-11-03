@@ -603,8 +603,11 @@ LIVE_PRICES.org_confirmation = estimated(
 /**
  * - `maintenance`: one funded run of live maintenance (a cleanup unit):
  *   a page of expired receipts and of old days, a day's duration debt
- *   served, a few feeds' recoveries (each funded on its own), a page of
- *   leases reaped and a page of revocations told (see `LIVE_MAINTENANCE`).
+ *   served, a few feeds' recoveries (each funded on its own) and a page of
+ *   each kind reaped (see `LIVE_MAINTENANCE`).
+ * - `revocation_page`: one revocation expanded a page and one feed told,
+ *   granted apart from routine maintenance only while revocations are due
+ *   (a cleanup unit owned by the maintenance object; `LIVE_REVOCATION_PAGE`).
  * - `recovery`: one feed's recovery page (a cleanup unit, owned by its
  *   object while it runs).
  */
@@ -618,7 +621,7 @@ LIVE_PRICES.org_confirmation = estimated(
  * their durations settled (93, 10; their pages funded on their own), each
  * kind reaped a page, leases lapsed both ways (190, 46), and 2 owners
  * settled two whole pages of days each and released (96, 32): 4,035 read,
- * rounded up. Revocations told are not among them.
+ * rounded up. Revocations are a page of their own (`revocation_page`).
  */
 export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_100, d1_rows_written: 184 };
 
@@ -627,7 +630,40 @@ LIVE_PRICES.maintenance = estimated(LIVE_MAINTENANCE_MEASURED, {
   duration: "owner",
   pendingMs: 60_000,
   maxQuantity: 1,
-  requests: 20,
+  // Its own, and its 2 recoveries' calls (each also its recovery's: counted twice).
+  requests: 3,
+  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+  localCleanupDebt: ZERO,
+  dayCleanupDebt: ZERO,
+});
+/**
+ * A revocation page at its most (Proposed; measured locally): the run's own
+ * grant, owner and checks, 8 revocations expanded a socket each (8
+ * dependency rows, each socket's feed a target) and one feed told, its 20
+ * sockets' leases and dependency rows released (D1: 467 rows read, rounded
+ * up, and 166 written, the maintenance fixture); the feed's object closing and forgetting its 20
+ * sockets with their ends' provisions (160 rows read and 103 written with
+ * two dependencies a socket, the live suite's; a socket rests on five at
+ * most, an agent's derived credential, each one more a row read and
+ * written: 220 and 163). A feed whose principal is being deleted retires as
+ * it wakes, whoever wakes it (its deferred work and email queue dropped):
+ * that is the deletion's work, done once whichever call comes first, and
+ * not priced here.
+ */
+export const LIVE_REVOCATION_PAGE_MEASURED = {
+  do_rows_read: 220,
+  do_rows_written: 163,
+  d1_rows_read: 500,
+  d1_rows_written: 166,
+};
+
+LIVE_PRICES.revocation_page = estimated(LIVE_REVOCATION_PAGE_MEASURED, {
+  validity: { maxMs: 10 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 60_000,
+  maxQuantity: 1,
+  // The feed told, and its sockets' closes (each a callback of the feed's object).
+  requests: 22,
   directoryCleanupDebt: vector({ d1_rows_written: 1 }),
   localCleanupDebt: ZERO,
   dayCleanupDebt: ZERO,

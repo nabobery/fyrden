@@ -833,7 +833,7 @@ CREATE INDEX live_budget_receipts_expiry ON live_budget_receipts (expires_at, se
 
 -- index live_budget_receipts_overdue
 CREATE INDEX live_budget_receipts_overdue ON live_budget_receipts (expires_at)
-  WHERE kind <> 'maintenance';
+  WHERE kind NOT IN ('maintenance', 'revocation_page');
 
 -- index live_budget_receipts_recipient
 CREATE INDEX live_budget_receipts_recipient

@@ -2537,6 +2537,30 @@ describe("live work's rows in a feed's object", () => {
     const bareRepo = await repoWithIssue(bare);
     const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));
     note("mark", past(marked, unmarked));
+    // A revocation page's tell at its most: a feed with its most sockets, all resting on the
+    // dependency revoked (the principal's), closed and forgotten with their ends' provisions.
+    const revokedFeed = await user();
+    for (const token of [
+      revokedFeed.token,
+      ...(await Promise.all([1, 2, 3].map(() => scopedToken(revokedFeed.principalId, [])))),
+    ])
+      for (let i = 0; i < LIVE_POLICY.perCredential; i++) await open(token, ROOMY);
+    expect(await openSockets(revokedFeed)).toBe(LIVE_POLICY.perFeed);
+    const principal = await runInDurableObject(feedOf(revokedFeed), (_: UserDO, state) =>
+      state.storage.sql
+        .exec<{ dependency: string }>(
+          "SELECT dependency FROM live_local_deps WHERE dependency LIKE 'principal:%' LIMIT 1",
+        )
+        .one(),
+    );
+    let closed: readonly string[] = [];
+    note(
+      "revocation_page",
+      await rows(revokedFeed, async () => {
+        closed = await feedOf(revokedFeed).revoked([principal.dependency]);
+      }),
+    );
+    expect(closed).toHaveLength(LIVE_POLICY.perFeed);
     expect(issued?.ticket).toBeDefined();
     // What was measured (for the manifest's observations), when asked.
     if (process.env.FYRDEN_PRINT_ROWS) throw new Error(JSON.stringify(measured));

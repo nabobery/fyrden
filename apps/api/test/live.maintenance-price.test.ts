@@ -25,10 +25,12 @@ import {
 import { reaping } from "../src/live/directory.js";
 import {
   LIVE_MAINTENANCE,
+  LIVE_REVOCATION_PAGE,
+  liveMaintenanceWork,
   runLiveMaintenance,
   settleStrandedOwners,
 } from "../src/live/maintenance.js";
-import { LIVE_MAINTENANCE_MEASURED } from "../src/live/manifest.js";
+import { LIVE_MAINTENANCE_MEASURED, LIVE_REVOCATION_PAGE_MEASURED } from "../src/live/manifest.js";
 import {
   admitLiveOwners,
   LIVE_OWNER_LIMITS,
@@ -333,5 +335,128 @@ describe("a maintenance run's pages, full", () => {
           written: Math.min(total.written, LIVE_MAINTENANCE_MEASURED.d1_rows_written),
         },
       });
+    }));
+
+  it("a revocation page, at its most, costs no more than it was measured at", () =>
+    isolated(async () => {
+      const now = Date.now();
+      // Revocations to expand past a page, each resting on a socket in a feed of its own (each a
+      // scan row and a target: a page's most).
+      const fill: D1PreparedStatement[] = [];
+      for (let i = 0; i <= LIVE_REVOCATION_PAGE.revocations; i++)
+        fill.push(
+          env.DIRECTORY.prepare(
+            "INSERT INTO revocations (subject, at, expanded) VALUES (?, ?, 0)",
+          ).bind(`dep_expand_${i}`, now),
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_sockets (socket_id, ticket_id, feed, credential_id, state,
+             pending_until, expires_at) VALUES (?, ?, ?, 'tok_x', 'open', ?, ?)`,
+          ).bind(`sx_${i}`, `tx_${i}`, `usr_expand_${i}`, now + DAY, now + DAY),
+          env.DIRECTORY.prepare(
+            "INSERT INTO live_socket_deps (dependency, socket_id) VALUES (?, ?)",
+          ).bind(`dep_expand_${i}`, `sx_${i}`),
+        );
+      // A feed told, due before them, whose sockets all close: their leases released.
+      fill.push(
+        env.DIRECTORY.prepare(
+          "INSERT INTO revocations (subject, at, expanded) VALUES (?, ?, 1)",
+        ).bind("dep_told", now),
+      );
+      const closing: string[] = [];
+      for (let i = 0; i < 20; i++) {
+        const id = `st_${i}`;
+        closing.push(id);
+        fill.push(
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_sockets (socket_id, ticket_id, feed, credential_id, state,
+             pending_until, expires_at) VALUES (?, ?, 'usr_told', 'tok_t', 'open', ?, ?)`,
+          ).bind(id, `tt_${id}`, now + DAY, now + DAY),
+        );
+        for (let d = 0; d < 5; d++)
+          fill.push(
+            env.DIRECTORY.prepare(
+              "INSERT INTO live_socket_deps (dependency, socket_id) VALUES (?, ?)",
+            ).bind(d === 0 ? "dep_told" : `dep_t${d}`, id),
+          );
+      }
+      for (let i = 0; i < fill.length; i += 50) await env.DIRECTORY.batch(fill.slice(i, i + 50));
+      await env.DIRECTORY.prepare(
+        `INSERT INTO revocation_targets (seq, feed, attempts, next_attempt_at)
+       SELECT seq, 'usr_told', 0, ? FROM revocations WHERE subject = 'dep_told'`,
+      )
+        .bind(now - 60_000)
+        .run();
+      // Nothing routine due (earlier files' leftovers cleared), revocations due.
+      for (let i = 0; i < 20 && (await liveMaintenanceWork(env.DIRECTORY)).routine; i++)
+        await runLiveMaintenance(env);
+      expect(await liveMaintenanceWork(env.DIRECTORY)).toEqual({
+        routine: false,
+        revocations: true,
+      });
+      const granted = () =>
+        env.DIRECTORY.prepare(
+          `SELECT sum(kind = 'maintenance') AS maintenance, sum(kind = 'revocation_page') AS pages
+         FROM live_budget_receipts`,
+        ).first<{ maintenance: number; pages: number }>();
+      const before = await granted();
+      const told: string[] = [];
+      const rows = await measureInvocation(
+        createMetrics(env.METRICS),
+        { where: "do", op: "liveMaintenance", doClass: "MaintenanceDO" },
+        async () => {
+          const before = d1RowsRun();
+          const run = await runLiveMaintenance({
+            ...env,
+            DIRECTORY: countedD1(env.DIRECTORY),
+            USER: {
+              getByName: (feed: string) => ({
+                revoked: async () => {
+                  told.push(feed);
+                  return feed === "usr_told" ? closing : [];
+                },
+              }),
+            },
+          } as unknown as typeof env);
+          if (run?.status !== "funded") throw new Error(JSON.stringify(run));
+          const after = d1RowsRun();
+          return { read: after.read - before.read, written: after.written - before.written };
+        },
+      );
+      // Its own grant, routine maintenance's none (nothing routine was due).
+      expect(await granted()).toEqual({
+        maintenance: before?.maintenance ?? 0,
+        pages: (before?.pages ?? 0) + 1,
+      });
+      // One feed told, its leases gone; the revocations expanded a page into targets of their own.
+      expect(told).toEqual(["usr_told"]);
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT count(*) AS n FROM live_sockets WHERE feed = 'usr_told'",
+        ).first(),
+      ).toEqual({ n: 0 });
+      expect(
+        await env.DIRECTORY.prepare(
+          `SELECT count(*) AS n FROM revocation_targets t JOIN revocations r ON r.seq = t.seq
+         WHERE r.subject LIKE 'dep_expand_%'`,
+        ).first(),
+      ).toEqual({ n: LIVE_REVOCATION_PAGE.revocations });
+      expect(rows).toEqual({
+        read: Math.min(rows.read, LIVE_REVOCATION_PAGE_MEASURED.d1_rows_read),
+        written: Math.min(rows.written, LIVE_REVOCATION_PAGE_MEASURED.d1_rows_written),
+      });
+      // What it made of the directory's goes (the file's other test measures whole runs).
+      await env.DIRECTORY.batch([
+        env.DIRECTORY.prepare(
+          `DELETE FROM revocation_targets
+           WHERE seq IN (SELECT seq FROM revocations WHERE subject LIKE 'dep_%')`,
+        ),
+        env.DIRECTORY.prepare("DELETE FROM revocations WHERE subject LIKE 'dep_%'"),
+        env.DIRECTORY.prepare(
+          "DELETE FROM live_socket_deps WHERE socket_id LIKE 'sx_%' OR socket_id LIKE 'st_%'",
+        ),
+        env.DIRECTORY.prepare(
+          "DELETE FROM live_sockets WHERE socket_id LIKE 'sx_%' OR socket_id LIKE 'st_%'",
+        ),
+      ]);
     }));
 });
