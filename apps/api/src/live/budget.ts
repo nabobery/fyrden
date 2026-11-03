@@ -63,6 +63,28 @@ export const LIVE_TURN_RECEIPT_PAGE = 2;
 /** The newest receipts of each turn kind past their validity a turn's grant looks at. */
 export const LIVE_TURN_RECEIPT_LOOK = 4;
 export const LIVE_RECEIPT_PAGE = 32;
+
+/**
+ * When expired receipts call for cleanup (Proposed): a page of them
+ * overdue, or one overdue for two hours. Until then a grant goes on (their
+ * debt still counted), and maintenance waits to remove them a page at a
+ * time rather than one a run.
+ */
+export const LIVE_RECEIPTS_OVERDUE = { page: 16, graceMs: 2 * 60 * 60_000 } as const;
+
+/**
+ * Whether expired receipts call for cleanup now (`LIVE_RECEIPTS_OVERDUE`),
+ * maintenance's own excepted (the next run removes them, and they alone
+ * never call for one): one SQL condition, read through an index of the
+ * others only (a page at most, whatever maintenance's own left).
+ */
+export function liveReceiptsOverdue(now: string = LIVE_NOW): string {
+  const { page, graceMs } = LIVE_RECEIPTS_OVERDUE;
+  return `(EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
+      WHERE expires_at <= ${now} - ${graceMs} AND kind <> 'maintenance')
+    OR (SELECT count(*) FROM (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
+      WHERE expires_at <= ${now} AND kind <> 'maintenance' LIMIT ${page})) >= ${page})`;
+}
 export const LIVE_DAY_PAGE = 8;
 
 /** D1's clock in milliseconds (tests replace the marked expression). */
@@ -497,10 +519,8 @@ export async function reserveLive(
             ...R.map(
               (r) => `debt_${r} + ${addedDebt(plan, r, b)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
             ),
-            // Maintenance's own receipts excepted: the next run removes them, and they alone never
-            // call for one.
-            `NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE expires_at <= ${N}
-              AND kind <> 'maintenance' ORDER BY expires_at, seq LIMIT 1)`,
+            // Expired receipts once they call for cleanup (maintenance's own never do).
+            `NOT ${liveReceiptsOverdue(N)}`,
             `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
           ].join("\n    AND ")
         : "1";

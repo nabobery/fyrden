@@ -251,7 +251,8 @@ function estimated(
  * same change taken out), and D1's rows per invocation on Workers
  * Free (2026-11-01: an upgrade's whole D1 priced on its transport, the
  * admission's, terminal's and blocks' grants within it; a turn's on the
- * pump; maintenance's, its recoveries' within it). A recovery's rows are
+ * pump), and maintenance's from its pages full (`LIVE_MAINTENANCE_MEASURED`;
+ * its recoveries' pages funded on their own). A recovery's rows are
  * its page's bound, its D1 an estimate. The margin and the allowances are
  * Proposed.
  *
@@ -278,8 +279,10 @@ function estimated(
  *   them, installed into the pool whole.
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
+  // Its D1 as measured on Free (191 read, 35 written), its two receipts written to the overdue
+  // index too (two written more).
   ticket: estimated(
-    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 191, d1_rows_written: 35 },
+    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 191, d1_rows_written: 37 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -292,9 +295,10 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   // Its D1 as measured on Free (422 read, 67 written), its turn's grant removing a full page of
-  // the feed's done turns (111 read and 2 written more, a ledger probe).
+  // the feed's done turns (111 read and 2 written more, a ledger probe), and its five grants'
+  // receipts written to the overdue index too (five written more).
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 533, d1_rows_written: 69 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 533, d1_rows_written: 74 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -424,13 +428,15 @@ export const LIVE_TURN_RENEWALS = 2;
 export const LIVE_TURN_STEPS = {
   // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC
   // (146 read, 25 written), the successor's grant now reading the feed's done turns (155 read at
-  // 20 sockets) and removing a full page of them (111 read and 2 written more, a ledger probe).
-  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 266, d1_rows_written: 27 },
+  // 20 sockets) and removing a full page of them (111 read and 2 written more, a ledger probe),
+  // its receipt written to the overdue index too (one written more).
+  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 266, d1_rows_written: 28 },
   housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
   forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
   renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
-  refill: { do_rows_read: 43, do_rows_written: 15, d1_rows_read: 74, d1_rows_written: 9 },
-  delivery: { do_rows_read: 496, do_rows_written: 20, d1_rows_read: 954, d1_rows_written: 6 },
+  // Its D1 over a midnight (a two-day block), its receipt written to the overdue index too.
+  refill: { do_rows_read: 43, do_rows_written: 15, d1_rows_read: 74, d1_rows_written: 10 },
+  delivery: { do_rows_read: 496, do_rows_written: 20, d1_rows_read: 955, d1_rows_written: 7 },
   // Its reads its bound, not one run's (they vary with what its index scans pass, 318 to 420
   // seen): about five a row it deletes (76 a page), its sockets' progress scanned (20), and more.
   prune: { do_rows_read: 440, do_rows_written: 76, d1_rows_read: 0, d1_rows_written: 0 },
@@ -519,13 +525,14 @@ function turnUnit(
  */
 /**
  * The pump turn as measured whole (a full delivery and prune, its alarm's reads around it; 712
- * D1 rows read and 29 written), with its successor's grant removing a full page of done turns.
+ * D1 rows read and 31 written, its receipts in the overdue index), with its successor's grant
+ * removing a full page of done turns (111 read, 2 written).
  */
 const PUMP_MEASURED = {
   do_rows_read: 1_197,
   do_rows_written: 87,
   d1_rows_read: 823,
-  d1_rows_written: 31,
+  d1_rows_written: 33,
 };
 
 const TURN_ENTRY = {
@@ -577,10 +584,11 @@ LIVE_PRICES.renewal = turnUnit(
  *   one probed, for a credential's readers) and writes (the restore
  *   generation it takes first in an instance of a restored account), both
  *   measured by the live suite's fixtures; the grant's own D1 (at most a
- *   turn's, which makes one) and the call's entry.
+ *   turn's, which makes one, its receipt written to the overdue index too)
+ *   and the call's entry.
  */
 LIVE_PRICES.org_confirmation = estimated(
-  { do_rows_read: 4_100, do_rows_written: 1, d1_rows_read: 132, d1_rows_written: 24 },
+  { do_rows_read: 4_100, do_rows_written: 1, d1_rows_read: 132, d1_rows_written: 25 },
   {
     validity: { maxMs: 60_000, days: 2 },
     duration: "synchronous",
@@ -600,19 +608,30 @@ LIVE_PRICES.org_confirmation = estimated(
  * - `recovery`: one feed's recovery page (a cleanup unit, owned by its
  *   object while it runs).
  */
-LIVE_PRICES.maintenance = estimated(
-  { d1_rows_read: 262, d1_rows_written: 49 },
-  {
-    validity: { maxMs: 10 * 60_000, days: 2 },
-    duration: "owner",
-    pendingMs: 60_000,
-    maxQuantity: 1,
-    requests: 20,
-    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
-    localCleanupDebt: ZERO,
-    dayCleanupDebt: ZERO,
-  },
-);
+/**
+ * A maintenance run with every page full, at its worst (Proposed; measured
+ * locally by its fixture, D1's rows as an invocation counts them): the
+ * run's own grant over a midnight, owner and checks, with an overdue
+ * receipt removed (252 read, 39 written), 16 receipts each holding escrow
+ * on two days of its own (3,361, 49), a day (28, 2), a day's duration debt
+ * served (5, 2), 2 recovery targets adopted (10, 4) and 2 coordinated with
+ * their durations settled (93, 10; their pages funded on their own), each
+ * kind reaped a page, leases lapsed both ways (190, 46), and 2 owners
+ * settled two whole pages of days each and released (96, 32): 4,035 read,
+ * rounded up. Revocations told are not among them.
+ */
+export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_100, d1_rows_written: 184 };
+
+LIVE_PRICES.maintenance = estimated(LIVE_MAINTENANCE_MEASURED, {
+  validity: { maxMs: 10 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 60_000,
+  maxQuantity: 1,
+  requests: 20,
+  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+  localCleanupDebt: ZERO,
+  dayCleanupDebt: ZERO,
+});
 LIVE_PRICES.recovery = estimated(
   { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 10, d1_rows_written: 4 },
   {

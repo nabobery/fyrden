@@ -170,17 +170,34 @@ export async function release(db: D1Database, socketIds: readonly string[]): Pro
   ]);
 }
 
+/** What one reaping removes of each kind at most (a number: as many of each). */
+export interface LiveReapPages {
+  /** Leases whose release was lost, each with its dependency rows. */
+  readonly leases: number;
+  /** Told revocations past their keep. */
+  readonly revocations: number;
+  /** Admission counts, and ticket counts, before yesterday (as many of each). */
+  readonly counts: number;
+  /** Tickets' transports past their expiry. */
+  readonly transports: number;
+}
+
 /**
  * Reaps leases whose release was lost (pending past its wait, or past its
- * expiry), with their dependency rows, at most a run's in all, the earliest
- * due first; told revocations past their keep; admission and ticket counts
- * before yesterday; tickets' transports past their expiry.
+ * expiry), with their dependency rows, the earliest due first; told
+ * revocations past their keep; admission and ticket counts before
+ * yesterday; tickets' transports past their expiry: each a page of its own.
  */
 export function reaping(
   db: D1Database,
   now: number,
-  rows: number = LIVE_ADMISSION.reapRows,
+  pages: number | LiveReapPages = LIVE_ADMISSION.reapRows,
 ): D1PreparedStatement[] {
+  const page =
+    typeof pages === "number"
+      ? { leases: pages, revocations: pages, counts: pages, transports: pages }
+      : pages;
+  const rows = page.leases;
   // Each kind read through its own index (a run's at most), then the earliest due of both: the
   // same choice for both deletes (the dependency rows go first, the leases still there).
   const due = `SELECT socket_id FROM (
@@ -201,14 +218,14 @@ export function reaping(
              AND NOT EXISTS (SELECT 1 FROM revocation_targets t WHERE t.seq = revocations.seq)
            ORDER BY at LIMIT ?2)`,
       )
-      .bind(now - LIVE_ADMISSION.keepMs, rows),
+      .bind(now - LIVE_ADMISSION.keepMs, page.revocations),
     db
       .prepare(
         `DELETE FROM live_admissions WHERE (principal_id, day) IN (
            SELECT principal_id, day FROM live_admissions INDEXED BY live_admissions_day
            WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
       )
-      .bind(Math.floor(now / DAY) - 1, rows),
+      .bind(Math.floor(now / DAY) - 1, page.counts),
     // Tickets' day counts before yesterday, and transports past their expiry, a run's at most.
     db
       .prepare(
@@ -216,14 +233,14 @@ export function reaping(
            SELECT principal_id, day FROM live_ticket_days INDEXED BY live_ticket_days_day
            WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
       )
-      .bind(Math.floor(now / DAY) - 1, rows),
+      .bind(Math.floor(now / DAY) - 1, page.counts),
     db
       .prepare(
         `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
            SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
            WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
       )
-      .bind(now, rows),
+      .bind(now, page.transports),
   ];
 }
 

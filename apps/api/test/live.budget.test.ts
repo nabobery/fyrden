@@ -12,6 +12,7 @@ import {
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
   LIVE_PROTECTED,
+  LIVE_RECEIPTS_OVERDUE,
   type LiveDurationCompletion,
   type LiveGrantResult,
   makeLiveGrant,
@@ -417,25 +418,61 @@ describe("a live grant", () => {
     });
   });
 
-  it("waits for overdue cleanup when ordinary, not when cleanup", async () => {
+  it("waits for overdue cleanup when ordinary, once it calls for a run: a page, or two hours; not when cleanup", async () => {
     await isolated(async () => {
       const day = testDay(10);
       const { db, clock } = at(day);
-      expect((await reserveLive(db, await makeLiveGrant(await plan({ day })))).status).toBe(
-        "granted",
-      );
-      // Three days later, that receipt is past its expiry and not yet removed.
-      const later = day + 3;
-      clock.now = later * DAY + DAY / 2;
-      expect(await reserveLive(db, await makeLiveGrant(await plan({ day: later })))).toEqual({
-        status: "refused",
-        reason: "temporary",
-      });
+      const ordinary = async () =>
+        (
+          await reserveLive(
+            db,
+            await makeLiveGrant(await plan({ day: Math.floor(clock.now / DAY), from: clock.now })),
+          )
+        ).status;
+      expect(await ordinary()).toBe("granted");
+      // Its receipt's expiry: overdue from then, not yet removed.
+      const expiry = day * DAY + DAY / 2 + 60_000 + 2 * DAY;
+      clock.now = expiry + LIVE_RECEIPTS_OVERDUE.graceMs - 60_000;
+      expect(await ordinary()).toBe("granted");
+      clock.now = expiry + LIVE_RECEIPTS_OVERDUE.graceMs;
+      expect(await ordinary()).toBe("refused");
       const cleanup = await reserveLive(
         db,
-        await makeLiveGrant(await plan({ day: later, class: "cleanup", kind: "maintenance" })),
+        await makeLiveGrant(
+          await plan({
+            day: Math.floor(clock.now / DAY),
+            from: clock.now,
+            class: "cleanup",
+            kind: "maintenance",
+          }),
+        ),
       );
       expect(cleanup.status).toBe("granted");
+    });
+    await isolated(async () => {
+      const day = testDay(11);
+      const { db, clock } = at(day);
+      const grant = async (from: number) =>
+        (await reserveLive(db, await makeLiveGrant(await plan({ day, from })))).status;
+      // A page but one expiring at once, the last a half hour later.
+      const noon = day * DAY + DAY / 2;
+      for (let i = 1; i < LIVE_RECEIPTS_OVERDUE.page; i++)
+        expect(await grant(noon)).toBe("granted");
+      clock.now = noon + 30 * 60_000;
+      expect(await grant(clock.now)).toBe("granted");
+      const ordinary = async () =>
+        (
+          await reserveLive(
+            db,
+            await makeLiveGrant(await plan({ day: Math.floor(clock.now / DAY), from: clock.now })),
+          )
+        ).status;
+      const expiry = noon + 60_000 + 2 * DAY;
+      clock.now = expiry + 60_000;
+      expect(await ordinary()).toBe("granted");
+      // A page overdue, however recently.
+      clock.now = expiry + 31 * 60_000;
+      expect(await ordinary()).toBe("refused");
     });
   });
 

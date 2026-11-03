@@ -3,6 +3,8 @@ import { MAINTENANCE_OBJECT } from "../cron/maintenance.js";
 import {
   expireLiveReceipts,
   LIVE_NOW,
+  LIVE_RECEIPTS_OVERDUE,
+  liveReceiptsOverdue,
   makeLiveGrant,
   pruneLiveBudgetDays,
   reserveLive,
@@ -33,13 +35,26 @@ import {
  * is owed. Each page stops once the run is given up on.
  */
 
-/** A run's pages (Proposed): what one maintenance grant pays for at most. */
+/**
+ * A run's pages (Proposed): what one maintenance grant pays for at most,
+ * sized with its price (each page measured full) so a day's runs fit
+ * cleanup's share: a run is due for expired receipts only once they call
+ * for cleanup (`LIVE_RECEIPTS_OVERDUE`), for lapsed leases only two hours
+ * on (admission already passes over a lapsed one), and for expired
+ * transports once a page of them is, or one has been for two hours, so a
+ * quiet deployment runs about every two hours rather than every five
+ * minutes.
+ */
 export const LIVE_MAINTENANCE = {
-  receipts: 32,
-  days: 8,
-  owners: 8,
+  receipts: LIVE_RECEIPTS_OVERDUE.page,
+  days: 1,
+  // Owners whose accounting was lost are rare: two a run (each up to two pages of days).
+  owners: 2,
   recoveries: 2,
-  reap: 100,
+  // Each kind sized to what arrives of it: leases lapse only when a release was lost (each with
+  // its dependency rows), revocations are rare, counts are one a principal a day of each, and a
+  // principal may issue 60 tickets a day (each a transport).
+  reap: { leases: 2, revocations: 2, counts: 8, transports: 16 },
   deliveries: 16,
   revocations: 8,
 } as const;
@@ -52,8 +67,7 @@ export async function liveMaintenanceDue(db: D1Database): Promise<boolean> {
     .withSession("first-primary")
     .prepare(
       `SELECT
-         EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_expiry
-           WHERE expires_at <= ${N} AND kind <> 'maintenance')
+         ${liveReceiptsOverdue(N)}
          OR EXISTS (SELECT 1 FROM live_duration_owners WHERE status IN ('observing', 'accounted')
            OR (status = 'reserved' AND dispatch_until <= ${N}))
          OR EXISTS (SELECT 1 FROM live_budget_days
@@ -64,7 +78,12 @@ export async function liveMaintenanceDue(db: D1Database): Promise<boolean> {
          OR EXISTS (SELECT 1 FROM revocation_targets INDEXED BY revocation_targets_due
            WHERE next_attempt_at <= ${N})
          OR EXISTS (SELECT 1 FROM live_sockets INDEXED BY live_sockets_expiry
-           WHERE expires_at <= ${N})
+           WHERE expires_at <= ${N} - ${LIVE_RECEIPTS_OVERDUE.graceMs})
+         OR EXISTS (SELECT 1 FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
+           WHERE expires_at <= ${N} - ${LIVE_RECEIPTS_OVERDUE.graceMs})
+         OR (SELECT count(*) FROM (SELECT 1 FROM live_ticket_transports
+           INDEXED BY live_ticket_transports_expiry WHERE expires_at <= ${N}
+           LIMIT ${LIVE_MAINTENANCE.reap.transports})) >= ${LIVE_MAINTENANCE.reap.transports}
          OR EXISTS (SELECT 1 FROM live_budget_state WHERE id = 1 AND duration_debt_ms > 0
            AND debt_service_day < CAST(${N} / 86400000 AS INTEGER)) AS due`,
     )

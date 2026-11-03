@@ -6,7 +6,7 @@
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import { makeLiveGrant, reserveLive } from "../src/live/budget.js";
+import { LIVE_RECEIPTS_OVERDUE, makeLiveGrant, reserveLive } from "../src/live/budget.js";
 import { extendLease, reaping } from "../src/live/directory.js";
 import {
   liveMaintenanceDue,
@@ -66,6 +66,25 @@ describe("live maintenance", () => {
           "SELECT count(*) AS n FROM live_duration_owners WHERE object_type = 'MaintenanceDO'",
         ).first(),
       ).toEqual({ n: 0 });
+    }));
+
+  it("waits for expired receipts until they call for cleanup: two hours on, or a page", () =>
+    isolated(async () => {
+      for (let i = 0; i < 20 && (await liveMaintenanceDue(env.DIRECTORY)); i++)
+        await runLiveMaintenance(env);
+      // A grant whose receipt expired an hour ago (its validity plus two days).
+      const now = await ledgerNow();
+      const from = now - 2 * DAY - 60_000 - 60 * 60_000;
+      const granted = await reserveLive(
+        clockedD1(env.DIRECTORY, { now: from }),
+        await makeLiveGrant(
+          await plan({ day: Math.floor(from / DAY), from, recipient: `usr_${uniqueId("late")}` }),
+        ),
+      );
+      if (granted.status !== "granted") throw new Error(granted.reason);
+      const due = (at: number) => liveMaintenanceDue(clockedD1(env.DIRECTORY, { now: at }));
+      expect(await due(now)).toBe(false);
+      expect(await due(now + LIVE_RECEIPTS_OVERDUE.graceMs - 60 * 60_000)).toBe(true);
     }));
 
   it("goes quiet: its own receipts expiring call for no run", () =>
