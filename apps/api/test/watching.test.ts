@@ -102,15 +102,29 @@ describe("a repository subscription", () => {
   it("refuses the watcher past the cap, freeing the places of principals deleted", async () => {
     const [owner, late] = [await user(), await user()];
     const repo = await repoOf(owner, [late]);
-    // At the cap (rows written as the repository would, for speed), one of them deleted.
+    // At the cap, one of them deleted: its row written by the repository, the others copies
+    // of it in one statement (a set each would count the watchers before it, 12.5 million
+    // rows read in all).
     const gone = await user();
-    await runInDurableObject(env.REPO.getByName(repo.id), (instance: RepoDO, state) => {
-      state.storage.transactionSync(() => {
-        for (let i = 0; i < WATCH_POLICY.maxWatchers - 1; i++)
-          instance.watching.set(`usr_watcher${i}`, `usr_watcher${i}`, "watching");
-        instance.watching.set(gone.principalId, gone.principalId, "watching");
-      });
-    });
+    const watching = await runInDurableObject(
+      env.REPO.getByName(repo.id),
+      (instance: RepoDO, state) =>
+        state.storage.transactionSync(() => {
+          instance.watching.set(gone.principalId, gone.principalId, "watching");
+          state.storage.sql.exec(
+            `WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+             INSERT INTO watchers (principal, root, level, epoch_gen, revision, at)
+             SELECT 'usr_watcher' || i, 'usr_watcher' || i, level, epoch_gen, revision, at
+             FROM n, watchers WHERE principal = ?`,
+            WATCH_POLICY.maxWatchers - 1,
+            gone.principalId,
+          );
+          return state.storage.sql
+            .exec<{ n: number }>("SELECT count(*) AS n FROM watchers WHERE level = 'watching'")
+            .one().n;
+        }),
+    );
+    expect(watching).toBe(WATCH_POLICY.maxWatchers);
     expect(await watch(late, repo.fullName, { subscribed: true })).toMatchObject({
       status: 409,
       body: { code: "watchers_full" },
