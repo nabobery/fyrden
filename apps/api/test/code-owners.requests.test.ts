@@ -82,13 +82,22 @@ async function branchAt(name: string, sha: string): Promise<void> {
   expect(pushed.report).toContain(`ok refs/heads/${name}\n`);
 }
 
-/** Makes everything queued due now. */
+/**
+ * Makes everything queued due now, and holds the outbox: what the jobs
+ * append stays there to be read (a drain, due a second after an append,
+ * would send and delete it once a slow run's alarms pass that second).
+ */
 const dueNow = (r: RepoDO) => {
   const sql = r.git.context.storage.sql;
   const now = r.git.context.now();
   sql.exec("UPDATE jobs SET next_run_at = ? WHERE state = 'queued'", now);
   sql.exec("UPDATE code_owner_jobs SET requested_at = ?", now);
   sql.exec("UPDATE code_owner_request_jobs SET requested_at = ?", now);
+  sql.exec(
+    `INSERT INTO outbox_state (id, next_drain_at) VALUES (1, ?1)
+     ON CONFLICT (id) DO UPDATE SET next_drain_at = ?1`,
+    now + 24 * 60 * 60_000,
+  );
 };
 
 /** Runs the repository's due jobs, a few rounds, everything due now. */

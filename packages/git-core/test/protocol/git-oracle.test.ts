@@ -154,11 +154,39 @@ function advertisedBy(caps: readonly Capability[]): V2Advertised {
   };
 }
 
-const statelessUploadPack = (input: Uint8Array) =>
-  sandbox.gitBytes([...ONE_THREAD, "upload-pack", "--stateless-rpc", SRV], {
+/**
+ * upload-pack's response to `input`, as git means it: its sections byte for
+ * byte up to the packfile, then the packfile's data by sideband band. Its
+ * framing is not compared: upload-pack frames the pack as it reads it from
+ * pack-objects, so the same pack splits into packets differently from run
+ * to run. Progress (band 2) is left out for the same reason.
+ */
+async function statelessUploadPack(input: Uint8Array) {
+  const response = await sandbox.gitBytes([...ONE_THREAD, "upload-pack", "--stateless-rpc", SRV], {
     input,
     env: { GIT_PROTOCOL: "version=2" },
   });
+  const reader = new PktLineReader(response);
+  for (;;) {
+    const pkt = reader.read();
+    if (pkt === undefined) return { sections: response, bands: {} };
+    if (pkt.kind === "data" && latin1(chompLf(pkt.data)) === "packfile") break;
+  }
+  const sections = response.subarray(0, reader.offset);
+  const bands: Record<number, Uint8Array[]> = {};
+  for await (const frame of demultiplexSideband(reader)) {
+    if (frame.band === 2) continue;
+    bands[frame.band] ??= [];
+    bands[frame.band]?.push(frame.payload);
+  }
+  return {
+    sections,
+    bands: Object.fromEntries(
+      Object.entries(bands).map(([band, parts]) => [band, concat(...parts)]),
+    ),
+    rest: reader.rest(),
+  };
+}
 
 describe("a protocol v2 clone and fetch", () => {
   let session: { input: Uint8Array; output: Uint8Array };
@@ -193,7 +221,7 @@ describe("a protocol v2 clone and fetch", () => {
     expect(fetch.done).toBe(true);
   });
 
-  it("gets git's response, byte for byte, to each request re-encoded by Fyrden", async () => {
+  it("gets git's response to each request re-encoded by Fyrden", async () => {
     for (const { request, bytes } of await splitRequests(session.input, advertised)) {
       const ours = encodeV2CommandRequest(request);
       expect(await statelessUploadPack(ours)).toEqual(await statelessUploadPack(bytes));
