@@ -37,6 +37,11 @@ catalog:
   # passes through a globalSetup module ("No test files found"; verified:
   # https://github.com/vitest-dev/vitest/issues/11682). Upgrade it with the
   # vitest release that carries the fix (vitest-dev/vitest#11709).
+  # Vitest 5.1.0 with vite 8.3.5 starts the API suite without that crash, but
+  # it is not a fix to take yet (measured 2026-11-04): the API suite shuffled
+  # with seed 1 fails 11 tests in 7 files (feed.operations, feed.purge,
+  # fork-pulls, live, mergeability, merges, repos.delete) that all pass on
+  # 5.0.3 with the same seed. Not measured on 5.1.0: the coverage run's memory.
   vite: 8.3.4
   vitest: 5.0.3
   wrangler: 4.156.0
