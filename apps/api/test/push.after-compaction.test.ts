@@ -106,6 +106,31 @@ async function stage(stub: Stub, bytes: Uint8Array): Promise<string> {
   return begun.uploadId;
 }
 
+/**
+ * Uploads a push and runs its indexing up to its last phase: the
+ * connectivity check has noted the packs it relied on, but the upload is
+ * not marked indexed yet. A budget of 0 runs one phase per call (parse,
+ * completion, connect; the last, graph, then records the dependencies).
+ */
+async function stageBeforeLastPhase(stub: Stub, bytes: Uint8Array): Promise<string> {
+  const begun = await stub.beginPush({ principal: "usr_compact", tokenId: "tok_compact" });
+  if (!begun.ok) throw new Error(begun.error);
+  await env.GIT.put(begun.bodyKey, bytes);
+  const states = [(await stub.runPush(begun.uploadId, bytes.length, 0)).state];
+  for (let i = 0; i < 2; i++) states.push((await stub.pushStatus(begun.uploadId, 0)).state);
+  expect(states).toEqual(["indexing", "indexing", "indexing"]);
+  expect(await inRepo(stub, ({ git }) => git.uploads.get(begun.uploadId)?.state)).toBe("indexing");
+  return begun.uploadId;
+}
+
+/** Runs the rest of a staged push's indexing. */
+async function finishIndexing(stub: Stub, uploadId: string) {
+  let progress = await stub.pushStatus(uploadId, 10_000);
+  for (let i = 0; progress.state === "indexing" && i < 100; i++)
+    progress = await stub.pushStatus(uploadId, 10_000);
+  expect(progress.state).toBe("ready");
+}
+
 /** Commits a staged push, as the Worker does after re-authorizing the pusher. */
 async function commit(stub: Stub, uploadId: string) {
   const response = await stub.finalizePush(uploadId, {
@@ -267,4 +292,48 @@ describe("push: dependencies merged away by compaction", () => {
     expect(await refOf(stub, "refs/heads/a")).toBeNull();
   });
 
+  it("commits a push whose dependency was merged away while it was still being indexed", async () => {
+    const { stub, tip } = await repoWithPacks(2, 2);
+    const a = await branchBody("refs/heads/a", tip, 600);
+    const staged = await stageBeforeLastPhase(stub, a.bytes);
+    const live = await inRepo(stub, ({ git }) => git.registry.liveOwn().map((p) => p.packId));
+
+    // Another push merges every live pack while the first one is between its phases.
+    expect(await push(stub, (await branchBody("refs/heads/b", tip, 601)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+    expect(
+      await inRepo(stub, ({ git }) => live.map((id) => git.registry.get(id)?.state ?? null)),
+    ).toEqual(live.map(() => "superseded"));
+
+    await finishIndexing(stub, staged);
+    // Recorded against the packs that hold the objects now.
+    const deps = await depsOf(stub, staged);
+    expect(deps.length).toBeGreaterThan(0);
+    expect(deps.every((d) => d.state === "live")).toBe(true);
+    expect(await commit(stub, staged)).toEqual(ok("refs/heads/a"));
+    expect(await refOf(stub, "refs/heads/a")).toBe(oidToHex(a.oid));
+  });
+
+  it("still refuses a push indexed against a merged pack whose objects are gone", async () => {
+    const { stub, tip } = await repoWithPacks(2, 2);
+    const a = await branchBody("refs/heads/a", tip, 700);
+    const staged = await stageBeforeLastPhase(stub, a.bytes);
+    expect(await push(stub, (await branchBody("refs/heads/b", tip, 701)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+    // The compacted pack is removed for good before the first push finishes indexing.
+    await inRepo(stub, ({ git }) => {
+      for (const pack of git.registry.liveOwn().filter((p) => p.kind === "compact"))
+        git.registry.transition(pack.packId, ["live"], "condemned");
+    });
+
+    await finishIndexing(stub, staged);
+    expect(await commit(stub, staged)).toEqual([
+      "unpack ok\n",
+      `ng refs/heads/a ${GONE}\n`,
+      "0000",
+    ]);
+    expect(await refOf(stub, "refs/heads/a")).toBeNull();
+  });
 });
