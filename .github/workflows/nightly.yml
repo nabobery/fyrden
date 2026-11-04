@@ -22,18 +22,19 @@ jobs:
       # Reads the lockfile only; a new advisory shows up here before a PR hits it.
       - run: pnpm audit
 
-  # Ten seeds per package, two in each of five shards: one API pass takes
-  # 7 to 10 minutes on a hosted runner (measured: 413 to 622 s in CI run
-  # 39117992148, 2026-10-18), so ten in one job outgrow any sensible
-  # timeout. A failing shard prints its seed.
+  # Ten seeds per package, one in each job, as CI's shuffle guard runs them:
+  # one API pass takes about 14 minutes on a hosted runner (821 to 887 s
+  # passing in Nightly runs 41297246322 to 41816809037, 2026-11-01 to 04,
+  # with 235 to 242 test files; 454 to 607 s with 128 before), so two in one
+  # job outgrew its 35 minutes as the suite grew. A failing job prints its seed.
   shuffle:
-    name: Shuffle guard (shard ${{ matrix.shard }} of 5)
+    name: Shuffle guard (seed ${{ matrix.seed }} of 10)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        seed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,7 +47,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm turbo run test:shuffle --continue=dependencies-successful
         env:
-          SHUFFLE_RUNS: "2"
+          SHUFFLE_RUNS: "1"
 
   # Every case of the git interoperability catalogue, on the pinned git
   # releases (built from checked tarballs, cached) and on the runner image's
