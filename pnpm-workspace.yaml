@@ -21,7 +21,9 @@ catalog:
   "@playwright/test": 1.63.0
   "@stryker-mutator/core": 10.1.1
   "@stryker-mutator/vitest-runner": 10.1.1
-  "@types/node": 24.19.1
+  # Follows the Node major the repository runs (24: .nvmrc, engines), not the
+  # newest @types/node (26.x describes APIs Node 24 does not have).
+  "@types/node": 24.19.2
   # Vitest stays on 5.0.3 (with its coverage provider): 5.0.4 turned
   # fsModuleCache on, and with it fyrden-api's Istanbul run in the Workers pool
   # loses its workerd workers ("Worker exited unexpectedly", 124 of 128 files)
