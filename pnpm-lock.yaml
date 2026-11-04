@@ -192,8 +192,8 @@ catalogs:
       specifier: 4.10.2
       version: 4.10.2
     hono:
-      specifier: 4.13.13
-      version: 4.13.13
+      specifier: 4.13.14
+      version: 4.13.14
     msw:
       specifier: 3.0.3
       version: 3.0.3
@@ -254,7 +254,7 @@ importers:
         version: 2.3.1
       hono:
         specifier: 'catalog:'
-        version: 4.13.13
+        version: 4.13.14
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -2613,8 +2613,8 @@ packages:
   headers-polyfill@5.0.1:
     resolution: {integrity: sha512-1TJ6Fih/b8h5TIcv+1+Hw0PDQWJTKDKzFZzcKOiW1wJza3XoAQlkCuXLbymPYB8+ZQyw8mHvdw560e8zVFIWyA==}
 
-  hono@4.13.13:
-    resolution: {integrity: sha512-CQ46U0ZkAGmbT/4UxdzzGJpacP2IeKgY4a5/tOI9AABbpOMfK739wfDXmv1usCk+3RkKj1hQy4/fjhiwa2xlrA==}
+  hono@4.13.14:
+    resolution: {integrity: sha512-yhRLQ21U6qa9Hsu2N7Qcbh8tE+WKEcoErjIo56LeSGiGXGp9sA7UpE86Ui9uexb61KakiGwuHMn2QdV7w6i6kQ==}
     engines: {node: '>=16.9.0'}
 
   html-void-elements@3.0.0:
@@ -5439,7 +5439,7 @@ snapshots:
       '@types/set-cookie-parser': 2.4.10
       set-cookie-parser: 3.1.3
 
-  hono@4.13.13: {}
+  hono@4.13.14: {}
 
   html-void-elements@3.0.0: {}
 

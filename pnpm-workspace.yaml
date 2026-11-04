@@ -20,7 +20,7 @@ catalog:
   # enough to take down a CI runner.
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
-  hono: 4.13.13
+  hono: 4.13.14
   msw: 3.0.3
   turbo: 2.11.10
   typescript: 7.0.2
