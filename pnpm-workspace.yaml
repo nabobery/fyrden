@@ -5,7 +5,7 @@ packages:
 
 # Exact pins for test and deploy tooling: upgrade in dedicated PRs.
 catalog:
-  "@biomejs/biome": 2.6.2
+  "@biomejs/biome": 2.6.4
   "@cloudflare/vite-plugin": 1.66.0
   "@cloudflare/vitest-plugin": 1.4.11
   "@modelcontextprotocol/server": 2.4.0
