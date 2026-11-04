@@ -82,6 +82,13 @@ overrides:
   # GHSA-4mjr-xmp4-gh2g, GHSA-6pq8-jhm2-2vcw). 6.16.1 is the patched release
   # of the same major. Drop this once Stryker moves to typed-rest-client 3.
   "typed-rest-client>qs": "6.16.1"
+  # Reviewed 2026-11-04: Stryker 10.1.1 (dev only) asks for minimatch ~10.2.4, and every 10.x
+  # release is inside GHSA-g3hv-75wg-m249 (denial of service via globparts amplification,
+  # before 11.0.1; the new matcher is not backported to 10). Stryker calls only minimatch(),
+  # new Minimatch() with dot, flipNegate and nocase, match(path, partial), negate and
+  # hasMagic(), all unchanged in 11; a dry run of a mutation scope finds the same files and
+  # mutants as on 10.2.6. Drop this once Stryker asks for minimatch 11.
+  "@stryker-mutator/core>minimatch": "11.0.4"
   # Reviewed 2026-10-16: the diff renderer asks for shiki "^3.0.0 || ^4.0.0";
   # pinned to a release at least two weeks old instead of the newest in range.
   "@pierre/diffs>shiki": "4.4.3"
