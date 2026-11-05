@@ -5,14 +5,25 @@ packages:
 
 # Exact pins for test and deploy tooling: upgrade in dedicated PRs.
 catalog:
-  "@biomejs/biome": 2.6.2
+  "@biomejs/biome": 2.6.4
   "@cloudflare/vite-plugin": 1.66.0
-  "@cloudflare/vitest-plugin": 1.4.9
-  "@modelcontextprotocol/server": 2.3.1
+  "@cloudflare/vitest-plugin": 1.4.11
+  "@modelcontextprotocol/server": 2.4.0
   "@msw/cloudflare": 0.2.0
-  "@stryker-mutator/core": 10.0.0
-  "@stryker-mutator/vitest-runner": 10.0.0
-  "@types/node": 24.19.1
+  # Not 1.64 yet: its Chromium (156.0.8078.4) reports a script-src-attr refusal
+  # for an on* attribute that is only parsed into an inert DOMParser document,
+  # which nothing runs (measured 2026-11-04: Chromium 153.0.8010.12, Playwright
+  # 1.63.0's, reports none for the same code). Mermaid's DOMPurify parses the e2e
+  # suite's hostile labels that way, so "never had a script, style or image
+  # refused by the policy on any page" fails with five "Executing inline event
+  # handler" lines while window.pwned stays unset. Taking it means deciding what
+  # that assertion should exempt.
+  "@playwright/test": 1.63.0
+  "@stryker-mutator/core": 10.1.1
+  "@stryker-mutator/vitest-runner": 10.1.1
+  # Follows the Node major the repository runs (24: .nvmrc, engines), not the
+  # newest @types/node (26.x describes APIs Node 24 does not have).
+  "@types/node": 24.19.2
   # Vitest stays on 5.0.3 (with its coverage provider): 5.0.4 turned
   # fsModuleCache on, and with it fyrden-api's Istanbul run in the Workers pool
   # loses its workerd workers ("Worker exited unexpectedly", 124 of 128 files)
@@ -20,7 +31,7 @@ catalog:
   # enough to take down a CI runner.
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
-  hono: 4.13.13
+  hono: 4.13.14
   msw: 3.0.3
   turbo: 2.11.10
   typescript: 7.0.2
@@ -28,9 +39,14 @@ catalog:
   # passes through a globalSetup module ("No test files found"; verified:
   # https://github.com/vitest-dev/vitest/issues/11682). Upgrade it with the
   # vitest release that carries the fix (vitest-dev/vitest#11709).
+  # Vitest 5.1.0 with vite 8.3.5 starts the API suite without that crash, but
+  # it is not a fix to take yet (measured 2026-11-04): the API suite shuffled
+  # with seed 1 fails 11 tests in 7 files (feed.operations, feed.purge,
+  # fork-pulls, live, mergeability, merges, repos.delete) that all pass on
+  # 5.0.3 with the same seed. Not measured on 5.1.0: the coverage run's memory.
   vite: 8.3.4
   vitest: 5.0.3
-  wrangler: 4.154.0
+  wrangler: 4.156.0
   zod: 4.6.7
 
 # Supply-chain policy. These match or tighten pnpm's defaults and are written
@@ -82,6 +98,13 @@ overrides:
   # GHSA-4mjr-xmp4-gh2g, GHSA-6pq8-jhm2-2vcw). 6.16.1 is the patched release
   # of the same major. Drop this once Stryker moves to typed-rest-client 3.
   "typed-rest-client>qs": "6.16.1"
+  # Reviewed 2026-11-04: Stryker 10.1.1 (dev only) asks for minimatch ~10.2.4, and every 10.x
+  # release is inside GHSA-g3hv-75wg-m249 (denial of service via globparts amplification,
+  # before 11.0.1; the new matcher is not backported to 10). Stryker calls only minimatch(),
+  # new Minimatch() with dot, flipNegate and nocase, match(path, partial), negate and
+  # hasMagic(), all unchanged in 11; a dry run of a mutation scope finds the same files and
+  # mutants as on 10.2.6. Drop this once Stryker asks for minimatch 11.
+  "@stryker-mutator/core>minimatch": "11.0.4"
   # Reviewed 2026-10-16: the diff renderer asks for shiki "^3.0.0 || ^4.0.0";
   # pinned to a release at least two weeks old instead of the newest in range.
   "@pierre/diffs>shiki": "4.4.3"
