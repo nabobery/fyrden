@@ -26,7 +26,9 @@ import { epochStatement } from "../src/queues/events-consumer.js";
 import { READ_MODEL_ADMISSION, withReadModel } from "../src/read-model/executor.js";
 import {
   ADMIT_STATEMENTS,
+  AUTOMERGE,
   admitStatements,
+  GROWTH,
   growthOf,
   STATEMENT_READS,
   STATEMENT_ROWS,
@@ -213,9 +215,23 @@ describe("search's projections, measured against their reservations", () => {
     },
   );
 
+  it("reserves the index's merges only for a batch that writes a full-text index", () => {
+    const milestone = { number: 1, title: "m", description: "d".repeat(BODY) };
+    const own =
+      GROWTH.entity +
+      GROWTH.factor * new TextEncoder().encode(JSON.stringify(milestone)).byteLength;
+    const merge = AUTOMERGE.unit * AUTOMERGE.levels * AUTOMERGE.page;
+    // Labels and milestones are ordinary rows: what they are, and no merge.
+    expect(growthOf([milestone], [])).toBe(own);
+    expect(growthOf(Array(15).fill(milestone), [])).toBe(15 * own);
+    // An issue's batch: one merge's allowance, whatever else it carries.
+    const edit = issue(1, "small") as unknown as Record<string, unknown>;
+    expect(growthOf([edit, milestone], [edit]) - growthOf([edit, milestone], [])).toBe(merge);
+  });
+
   it("small edits after an index of many large documents, its merges among them", async () => {
     const repoId = await source();
-    for (let batch = 0; batch < 4; batch++)
+    for (let batch = 0; batch < 8; batch++)
       within(
         await measure(
           repoId,
@@ -226,13 +242,18 @@ describe("search's projections, measured against their reservations", () => {
           1,
         ),
       );
-    for (let version = 2; version <= 61; version++)
-      within(
-        await measure(
-          repoId,
-          [{ number: (version % 20) + 1, row: issue((version % 20) + 1, `Edited ${version}`) }],
-          version,
-        ),
+    // Each edit writes a leaf at least: 64 of them pass a multiple of 64, setting off a merge.
+    let most = 0;
+    for (let version = 2; version <= 2 + AUTOMERGE.unit; version++) {
+      const edited = await measure(
+        repoId,
+        [{ number: (version % 40) + 1, row: issue((version % 40) + 1, `Edited ${version}`) }],
+        version,
       );
+      within(edited);
+      most = Math.max(most, edited.grew);
+    }
+    // One grew the index by more than its entity's own: the merge it set off, within its reservation.
+    expect(most).toBeGreaterThan(GROWTH.entity);
   });
 });

@@ -1,5 +1,5 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { eventKey } from "@fyrden/domain";
+import { eventKey, ISSUE_ENTITY, PULL_ENTITY } from "@fyrden/domain";
 import type { Snapshot } from "../queues/events-consumer.js";
 import { READ_MODEL_ADMISSION } from "../read-model/executor.js";
 import {
@@ -77,6 +77,8 @@ export function liveSearch(
   let projected = 0;
   // What those projected hold, for the growth they may make.
   const rows: (Record<string, unknown> | null)[] = [];
+  // Those of issues and pull requests: written to the full-text index too.
+  const indexed: (Record<string, unknown> | null)[] = [];
   let malformed = false;
   for (const event of snapshots) {
     const { entity } = event;
@@ -97,6 +99,8 @@ export function liveSearch(
         projections.push(...statements);
         projected++;
         rows.push(entity.deleted ? null : entity.row);
+        if (entity.type === ISSUE_ENTITY || entity.type === PULL_ENTITY)
+          indexed.push(rows.at(-1) ?? null);
       }
     } catch (error) {
       // Skipped: the rest of the envelope applies, and the reconciliation reads it again.
@@ -132,7 +136,10 @@ export function liveSearch(
   const after =
     writes.length === 0
       ? []
-      : [...(admitting ? admitStatements(db, token, reserved, growthOf(rows)) : []), ...writes];
+      : [
+          ...(admitting ? admitStatements(db, token, reserved, growthOf(rows, indexed)) : []),
+          ...writes,
+        ];
   return {
     before,
     after,
