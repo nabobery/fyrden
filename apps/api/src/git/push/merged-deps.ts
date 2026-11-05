@@ -23,9 +23,13 @@ const MERGED_AWAY: ReadonlySet<string> = new Set(["superseded", "condemned"]);
  * order (each slice falls in a few fanout buckets of every holder): what a
  * lookup allocates per object stays bounded however large the pack. Each
  * slice asks the packs that held earlier slices' objects first, so after
- * the first slice a compacted pack answers alone, in about two range reads
- * of a large index: some 200 for a pack of 400,000 objects, within a
- * request's subrequests on Workers Free. Proposed.
+ * the first slice the compacted packs answer alone, each in about two range
+ * reads of a large index (its oid table, its offsets): some 200 for a pack of
+ * 400,000 objects with one holder, within a request's subrequests on Workers
+ * Free. A holder past 2 GiB costs a read more for each object stored beyond
+ * that point (the lookup reads their 64-bit offsets, though only presence
+ * matters here); such a follow can run out of subrequests and the push is
+ * refused, as it was before following. Proposed.
  */
 const LOOKUP_SLICE = 4096;
 
