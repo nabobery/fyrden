@@ -6,8 +6,8 @@ packages:
 # Exact pins for test and deploy tooling: upgrade in dedicated PRs.
 catalog:
   "@biomejs/biome": 2.6.4
-  "@cloudflare/vite-plugin": 1.66.0
-  "@cloudflare/vitest-plugin": 1.4.11
+  "@cloudflare/vite-plugin": 1.67.0
+  "@cloudflare/vitest-plugin": 1.4.12
   "@modelcontextprotocol/server": 2.4.0
   "@msw/cloudflare": 0.2.0
   # Not 1.64 yet: its Chromium (156.0.8078.4) reports a script-src-attr refusal
@@ -18,20 +18,20 @@ catalog:
   # refused by the policy on any page" fails with five "Executing inline event
   # handler" lines while window.pwned stays unset. Taking it means deciding what
   # that assertion should exempt.
-  "@playwright/test": 1.63.0
+  "@playwright/test": 1.64.1
   "@stryker-mutator/core": 10.1.1
   "@stryker-mutator/vitest-runner": 10.1.1
   # Follows the Node major the repository runs (24: .nvmrc, engines), not the
   # newest @types/node (26.x describes APIs Node 24 does not have).
-  "@types/node": 24.19.2
+  "@types/node": 26.6.6
   # Vitest stays on 5.0.3 (with its coverage provider): 5.0.4 turned
   # fsModuleCache on, and with it fyrden-api's Istanbul run in the Workers pool
   # loses its workerd workers ("Worker exited unexpectedly", 124 of 128 files)
   # at twice the memory (measured 2026-10-30: 4.6 GiB against 2.5 GiB on 5.0.3),
   # enough to take down a CI runner.
-  "@vitest/coverage-istanbul": 5.0.3
+  "@vitest/coverage-istanbul": 5.0.5
   fast-check: 4.10.2
-  hono: 4.13.14
+  hono: 4.13.16
   msw: 3.0.3
   turbo: 2.11.10
   typescript: 7.0.2
@@ -44,9 +44,9 @@ catalog:
   # with seed 1 fails 11 tests in 7 files (feed.operations, feed.purge,
   # fork-pulls, live, mergeability, merges, repos.delete) that all pass on
   # 5.0.3 with the same seed. Not measured on 5.1.0: the coverage run's memory.
-  vite: 8.3.4
-  vitest: 5.0.3
-  wrangler: 4.156.0
+  vite: 8.3.5
+  vitest: 5.0.5
+  wrangler: 4.156.1
   zod: 4.6.7
 
 # Supply-chain policy. These match or tighten pnpm's defaults and are written
