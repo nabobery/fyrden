@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "typeRoots": ["../../../node_modules/.pnpm/node_modules/@types"],
+    "paths": {
+      "@pierre/diffs/ssr": ["../../../apps/web/node_modules/@pierre/diffs/dist/ssr/index.d.ts"],
+      "@pierre/highlights": ["../../../apps/web/node_modules/@pierre/highlights/dist/index.d.ts"],
+      "@pierre/highlights/themes/*": [
+        "../../../apps/web/node_modules/@pierre/highlights/dist/themes/*.d.ts"
+      ],
+      "esbuild": ["../../../node_modules/.pnpm/node_modules/esbuild"]
+    }
+  },
+  "include": ["run.ts", "src"]
+}
