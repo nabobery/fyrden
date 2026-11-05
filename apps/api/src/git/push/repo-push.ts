@@ -36,7 +36,7 @@ import {
   pushCommitter,
 } from "./commit.js";
 import { pushIndexEnv } from "./index-env.js";
-import { anySuperseded, followSuperseded } from "./merged-deps.js";
+import { anyMergedAway, followMergedAway } from "./merged-deps.js";
 import { ACCESS_LOST } from "./reauthorize.js";
 import {
   INLINE_CURSOR_BYTES,
@@ -126,12 +126,12 @@ const INDEX_LOCK_MS = 5 * 60 * 1000;
  */
 const INDEX_BUSY_RETRY_MS = 5_000;
 /**
- * How many times indexing follows dependencies superseded meanwhile before
+ * How many times indexing follows dependencies merged away meanwhile before
  * recording them as they are (the commit then refuses, retryably): each try
- * ends with no superseded dependency unless a compaction committed during
+ * ends with none merged away unless a compaction committed during
  * its reads. Proposed.
  */
-const FOLLOW_SUPERSEDED_TRIES = 3;
+const FOLLOW_MERGED_TRIES = 3;
 
 /** How long finalize waits for the commit lock (held by other pushes and maintenance swaps). Proposed. */
 const COMMIT_LOCK_WAIT_MS = 10_000;
@@ -551,10 +551,11 @@ export class RepoPush {
       if (indexer.phase !== "done") return "more";
       const outcome = indexer.outcome();
       if (outcome.ok) {
-        // A compaction may have merged a pack the check relied on since it was noted.
+        // A compaction may have merged a pack the check relied on since it was noted (and a
+        // retirement condemned it).
         let deps = outcome.deps;
-        for (let i = 0; i < FOLLOW_SUPERSEDED_TRIES && anySuperseded(this.git, deps); i++) {
-          deps = await followSuperseded(this.git, deps, { calls: 0 }, () =>
+        for (let i = 0; i < FOLLOW_MERGED_TRIES && anyMergedAway(this.git, deps); i++) {
+          deps = await followMergedAway(this.git, deps, { calls: 0 }, () =>
             this.metrics.count("r2.class_b", { bucket: BUCKET_NAME, op: "get_idx" }),
           );
           if (!this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";

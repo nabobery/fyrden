@@ -9,24 +9,39 @@ import { liveView } from "../pack-view.js";
  * (`markIndexed`); a compaction that commits in between (another push's
  * tail merge, the pack-cap compaction, a view compaction) supersedes a
  * pack the push noted, and only rewrites the dependencies already recorded.
- * The pack's objects are still there, in the compacted pack, so before
- * recording them the push follows each superseded dependency to the packs
- * that now hold its objects.
+ * A retirement pass may condemn that pack before indexing ends, too. The
+ * pack's objects are still there, in the compacted pack, so before
+ * recording them the push follows each dependency no longer readable to the
+ * packs that now hold its objects.
  */
 
-/** Whether any of `deps` was superseded (merged into another pack) since indexing noted it. */
-export function anySuperseded(git: RepoGitStorage, deps: readonly PackId[]): boolean {
-  return deps.some((id) => git.registry.get(id)?.state === "superseded");
+/** Superseded by a compaction, or condemned after it (or by a collection). */
+const MERGED_AWAY: ReadonlySet<string> = new Set(["superseded", "condemned"]);
+
+/**
+ * The source pack's objects are looked up this many at a time, in index
+ * order (each slice falls in a few fanout buckets of every holder): what a
+ * lookup allocates per object stays bounded however large the pack.
+ * Proposed.
+ */
+const LOOKUP_SLICE = 4096;
+
+const mergedAway = (git: RepoGitStorage, id: PackId) =>
+  MERGED_AWAY.has(git.registry.get(id)?.state ?? "");
+
+/** Whether any of `deps` was merged away or condemned since indexing noted it. */
+export function anyMergedAway(git: RepoGitStorage, deps: readonly PackId[]): boolean {
+  return deps.some((id) => mergedAway(git, id));
 }
 
 /**
- * `deps` with each superseded pack replaced by the readable packs (live or
- * garbage) that together hold every one of its objects, as their indexes
- * show. A superseded pack whose objects are not all readable any more (or
+ * `deps` with each pack merged away or condemned replaced by the readable
+ * packs (live or garbage) that together hold every one of its objects, as
+ * their indexes show. One whose objects are not all readable any more (or
  * whose index is gone) is kept as it is, so the commit refuses; any other
  * dependency is kept as it is too.
  */
-export async function followSuperseded(
+export async function followMergedAway(
   git: RepoGitStorage,
   deps: readonly PackId[],
   counter: CallCounter,
@@ -34,10 +49,7 @@ export async function followSuperseded(
 ): Promise<PackId[]> {
   const out = new Set<PackId>();
   for (const dep of deps) {
-    const holders =
-      git.registry.get(dep)?.state === "superseded"
-        ? await holdersOf(git, dep, counter, onRead)
-        : undefined;
+    const holders = mergedAway(git, dep) ? await holdersOf(git, dep, counter, onRead) : undefined;
     for (const id of holders ?? [dep]) out.add(id);
   }
   return [...out];
@@ -59,22 +71,28 @@ async function holdersOf(
   }
   try {
     const idx = (loaded.packs[0] as (typeof loaded.packs)[number]).idx;
-    let missing: Oid[] = Array.from({ length: idx.count }, (_, i) => idx.oidAt(i));
     const garbage = git.registry
       .inState("garbage")
       .filter((p) => p.bytes !== null)
       .map((p) => p.packId);
-    const holders: PackId[] = [];
-    for (const pack of liveView(git, onRead, garbage).packs) {
-      if (missing.length === 0) break;
-      const found = pack.idx.lookupMany
-        ? await pack.idx.lookupMany(missing)
-        : await Promise.all(missing.map((oid) => pack.idx.lookup(oid)));
-      const rest = missing.filter((_, i) => !found[i]);
-      if (rest.length < missing.length) holders.push(pack.packId);
-      missing = rest;
+    const packs = liveView(git, onRead, garbage).packs;
+    const holders = new Set<PackId>();
+    for (let start = 0; start < idx.count; start += LOOKUP_SLICE) {
+      let missing: Oid[] = [];
+      for (let i = start; i < Math.min(start + LOOKUP_SLICE, idx.count); i++)
+        missing.push(idx.oidAt(i));
+      for (const pack of packs) {
+        if (missing.length === 0) break;
+        const found = pack.idx.lookupMany
+          ? await pack.idx.lookupMany(missing)
+          : await Promise.all(missing.map((oid) => pack.idx.lookup(oid)));
+        const rest = missing.filter((_, i) => !found[i]);
+        if (rest.length < missing.length) holders.add(pack.packId);
+        missing = rest;
+      }
+      if (missing.length > 0) return undefined;
     }
-    return missing.length === 0 ? holders : undefined;
+    return [...holders];
   } finally {
     loaded.release();
   }
