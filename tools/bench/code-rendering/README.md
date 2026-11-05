@@ -251,8 +251,8 @@ What this shows:
   run: 0.11 to 0.26, and 0.02.)
 - **Largest TypeScript file within 10 ms with the file renderer, locally.**
   Warm, 142 KiB by median and 100 KiB by p95 (the first run: 82 and 46).
-  Cold, **none**: 1 KiB takes 11 ms by median, and 2 to 4 KiB exactly
-  10 ms. About 6 ms of a cold call is loading the modules and the rest is
+  Cold, no size with any margin: no p95 fits, 1 KiB takes 11 ms by median,
+  and the 2 and 4 KiB medians sit exactly at 10 ms. About 6 ms of a cold call is loading the modules and the rest is
   the first render (theme resolution, code not yet optimised).
 - **Largest within 10 ms with `codeToHtml` alone, locally.** Warm, 939 KiB
   by median and 853 KiB by p95. Cold, about 341 KiB by median. The cold
@@ -301,8 +301,8 @@ these times are for finished, highlighted lines.
 
 `StreamTokenizer` gives the first screen in about half a millisecond warm
 (1.5 ms p95) whatever the file size, because it only reads what it has
-been pushed so far; a page that has not loaded Highlights yet pays about
-7.5 ms more, mostly the import. These are Node figures: a browser main
+been pushed so far; a page that has not loaded Highlights yet takes about
+7.5 ms in all, mostly the import. These are Node figures: a browser main
 thread adds DOM, layout and paint, and its speed depends on the device.
 `LiveTokenizer` takes the whole document up front, so its first screen
 costs grow with the file: 2.5 ms at 256 KiB and 7.1 ms at 1 MiB. In
