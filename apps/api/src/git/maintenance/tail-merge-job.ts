@@ -2,6 +2,7 @@ import {
   type JobHandler,
   LOCK_REF_COMMIT,
   type RepoGitStorage,
+  replaceUploadDependencies,
 } from "@fyrden/adapters-cloudflare/git";
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { anyLeased, discardTailMerge, prepareTailMerge } from "./tail-merge.js";
@@ -61,6 +62,9 @@ export function packCapCompactionHandler(
                   : anyLeased(git, merge.removePacks)
                     ? "a merged pack was leased meanwhile"
                     : undefined,
+              // Pushes indexed against a merged pack depend on the compacted one now.
+              onCommitted: () =>
+                void replaceUploadDependencies(git, merge.removePacks, [merge.packId]),
             });
             if (result.ok) return "done";
             if (result.reason !== "version-conflict") break;

@@ -1,8 +1,9 @@
-import type {
-  LockHandle,
-  RefActor,
-  RepoGitStorage,
-  UploadRecord,
+import {
+  type LockHandle,
+  type RefActor,
+  type RepoGitStorage,
+  replaceUploadDependencies,
+  type UploadRecord,
 } from "@fyrden/adapters-cloudflare/git";
 import type { PackId, PushCommitRequest, PushCommitResult, RefUpdate } from "@fyrden/git-core";
 import { anyLeased, type TailMerge, type TailMergeOutcome } from "../maintenance/tail-merge.js";
@@ -85,7 +86,9 @@ const LOCK_RENEW_MS = 30_000;
  * With a `cap` gate, the transaction that makes the upload live first gets
  * the merge the pack-count cap needs. That transaction then also swaps in
  * the compacted pack: it goes live and the packs it replaces are
- * superseded (with the upload's own unit when that was merged too). A
+ * superseded (with the upload's own unit when that was merged too); other
+ * pushes not yet committed that depend on a replaced pack depend on the
+ * compacted one from then on, as after any other compaction. A
  * replaced pack that gained a lease since the merge was chosen refuses the
  * commit, since a pack in use is never superseded. When the cap cannot be
  * met, the transaction is not attempted and the push fails with a
@@ -175,6 +178,9 @@ export function pushCommitter(
         fastForward: request.fastForward,
         authorize: (context) => authorize(context, removePacks),
         onCommitted: (context) => {
+          // Other pushes indexed against a merged pack depend on the compacted one now (it
+          // holds all their objects); without this their commit would find the pack gone.
+          if (swap) replaceUploadDependencies(git, removePacks, [swap.packId]);
           committed.push({ version: context.version, updates: request.updates });
           if (request.withUpload) inCommit?.();
         },

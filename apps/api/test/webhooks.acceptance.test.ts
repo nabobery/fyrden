@@ -691,46 +691,54 @@ describe("full webhook bodies", () => {
     for (const body of await t.bodies(labeled)) expect((body.issue as Body).body).toBe(shared);
   });
 
+  // The 20-hook case makes 4,000 deliveries and 3,600 queue messages through the real fan-out:
+  // about 3 s alone, 10 to 16 s in CI's coverage shards beside other files, once 31.6 s on a slow
+  // runner, past Vitest's 30 s. Its work is fixed, so its time is given room, not the work cut.
+  const FAN_OUT_TIMEOUT_MS = 120_000;
   for (const hooks of [0, 1, 20])
-    it(`fan a 100-label replacement out to ${hooks} hooks: its deliveries, messages and writes`, async () => {
-      for (let i = 0; i < hooks; i++) await t.createHook({ events: ["issues"] });
-      const before = Array.from({ length: MAX_SUBJECT_LABELS }, (_, i) => `a${i}`);
-      const after = Array.from({ length: MAX_SUBJECT_LABELS }, (_, i) => `b${i}`);
-      for (const name of [...before, ...after])
-        await ok(api("POST", `${t.path}/labels`, t.owner.token, { name, color: "ffffff" }));
-      await countBlobWrites();
-      await ok(
-        api("POST", `${t.path}/issues`, t.owner.token, {
-          title: "Relabeled",
-          body: "r".repeat(5_000),
-          labels: before,
-        }),
-      );
-      // The issue's body kept once (a row and its index entry), when a hook takes the event.
-      expect(blobWrites).toBe(hooks > 0 ? 2 : 0);
-      const from = (await t.routed()).length;
-      blobWrites = 0;
-      await ok(api("PUT", `${t.path}/issues/1/labels`, t.owner.token, { labels: after }));
-      // The replacement's 200 events name the same body at one deadline: it is kept longer at
-      // most once (its row and index entry, when the clock moved since it was stored), not once
-      // per event.
-      expect(blobWrites).toBeLessThanOrEqual(hooks > 0 ? 2 : 0);
-      const events = (await t.routed()).slice(from);
-      // One event per label removed and per label added, each to every hook.
-      expect(events).toHaveLength(hooks > 0 ? 2 * MAX_SUBJECT_LABELS : 0);
-      if (hooks === 0) return;
-      await t.materialize(events, 2);
-      // Every hook a delivery of each event; the sink makes two first attempts per event (one
-      // with a single hook), the others are a queue message each (3,600 for 20 hooks).
-      const deliveries = (await t.deliveries()).filter((d) => d.event === "issues");
-      expect(deliveries).toHaveLength(2 * MAX_SUBJECT_LABELS * hooks);
-      expect(deliveries.filter((d) => d.state === "dropped")).toEqual([]);
-      expect(t.received).toHaveLength(2 * MAX_SUBJECT_LABELS * Math.min(hooks, 2));
-      expect(t.sent).toHaveLength(2 * MAX_SUBJECT_LABELS * Math.max(hooks - 2, 0));
-      // A removal tells of the label it took off, in full.
-      const removed = t.received
-        .map((r) => JSON.parse(r.body) as Body)
-        .find((b) => b.action === "unlabeled" && (b.label as Body).name === "a0");
-      expect(removed).toMatchObject({ label: { name: "a0", color: "ffffff", default: false } });
-    });
+    it(
+      `fan a 100-label replacement out to ${hooks} hooks: its deliveries, messages and writes`,
+      async () => {
+        for (let i = 0; i < hooks; i++) await t.createHook({ events: ["issues"] });
+        const before = Array.from({ length: MAX_SUBJECT_LABELS }, (_, i) => `a${i}`);
+        const after = Array.from({ length: MAX_SUBJECT_LABELS }, (_, i) => `b${i}`);
+        for (const name of [...before, ...after])
+          await ok(api("POST", `${t.path}/labels`, t.owner.token, { name, color: "ffffff" }));
+        await countBlobWrites();
+        await ok(
+          api("POST", `${t.path}/issues`, t.owner.token, {
+            title: "Relabeled",
+            body: "r".repeat(5_000),
+            labels: before,
+          }),
+        );
+        // The issue's body kept once (a row and its index entry), when a hook takes the event.
+        expect(blobWrites).toBe(hooks > 0 ? 2 : 0);
+        const from = (await t.routed()).length;
+        blobWrites = 0;
+        await ok(api("PUT", `${t.path}/issues/1/labels`, t.owner.token, { labels: after }));
+        // The replacement's 200 events name the same body at one deadline: it is kept longer at
+        // most once (its row and index entry, when the clock moved since it was stored), not once
+        // per event.
+        expect(blobWrites).toBeLessThanOrEqual(hooks > 0 ? 2 : 0);
+        const events = (await t.routed()).slice(from);
+        // One event per label removed and per label added, each to every hook.
+        expect(events).toHaveLength(hooks > 0 ? 2 * MAX_SUBJECT_LABELS : 0);
+        if (hooks === 0) return;
+        await t.materialize(events, 2);
+        // Every hook a delivery of each event; the sink makes two first attempts per event (one
+        // with a single hook), the others are a queue message each (3,600 for 20 hooks).
+        const deliveries = (await t.deliveries()).filter((d) => d.event === "issues");
+        expect(deliveries).toHaveLength(2 * MAX_SUBJECT_LABELS * hooks);
+        expect(deliveries.filter((d) => d.state === "dropped")).toEqual([]);
+        expect(t.received).toHaveLength(2 * MAX_SUBJECT_LABELS * Math.min(hooks, 2));
+        expect(t.sent).toHaveLength(2 * MAX_SUBJECT_LABELS * Math.max(hooks - 2, 0));
+        // A removal tells of the label it took off, in full.
+        const removed = t.received
+          .map((r) => JSON.parse(r.body) as Body)
+          .find((b) => b.action === "unlabeled" && (b.label as Body).name === "a0");
+        expect(removed).toMatchObject({ label: { name: "a0", color: "ffffff", default: false } });
+      },
+      FAN_OUT_TIMEOUT_MS,
+    );
 });
