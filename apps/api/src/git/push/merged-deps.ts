@@ -21,8 +21,11 @@ const MERGED_AWAY: ReadonlySet<string> = new Set(["superseded", "condemned"]);
 /**
  * The source pack's objects are looked up this many at a time, in index
  * order (each slice falls in a few fanout buckets of every holder): what a
- * lookup allocates per object stays bounded however large the pack.
- * Proposed.
+ * lookup allocates per object stays bounded however large the pack. Each
+ * slice asks the packs that held earlier slices' objects first, so after
+ * the first slice a compacted pack answers alone, in about two range reads
+ * of a large index: some 200 for a pack of 400,000 objects, within a
+ * request's subrequests on Workers Free. Proposed.
  */
 const LOOKUP_SLICE = 4096;
 
@@ -81,7 +84,11 @@ async function holdersOf(
       let missing: Oid[] = [];
       for (let i = start; i < Math.min(start + LOOKUP_SLICE, idx.count); i++)
         missing.push(idx.oidAt(i));
-      for (const pack of packs) {
+      const holdersFirst = [
+        ...packs.filter((p) => holders.has(p.packId)),
+        ...packs.filter((p) => !holders.has(p.packId)),
+      ];
+      for (const pack of holdersFirst) {
         if (missing.length === 0) break;
         const found = pack.idx.lookupMany
           ? await pack.idx.lookupMany(missing)

@@ -383,7 +383,7 @@ describe("push: dependencies merged away by compaction", () => {
     await inRepo(stub, (repo) => {
       repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 2 };
     });
-    // Main's first pack holds 4,102 objects (a tree of 4,100 files); the second one, 3.
+    // Main's pack holds 4,102 objects (a tree of 4,100 files); an unrelated branch's, 3.
     const wide = await widePack(4_100);
     expect(
       await push(
@@ -391,31 +391,37 @@ describe("push: dependencies merged away by compaction", () => {
         concat([pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: MAIN }]), wide.pack]),
       ),
     ).toEqual(ok(MAIN));
-    const next = await commitPack(wide.oid, 1);
+    const other = await commitPack(null, 1);
     expect(
       await push(
         stub,
         concat([
-          pushBody([{ old: oidToHex(wide.oid), new: oidToHex(next.oid), ref: MAIN }]),
-          next.pack,
+          pushBody([{ old: ZERO, new: oidToHex(other.oid), ref: "refs/heads/o" }]),
+          other.pack,
         ]),
       ),
-    ).toEqual(ok(MAIN));
-    const a = await branchBody("refs/heads/a", next.oid, 660);
+    ).toEqual(ok("refs/heads/o"));
+    const widePackId = await inRepo(
+      stub,
+      ({ git }) => git.registry.liveOwn().find((p) => p.objectCount === 4_102)?.packId,
+    );
+    expect(widePackId).toBeDefined();
+    // Its parent is in the wide pack only: that pack is the push's one dependency.
+    const a = await branchBody("refs/heads/a", wide.oid, 660);
     const staged = await stageBeforeLastPhase(stub, a.bytes);
     // The background compaction merges both packs while the push is between its phases.
     await compactInBackground(stub);
     expect(
-      await inRepo(stub, ({ git }) =>
-        git.registry
-          .inState("superseded")
-          .some((p) => p.objectCount !== null && p.objectCount > 4_096),
-      ),
-    ).toBe(true);
+      await inRepo(stub, ({ git }) => git.registry.get(widePackId as string)?.state ?? null),
+    ).toBe("superseded");
 
     await finishIndexing(stub, staged);
-    expect((await depsOf(stub, staged)).every((d) => d.state === "live")).toBe(true);
+    const deps = await depsOf(stub, staged);
+    expect(deps.map((d) => d.id)).not.toContain(widePackId);
+    expect(deps.length).toBeGreaterThan(0);
+    expect(deps.every((d) => d.state === "live")).toBe(true);
     expect(await commit(stub, staged)).toEqual(ok("refs/heads/a"));
+    expect(await refOf(stub, "refs/heads/a")).toBe(oidToHex(a.oid));
   });
 
   it("still refuses a push indexed against a merged pack whose objects are gone", async () => {
