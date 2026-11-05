@@ -41,22 +41,28 @@ export function anyMergedAway(git: RepoGitStorage, deps: readonly PackId[]): boo
   return deps.some((id) => mergedAway(git, id));
 }
 
+/** Ended because `stillHeld` said the runner's lock was lost. */
+const LOST = Symbol("lost");
+
 /**
  * `deps` with each pack merged away or condemned replaced by the readable
  * packs (live or garbage) that together hold every one of its objects, as
  * their indexes show. One whose objects are not all readable any more (or
  * whose index is gone) is kept as it is, so the commit refuses; any other
- * dependency is kept as it is too.
+ * dependency is kept as it is too. `stillHeld` renews the caller's lock
+ * after each slice of lookups; undefined when it could not (another runner
+ * may be indexing the upload), and nothing should be recorded.
  */
 export async function followMergedAway(
   git: RepoGitStorage,
   deps: readonly PackId[],
-  counter: CallCounter,
-  onRead: () => void,
-): Promise<PackId[]> {
+  reads: { counter: CallCounter; onRead: () => void },
+  stillHeld: () => boolean,
+): Promise<PackId[] | undefined> {
   const out = new Set<PackId>();
   for (const dep of deps) {
-    const holders = mergedAway(git, dep) ? await holdersOf(git, dep, counter, onRead) : undefined;
+    const holders = mergedAway(git, dep) ? await holdersOf(git, dep, reads, stillHeld) : undefined;
+    if (holders === LOST) return undefined;
     for (const id of holders ?? [dep]) out.add(id);
   }
   return [...out];
@@ -66,9 +72,9 @@ export async function followMergedAway(
 async function holdersOf(
   git: RepoGitStorage,
   packId: PackId,
-  counter: CallCounter,
-  onRead: () => void,
-): Promise<PackId[] | undefined> {
+  { counter, onRead }: { counter: CallCounter; onRead: () => void },
+  stillHeld: () => boolean,
+): Promise<PackId[] | undefined | typeof LOST> {
   let loaded: LoadedPacks;
   try {
     loaded = await LoadedPacks.load(git, [packId], counter);
@@ -102,6 +108,7 @@ async function holdersOf(
         missing = rest;
       }
       if (missing.length > 0) return undefined;
+      if (!stillHeld()) return LOST;
     }
     return [...holders];
   } finally {

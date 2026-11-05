@@ -555,10 +555,19 @@ export class RepoPush {
         // retirement condemned it).
         let deps = outcome.deps;
         for (let i = 0; i < FOLLOW_MERGED_TRIES && anyMergedAway(this.git, deps); i++) {
-          deps = await followMergedAway(this.git, deps, { calls: 0 }, () =>
-            this.metrics.count("r2.class_b", { bucket: BUCKET_NAME, op: "get_idx" }),
+          const followed = await followMergedAway(
+            this.git,
+            deps,
+            {
+              counter: { calls: 0 },
+              onRead: () =>
+                this.metrics.count("r2.class_b", { bucket: BUCKET_NAME, op: "get_idx" }),
+            },
+            // Renewed between slices, so a long follow keeps the lock it runs under.
+            () => this.git.locks.renew(lock, INDEX_LOCK_MS) !== undefined,
           );
-          if (!this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";
+          if (!followed || !this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";
+          deps = followed;
         }
         // Recorded with no await since the last check: a later compaction rewrites them.
         this.git.uploads.markIndexed(uploadId, { deps, objectCount: outcome.objectCount });
