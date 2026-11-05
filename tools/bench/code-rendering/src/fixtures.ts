@@ -73,8 +73,10 @@ export function makeFixtures(root: string, dir: string, esbuild: typeof Esbuild)
 
   // JSON: the largest tracked JSON file as it is, and a 100 KiB document of
   // the repository's own file list (pretty-printed, as a lockfile or an API
-  // answer would be).
+  // answer would be). Benchmark outputs (this directory's results.json) are
+  // left out, so a run never renders a previous run's results.
   const jsonFiles = trackedFiles(root, /\.json$/)
+    .filter((p) => !p.startsWith("tools/bench/"))
     .map((p) => ({ p, size: readFileSync(join(root, p)).length }))
     .sort((a, b) => b.size - a.size);
   const largestJson = jsonFiles[0];

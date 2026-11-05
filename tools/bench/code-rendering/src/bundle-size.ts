@@ -105,23 +105,24 @@ export default {
   };
 }
 
+const CLIENT_ENTRIES = {
+  fileDiff: `export { FileDiff } from "@pierre/diffs/react";\n`,
+  file: `export { File } from "@pierre/diffs/react";\n`,
+};
+type ClientEntry = keyof typeof CLIENT_ENTRIES;
+
 /**
- * Browser bundles split as Vite splits them (dynamic imports become chunks
- * loaded on demand), minified, React left out (every page has it). For each
- * entry: what a page loads before it can draw (the entry and the chunks it
- * imports statically) and what it may load later (its dynamic imports).
+ * One browser build of `names` from `CLIENT_ENTRIES`, split as Vite splits
+ * them (dynamic imports become chunks loaded on demand), minified, React
+ * left out (every page has it). For each entry: what a page loads before it
+ * can draw (the entry and the chunks it imports statically) and what it may
+ * load later (its dynamic imports), as sets of output paths.
  */
-async function clientBundles(esbuild: typeof Esbuild, work: string) {
-  const dir = join(work, "client-bundles");
+async function clientBuild(esbuild: typeof Esbuild, dir: string, names: ClientEntry[]) {
   mkdirSync(dir, { recursive: true });
-  const entries = {
-    fileDiff: `export { FileDiff } from "@pierre/diffs/react";\n`,
-    file: `export { File } from "@pierre/diffs/react";\n`,
-  };
-  for (const [name, source] of Object.entries(entries))
-    writeFileSync(join(dir, `${name}.ts`), source);
+  for (const name of names) writeFileSync(join(dir, `${name}.ts`), CLIENT_ENTRIES[name]);
   const result = await esbuild.build({
-    entryPoints: Object.keys(entries).map((n) => join(dir, `${n}.ts`)),
+    entryPoints: names.map((n) => join(dir, `${n}.ts`)),
     outdir: join(dir, "out"),
     bundle: true,
     splitting: true,
@@ -148,34 +149,66 @@ async function clientBundles(esbuild: typeof Esbuild, work: string) {
     walk(start);
     return seen;
   };
-  const total = (paths: Iterable<string>): Sized => {
-    let bytes = 0;
-    let gzipBytes = 0;
-    for (const p of paths) {
-      const s = sized(join(process.cwd(), p));
-      bytes += s.bytes;
-      gzipBytes += s.gzipBytes;
-    }
-    return { bytes, gzipBytes };
-  };
-  const of = (name: string) => {
+  const of = (name: ClientEntry) => {
     const out = key(join(dir, "out", `${name}.js`));
     const initial = reach(out, (kind) => kind === "import-statement");
     const all = reach(out, () => true);
     return { initial, lazy: [...all].filter((p) => !initial.has(p)) };
   };
-  const fileDiff = of("fileDiff");
-  const file = of("file");
+  return { outputs, of };
+}
+
+function total(paths: Iterable<string>): Sized {
+  let bytes = 0;
+  let gzipBytes = 0;
+  for (const p of paths) {
+    const s = sized(join(process.cwd(), p));
+    bytes += s.bytes;
+    gzipBytes += s.gzipBytes;
+  }
+  return { bytes, gzipBytes };
+}
+
+const minus = (a: Sized, b: Sized): Sized => ({
+  bytes: a.bytes - b.bytes,
+  gzipBytes: a.gzipBytes - b.gzipBytes,
+});
+
+/**
+ * What a file view costs in the browser, from two builds: `FileDiff` alone
+ * (what the pull request page loads today) and `FileDiff` with `File` (the
+ * app once file views exist). Splitting the two entries moves code into
+ * shared chunks, so the cost is given two ways: the first time (everything
+ * either page loads before drawing, against `FileDiff` alone) and per
+ * navigation once the pull request page's chunks are cached (what a file
+ * view loads that the pull request page did not).
+ */
+async function clientBundles(esbuild: typeof Esbuild, work: string) {
+  const alone = await clientBuild(esbuild, join(work, "client-file-diff"), ["fileDiff"]);
+  const fileDiffAlone = total(alone.of("fileDiff").initial);
+
+  const joint = await clientBuild(esbuild, join(work, "client-both"), ["fileDiff", "file"]);
+  const fileDiff = joint.of("fileDiff");
+  const file = joint.of("file");
+  const bothInitial = total(new Set([...fileDiff.initial, ...file.initial]));
   // The chunks holding Highlights (its WebAssembly inlined), the one a file view fetches to highlight.
   const highlights = file.lazy.filter((p) =>
-    Object.keys(outputs[p]?.inputs ?? {}).some((i) => i.includes("@pierre+highlights@")),
+    Object.keys(joint.outputs[p]?.inputs ?? {}).some((i) => i.includes("@pierre+highlights@")),
   );
+  const fileDiffInitial = total(fileDiff.initial);
   return {
-    fileHighlightsChunks: total(highlights),
-    fileDiffInitial: total(fileDiff.initial),
+    fileDiffAlone,
+    fileDiffInitial,
     fileInitial: total(file.initial),
-    fileInitialNotInFileDiff: total([...file.initial].filter((p) => !fileDiff.initial.has(p))),
+    bothInitial,
+    /** Before drawing, first visit: both pages' code against the pull request page's today. */
+    firstTimeAdded: minus(bothInitial, fileDiffAlone),
+    /** The pull request page's own load before drawing, grown by the split. */
+    fileDiffGrowth: minus(fileDiffInitial, fileDiffAlone),
+    /** Before drawing, with the pull request page's chunks cached. */
+    perNavigation: total([...file.initial].filter((p) => !fileDiff.initial.has(p))),
     fileLazy: total(file.lazy),
+    fileHighlightsChunks: total(highlights),
   };
 }
 

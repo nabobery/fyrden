@@ -37,6 +37,9 @@ const bench :Workerd.Worker = (
   return path;
 }
 
+/** Every workerd process started and not yet stopped, for `Workerd.killAll`. */
+const running = new Set<ChildProcess>();
+
 export class Workerd {
   private readonly child: ChildProcess;
   readonly url: string;
@@ -49,28 +52,62 @@ export class Workerd {
     this.startMs = startMs;
   }
 
-  /** Starts workerd and resolves once it reports its socket listening (its control fd). */
+  /**
+   * Starts workerd and resolves once it reports its socket listening (its
+   * control fd). A process that fails to start is killed before the promise
+   * rejects.
+   */
   static start(binary: string, config: string): Promise<Workerd> {
     const started = performance.now();
     const child = spawn(binary, ["serve", "--control-fd=3", config], {
       stdio: ["ignore", "ignore", "pipe", "pipe"],
     });
+    running.add(child);
+    child.once("exit", () => running.delete(child));
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
       stderr += chunk;
     });
-    return new Promise((resolve, reject) => {
-      child.once("exit", (code) => reject(new Error(`workerd exited (${code}): ${stderr}`)));
+    return new Promise<Workerd>((resolve, reject) => {
+      const fail = (error: Error) => {
+        child.kill("SIGKILL");
+        reject(error);
+      };
+      child.once("error", fail);
+      child.once("exit", (code) => fail(new Error(`workerd exited (${code}): ${stderr}`)));
       const control = child.stdio[3];
-      if (!control || !("on" in control)) throw new Error("no control fd");
+      if (!control || !("on" in control)) return fail(new Error("no control fd"));
       createInterface({ input: control as NodeJS.ReadableStream }).on("line", (line) => {
-        const event = JSON.parse(line) as { event: string; socket: string; port: number };
-        if (event.event === "listen" && event.socket === "http")
-          resolve(
-            new Workerd(child, `http://127.0.0.1:${event.port}`, performance.now() - started),
-          );
+        try {
+          const event = JSON.parse(line) as { event: string; socket: string; port: number };
+          if (event.event === "listen" && event.socket === "http")
+            resolve(
+              new Workerd(child, `http://127.0.0.1:${event.port}`, performance.now() - started),
+            );
+        } catch (error) {
+          fail(error as Error);
+        }
       });
     });
+  }
+
+  /** Starts workerd, runs `use` with it, and stops it whether `use` succeeds or throws. */
+  static async with<T>(
+    binary: string,
+    config: string,
+    use: (w: Workerd) => Promise<T>,
+  ): Promise<T> {
+    const w = await Workerd.start(binary, config);
+    try {
+      return await use(w);
+    } finally {
+      await w.stop();
+    }
+  }
+
+  /** Kills every workerd still running, synchronously (for an interrupted run). */
+  static killAll(): void {
+    for (const child of running) child.kill("SIGKILL");
   }
 
   stats(): ProcStats {
@@ -98,7 +135,9 @@ export class Workerd {
     htmlBytes: number;
     spans: number;
   }> {
-    const params = new URLSearchParams(Object.entries(query).map(([k, v]) => [k, String(v)]));
+    const params = new URLSearchParams(
+      Object.entries(query).map(([k, v]): [string, string] => [k, String(v)]),
+    );
     const response = await fetch(`${this.url}/render?${params}`, { method: "POST", body });
     if (!response.ok) throw new Error(`render failed: ${response.status} ${await response.text()}`);
     return response.json() as never;
@@ -111,10 +150,18 @@ export class Workerd {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
-      this.child.removeAllListeners("exit");
-      if (this.child.exitCode !== null) return resolve();
-      this.child.once("exit", () => resolve());
-      this.child.kill("SIGKILL");
+      const child = this.child;
+      child.removeAllListeners("exit");
+      // A process killed by a signal has a signalCode and no exitCode.
+      if (child.exitCode !== null || child.signalCode !== null) {
+        running.delete(child);
+        return resolve();
+      }
+      child.once("exit", () => {
+        running.delete(child);
+        resolve();
+      });
+      child.kill("SIGKILL");
     });
   }
 }

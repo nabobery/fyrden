@@ -12,8 +12,16 @@
  */
 // biome-ignore-all lint/suspicious/noConsole: a benchmark reports on the console
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { cpus, tmpdir } from "node:os";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { cpus, tmpdir, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { measureBundles } from "./src/bundle-size.ts";
@@ -49,16 +57,23 @@ const MODES: Mode[] = ["highlights", "file"];
 const BUDGET_MS = 10;
 const compatibilityDate = "2026-10-01"; // apps/web/wrangler.jsonc
 
-const work = mkdtempSync(join(tmpdir(), "fyrden-code-rendering-"));
-const esbuild = loadEsbuild();
+// The workerd section reads each process's CPU and peak memory from /proc:
+// refuse before anything is built or spawned where there is none.
+if (only.has("workerd") && !existsSync("/proc/self/status")) {
+  console.error(
+    `The workerd measurements need Linux (/proc); this is ${process.platform}. ` +
+      "Run on Linux (a container works), or leave them out with --only=node,bundle.",
+  );
+  process.exit(1);
+}
+
 const log = (message: string) => console.error(`[bench] ${message}`);
 const round = (n: number, digits = 2) => Math.round(n * 10 ** digits) / 10 ** digits;
-const isLarge = (f: Fixture) => f.bytes >= 256 * 1024;
+/** The ladder's 256 KiB step and larger (each step is cut back to a line end, so just under its size). */
+const isLarge = (f: Fixture) => f.bytes > 128 * 1024;
 
-const fixtureDir = join(work, "fixtures");
-mkdirSync(fixtureDir);
-const fixtures = makeFixtures(ROOT, fixtureDir, esbuild);
-log(`${fixtures.length} fixtures in ${fixtureDir}`);
+let esbuild: ReturnType<typeof loadEsbuild>;
+let fixtures: Fixture[] = [];
 
 // ---------------------------------------------------------------- workerd
 
@@ -113,10 +128,10 @@ async function workerdSection() {
       ["withShiki", fullConfig],
       ["empty", emptyConfig],
     ] as const) {
-      const w = await Workerd.start(binary, cfg);
-      await w.noop();
-      startup[key].push(w.startMs);
-      await w.stop();
+      await Workerd.with(binary, cfg, async (w) => {
+        await w.noop();
+        startup[key].push(w.startMs);
+      });
     }
   }
 
@@ -129,12 +144,12 @@ async function workerdSection() {
       const rss: number[] = [];
       let last = { htmlBytes: 0, spans: 0 };
       for (let i = 0; i < RUNS.cold; i++) {
-        const w = await Workerd.start(binary, config);
-        await w.noop();
-        const before = w.stats();
-        const r = await w.render({ ...query, reps: 1 }, text);
-        const after = w.stats();
-        await w.stop();
+        const { r, before, after } = await Workerd.with(binary, config, async (w) => {
+          await w.noop();
+          const before = w.stats();
+          const r = await w.render({ ...query, reps: 1 }, text);
+          return { r, before, after: w.stats() };
+        });
         cold.total.push(r.totalMs);
         cold.load.push(r.loadMs);
         cold.render.push(r.renderMs);
@@ -142,21 +157,26 @@ async function workerdSection() {
         last = r;
       }
 
-      const w = await Workerd.start(binary, config);
-      for (let i = 0; i < 3; i++) await w.render({ ...query, reps: 1 }, text);
       const samples = isLarge(fixture) ? RUNS.warmLarge : RUNS.warm;
-      const perCall: number[] = [];
-      const cpuBefore = w.stats().cpuTicks;
-      for (let i = 0; i < samples; i++)
-        perCall.push((await w.render({ ...query, reps: 1 }, text)).renderMs);
-      const cpuAfter = w.stats().cpuTicks;
-      // workerd's clock ticks in whole ms: a batch of calls gives a sub-ms mean.
-      const median = summarize(perCall).median;
-      const reps = Math.min(500, Math.max(1, Math.ceil(50 / Math.max(median, 0.1))));
-      let batched = 0;
-      for (let i = 0; i < 3; i++) batched += (await w.render({ ...query, reps }, text)).renderMs;
-      const peak = w.stats().vmHwmKiB;
-      await w.stop();
+      const { perCall, cpuBefore, cpuAfter, reps, batched, peak } = await Workerd.with(
+        binary,
+        config,
+        async (w) => {
+          for (let i = 0; i < 3; i++) await w.render({ ...query, reps: 1 }, text);
+          const perCall: number[] = [];
+          const cpuBefore = w.stats().cpuTicks;
+          for (let i = 0; i < samples; i++)
+            perCall.push((await w.render({ ...query, reps: 1 }, text)).renderMs);
+          const cpuAfter = w.stats().cpuTicks;
+          // workerd's clock ticks in whole ms: a batch of calls gives a sub-ms mean.
+          const median = summarize(perCall).median;
+          const reps = Math.min(500, Math.max(1, Math.ceil(50 / Math.max(median, 0.1))));
+          let batched = 0;
+          for (let i = 0; i < 3; i++)
+            batched += (await w.render({ ...query, reps }, text)).renderMs;
+          return { perCall, cpuBefore, cpuAfter, reps, batched, peak: w.stats().vmHwmKiB };
+        },
+      );
 
       const row: WorkerdRow = {
         fixture: fixture.id,
@@ -292,31 +312,65 @@ async function nodeSection() {
 const results: Record<string, unknown> = {
   date: new Date().toISOString().slice(0, 10),
   commit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim(),
-  machine: { cpu: cpus()[0]?.model, cores: cpus().length, node: process.version },
+  machine: {
+    cpu: cpus()[0]?.model,
+    cores: cpus().length,
+    arch: process.arch,
+    memoryGiB: Math.round(totalmem() / 2 ** 30),
+    container: existsSync("/.dockerenv"),
+    node: process.version,
+  },
   versions: {
     workerd: workerdVersion(),
     "@pierre/diffs": packageVersion("@pierre/diffs"),
     "@pierre/highlights": packageVersion("@pierre/highlights"),
   },
   runs: RUNS,
-  fixtures: fixtures.map(({ path: _path, ...f }) => f),
 };
 
+const work = mkdtempSync(join(tmpdir(), "fyrden-code-rendering-"));
+// An interrupted run stops every workerd it started and removes its files.
+for (const [signal, code] of [
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const)
+  process.once(signal, () => {
+    Workerd.killAll();
+    rmSync(work, { recursive: true, force: true });
+    console.error(`[bench] ${signal}: stopped`);
+    process.exit(code);
+  });
+
 try {
+  esbuild = loadEsbuild();
+  const fixtureDir = join(work, "fixtures");
+  mkdirSync(fixtureDir);
+  fixtures = makeFixtures(ROOT, fixtureDir, esbuild);
+  log(`${fixtures.length} fixtures in ${fixtureDir}`);
+  results.fixtures = fixtures.map(({ path: _path, ...f }) => f);
   if (only.has("workerd")) results.workerd = await workerdSection();
   if (only.has("node")) results.node = await nodeSection();
   if (only.has("bundle")) results.bundle = await measureBundles(esbuild, work);
 } finally {
+  Workerd.killAll();
   rmSync(work, { recursive: true, force: true });
 }
 
 const kib = (bytes: number) => round(bytes / 1024, 1);
+const machine = results.machine as {
+  cpu: string | undefined;
+  cores: number;
+  arch: string;
+  memoryGiB: number;
+  container: boolean;
+};
 const lines: string[] = [];
 lines.push(
   `# Code rendering benchmark: results`,
   "",
   `Generated by \`run.ts\` on ${results.date} at ${String(results.commit).slice(0, 12)}; ` +
-    `${(results.machine as { cpu: string }).cpu}, ${(results.machine as { cores: number }).cores} cores, Node ${process.version}, ` +
+    `${machine.cpu || "CPU model not reported"}, ${machine.cores} cores, ${machine.arch}, ${machine.memoryGiB} GiB` +
+    `${machine.container ? ", in a container" : ""}, Node ${process.version}, ` +
     `workerd ${(results.versions as { workerd: string }).workerd}. Times in ms; n samples each. See README.md for the method.`,
   "",
 );
@@ -404,6 +458,9 @@ if (results.bundle) {
   const b = results.bundle as Awaited<ReturnType<typeof measureBundles>>;
   const s = (x: { bytes: number; gzipBytes: number }) =>
     `${kib(x.bytes)} KiB (gzip ${kib(x.gzipBytes)} KiB)`;
+  const sign = (n: number) => (n < 0 ? "" : "+");
+  const signed = (x: { bytes: number; gzipBytes: number }) =>
+    `${sign(x.bytes)}${kib(x.bytes)} KiB (gzip ${sign(x.gzipBytes)}${kib(x.gzipBytes)} KiB)`;
   const up = (u: { totalKiB: number; gzipKiB: number }) =>
     `${u.totalKiB} KiB, gzip ${u.gzipKiB} KiB (+${round(u.totalKiB - b.server.webOnly.totalKiB)} KiB, gzip +${round(u.gzipKiB - b.server.webOnly.gzipKiB)} KiB)`;
   lines.push(
@@ -416,15 +473,18 @@ if (results.bundle) {
     `- with the file renderer, Shiki left out: ${up(b.server.withRendererNoShiki.upload)}; the renderer module ${s(b.server.withRendererNoShiki.rendererModule)}`,
     `- Highlights' .wasm (in both): ${s(b.server.withRenderer.wasmModule)}`,
     "",
-    "Browser (esbuild, split at dynamic imports, minified, React external):",
+    "Browser (esbuild, split at dynamic imports, minified, React external), before drawing unless said otherwise:",
     "",
-    `- \`FileDiff\` (the pull request page's), loaded before drawing: ${s(b.client.fileDiffInitial)}`,
-    `- \`File\` (a file view), loaded before drawing: ${s(b.client.fileInitial)}; of it not shared with \`FileDiff\`: ${s(b.client.fileInitialNotInFileDiff)}; everything it may load on demand (Highlights, and every Shiki grammar and theme): ${s(b.client.fileLazy)}, of which the Highlights chunks a file view fetches: ${s(b.client.fileHighlightsChunks)}`,
+    `- \`FileDiff\` built alone (the pull request page today): ${s(b.client.fileDiffAlone)}`,
+    `- \`FileDiff\` and \`File\` built together (the app with file views): the pull request page ${s(b.client.fileDiffInitial)} (${signed(b.client.fileDiffGrowth)} against alone), a file view ${s(b.client.fileInitial)}, both pages' chunks together ${s(b.client.bothInitial)}`,
+    `- first time, nothing cached: file views add ${signed(b.client.firstTimeAdded)} to what the pull request page loads today`,
+    `- per navigation, the pull request page's chunks cached: a file view loads ${s(b.client.perNavigation)} more`,
+    `- a file view's on-demand chunks (Highlights, and every Shiki grammar and theme): ${s(b.client.fileLazy)}, of which the Highlights chunks it fetches to highlight: ${s(b.client.fileHighlightsChunks)}`,
     `- the client build already ships: JS ${s(b.client.shippedJs)}, WebAssembly ${s(b.client.shippedWasm)}; worker chunks: ${b.client.workerChunks.map((w) => `${w.name} ${s(w)}`).join(", ")}`,
     "",
   );
 }
 
 writeFileSync(join(HERE, "results.json"), `${JSON.stringify(results, null, 2)}\n`);
-writeFileSync(join(HERE, "results.md"), `${lines.join("\n")}\n`);
+writeFileSync(join(HERE, "results.md"), `${lines.join("\n").trimEnd()}\n`);
 console.log(lines.join("\n"));

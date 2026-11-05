@@ -55,6 +55,28 @@ const TOKEN_OPTIONS = {
   tokenizeMaxLineLength: 1000,
 } as const;
 
+type Token = { content: string; color?: string; fontStyle?: number; htmlStyle?: object };
+
+/** A line's tokens as text and style, offsets left out (LiveTokenizer's are line-relative). */
+function lineKey(tokens: readonly Token[]): string {
+  return JSON.stringify(tokens.map((t) => [t.content, t.color, t.fontStyle, t.htmlStyle]));
+}
+
+/**
+ * Checked outside the timing: `got` (a first screen) matches the whole
+ * file's `codeToTokens` line for line, so no method is timed reading
+ * unfinished or plain tokens.
+ */
+function checkScreen(
+  method: string,
+  got: readonly (readonly Token[])[],
+  whole: readonly (readonly Token[])[],
+) {
+  for (const [line, tokens] of got.entries())
+    if (lineKey(tokens) !== lineKey(whole[line] ?? []))
+      throw new Error(`${method}: line ${line} of the first screen differs from codeToTokens`);
+}
+
 /** Each way of getting the first `lines` lines' tokens of a large file, timed. */
 async function firstScreenOnce(text: string, lang: string, lines: number) {
   const hl = await import("@pierre/highlights");
@@ -76,22 +98,31 @@ async function firstScreenOnce(text: string, lang: string, lines: number) {
   // StreamTokenizer: push the file in 16 KiB chunks until the first screen is complete.
   start = now();
   const stream = new hl.StreamTokenizer(options);
-  let got = 0;
+  const streamScreen: Token[][] = [];
   let pushed = 0;
-  for (let at = 0; at < text.length && got < lines; at += 16 * 1024) {
-    got += stream.pushCode(text.slice(at, at + 16 * 1024)).length;
+  for (let at = 0; at < text.length && streamScreen.length < lines; at += 16 * 1024) {
+    streamScreen.push(...stream.pushCode(text.slice(at, at + 16 * 1024)));
     pushed = Math.min(text.length, at + 16 * 1024);
   }
   const streamMs = now() - start;
   stream.dispose();
+  checkScreen("StreamTokenizer", streamScreen.slice(0, lines), all.tokens);
 
-  // LiveTokenizer: the whole document, with the first screen as its render range.
+  // LiveTokenizer: the whole document, with the first screen as its render
+  // range. The constructor completes only what fits its time budget, and a
+  // pending line reads back as plain text, so `flush(lines)` finishes the
+  // first screen before it is read. `flush` clears the pause and schedules
+  // the rest for a later task; pausing again keeps that work for the timed
+  // `flush()` below.
   start = now();
   const live = new hl.LiveTokenizer({ ...options, code: text, renderRange: [0, lines] });
   live.pause();
-  let liveTokens = 0;
-  for (let line = 0; line < lines; line++) liveTokens += live.getLineTokens(line).tokens.length;
+  live.flush(lines);
+  live.pause();
+  const liveScreen: Token[][] = [];
+  for (let line = 0; line < lines; line++) liveScreen.push(live.getLineTokens(line).tokens);
   const liveMs = now() - start;
+  checkScreen("LiveTokenizer", liveScreen, all.tokens);
   // What finishing the rest synchronously costs (the background batches' total work).
   start = now();
   live.flush();
@@ -102,10 +133,9 @@ async function firstScreenOnce(text: string, lang: string, lines: number) {
     wholeMs,
     wholeLines: all.tokens.length,
     streamMs,
-    streamLines: got,
+    streamLines: streamScreen.length,
     streamCharsPushed: pushed,
     liveMs,
-    liveFirstScreenTokens: liveTokens,
     liveFlushMs,
   };
 }
