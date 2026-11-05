@@ -6,8 +6,8 @@ packages:
 # Exact pins for test and deploy tooling: upgrade in dedicated PRs.
 catalog:
   "@biomejs/biome": 2.6.4
-  "@cloudflare/vite-plugin": 1.66.0
-  "@cloudflare/vitest-plugin": 1.4.11
+  "@cloudflare/vite-plugin": 1.67.0
+  "@cloudflare/vitest-plugin": 1.4.12
   "@modelcontextprotocol/server": 2.4.0
   "@msw/cloudflare": 0.2.0
   # Not 1.64 yet: its Chromium (156.0.8078.4) reports a script-src-attr refusal
@@ -31,7 +31,7 @@ catalog:
   # enough to take down a CI runner.
   "@vitest/coverage-istanbul": 5.0.3
   fast-check: 4.10.2
-  hono: 4.13.14
+  hono: 4.13.16
   msw: 3.0.3
   turbo: 2.11.10
   typescript: 7.0.2
@@ -46,7 +46,7 @@ catalog:
   # 5.0.3 with the same seed. Not measured on 5.1.0: the coverage run's memory.
   vite: 8.3.4
   vitest: 5.0.3
-  wrangler: 4.156.0
+  wrangler: 4.156.1
   zod: 4.6.7
 
 # Supply-chain policy. These match or tighten pnpm's defaults and are written
