@@ -85,20 +85,36 @@ async function commitPack(parent: Oid | null, n: number): Promise<{ oid: Oid; pa
   return { oid: commitOid, pack: concat(chunks) };
 }
 
-/** A root commit of `files` files and its pack (`files` + 2 objects). */
-async function widePack(files: number): Promise<{ oid: Oid; pack: Uint8Array }> {
-  const blobs = await Promise.all(
-    Array.from({ length: files }, async (_, i) => {
-      const data = encoder.encode(`file ${i}\n`);
-      return {
-        name: `f${String(i).padStart(5, "0")}`,
-        data,
-        oid: await hashObject(sha1, "blob", data),
-      };
-    }),
-  );
+interface PackObject {
+  type: "commit" | "tree" | "blob";
+  data: Uint8Array;
+  oid: Oid;
+}
+
+/** A pack of `objects`, in their order. */
+async function packOf(objects: readonly PackObject[]): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  const builder = await PackBuilder.start(objects.length, {
+    sink: { write: async (chunk) => void chunks.push(chunk.slice()) },
+    zlib,
+    memory: unbounded,
+  });
+  for (const o of objects) await builder.addObject(o.type, o.data, o.oid);
+  (await builder.finish()).release();
+  return concat(chunks);
+}
+
+/** A root commit over a tree of `blobs` (named in their order), and its objects, commit first. */
+async function rootCommit(
+  blobs: readonly { data: Uint8Array; oid: Oid }[],
+  message: string,
+): Promise<{ oid: Oid; objects: PackObject[] }> {
   const tree = encodeTree(
-    blobs.map((b) => ({ mode: 0o100644, name: encoder.encode(b.name), oid: b.oid })),
+    blobs.map((b, i) => ({
+      mode: 0o100644,
+      name: encoder.encode(`f${String(i).padStart(5, "0")}`),
+      oid: b.oid,
+    })),
   );
   const treeOid = await hashObject(sha1, "tree", tree);
   const commit = encodeCommit({
@@ -107,20 +123,31 @@ async function widePack(files: number): Promise<{ oid: Oid; pack: Uint8Array }> 
     author: ident(1_700_000_000),
     committer: ident(1_700_000_000),
     headers: [],
-    message: encoder.encode("wide\n"),
+    message: encoder.encode(message),
   });
-  const commitOid = await hashObject(sha1, "commit", commit);
-  const chunks: Uint8Array[] = [];
-  const builder = await PackBuilder.start(files + 2, {
-    sink: { write: async (chunk) => void chunks.push(chunk.slice()) },
-    zlib,
-    memory: unbounded,
-  });
-  await builder.addObject("commit", commit, commitOid);
-  await builder.addObject("tree", tree, treeOid);
-  for (const b of blobs) await builder.addObject("blob", b.data, b.oid);
-  (await builder.finish()).release();
-  return { oid: commitOid, pack: concat(chunks) };
+  const oid = await hashObject(sha1, "commit", commit);
+  return {
+    oid,
+    objects: [
+      { type: "commit", data: commit, oid },
+      { type: "tree", data: tree, oid: treeOid },
+      ...blobs.map((b) => ({ type: "blob" as const, ...b })),
+    ],
+  };
+}
+
+/** A root commit of `files` files, its objects and its pack (`files` + 2 objects). */
+async function widePack(
+  files: number,
+): Promise<{ oid: Oid; objects: PackObject[]; pack: Uint8Array }> {
+  const blobs = await Promise.all(
+    Array.from({ length: files }, async (_, i) => {
+      const data = encoder.encode(`file ${i}\n`);
+      return { data, oid: await hashObject(sha1, "blob", data) };
+    }),
+  );
+  const root = await rootCommit(blobs, "wide\n");
+  return { ...root, pack: await packOf(root.objects) };
 }
 
 /** A push of a new commit on `ref` (created from nothing) whose parent is `parent`. */
@@ -218,6 +245,20 @@ async function compactInBackground(stub: Stub) {
   for (let i = 0; i < 20 && (await jobState()) !== "done"; i++) await runDurableObjectAlarm(stub);
   expect(await jobState()).toBe("done");
 }
+
+/** The repository's one live pack. */
+async function onlyLivePack(stub: Stub): Promise<string> {
+  const live = await inRepo(stub, ({ git }) => git.registry.liveOwn().map((p) => p.packId));
+  expect(live).toHaveLength(1);
+  return live[0] as string;
+}
+
+/** The staged upload's state and `packId`'s: still indexing, and the pack merged away. */
+const mergedWhileIndexing = (stub: Stub, uploadId: string, packId: string) =>
+  inRepo(stub, ({ git }) => [
+    git.uploads.get(uploadId)?.state ?? null,
+    git.registry.get(packId)?.state ?? null,
+  ]);
 
 const refOf = (stub: Stub, ref: string) =>
   inRepo(stub, ({ git }) => {
@@ -381,9 +422,9 @@ describe("push: dependencies merged away by compaction", () => {
   it("follows a merged-away dependency of more objects than one lookup slice holds", async () => {
     const { stub } = await newRepo();
     await inRepo(stub, (repo) => {
-      repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 2 };
+      repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 1 };
     });
-    // Main's pack holds 4,102 objects (a tree of 4,100 files); an unrelated branch's, 3.
+    // Main's one pack holds 4,102 objects (a tree of 4,100 files): two lookup slices.
     const wide = await widePack(4_100);
     expect(
       await push(
@@ -391,29 +432,15 @@ describe("push: dependencies merged away by compaction", () => {
         concat([pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: MAIN }]), wide.pack]),
       ),
     ).toEqual(ok(MAIN));
-    const other = await commitPack(null, 1);
-    expect(
-      await push(
-        stub,
-        concat([
-          pushBody([{ old: ZERO, new: oidToHex(other.oid), ref: "refs/heads/o" }]),
-          other.pack,
-        ]),
-      ),
-    ).toEqual(ok("refs/heads/o"));
-    const widePackId = await inRepo(
-      stub,
-      ({ git }) => git.registry.liveOwn().find((p) => p.objectCount === 4_102)?.packId,
-    );
-    expect(widePackId).toBeDefined();
+    const widePackId = await onlyLivePack(stub);
     // Its parent is in the wide pack only: that pack is the push's one dependency.
     const a = await branchBody("refs/heads/a", wide.oid, 660);
     const staged = await stageBeforeLastPhase(stub, a.bytes);
-    // The background compaction merges both packs while the push is between its phases.
-    await compactInBackground(stub);
-    expect(
-      await inRepo(stub, ({ git }) => git.registry.get(widePackId as string)?.state ?? null),
-    ).toBe("superseded");
+    // Another push's commit merges the wide pack with its own while the first is indexing.
+    expect(await push(stub, (await branchBody("refs/heads/b", wide.oid, 661)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+    expect(await mergedWhileIndexing(stub, staged, widePackId)).toEqual(["indexing", "superseded"]);
 
     await finishIndexing(stub, staged);
     const deps = await depsOf(stub, staged);
@@ -422,6 +449,69 @@ describe("push: dependencies merged away by compaction", () => {
     expect(deps.every((d) => d.state === "live")).toBe(true);
     expect(await commit(stub, staged)).toEqual(ok("refs/heads/a"));
     expect(await refOf(stub, "refs/heads/a")).toBe(oidToHex(a.oid));
+  });
+
+  it("still refuses a push when only the first lookup slice of its merged-away dependency is held", async () => {
+    const { stub } = await newRepo();
+    await inRepo(stub, (repo) => {
+      repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 1 };
+    });
+    // Main's pack: the wide commit's 4,102 objects, and 6 loose blobs whose oids sort after
+    // all of them, so they fall in the second lookup slice (positions 4,102 to 4,107).
+    const wide = await widePack(4_100);
+    const highest = wide.objects
+      .map((o) => oidToHex(o.oid))
+      .sort()
+      .at(-1) as string;
+    const extras: PackObject[] = [];
+    for (let i = 0; extras.length < 6; i++) {
+      const data = encoder.encode(`extra ${i}\n`);
+      const blobOid = await hashObject(sha1, "blob", data);
+      if (oidToHex(blobOid) > highest) extras.push({ type: "blob", data, oid: blobOid });
+    }
+    expect(
+      await push(
+        stub,
+        concat([
+          pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: MAIN }]),
+          await packOf([...wide.objects, ...extras]),
+        ]),
+      ),
+    ).toEqual(ok(MAIN));
+    const widePackId = await onlyLivePack(stub);
+    const a = await branchBody("refs/heads/a", wide.oid, 670);
+    const staged = await stageBeforeLastPhase(stub, a.bytes);
+    expect(await push(stub, (await branchBody("refs/heads/b", wide.oid, 671)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+    expect(await mergedWhileIndexing(stub, staged, widePackId)).toEqual(["indexing", "superseded"]);
+    // The compacted pack is removed for good; a new pack holds the wide commit's objects
+    // again, but not the loose blobs.
+    await inRepo(stub, ({ git }) => {
+      for (const pack of git.registry.liveOwn())
+        git.registry.transition(pack.packId, ["live"], "condemned");
+    });
+    expect(
+      await push(
+        stub,
+        concat([
+          pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: "refs/heads/p" }]),
+          wide.pack,
+        ]),
+      ),
+    ).toEqual(ok("refs/heads/p"));
+    expect(await mergedWhileIndexing(stub, staged, widePackId)).toEqual(["indexing", "superseded"]);
+
+    await finishIndexing(stub, staged);
+    // Every object of the first slice is readable, but the second slice's loose blobs are in
+    // no readable pack: the dependency is kept, and the commit refuses.
+    expect((await depsOf(stub, staged)).map((d) => d.id)).toEqual([widePackId]);
+    expect(await commit(stub, staged)).toEqual([
+      "unpack ok\n",
+      `ng refs/heads/a ${GONE}\n`,
+      "0000",
+    ]);
+    expect(await refOf(stub, "refs/heads/a")).toBeNull();
   });
 
   it("still refuses a push indexed against a merged pack whose objects are gone", async () => {
