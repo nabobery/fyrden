@@ -26,15 +26,16 @@ jobs:
   # one API pass takes about 14 minutes on a hosted runner (821 to 887 s
   # passing in Nightly runs 41297246322 to 41816809037, 2026-11-01 to 04,
   # with 235 to 242 test files; 454 to 607 s with 128 before), so two in one
-  # job outgrew its 35 minutes as the suite grew. A failing job prints its seed.
+  # job outgrew its 35 minutes as the suite grew. Each pass draws its own seed;
+  # a failing job prints it.
   shuffle:
-    name: Shuffle guard (seed ${{ matrix.seed }} of 10)
+    name: Shuffle guard (run ${{ matrix.run }} of 10)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        seed: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
