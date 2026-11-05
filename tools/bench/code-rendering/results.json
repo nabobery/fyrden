@@ -1,9 +1,12 @@
 {
-  "date": "2026-11-04",
-  "commit": "6206d9db1b066605b5642cda010c474aaff154cb",
+  "date": "2026-11-05",
+  "commit": "484dd0c45f41c584707c58b46f2d5ce320983e67",
   "machine": {
-    "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
-    "cores": 4,
+    "cpu": "unknown",
+    "cores": 10,
+    "arch": "arm64",
+    "memoryGiB": 8,
+    "container": true,
     "node": "v24.15.0"
   },
   "versions": {
@@ -185,24 +188,24 @@
     "startup": {
       "bench": {
         "n": 12,
-        "median": 49.69195099999979,
-        "p95": 67.08172700000068,
-        "min": 45.63844100000006,
-        "max": 67.08172700000068
+        "median": 23.340125000000626,
+        "p95": 220.21095799999966,
+        "min": 17.19983299999967,
+        "max": 220.21095799999966
       },
       "withShiki": {
         "n": 12,
-        "median": 201.73455000000104,
-        "p95": 250.1104889999997,
-        "min": 185.67961399999967,
-        "max": 250.1104889999997
+        "median": 100.55641700000069,
+        "p95": 406.07466699999986,
+        "min": 81.7954579999996,
+        "max": 406.07466699999986
       },
       "empty": {
         "n": 12,
-        "median": 28.44740600000023,
-        "p95": 36.212382000000616,
-        "min": 26.251812999998947,
-        "max": 36.212382000000616
+        "median": 12.818458000000646,
+        "p95": 53.97929199999999,
+        "min": 9.227875000000495,
+        "max": 53.97929199999999
       }
     },
     "bundleBytes": {
@@ -219,44 +222,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 4,
-            "p95": 5,
-            "min": 3,
-            "max": 5
+            "median": 2,
+            "p95": 6,
+            "min": 2,
+            "max": 6
           },
           "load": {
             "n": 12,
             "median": 1,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "p95": 3,
+            "min": 0,
+            "max": 3
           },
           "render": {
             "n": 12,
             "median": 2,
             "p95": 3,
-            "min": 2,
+            "min": 1,
             "max": 3
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 1844,
-            "p95": 2036,
-            "min": 1728,
-            "max": 2036
+            "median": 1664,
+            "p95": 1920,
+            "min": 1664,
+            "max": 1920
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
             "median": 0,
-            "p95": 1,
+            "p95": 0,
             "min": 0,
-            "max": 1
+            "max": 0
           },
-          "batchedMeanMs": 0.015,
-          "processCpuPerRequestMs": 1,
-          "peakRssKiB": 73392
+          "batchedMeanMs": 0.011,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 80372
         }
       },
       {
@@ -268,44 +271,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 23,
-            "p95": 34,
-            "min": 21,
-            "max": 34
+            "median": 11,
+            "p95": 21,
+            "min": 9,
+            "max": 21
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 20,
-            "min": 12,
-            "max": 20
+            "median": 6,
+            "p95": 14,
+            "min": 5,
+            "max": 14
           },
           "render": {
             "n": 12,
-            "median": 10,
-            "p95": 14,
-            "min": 9,
-            "max": 14
+            "median": 4,
+            "p95": 7,
+            "min": 4,
+            "max": 7
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 9704,
-            "p95": 10004,
-            "min": 9328,
-            "max": 10004
+            "median": 9216,
+            "p95": 9344,
+            "min": 9088,
+            "max": 9344
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 1,
+            "median": 0,
             "p95": 1,
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.2,
-          "processCpuPerRequestMs": 2,
-          "peakRssKiB": 80380
+          "batchedMeanMs": 0.086,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 100240
         }
       },
       {
@@ -317,44 +320,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 4,
-            "p95": 6,
-            "min": 3,
-            "max": 6
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
           },
           "load": {
             "n": 12,
             "median": 1,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "p95": 2,
+            "min": 0,
+            "max": 2
           },
           "render": {
             "n": 12,
-            "median": 3,
-            "p95": 4,
-            "min": 2,
-            "max": 4
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 1812,
-            "p95": 1964,
-            "min": 1744,
-            "max": 1964
+            "median": 1792,
+            "p95": 1792,
+            "min": 1664,
+            "max": 1792
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
             "median": 0,
-            "p95": 1,
+            "p95": 0,
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.023,
-          "processCpuPerRequestMs": 1,
-          "peakRssKiB": 72816
+          "batchedMeanMs": 0.011,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 81044
         }
       },
       {
@@ -366,44 +369,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 24,
-            "p95": 46,
-            "min": 22,
-            "max": 46
+            "median": 10,
+            "p95": 15,
+            "min": 9,
+            "max": 15
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 25,
-            "min": 12,
-            "max": 25
+            "median": 6,
+            "p95": 9,
+            "min": 5,
+            "max": 9
           },
           "render": {
             "n": 12,
-            "median": 11,
-            "p95": 21,
-            "min": 10,
-            "max": 21
+            "median": 5,
+            "p95": 6,
+            "min": 4,
+            "max": 6
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 9916,
-            "p95": 10156,
-            "min": 9664,
-            "max": 10156
+            "median": 9472,
+            "p95": 9600,
+            "min": 9344,
+            "max": 9600
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 1,
+            "median": 0,
             "p95": 1,
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.567,
-          "processCpuPerRequestMs": 2.7,
-          "peakRssKiB": 82624
+          "batchedMeanMs": 0.123,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 104676
         }
       },
       {
@@ -415,44 +418,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 4,
-            "p95": 11,
-            "min": 4,
-            "max": 11
-          },
-          "load": {
-            "n": 12,
             "median": 2,
             "p95": 2,
             "min": 1,
             "max": 2
           },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
           "render": {
             "n": 12,
-            "median": 3,
-            "p95": 9,
-            "min": 2,
-            "max": 9
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 1944,
-            "p95": 2088,
-            "min": 1708,
-            "max": 2088
+            "median": 1792,
+            "p95": 1920,
+            "min": 1792,
+            "max": 1920
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
             "median": 0,
-            "p95": 1,
+            "p95": 0,
             "min": 0,
-            "max": 1
+            "max": 0
           },
-          "batchedMeanMs": 0.052,
-          "processCpuPerRequestMs": 1.3,
-          "peakRssKiB": 72884
+          "batchedMeanMs": 0.021,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 81000
         }
       },
       {
@@ -464,44 +467,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 28,
-            "p95": 35,
-            "min": 24,
-            "max": 35
+            "median": 10,
+            "p95": 15,
+            "min": 10,
+            "max": 15
           },
           "load": {
             "n": 12,
-            "median": 15,
-            "p95": 18,
-            "min": 12,
-            "max": 18
+            "median": 5,
+            "p95": 7,
+            "min": 5,
+            "max": 7
           },
           "render": {
             "n": 12,
-            "median": 14,
-            "p95": 17,
-            "min": 10,
-            "max": 17
+            "median": 5,
+            "p95": 9,
+            "min": 5,
+            "max": 9
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 10248,
-            "p95": 10528,
-            "min": 9980,
-            "max": 10528
+            "median": 9728,
+            "p95": 9984,
+            "min": 9728,
+            "max": 9984
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 1,
-            "p95": 2,
+            "median": 0,
+            "p95": 1,
             "min": 0,
-            "max": 2
+            "max": 1
           },
-          "batchedMeanMs": 0.853,
-          "processCpuPerRequestMs": 4,
-          "peakRssKiB": 89384
+          "batchedMeanMs": 0.215,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 118928
         }
       },
       {
@@ -513,31 +516,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 5,
-            "p95": 7,
-            "min": 4,
-            "max": 7
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
           },
           "load": {
             "n": 12,
-            "median": 2,
+            "median": 1,
             "p95": 2,
-            "min": 1,
+            "min": 0,
             "max": 2
           },
           "render": {
             "n": 12,
-            "median": 3,
-            "p95": 5,
-            "min": 2,
-            "max": 5
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 5432,
-            "p95": 5704,
-            "min": 5164,
-            "max": 5704
+            "median": 5376,
+            "p95": 5564,
+            "min": 4864,
+            "max": 5564
           }
         },
         "warm": {
@@ -548,9 +551,9 @@
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.16,
-          "processCpuPerRequestMs": 1.7,
-          "peakRssKiB": 78396
+          "batchedMeanMs": 0.045,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 86396
         }
       },
       {
@@ -562,44 +565,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 29,
-            "p95": 33,
-            "min": 25,
-            "max": 33
+            "median": 11,
+            "p95": 17,
+            "min": 11,
+            "max": 17
           },
           "load": {
             "n": 12,
-            "median": 14,
-            "p95": 19,
-            "min": 12,
-            "max": 19
+            "median": 6,
+            "p95": 8,
+            "min": 5,
+            "max": 8
           },
           "render": {
             "n": 12,
-            "median": 14,
-            "p95": 16,
-            "min": 13,
-            "max": 16
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 11860,
-            "p95": 12412,
-            "min": 11488,
-            "max": 12412
+            "median": 11008,
+            "p95": 11136,
+            "min": 10880,
+            "max": 11136
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
             "median": 1,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
-          "batchedMeanMs": 1.093,
-          "processCpuPerRequestMs": 4.3,
-          "peakRssKiB": 96168
+          "batchedMeanMs": 0.453,
+          "processCpuPerRequestMs": 2,
+          "peakRssKiB": 109020
         }
       },
       {
@@ -611,31 +614,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 5,
-            "p95": 7,
-            "min": 5,
-            "max": 7
+            "median": 2,
+            "p95": 5,
+            "min": 2,
+            "max": 5
           },
           "load": {
             "n": 12,
             "median": 1,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 4,
-            "p95": 5,
-            "min": 3,
-            "max": 5
+            "median": 1,
+            "p95": 4,
+            "min": 1,
+            "max": 4
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 6376,
-            "p95": 6840,
-            "min": 5984,
-            "max": 6840
+            "median": 8192,
+            "p95": 8832,
+            "min": 7936,
+            "max": 8832
           }
         },
         "warm": {
@@ -646,9 +649,9 @@
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.192,
-          "processCpuPerRequestMs": 1,
-          "peakRssKiB": 85772
+          "batchedMeanMs": 0.086,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 93424
         }
       },
       {
@@ -660,44 +663,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 34,
-            "p95": 46,
-            "min": 30,
-            "max": 46
+            "median": 13,
+            "p95": 27,
+            "min": 12,
+            "max": 27
           },
           "load": {
             "n": 12,
-            "median": 14,
-            "p95": 19,
-            "min": 12,
-            "max": 19
+            "median": 5,
+            "p95": 8,
+            "min": 5,
+            "max": 8
           },
           "render": {
             "n": 12,
-            "median": 21,
-            "p95": 27,
-            "min": 17,
-            "max": 27
+            "median": 8,
+            "p95": 19,
+            "min": 7,
+            "max": 19
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 17028,
-            "p95": 19488,
-            "min": 16912,
-            "max": 19488
+            "median": 17280,
+            "p95": 17720,
+            "min": 15360,
+            "max": 17720
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 3,
-            "p95": 4,
+            "median": 1,
+            "p95": 3,
             "min": 1,
-            "max": 6
+            "max": 4
           },
-          "batchedMeanMs": 2.451,
-          "processCpuPerRequestMs": 6.3,
-          "peakRssKiB": 109984
+          "batchedMeanMs": 0.98,
+          "processCpuPerRequestMs": 3.7,
+          "peakRssKiB": 118184
         }
       },
       {
@@ -709,44 +712,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 7,
-            "p95": 10,
-            "min": 6,
-            "max": 10
+            "median": 3,
+            "p95": 9,
+            "min": 3,
+            "max": 9
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
-          },
-          "render": {
-            "n": 12,
-            "median": 5,
-            "p95": 8,
-            "min": 5,
-            "max": 8
-          },
-          "peakRssDeltaKiB": {
-            "n": 12,
-            "median": 7904,
-            "p95": 11100,
-            "min": 7628,
-            "max": 11100
-          }
-        },
-        "warm": {
-          "perCall": {
-            "n": 30,
             "median": 1,
             "p95": 2,
             "min": 0,
             "max": 2
           },
-          "batchedMeanMs": 0.507,
-          "processCpuPerRequestMs": 1.7,
-          "peakRssKiB": 79980
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 8,
+            "min": 2,
+            "max": 8
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9600,
+            "p95": 11904,
+            "min": 9216,
+            "max": 11904
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.165,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 100556
         }
       },
       {
@@ -758,44 +761,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 50,
-            "p95": 56,
-            "min": 36,
-            "max": 56
+            "median": 17,
+            "p95": 21,
+            "min": 15,
+            "max": 21
           },
           "load": {
             "n": 12,
-            "median": 18,
-            "p95": 25,
-            "min": 13,
-            "max": 25
+            "median": 6,
+            "p95": 8,
+            "min": 5,
+            "max": 8
           },
           "render": {
             "n": 12,
-            "median": 31,
-            "p95": 36,
-            "min": 23,
-            "max": 36
+            "median": 12,
+            "p95": 15,
+            "min": 10,
+            "max": 15
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 21008,
-            "p95": 21368,
-            "min": 20860,
-            "max": 21368
+            "median": 19328,
+            "p95": 19456,
+            "min": 19128,
+            "max": 19456
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 4,
-            "p95": 6,
-            "min": 3,
-            "max": 6
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
           },
-          "batchedMeanMs": 4.615,
-          "processCpuPerRequestMs": 9.3,
-          "peakRssKiB": 114364
+          "batchedMeanMs": 1.8,
+          "processCpuPerRequestMs": 4,
+          "peakRssKiB": 156060
         }
       },
       {
@@ -807,44 +810,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 9,
-            "p95": 12,
-            "min": 8,
-            "max": 12
+            "median": 4,
+            "p95": 5,
+            "min": 3,
+            "max": 5
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 7,
-            "p95": 10,
-            "min": 6,
-            "max": 10
+            "median": 4,
+            "p95": 4,
+            "min": 2,
+            "max": 4
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 13216,
-            "p95": 14172,
-            "min": 12036,
-            "max": 14172
+            "median": 12804,
+            "p95": 14976,
+            "min": 10372,
+            "max": 14976
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 2,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
-          "batchedMeanMs": 1.293,
-          "processCpuPerRequestMs": 3.7,
-          "peakRssKiB": 87620
+          "batchedMeanMs": 0.587,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 110608
         }
       },
       {
@@ -856,44 +859,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 53,
-            "p95": 70,
-            "min": 46,
-            "max": 70
+            "median": 19,
+            "p95": 29,
+            "min": 18,
+            "max": 29
           },
           "load": {
+            "n": 12,
+            "median": 5,
+            "p95": 10,
+            "min": 5,
+            "max": 10
+          },
+          "render": {
             "n": 12,
             "median": 14,
             "p95": 20,
             "min": 13,
             "max": 20
           },
-          "render": {
-            "n": 12,
-            "median": 38,
-            "p95": 50,
-            "min": 33,
-            "max": 50
-          },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 27964,
-            "p95": 29044,
-            "min": 27716,
-            "max": 29044
+            "median": 26112,
+            "p95": 26496,
+            "min": 25984,
+            "max": 26496
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 9,
-            "p95": 15,
-            "min": 6,
-            "max": 22
+            "median": 3,
+            "p95": 5,
+            "min": 3,
+            "max": 6
           },
-          "batchedMeanMs": 8.556,
-          "processCpuPerRequestMs": 19.7,
-          "peakRssKiB": 163768
+          "batchedMeanMs": 3.549,
+          "processCpuPerRequestMs": 7.3,
+          "peakRssKiB": 175212
         }
       },
       {
@@ -905,44 +908,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 9,
-            "p95": 13,
-            "min": 9,
-            "max": 13
+            "median": 4,
+            "p95": 246,
+            "min": 4,
+            "max": 246
           },
           "load": {
             "n": 12,
-            "median": 1,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 8,
-            "p95": 12,
-            "min": 8,
-            "max": 12
+            "median": 4,
+            "p95": 245,
+            "min": 3,
+            "max": 245
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 15428,
-            "p95": 16120,
-            "min": 14688,
-            "max": 16120
+            "median": 15580,
+            "p95": 17608,
+            "min": 15400,
+            "max": 17608
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 2,
-            "p95": 3,
-            "min": 2,
-            "max": 3
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
-          "batchedMeanMs": 2.68,
-          "processCpuPerRequestMs": 5,
-          "peakRssKiB": 107264
+          "batchedMeanMs": 0.993,
+          "processCpuPerRequestMs": 2,
+          "peakRssKiB": 119776
         }
       },
       {
@@ -954,44 +957,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 61,
-            "p95": 78,
-            "min": 53,
-            "max": 78
+            "median": 26,
+            "p95": 49,
+            "min": 23,
+            "max": 49
           },
           "load": {
             "n": 12,
-            "median": 12,
-            "p95": 18,
-            "min": 12,
-            "max": 18
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
           },
           "render": {
             "n": 12,
-            "median": 48,
-            "p95": 60,
-            "min": 41,
-            "max": 60
+            "median": 20,
+            "p95": 42,
+            "min": 18,
+            "max": 42
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 32392,
-            "p95": 32692,
-            "min": 32168,
-            "max": 32692
+            "median": 29880,
+            "p95": 30044,
+            "min": 29696,
+            "max": 30044
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 11,
-            "p95": 21,
-            "min": 9,
-            "max": 22
+            "median": 5,
+            "p95": 10,
+            "min": 4,
+            "max": 121
           },
-          "batchedMeanMs": 10.733,
-          "processCpuPerRequestMs": 26.7,
-          "peakRssKiB": 193064
+          "batchedMeanMs": 6.9,
+          "processCpuPerRequestMs": 14.7,
+          "peakRssKiB": 203828
         }
       },
       {
@@ -1003,44 +1006,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 12,
-            "p95": 18,
-            "min": 11,
-            "max": 18
+            "median": 6,
+            "p95": 63,
+            "min": 4,
+            "max": 63
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 1,
+            "p95": 10,
+            "min": 0,
+            "max": 10
           },
           "render": {
             "n": 12,
-            "median": 11,
-            "p95": 16,
-            "min": 10,
-            "max": 16
+            "median": 5,
+            "p95": 53,
+            "min": 4,
+            "max": 53
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 16756,
-            "p95": 16996,
-            "min": 16536,
-            "max": 16996
+            "median": 16040,
+            "p95": 16176,
+            "min": 13872,
+            "max": 16176
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 4,
-            "p95": 5,
-            "min": 2,
-            "max": 6
+            "median": 2,
+            "p95": 2,
+            "min": 1,
+            "max": 2
           },
-          "batchedMeanMs": 2.667,
-          "processCpuPerRequestMs": 8.7,
-          "peakRssKiB": 110480
+          "batchedMeanMs": 1.707,
+          "processCpuPerRequestMs": 3.7,
+          "peakRssKiB": 123328
         }
       },
       {
@@ -1052,44 +1055,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 68,
-            "p95": 87,
-            "min": 58,
-            "max": 87
+            "median": 28,
+            "p95": 34,
+            "min": 23,
+            "max": 34
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 21,
-            "min": 12,
-            "max": 21
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
           },
           "render": {
             "n": 12,
-            "median": 54,
-            "p95": 66,
-            "min": 46,
-            "max": 66
+            "median": 23,
+            "p95": 26,
+            "min": 18,
+            "max": 26
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 37488,
-            "p95": 37832,
-            "min": 37052,
-            "max": 37832
+            "median": 38736,
+            "p95": 39120,
+            "min": 38520,
+            "max": 39120
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 12,
-            "p95": 31,
-            "min": 11,
-            "max": 38
+            "median": 6,
+            "p95": 14,
+            "min": 6,
+            "max": 18
           },
-          "batchedMeanMs": 14.133,
-          "processCpuPerRequestMs": 35,
-          "peakRssKiB": 217592
+          "batchedMeanMs": 7.704,
+          "processCpuPerRequestMs": 17.3,
+          "peakRssKiB": 238200
         }
       },
       {
@@ -1101,44 +1104,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 19,
-            "p95": 26,
-            "min": 18,
-            "max": 26
+            "median": 8,
+            "p95": 13,
+            "min": 7,
+            "max": 13
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 17,
-            "p95": 24,
-            "min": 16,
-            "max": 24
+            "median": 7,
+            "p95": 12,
+            "min": 6,
+            "max": 12
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 20672,
-            "p95": 20940,
-            "min": 20040,
-            "max": 20940
+            "median": 19188,
+            "p95": 21248,
+            "min": 18924,
+            "max": 21248
           }
         },
         "warm": {
           "perCall": {
-            "n": 30,
-            "median": 6,
-            "p95": 7,
-            "min": 5,
-            "max": 8
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
           },
-          "batchedMeanMs": 5.815,
-          "processCpuPerRequestMs": 12,
-          "peakRssKiB": 131796
+          "batchedMeanMs": 2.427,
+          "processCpuPerRequestMs": 5,
+          "peakRssKiB": 174376
         }
       },
       {
@@ -1150,44 +1153,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 102,
-            "p95": 145,
-            "min": 92,
-            "max": 145
+            "median": 59,
+            "p95": 133,
+            "min": 37,
+            "max": 133
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 19,
-            "min": 11,
-            "max": 19
+            "median": 7,
+            "p95": 14,
+            "min": 5,
+            "max": 14
           },
           "render": {
             "n": 12,
-            "median": 88,
-            "p95": 126,
-            "min": 80,
-            "max": 126
+            "median": 53,
+            "p95": 121,
+            "min": 32,
+            "max": 121
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 60984,
-            "p95": 61412,
-            "min": 60648,
-            "max": 61412
+            "median": 59564,
+            "p95": 60172,
+            "min": 59324,
+            "max": 60172
           }
         },
         "warm": {
           "perCall": {
-            "n": 30,
-            "median": 39,
-            "p95": 55,
-            "min": 33,
-            "max": 59
+            "n": 12,
+            "median": 43,
+            "p95": 74,
+            "min": 18,
+            "max": 74
           },
-          "batchedMeanMs": 41.833,
-          "processCpuPerRequestMs": 79,
-          "peakRssKiB": 248984
+          "batchedMeanMs": 31.5,
+          "processCpuPerRequestMs": 80,
+          "peakRssKiB": 257952
         }
       },
       {
@@ -1199,44 +1202,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 31,
-            "p95": 41,
-            "min": 28,
-            "max": 41
+            "median": 14,
+            "p95": 24,
+            "min": 11,
+            "max": 24
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
           },
           "render": {
             "n": 12,
-            "median": 30,
-            "p95": 38,
-            "min": 27,
-            "max": 38
+            "median": 13,
+            "p95": 22,
+            "min": 10,
+            "max": 22
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 27264,
-            "p95": 27596,
-            "min": 24768,
-            "max": 27596
+            "median": 23196,
+            "p95": 23440,
+            "min": 22964,
+            "max": 23440
           }
         },
         "warm": {
           "perCall": {
             "n": 12,
-            "median": 11,
-            "p95": 21,
-            "min": 11,
-            "max": 21
+            "median": 5,
+            "p95": 6,
+            "min": 5,
+            "max": 6
           },
-          "batchedMeanMs": 13.533,
-          "processCpuPerRequestMs": 28.3,
-          "peakRssKiB": 167484
+          "batchedMeanMs": 5.4,
+          "processCpuPerRequestMs": 13.3,
+          "peakRssKiB": 200160
         }
       },
       {
@@ -1248,44 +1251,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 189,
-            "p95": 249,
-            "min": 160,
-            "max": 249
+            "median": 76,
+            "p95": 98,
+            "min": 68,
+            "max": 98
           },
           "load": {
             "n": 12,
-            "median": 14,
-            "p95": 19,
-            "min": 12,
-            "max": 19
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
           },
           "render": {
             "n": 12,
-            "median": 177,
-            "p95": 230,
-            "min": 147,
-            "max": 230
+            "median": 70,
+            "p95": 88,
+            "min": 62,
+            "max": 88
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 104320,
-            "p95": 106424,
-            "min": 104016,
-            "max": 106424
+            "median": 104340,
+            "p95": 108308,
+            "min": 104088,
+            "max": 108308
           }
         },
         "warm": {
           "perCall": {
             "n": 12,
-            "median": 106,
-            "p95": 138,
-            "min": 73,
-            "max": 138
+            "median": 64,
+            "p95": 2119,
+            "min": 40,
+            "max": 2119
           },
-          "batchedMeanMs": 104,
-          "processCpuPerRequestMs": 235,
-          "peakRssKiB": 848108
+          "batchedMeanMs": 77.333,
+          "processCpuPerRequestMs": 558.3,
+          "peakRssKiB": 855196
         }
       },
       {
@@ -1297,44 +1300,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 51,
-            "p95": 69,
-            "min": 49,
-            "max": 69
+            "median": 21,
+            "p95": 86,
+            "min": 17,
+            "max": 86
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 4,
-            "min": 1,
-            "max": 4
+            "median": 1,
+            "p95": 3,
+            "min": 0,
+            "max": 3
           },
           "render": {
             "n": 12,
-            "median": 50,
-            "p95": 67,
-            "min": 48,
-            "max": 67
+            "median": 20,
+            "p95": 84,
+            "min": 17,
+            "max": 84
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 41352,
-            "p95": 42472,
-            "min": 41112,
-            "max": 42472
+            "median": 40040,
+            "p95": 40232,
+            "min": 39808,
+            "max": 40232
           }
         },
         "warm": {
           "perCall": {
             "n": 12,
-            "median": 22,
-            "p95": 32,
-            "min": 21,
-            "max": 32
+            "median": 11,
+            "p95": 12,
+            "min": 10,
+            "max": 12
           },
-          "batchedMeanMs": 24,
-          "processCpuPerRequestMs": 50,
-          "peakRssKiB": 237832
+          "batchedMeanMs": 16.8,
+          "processCpuPerRequestMs": 24.2,
+          "peakRssKiB": 298168
         }
       },
       {
@@ -1346,44 +1349,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 306,
-            "p95": 400,
-            "min": 286,
-            "max": 400
+            "median": 128,
+            "p95": 174,
+            "min": 118,
+            "max": 174
           },
           "load": {
             "n": 12,
-            "median": 12,
-            "p95": 20,
-            "min": 11,
-            "max": 20
+            "median": 5,
+            "p95": 9,
+            "min": 5,
+            "max": 9
           },
           "render": {
             "n": 12,
-            "median": 292,
-            "p95": 380,
-            "min": 269,
-            "max": 380
+            "median": 123,
+            "p95": 165,
+            "min": 113,
+            "max": 165
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 194576,
-            "p95": 195164,
-            "min": 164480,
-            "max": 195164
+            "median": 194288,
+            "p95": 195072,
+            "min": 192452,
+            "max": 195072
           }
         },
         "warm": {
           "perCall": {
             "n": 12,
-            "median": 396,
-            "p95": 470,
-            "min": 282,
-            "max": 470
+            "median": 117,
+            "p95": 128,
+            "min": 107,
+            "max": 128
           },
-          "batchedMeanMs": 269,
-          "processCpuPerRequestMs": 980,
-          "peakRssKiB": 1632556
+          "batchedMeanMs": 116.667,
+          "processCpuPerRequestMs": 294.2,
+          "peakRssKiB": 1641328
         }
       },
       {
@@ -1395,31 +1398,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 4,
-            "p95": 10,
-            "min": 4,
-            "max": 10
+            "median": 2,
+            "p95": 4,
+            "min": 2,
+            "max": 4
           },
           "load": {
             "n": 12,
             "median": 1,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 3,
-            "p95": 7,
-            "min": 2,
-            "max": 7
+            "median": 1,
+            "p95": 4,
+            "min": 1,
+            "max": 4
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 5752,
-            "p95": 5916,
-            "min": 5624,
-            "max": 5916
+            "median": 5504,
+            "p95": 5632,
+            "min": 5376,
+            "max": 5632
           }
         },
         "warm": {
@@ -1428,11 +1431,11 @@
             "median": 0,
             "p95": 1,
             "min": 0,
-            "max": 1
+            "max": 2
           },
-          "batchedMeanMs": 0.11,
-          "processCpuPerRequestMs": 1.3,
-          "peakRssKiB": 86048
+          "batchedMeanMs": 0.063,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 94104
         }
       },
       {
@@ -1444,44 +1447,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 46,
-            "p95": 52,
-            "min": 31,
-            "max": 52
-          },
-          "load": {
-            "n": 12,
-            "median": 19,
+            "median": 14,
             "p95": 22,
             "min": 12,
             "max": 22
           },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
           "render": {
             "n": 12,
-            "median": 27,
-            "p95": 30,
-            "min": 19,
-            "max": 30
+            "median": 8,
+            "p95": 15,
+            "min": 7,
+            "max": 15
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 14280,
-            "p95": 17812,
-            "min": 13352,
-            "max": 17812
+            "median": 16384,
+            "p95": 17152,
+            "min": 12672,
+            "max": 17152
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 4,
-            "p95": 7,
-            "min": 2,
-            "max": 8
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
           },
-          "batchedMeanMs": 2.744,
-          "processCpuPerRequestMs": 8.7,
-          "peakRssKiB": 109880
+          "batchedMeanMs": 1.253,
+          "processCpuPerRequestMs": 4,
+          "peakRssKiB": 135724
         }
       },
       {
@@ -1493,44 +1496,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 7,
-            "p95": 15,
-            "min": 6,
-            "max": 15
+            "median": 3,
+            "p95": 4,
+            "min": 2,
+            "max": 4
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 3,
-            "min": 1,
-            "max": 3
-          },
-          "render": {
-            "n": 12,
-            "median": 6,
-            "p95": 12,
-            "min": 5,
-            "max": 12
-          },
-          "peakRssDeltaKiB": {
-            "n": 12,
-            "median": 13660,
-            "p95": 14184,
-            "min": 12700,
-            "max": 14184
-          }
-        },
-        "warm": {
-          "perCall": {
-            "n": 30,
             "median": 1,
             "p95": 1,
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.533,
-          "processCpuPerRequestMs": 2,
-          "peakRssKiB": 102368
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 13440,
+            "p95": 13568,
+            "min": 13312,
+            "max": 13568
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.225,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 163124
         }
       },
       {
@@ -1542,44 +1545,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 57,
-            "p95": 78,
-            "min": 53,
-            "max": 78
+            "median": 29,
+            "p95": 38,
+            "min": 22,
+            "max": 38
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 20,
-            "min": 12,
-            "max": 20
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
           },
           "render": {
             "n": 12,
-            "median": 44,
-            "p95": 61,
-            "min": 40,
-            "max": 61
+            "median": 19,
+            "p95": 29,
+            "min": 17,
+            "max": 29
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 34600,
-            "p95": 34808,
-            "min": 34468,
-            "max": 34808
+            "median": 31744,
+            "p95": 32128,
+            "min": 31488,
+            "max": 32128
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 16,
-            "p95": 26,
-            "min": 10,
-            "max": 28
+            "median": 6,
+            "p95": 13,
+            "min": 5,
+            "max": 20
           },
-          "batchedMeanMs": 21,
-          "processCpuPerRequestMs": 27.7,
-          "peakRssKiB": 175508
+          "batchedMeanMs": 8.556,
+          "processCpuPerRequestMs": 12.7,
+          "peakRssKiB": 181144
         }
       },
       {
@@ -1591,31 +1594,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 5,
-            "p95": 6,
-            "min": 4,
-            "max": 6
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
           },
           "load": {
             "n": 12,
-            "median": 2,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
             "p95": 2,
             "min": 1,
             "max": 2
           },
-          "render": {
-            "n": 12,
-            "median": 3,
-            "p95": 4,
-            "min": 2,
-            "max": 4
-          },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 2000,
-            "p95": 2084,
+            "median": 1792,
+            "p95": 1920,
             "min": 1792,
-            "max": 2084
+            "max": 1920
           }
         },
         "warm": {
@@ -1626,9 +1629,9 @@
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.048,
-          "processCpuPerRequestMs": 1.3,
-          "peakRssKiB": 73644
+          "batchedMeanMs": 0.025,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 81008
         }
       },
       {
@@ -1640,44 +1643,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 25,
-            "p95": 34,
-            "min": 22,
-            "max": 34
+            "median": 11,
+            "p95": 13,
+            "min": 10,
+            "max": 13
           },
           "load": {
             "n": 12,
-            "median": 14,
-            "p95": 19,
-            "min": 12,
-            "max": 19
+            "median": 6,
+            "p95": 7,
+            "min": 5,
+            "max": 7
           },
           "render": {
             "n": 12,
-            "median": 12,
-            "p95": 15,
-            "min": 10,
-            "max": 15
+            "median": 5,
+            "p95": 6,
+            "min": 4,
+            "max": 6
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 10276,
-            "p95": 10472,
-            "min": 9892,
-            "max": 10472
+            "median": 9856,
+            "p95": 9984,
+            "min": 9660,
+            "max": 9984
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 1,
-            "p95": 2,
+            "median": 0,
+            "p95": 1,
             "min": 0,
             "max": 2
           },
-          "batchedMeanMs": 0.48,
-          "processCpuPerRequestMs": 2.7,
-          "peakRssKiB": 83764
+          "batchedMeanMs": 0.188,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 119876
         }
       },
       {
@@ -1689,44 +1692,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 6,
-            "p95": 8,
-            "min": 5,
-            "max": 8
+            "median": 3,
+            "p95": 6,
+            "min": 2,
+            "max": 6
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 1,
+            "p95": 3,
+            "min": 0,
+            "max": 3
           },
           "render": {
             "n": 12,
-            "median": 4,
-            "p95": 6,
-            "min": 3,
-            "max": 6
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 10620,
-            "p95": 10856,
-            "min": 9820,
-            "max": 10856
+            "median": 9856,
+            "p95": 9984,
+            "min": 9728,
+            "max": 9984
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 1,
+            "median": 0,
             "p95": 1,
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.653,
-          "processCpuPerRequestMs": 2,
-          "peakRssKiB": 84260
+          "batchedMeanMs": 0.268,
+          "processCpuPerRequestMs": 1.7,
+          "peakRssKiB": 120624
         }
       },
       {
@@ -1738,44 +1741,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 36,
-            "p95": 47,
-            "min": 34,
-            "max": 47
+            "median": 21,
+            "p95": 38,
+            "min": 16,
+            "max": 38
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 16,
-            "min": 12,
-            "max": 16
+            "median": 7,
+            "p95": 9,
+            "min": 5,
+            "max": 9
           },
           "render": {
             "n": 12,
-            "median": 24,
+            "median": 13,
             "p95": 31,
-            "min": 22,
+            "min": 11,
             "max": 31
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 21600,
-            "p95": 21920,
-            "min": 21420,
-            "max": 21920
+            "median": 19840,
+            "p95": 20096,
+            "min": 19584,
+            "max": 20096
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 4,
-            "p95": 13,
-            "min": 3,
-            "max": 14
+            "median": 2,
+            "p95": 4,
+            "min": 1,
+            "max": 5
           },
-          "batchedMeanMs": 4.513,
-          "processCpuPerRequestMs": 10.7,
-          "peakRssKiB": 117736
+          "batchedMeanMs": 2.307,
+          "processCpuPerRequestMs": 5.7,
+          "peakRssKiB": 156568
         }
       },
       {
@@ -1787,31 +1790,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 7,
-            "p95": 8,
-            "min": 5,
-            "max": 8
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
           },
           "load": {
             "n": 12,
-            "median": 2,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 5,
-            "p95": 6,
-            "min": 3,
-            "max": 6
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 6300,
-            "p95": 6748,
-            "min": 6040,
-            "max": 6748
+            "median": 8704,
+            "p95": 8832,
+            "min": 8192,
+            "max": 8832
           }
         },
         "warm": {
@@ -1822,9 +1825,9 @@
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.281,
-          "processCpuPerRequestMs": 1,
-          "peakRssKiB": 78300
+          "batchedMeanMs": 0.079,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 86024
         }
       },
       {
@@ -1836,31 +1839,31 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 30,
-            "p95": 35,
-            "min": 23,
-            "max": 35
+            "median": 11,
+            "p95": 11,
+            "min": 9,
+            "max": 11
           },
           "load": {
             "n": 12,
-            "median": 17,
-            "p95": 20,
-            "min": 12,
-            "max": 20
+            "median": 6,
+            "p95": 7,
+            "min": 5,
+            "max": 7
           },
           "render": {
             "n": 12,
-            "median": 12,
-            "p95": 15,
-            "min": 11,
-            "max": 15
+            "median": 4,
+            "p95": 5,
+            "min": 4,
+            "max": 5
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 13872,
-            "p95": 14480,
-            "min": 13504,
-            "max": 14480
+            "median": 12544,
+            "p95": 12732,
+            "min": 12416,
+            "max": 12732
           }
         },
         "warm": {
@@ -1871,9 +1874,9 @@
             "min": 0,
             "max": 1
           },
-          "batchedMeanMs": 0.187,
-          "processCpuPerRequestMs": 1,
-          "peakRssKiB": 84620
+          "batchedMeanMs": 0.116,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 91980
         }
       },
       {
@@ -1885,44 +1888,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 11,
-            "p95": 14,
-            "min": 10,
-            "max": 14
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
           },
           "load": {
             "n": 12,
             "median": 1,
-            "p95": 2,
-            "min": 1,
-            "max": 2
+            "p95": 1,
+            "min": 0,
+            "max": 1
           },
           "render": {
             "n": 12,
-            "median": 9,
-            "p95": 12,
-            "min": 9,
-            "max": 12
+            "median": 5,
+            "p95": 11,
+            "min": 5,
+            "max": 11
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 14700,
-            "p95": 15044,
-            "min": 14184,
-            "max": 15044
+            "median": 13568,
+            "p95": 13696,
+            "min": 13440,
+            "max": 13696
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 2,
-            "p95": 3,
-            "min": 1,
-            "max": 3
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
           },
-          "batchedMeanMs": 1.627,
-          "processCpuPerRequestMs": 4,
-          "peakRssKiB": 92452
+          "batchedMeanMs": 0.74,
+          "processCpuPerRequestMs": 1.7,
+          "peakRssKiB": 112708
         }
       },
       {
@@ -1934,44 +1937,44 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 29,
-            "p95": 41,
-            "min": 27,
-            "max": 41
+            "median": 15,
+            "p95": 24,
+            "min": 12,
+            "max": 24
           },
           "load": {
             "n": 12,
-            "median": 13,
-            "p95": 20,
-            "min": 12,
-            "max": 20
+            "median": 7,
+            "p95": 8,
+            "min": 5,
+            "max": 8
           },
           "render": {
             "n": 12,
-            "median": 15,
-            "p95": 21,
-            "min": 14,
-            "max": 21
+            "median": 7,
+            "p95": 16,
+            "min": 6,
+            "max": 16
           },
           "peakRssDeltaKiB": {
             "n": 12,
-            "median": 15072,
-            "p95": 15300,
-            "min": 14696,
-            "max": 15300
+            "median": 13440,
+            "p95": 13696,
+            "min": 13184,
+            "max": 13696
           }
         },
         "warm": {
           "perCall": {
             "n": 30,
-            "median": 3,
-            "p95": 7,
-            "min": 2,
-            "max": 8
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 2
           },
-          "batchedMeanMs": 2.647,
-          "processCpuPerRequestMs": 3.7,
-          "peakRssKiB": 81360
+          "batchedMeanMs": 0.693,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 89772
         }
       }
     ]
@@ -1985,32 +1988,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 12.634807999999992,
-            "p95": 14.985735000000005,
-            "min": 9.937678000000005,
-            "max": 14.985735000000005
+            "median": 6.059540999999996,
+            "p95": 18.750833999999998,
+            "min": 5.512999999999991,
+            "max": 18.750833999999998
           },
           "load": {
             "n": 12,
-            "median": 9.010331999999977,
-            "p95": 12.265614,
-            "min": 6.9298670000000016,
-            "max": 12.265614
+            "median": 4.826874999999994,
+            "p95": 14.425083999999998,
+            "min": 3.8392499999999927,
+            "max": 14.425083999999998
           },
           "render": {
             "n": 12,
-            "median": 3.2470550000000173,
-            "p95": 3.818628000000018,
-            "min": 2.720121000000006,
-            "max": 3.818628000000018
+            "median": 1.4044999999999987,
+            "p95": 4.325749999999999,
+            "min": 1.2326660000000018,
+            "max": 4.325749999999999
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.051209999999997535,
-          "p95": 0.25203899999999635,
-          "min": 0.03408100000001468,
-          "max": 1.2849919999999884
+          "median": 0.02520900000000381,
+          "p95": 0.33612499999999557,
+          "min": 0.015416000000001873,
+          "max": 0.5839169999999996
         }
       },
       {
@@ -2020,32 +2023,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 27.511905000000013,
-            "p95": 36.535089,
-            "min": 24.732843000000003,
-            "max": 36.535089
+            "median": 14.35454200000001,
+            "p95": 27.21054199999999,
+            "min": 11.597499999999997,
+            "max": 27.21054199999999
           },
           "load": {
             "n": 12,
-            "median": 11.040149999999997,
-            "p95": 15.154927999999984,
-            "min": 9.726916000000003,
-            "max": 15.154927999999984
+            "median": 5.27624999999999,
+            "p95": 18.678541999999993,
+            "min": 4.239624999999997,
+            "max": 18.678541999999993
           },
           "render": {
             "n": 12,
-            "median": 16.040358999999995,
-            "p95": 21.380161000000015,
-            "min": 15.005927,
-            "max": 21.380161000000015
+            "median": 7.888541000000004,
+            "p95": 17.055333000000005,
+            "min": 7.209708999999997,
+            "max": 17.055333000000005
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.3455539999999928,
-          "p95": 1.1790909999999997,
-          "min": 0.17958600000000047,
-          "max": 1.3586909999999932
+          "median": 0.35437499999999034,
+          "p95": 1.0610420000000005,
+          "min": 0.10487499999999272,
+          "max": 2.8794579999999996
         }
       },
       {
@@ -2055,32 +2058,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 11.700665999999998,
-            "p95": 16.81625799999999,
-            "min": 9.564025999999998,
-            "max": 16.81625799999999
+            "median": 5.279207999999997,
+            "p95": 10.204916999999995,
+            "min": 4.791041999999997,
+            "max": 10.204916999999995
           },
           "load": {
             "n": 12,
-            "median": 8.76388,
-            "p95": 9.793575999999987,
-            "min": 6.6975359999999995,
-            "max": 9.793575999999987
+            "median": 3.946583000000004,
+            "p95": 8.378167000000005,
+            "min": 3.492582999999996,
+            "max": 8.378167000000005
           },
           "render": {
             "n": 12,
-            "median": 2.994870999999989,
-            "p95": 7.022682000000003,
-            "min": 2.858436999999995,
-            "max": 7.022682000000003
+            "median": 1.404332999999994,
+            "p95": 2.713832999999994,
+            "min": 1.2823340000000059,
+            "max": 2.713832999999994
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.06215199999999754,
-          "p95": 0.21098399999999629,
-          "min": 0.0538789999999949,
-          "max": 1.4039319999999975
+          "median": 0.035125000000007844,
+          "p95": 0.08237499999999898,
+          "min": 0.02637500000000159,
+          "max": 0.6742909999999966
         }
       },
       {
@@ -2090,32 +2093,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 26.001008999999996,
-            "p95": 39.014967999999996,
-            "min": 24.775101000000006,
-            "max": 39.014967999999996
+            "median": 12.937583000000004,
+            "p95": 14.908708000000004,
+            "min": 11.932333,
+            "max": 14.908708000000004
           },
           "load": {
             "n": 12,
-            "median": 10.464630999999997,
-            "p95": 19.76426400000001,
-            "min": 9.632710999999986,
-            "max": 19.76426400000001
+            "median": 4.643166999999991,
+            "p95": 5.419832999999997,
+            "min": 4.454541000000006,
+            "max": 5.419832999999997
           },
           "render": {
             "n": 12,
-            "median": 15.410076000000004,
-            "p95": 20.312998000000007,
-            "min": 15.008728999999988,
-            "max": 20.312998000000007
+            "median": 8.158249999999995,
+            "p95": 10.365791999999999,
+            "min": 7.405625000000001,
+            "max": 10.365791999999999
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.8750830000000178,
-          "p95": 1.8796190000000195,
-          "min": 0.46926500000000715,
-          "max": 3.9142109999999946
+          "median": 0.25241599999999664,
+          "p95": 0.7112500000000068,
+          "min": 0.1581249999999983,
+          "max": 0.7151670000000081
         }
       },
       {
@@ -2125,32 +2128,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 12.645202000000012,
-            "p95": 17.212502,
-            "min": 9.72775200000001,
-            "max": 17.212502
+            "median": 5.032457999999998,
+            "p95": 13.299750000000003,
+            "min": 4.366915999999996,
+            "max": 13.299750000000003
           },
           "load": {
             "n": 12,
-            "median": 8.896150000000006,
-            "p95": 13.037383000000005,
-            "min": 6.7882999999999925,
-            "max": 13.037383000000005
+            "median": 3.739457999999999,
+            "p95": 11.616792000000004,
+            "min": 3.049790999999999,
+            "max": 11.616792000000004
           },
           "render": {
             "n": 12,
-            "median": 3.749052000000006,
-            "p95": 4.975385000000003,
-            "min": 2.786635000000004,
-            "max": 4.975385000000003
+            "median": 1.321125000000002,
+            "p95": 1.6829579999999993,
+            "min": 1.2410829999999962,
+            "max": 1.6829579999999993
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.1614680000000135,
-          "p95": 0.5671389999999974,
-          "min": 0.07827299999999582,
-          "max": 1.9462939999999946
+          "median": 0.11470899999999062,
+          "p95": 0.6776669999999996,
+          "min": 0.024083000000004517,
+          "max": 2.0628329999999977
         }
       },
       {
@@ -2160,32 +2163,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 34.263030000000015,
-            "p95": 45.122409000000005,
-            "min": 26.541206000000003,
-            "max": 45.122409000000005
+            "median": 13.139790999999995,
+            "p95": 17.61712500000001,
+            "min": 11.832166999999998,
+            "max": 17.61712500000001
           },
           "load": {
             "n": 12,
-            "median": 13.638547000000017,
-            "p95": 22.218410000000006,
-            "min": 9.576315000000008,
-            "max": 22.218410000000006
+            "median": 4.439540999999998,
+            "p95": 5.678999999999988,
+            "min": 4.165416999999998,
+            "max": 5.678999999999988
           },
           "render": {
             "n": 12,
-            "median": 19.616071000000005,
-            "p95": 27.124746999999985,
-            "min": 16.964890999999994,
-            "max": 27.124746999999985
+            "median": 8.610709,
+            "p95": 12.943375000000003,
+            "min": 7.66675,
+            "max": 12.943375000000003
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.9300010000000043,
-          "p95": 2.591233999999986,
-          "min": 0.5710660000000018,
-          "max": 5.175577000000004
+          "median": 0.9657079999999922,
+          "p95": 3.5853330000000057,
+          "min": 0.3474999999999966,
+          "max": 7.220292000000001
         }
       },
       {
@@ -2195,32 +2198,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 10.79899900000001,
-            "p95": 18.847021000000012,
-            "min": 10.089939000000001,
-            "max": 18.847021000000012
+            "median": 5.462249999999997,
+            "p95": 9.321624999999997,
+            "min": 4.797499999999999,
+            "max": 9.321624999999997
           },
           "load": {
             "n": 12,
-            "median": 7.509578999999974,
-            "p95": 12.371978000000013,
-            "min": 6.842241000000001,
-            "max": 12.371978000000013
+            "median": 3.906041000000002,
+            "p95": 7.606875000000002,
+            "min": 3.4273329999999973,
+            "max": 7.606875000000002
           },
           "render": {
             "n": 12,
-            "median": 3.3012689999999907,
-            "p95": 6.475042999999999,
-            "min": 2.9967510000000033,
-            "max": 6.475042999999999
+            "median": 1.6193340000000092,
+            "p95": 1.9881249999999966,
+            "min": 1.3701670000000021,
+            "max": 1.9881249999999966
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.1649980000000255,
-          "p95": 0.3713679999999897,
-          "min": 0.10878099999999336,
-          "max": 1.692038999999994
+          "median": 0.06479199999999707,
+          "p95": 0.16904199999999747,
+          "min": 0.057749999999998636,
+          "max": 0.8089169999999939
         }
       },
       {
@@ -2230,32 +2233,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 30.285535999999993,
-            "p95": 44.232690000000005,
-            "min": 29.152585000000002,
-            "max": 44.232690000000005
+            "median": 14.383375000000001,
+            "p95": 22.812124999999995,
+            "min": 13.889084000000004,
+            "max": 22.812124999999995
           },
           "load": {
             "n": 12,
-            "median": 10.075778,
-            "p95": 15.720838999999998,
-            "min": 9.582913999999988,
-            "max": 15.720838999999998
+            "median": 4.441375000000001,
+            "p95": 8.818915999999987,
+            "min": 4.2136660000000035,
+            "max": 8.818915999999987
           },
           "render": {
             "n": 12,
-            "median": 20.222024000000005,
-            "p95": 28.511851000000007,
-            "min": 19.441478000000004,
-            "max": 28.511851000000007
+            "median": 9.957667000000008,
+            "p95": 13.993209000000007,
+            "min": 9.447709000000003,
+            "max": 13.993209000000007
           }
         },
         "warm": {
           "n": 30,
-          "median": 1.497382999999985,
-          "p95": 4.029212999999999,
-          "min": 1.120381000000009,
-          "max": 5.344757999999985
+          "median": 0.8031249999999943,
+          "p95": 2.0877499999999998,
+          "min": 0.49133299999999736,
+          "max": 2.8862499999999898
         }
       },
       {
@@ -2265,32 +2268,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 11.817886000000016,
-            "p95": 15.152547999999996,
-            "min": 9.79273099999999,
-            "max": 15.152547999999996
+            "median": 5.745042000000005,
+            "p95": 11.324666000000008,
+            "min": 5.069541999999998,
+            "max": 11.324666000000008
           },
           "load": {
             "n": 12,
-            "median": 7.678246999999999,
-            "p95": 11.471664000000004,
-            "min": 6.403368999999998,
-            "max": 11.471664000000004
+            "median": 3.9991249999999994,
+            "p95": 6.688083000000006,
+            "min": 3.4817919999999987,
+            "max": 6.688083000000006
           },
           "render": {
             "n": 12,
-            "median": 3.646004000000005,
-            "p95": 6.678035000000008,
-            "min": 3.3893619999999913,
-            "max": 6.678035000000008
+            "median": 1.588957999999991,
+            "p95": 4.636583000000002,
+            "min": 1.509916000000004,
+            "max": 4.636583000000002
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.2407869999999832,
-          "p95": 0.5395469999999989,
-          "min": 0.17661300000000324,
-          "max": 0.5726049999999958
+          "median": 0.1124590000000012,
+          "p95": 0.23649999999999238,
+          "min": 0.08754100000000165,
+          "max": 0.289709000000002
         }
       },
       {
@@ -2300,32 +2303,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 38.476825000000005,
-            "p95": 52.808705,
-            "min": 33.32405699999998,
-            "max": 52.808705
+            "median": 17.727208000000005,
+            "p95": 53.62175000000002,
+            "min": 15.341209,
+            "max": 53.62175000000002
           },
           "load": {
             "n": 12,
-            "median": 10.092798000000016,
-            "p95": 16.995060000000024,
-            "min": 9.587790999999996,
-            "max": 16.995060000000024
+            "median": 4.642250000000004,
+            "p95": 28.750083000000004,
+            "min": 4.158999999999999,
+            "max": 28.750083000000004
           },
           "render": {
             "n": 12,
-            "median": 26.475189,
-            "p95": 35.81364499999998,
-            "min": 23.696619999999996,
-            "max": 35.81364499999998
+            "median": 13.084958,
+            "p95": 24.871667000000016,
+            "min": 11.182209,
+            "max": 24.871667000000016
           }
         },
         "warm": {
           "n": 30,
-          "median": 3.9168170000000373,
-          "p95": 8.951510999999982,
-          "min": 1.9872409999999832,
-          "max": 9.785732999999993
+          "median": 1.4475839999999778,
+          "p95": 6.078416000000004,
+          "min": 0.9460410000000081,
+          "max": 7.023832999999996
         }
       },
       {
@@ -2335,32 +2338,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 12.851841000000007,
-            "p95": 17.791662000000002,
-            "min": 11.090901000000002,
-            "max": 17.791662000000002
+            "median": 5.603708000000005,
+            "p95": 8.992250000000006,
+            "min": 5.228875000000002,
+            "max": 8.992250000000006
           },
           "load": {
             "n": 12,
-            "median": 7.736918000000003,
-            "p95": 11.623104000000012,
-            "min": 6.868245000000002,
-            "max": 11.623104000000012
+            "median": 3.634833999999998,
+            "p95": 5.957332999999998,
+            "min": 3.3924999999999983,
+            "max": 5.957332999999998
           },
           "render": {
             "n": 12,
-            "median": 4.7057669999999945,
-            "p95": 6.463837999999981,
-            "min": 4.222656000000001,
-            "max": 6.463837999999981
+            "median": 1.9297920000000062,
+            "p95": 3.034917000000007,
+            "min": 1.7525410000000008,
+            "max": 3.034917000000007
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.4961099999999874,
-          "p95": 1.0759580000000142,
-          "min": 0.4367289999999855,
-          "max": 1.7906659999999874
+          "median": 0.2032920000000047,
+          "p95": 0.4102499999999907,
+          "min": 0.18320899999999085,
+          "max": 0.596082999999993
         }
       },
       {
@@ -2370,32 +2373,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 48.745295,
-            "p95": 59.211569,
-            "min": 44.32239100000001,
-            "max": 59.211569
+            "median": 19.748082999999994,
+            "p95": 23.136666999999996,
+            "min": 18.007250000000006,
+            "max": 23.136666999999996
           },
           "load": {
             "n": 12,
-            "median": 12.267441000000005,
-            "p95": 17.629986000000002,
-            "min": 9.52205099999999,
-            "max": 17.629986000000002
+            "median": 4.203749999999999,
+            "p95": 5.355333000000002,
+            "min": 4.113333999999995,
+            "max": 5.355333000000002
           },
           "render": {
             "n": 12,
-            "median": 37.363215999999994,
-            "p95": 45.462402,
-            "min": 32.37081900000001,
-            "max": 45.462402
+            "median": 15.554665999999997,
+            "p95": 18.828167,
+            "min": 13.865291999999997,
+            "max": 18.828167
           }
         },
         "warm": {
           "n": 30,
-          "median": 6.171553000000017,
-          "p95": 11.225764999999967,
-          "min": 3.7039589999999976,
-          "max": 20.961798999999985
+          "median": 3.039999999999992,
+          "p95": 6.384749999999997,
+          "min": 1.8450420000000065,
+          "max": 8.173666999999995
         }
       },
       {
@@ -2405,32 +2408,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 15.806064000000006,
-            "p95": 21.133102000000008,
-            "min": 12.382904999999994,
-            "max": 21.133102000000008
+            "median": 6.724542000000007,
+            "p95": 12.102875000000012,
+            "min": 6.178666999999997,
+            "max": 12.102875000000012
           },
           "load": {
             "n": 12,
-            "median": 10.057271999999998,
-            "p95": 12.808391,
-            "min": 6.802852999999999,
-            "max": 12.808391
+            "median": 3.9122079999999997,
+            "p95": 5.939667,
+            "min": 3.5892079999999993,
+            "max": 5.939667
           },
           "render": {
             "n": 12,
-            "median": 5.981988999999999,
-            "p95": 10.344851000000006,
-            "min": 5.580051999999995,
-            "max": 10.344851000000006
+            "median": 2.812334000000007,
+            "p95": 6.163208000000012,
+            "min": 2.491250000000001,
+            "max": 6.163208000000012
           }
         },
         "warm": {
           "n": 30,
-          "median": 1.3237609999999904,
-          "p95": 2.1271110000000135,
-          "min": 1.1509399999999914,
-          "max": 4.029752000000002
+          "median": 0.5812499999999972,
+          "p95": 0.9151669999999967,
+          "min": 0.4877919999999989,
+          "max": 1.5962090000000018
         }
       },
       {
@@ -2440,32 +2443,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 55.30603099999999,
-            "p95": 68.67755499999998,
-            "min": 49.131173000000004,
-            "max": 68.67755499999998
+            "median": 27.536749999999998,
+            "p95": 116.68170799999999,
+            "min": 23.882416000000006,
+            "max": 116.68170799999999
           },
           "load": {
             "n": 12,
-            "median": 10.799493999999996,
-            "p95": 20.29715300000001,
-            "min": 9.480243999999999,
-            "max": 20.29715300000001
+            "median": 5.304667000000002,
+            "p95": 15.652290999999991,
+            "min": 4.352000000000004,
+            "max": 15.652290999999991
           },
           "render": {
             "n": 12,
-            "median": 42.147851999999986,
-            "p95": 53.988293999999996,
-            "min": 39.475030000000004,
-            "max": 53.988293999999996
+            "median": 22.90625,
+            "p95": 101.029417,
+            "min": 19.051374999999993,
+            "max": 101.029417
           }
         },
         "warm": {
           "n": 30,
-          "median": 13.756732000000056,
-          "p95": 31.13408800000002,
-          "min": 9.034717,
-          "max": 45.943168000000014
+          "median": 7.765874999999994,
+          "p95": 25.730333,
+          "min": 4.540666000000044,
+          "max": 28.786666999999966
         }
       },
       {
@@ -2475,32 +2478,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 18.843713000000008,
-            "p95": 29.904132999999973,
-            "min": 17.49776,
-            "max": 29.904132999999973
+            "median": 8.629957999999995,
+            "p95": 12.209667000000003,
+            "min": 7.617875000000005,
+            "max": 12.209667000000003
           },
           "load": {
             "n": 12,
-            "median": 8.309757000000005,
-            "p95": 11.892990999999995,
-            "min": 7.283926000000008,
-            "max": 11.892990999999995
+            "median": 4.044457999999992,
+            "p95": 5.702834000000003,
+            "min": 3.4272920000000013,
+            "max": 5.702834000000003
           },
           "render": {
             "n": 12,
-            "median": 10.441142,
-            "p95": 18.01114199999998,
-            "min": 9.172914999999989,
-            "max": 18.01114199999998
+            "median": 4.421542000000002,
+            "p95": 6.506833,
+            "min": 3.8550419999999903,
+            "max": 6.506833
           }
         },
         "warm": {
           "n": 30,
-          "median": 2.1095929999999896,
-          "p95": 3.5170929999999885,
-          "min": 1.9046850000000006,
-          "max": 5.225549999999998
+          "median": 0.9130419999999901,
+          "p95": 1.2071660000000008,
+          "min": 0.7638749999999987,
+          "max": 1.9133329999999944
         }
       },
       {
@@ -2510,32 +2513,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 81.51272500000002,
-            "p95": 118.48650700000002,
-            "min": 73.842471,
-            "max": 118.48650700000002
+            "median": 34.910458999999996,
+            "p95": 57.707542000000004,
+            "min": 31.259915999999997,
+            "max": 57.707542000000004
           },
           "load": {
             "n": 12,
-            "median": 11.142845999999992,
-            "p95": 22.310930000000013,
-            "min": 9.732038000000003,
-            "max": 22.310930000000013
+            "median": 4.281542000000002,
+            "p95": 6.970417000000012,
+            "min": 4.1442909999999955,
+            "max": 6.970417000000012
           },
           "render": {
             "n": 12,
-            "median": 68.89486199999999,
-            "p95": 100.00226700000002,
-            "min": 63.38848500000002,
-            "max": 100.00226700000002
+            "median": 30.379041,
+            "p95": 50.73712499999999,
+            "min": 27.107749999999996,
+            "max": 50.73712499999999
           }
         },
         "warm": {
           "n": 30,
-          "median": 19.13767000000007,
-          "p95": 32.94569000000001,
-          "min": 11.352326000000062,
-          "max": 33.52290400000004
+          "median": 12.166415999999913,
+          "p95": 24.177082999999982,
+          "min": 7.128083000000004,
+          "max": 33.80758400000002
         }
       },
       {
@@ -2545,32 +2548,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 20.964576000000022,
-            "p95": 28.859222999999986,
-            "min": 18.199325,
-            "max": 28.859222999999986
+            "median": 8.712542,
+            "p95": 19.296249999999986,
+            "min": 8.193832999999998,
+            "max": 19.296249999999986
           },
           "load": {
             "n": 12,
-            "median": 10.642404999999997,
-            "p95": 13.64857099999999,
-            "min": 6.911804000000004,
-            "max": 13.64857099999999
+            "median": 4.052374999999998,
+            "p95": 8.298582999999994,
+            "min": 3.4159579999999963,
+            "max": 8.298582999999994
           },
           "render": {
             "n": 12,
-            "median": 11.828688,
-            "p95": 16.06596399999998,
-            "min": 9.553014999999988,
-            "max": 16.06596399999998
+            "median": 5.076833000000008,
+            "p95": 10.997666999999993,
+            "min": 4.30379099999999,
+            "max": 10.997666999999993
           }
         },
         "warm": {
           "n": 30,
-          "median": 3.906948,
-          "p95": 5.711773000000022,
-          "min": 3.503091000000012,
-          "max": 7.663947000000036
+          "median": 1.2316670000000016,
+          "p95": 2.1595410000000044,
+          "min": 1.017832999999996,
+          "max": 3.5210419999999942
         }
       },
       {
@@ -2580,32 +2583,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 93.716681,
-            "p95": 135.51256400000003,
-            "min": 75.259378,
-            "max": 135.51256400000003
+            "median": 43.604917,
+            "p95": 64.233458,
+            "min": 34.761207999999996,
+            "max": 64.233458
           },
           "load": {
             "n": 12,
-            "median": 12.748660000000001,
-            "p95": 20.728667,
-            "min": 9.814342999999994,
-            "max": 20.728667
+            "median": 4.893667000000001,
+            "p95": 9.991540999999998,
+            "min": 4.326833000000001,
+            "max": 9.991540999999998
           },
           "render": {
             "n": 12,
-            "median": 79.628184,
-            "p95": 114.78389700000002,
-            "min": 65.436181,
-            "max": 114.78389700000002
+            "median": 38.499832999999995,
+            "p95": 55.913208,
+            "min": 30.159999999999997,
+            "max": 55.913208
           }
         },
         "warm": {
           "n": 30,
-          "median": 27.385189999999966,
-          "p95": 47.67894100000012,
-          "min": 14.055562000000009,
-          "max": 47.90951600000005
+          "median": 10.672875000000033,
+          "p95": 24.466959000000003,
+          "min": 8.048000000000002,
+          "max": 24.73079100000001
         }
       },
       {
@@ -2615,32 +2618,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 22.51699099999999,
-            "p95": 28.570789999999988,
-            "min": 20.046608000000006,
-            "max": 28.570789999999988
+            "median": 10.612833000000002,
+            "p95": 12.478333,
+            "min": 8.513041999999999,
+            "max": 12.478333
           },
           "load": {
             "n": 12,
-            "median": 8.733154999999982,
-            "p95": 11.775756999999999,
-            "min": 7.06493900000001,
-            "max": 11.775756999999999
+            "median": 4.230125000000001,
+            "p95": 4.898999999999994,
+            "min": 3.008624999999995,
+            "max": 4.898999999999994
           },
           "render": {
             "n": 12,
-            "median": 13.115195999999997,
-            "p95": 16.91231000000002,
-            "min": 12.227864000000011,
-            "max": 16.91231000000002
+            "median": 6.420832999999995,
+            "p95": 7.9048329999999964,
+            "min": 5.464916000000009,
+            "max": 7.9048329999999964
           }
         },
         "warm": {
-          "n": 30,
-          "median": 4.602180000000033,
-          "p95": 5.338401000000005,
-          "min": 3.560771999999986,
-          "max": 7.3653819999999826
+          "n": 12,
+          "median": 2.2725830000000116,
+          "p95": 3.693583999999987,
+          "min": 1.9387920000000065,
+          "max": 3.693583999999987
         }
       },
       {
@@ -2650,32 +2653,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 167.133683,
-            "p95": 202.595034,
-            "min": 139.87980499999998,
-            "max": 202.595034
+            "median": 79.455834,
+            "p95": 214.93924999999996,
+            "min": 67.586916,
+            "max": 214.93924999999996
           },
           "load": {
             "n": 12,
-            "median": 11.195956999999993,
-            "p95": 16.022359999999992,
-            "min": 9.874274,
-            "max": 16.022359999999992
+            "median": 4.575167,
+            "p95": 21.670249999999996,
+            "min": 4.176416000000003,
+            "max": 21.670249999999996
           },
           "render": {
             "n": 12,
-            "median": 153.93504600000003,
-            "p95": 192.215108,
-            "min": 123.85744499999998,
-            "max": 192.215108
+            "median": 74.789959,
+            "p95": 200.630291,
+            "min": 63.30820799999999,
+            "max": 200.630291
           }
         },
         "warm": {
-          "n": 30,
-          "median": 46.02726599999983,
-          "p95": 74.12723400000004,
-          "min": 28.50650799999994,
-          "max": 79.89488100000017
+          "n": 12,
+          "median": 28.26925,
+          "p95": 42.038792,
+          "min": 16.52183400000007,
+          "max": 42.038792
         }
       },
       {
@@ -2685,32 +2688,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 30.98861099999999,
-            "p95": 37.157275,
-            "min": 27.551899000000006,
-            "max": 37.157275
+            "median": 15.281958000000003,
+            "p95": 20.776249999999997,
+            "min": 12.324374999999996,
+            "max": 20.776249999999997
           },
           "load": {
             "n": 12,
-            "median": 8.676320000000004,
-            "p95": 13.354273000000006,
-            "min": 7.673790999999994,
-            "max": 13.354273000000006
+            "median": 4.36604100000001,
+            "p95": 5.651665999999999,
+            "min": 3.7844589999999982,
+            "max": 5.651665999999999
           },
           "render": {
             "n": 12,
-            "median": 21.914766,
-            "p95": 25.574816999999996,
-            "min": 19.74652300000001,
-            "max": 25.574816999999996
+            "median": 10.469875000000002,
+            "p95": 15.124583999999999,
+            "min": 8.390208000000001,
+            "max": 15.124583999999999
           }
         },
         "warm": {
           "n": 12,
-          "median": 9.352687000000003,
-          "p95": 12.731709999999993,
-          "min": 7.2738540000000285,
-          "max": 12.731709999999993
+          "median": 4.466750000000019,
+          "p95": 5.9609999999999985,
+          "min": 3.58695800000001,
+          "max": 5.9609999999999985
         }
       },
       {
@@ -2720,32 +2723,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 242.28812100000002,
-            "p95": 355.381482,
-            "min": 224.22603099999998,
-            "max": 355.381482
+            "median": 157.882,
+            "p95": 775.0716259999999,
+            "min": 101.38216700000001,
+            "max": 775.0716259999999
           },
           "load": {
             "n": 12,
-            "median": 10.442496000000006,
-            "p95": 15.809304999999995,
-            "min": 9.872544000000005,
-            "max": 15.809304999999995
+            "median": 4.444625000000002,
+            "p95": 269.997709,
+            "min": 4.071167000000003,
+            "max": 269.997709
           },
           "render": {
             "n": 12,
-            "median": 231.39243000000002,
-            "p95": 345.342811,
-            "min": 211.290457,
-            "max": 345.342811
+            "median": 147.947375,
+            "p95": 529.491208,
+            "min": 97.154875,
+            "max": 529.491208
           }
         },
         "warm": {
           "n": 12,
-          "median": 122.49774899999989,
-          "p95": 233.949301,
-          "min": 65.95907,
-          "max": 233.949301
+          "median": 58.612583000000086,
+          "p95": 117.47537499999999,
+          "min": 41.50454100000002,
+          "max": 117.47537499999999
         }
       },
       {
@@ -2755,32 +2758,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 42.38525200000001,
-            "p95": 49.52706600000002,
-            "min": 39.78524499999999,
-            "max": 49.52706600000002
+            "median": 17.477292,
+            "p95": 27.05833299999999,
+            "min": 16.494999999999997,
+            "max": 27.05833299999999
           },
           "load": {
             "n": 12,
-            "median": 9.129705000000001,
-            "p95": 11.713742999999994,
-            "min": 7.454764999999995,
-            "max": 11.713742999999994
+            "median": 3.908834000000006,
+            "p95": 4.580708999999999,
+            "min": 3.4054160000000024,
+            "max": 4.580708999999999
           },
           "render": {
             "n": 12,
-            "median": 32.36384799999999,
-            "p95": 40.21352300000001,
-            "min": 31.548804999999987,
-            "max": 40.21352300000001
+            "median": 13.866917,
+            "p95": 22.663999999999987,
+            "min": 12.694333,
+            "max": 22.663999999999987
           }
         },
         "warm": {
           "n": 12,
-          "median": 18.812996999999996,
-          "p95": 22.23093,
-          "min": 14.870834000000002,
-          "max": 22.23093
+          "median": 7.551249999999982,
+          "p95": 10.422000000000025,
+          "min": 6.9519579999999905,
+          "max": 10.422000000000025
         }
       },
       {
@@ -2790,32 +2793,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 432.307206,
-            "p95": 527.550744,
-            "min": 379.264034,
-            "max": 527.550744
+            "median": 180.658708,
+            "p95": 325.292042,
+            "min": 152.965833,
+            "max": 325.292042
           },
           "load": {
             "n": 12,
-            "median": 11.152518,
-            "p95": 16.45399599999999,
-            "min": 9.709891999999996,
-            "max": 16.45399599999999
+            "median": 4.1319580000000045,
+            "p95": 9.697082999999992,
+            "min": 3.9056660000000036,
+            "max": 9.697082999999992
           },
           "render": {
             "n": 12,
-            "median": 421.15468799999996,
-            "p95": 511.096748,
-            "min": 365.99397799999997,
-            "max": 511.096748
+            "median": 176.62025,
+            "p95": 320.80112499999996,
+            "min": 148.005542,
+            "max": 320.80112499999996
           }
         },
         "warm": {
           "n": 12,
-          "median": 347.6352089999998,
-          "p95": 524.2468580000004,
-          "min": 235.78044899999986,
-          "max": 524.2468580000004
+          "median": 151.76337599999988,
+          "p95": 275.28425100000004,
+          "min": 119.52975000000015,
+          "max": 275.28425100000004
         }
       },
       {
@@ -2825,32 +2828,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 10.044134,
-            "p95": 15.14088700000002,
-            "min": 9.248638,
-            "max": 15.14088700000002
+            "median": 5.2356670000000065,
+            "p95": 6.877832999999995,
+            "min": 4.018625,
+            "max": 6.877832999999995
           },
           "load": {
             "n": 12,
-            "median": 7.360771999999997,
-            "p95": 11.469712000000015,
-            "min": 6.568701000000004,
-            "max": 11.469712000000015
+            "median": 4.076250000000002,
+            "p95": 5.754541000000003,
+            "min": 2.8999590000000026,
+            "max": 5.754541000000003
           },
           "render": {
             "n": 12,
-            "median": 2.7019949999999966,
-            "p95": 3.8910589999999843,
-            "min": 2.606580000000008,
-            "max": 3.8910589999999843
+            "median": 1.159125000000003,
+            "p95": 1.6761660000000091,
+            "min": 1.1118749999999977,
+            "max": 1.6761660000000091
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.18035000000000423,
-          "p95": 0.4630420000000015,
-          "min": 0.08322300000000382,
-          "max": 0.497856999999982
+          "median": 0.08158399999999943,
+          "p95": 0.14624999999999488,
+          "min": 0.04258300000000759,
+          "max": 0.23712499999999181
         }
       },
       {
@@ -2860,32 +2863,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 38.82744700000001,
-            "p95": 49.41358500000001,
-            "min": 34.631921000000006,
-            "max": 49.41358500000001
+            "median": 17.521208,
+            "p95": 40.149,
+            "min": 14.938416999999994,
+            "max": 40.149
           },
           "load": {
             "n": 12,
-            "median": 10.592273000000006,
-            "p95": 15.932114999999996,
-            "min": 9.916653999999994,
-            "max": 15.932114999999996
+            "median": 4.620625000000004,
+            "p95": 11.447874999999996,
+            "min": 4.084417000000002,
+            "max": 11.447874999999996
           },
           "render": {
             "n": 12,
-            "median": 26.691388000000018,
-            "p95": 36.199455,
-            "min": 23.84019699999999,
-            "max": 36.199455
+            "median": 12.470749999999995,
+            "p95": 29.605791999999994,
+            "min": 10.853999999999992,
+            "max": 29.605791999999994
           }
         },
         "warm": {
           "n": 30,
-          "median": 2.9831399999999917,
-          "p95": 8.419292999999982,
-          "min": 2.3272979999999848,
-          "max": 17.465529000000004
+          "median": 1.4553750000000036,
+          "p95": 7.632333000000017,
+          "min": 1.228459000000015,
+          "max": 8.789000000000001
         }
       },
       {
@@ -2895,32 +2898,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 11.814392999999995,
-            "p95": 16.04286399999998,
-            "min": 10.919912999999994,
-            "max": 16.04286399999998
+            "median": 7.825707999999999,
+            "p95": 105.36862500000001,
+            "min": 5.612707999999998,
+            "max": 105.36862500000001
           },
           "load": {
             "n": 12,
-            "median": 7.139880000000005,
-            "p95": 10.148299000000009,
-            "min": 6.252775,
-            "max": 10.148299000000009
+            "median": 5.6150829999999985,
+            "p95": 55.61625000000001,
+            "min": 3.6373339999999956,
+            "max": 55.61625000000001
           },
           "render": {
             "n": 12,
-            "median": 5.029147999999992,
-            "p95": 6.918969000000004,
-            "min": 4.667137999999994,
-            "max": 6.918969000000004
+            "median": 2.7915419999999926,
+            "p95": 49.752375,
+            "min": 1.8952079999999967,
+            "max": 49.752375
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.897908000000001,
-          "p95": 2.152782000000002,
-          "min": 0.7986160000000098,
-          "max": 3.793077000000011
+          "median": 0.46479200000000276,
+          "p95": 0.6871249999999947,
+          "min": 0.3106250000000017,
+          "max": 2.0801249999999953
         }
       },
       {
@@ -2930,32 +2933,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 92.45664799999999,
-            "p95": 112.45669699999999,
-            "min": 81.328019,
-            "max": 112.45669699999999
+            "median": 39.967333,
+            "p95": 50.63312500000001,
+            "min": 36.606958,
+            "max": 50.63312500000001
           },
           "load": {
             "n": 12,
-            "median": 10.109901000000008,
-            "p95": 15.994769999999988,
-            "min": 9.420829999999995,
-            "max": 15.994769999999988
+            "median": 4.707167000000027,
+            "p95": 5.300708,
+            "min": 4.071124999999995,
+            "max": 5.300708
           },
           "render": {
             "n": 12,
-            "median": 79.905752,
-            "p95": 99.13932599999998,
-            "min": 71.907189,
-            "max": 99.13932599999998
+            "median": 35.6435,
+            "p95": 45.60495800000001,
+            "min": 32.233582999999996,
+            "max": 45.60495800000001
           }
         },
         "warm": {
           "n": 30,
-          "median": 22.483984000000078,
-          "p95": 45.40221700000001,
-          "min": 12.748401000000058,
-          "max": 53.26826900000003
+          "median": 11.922583999999972,
+          "p95": 30.811499999999967,
+          "min": 7.139291999999955,
+          "max": 31.85012499999999
         }
       },
       {
@@ -2965,32 +2968,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 10.512898000000007,
-            "p95": 16.991491999999994,
-            "min": 9.50497900000002,
-            "max": 16.991491999999994
+            "median": 5.015709000000001,
+            "p95": 6.765874999999994,
+            "min": 4.450583000000002,
+            "max": 6.765874999999994
           },
           "load": {
             "n": 12,
-            "median": 7.515923000000001,
-            "p95": 12.904923999999994,
-            "min": 6.800252999999998,
-            "max": 12.904923999999994
+            "median": 3.7399169999999984,
+            "p95": 4.937916999999999,
+            "min": 3.230792000000001,
+            "max": 4.937916999999999
           },
           "render": {
             "n": 12,
-            "median": 3.00266400000001,
-            "p95": 4.086568,
-            "min": 2.6473629999999844,
-            "max": 4.086568
+            "median": 1.2376250000000013,
+            "p95": 1.8279579999999953,
+            "min": 1.1792500000000032,
+            "max": 1.8279579999999953
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.09640099999998597,
-          "p95": 0.287889999999976,
-          "min": 0.06364700000000312,
-          "max": 1.5535000000000139
+          "median": 0.038584000000000174,
+          "p95": 0.14399999999999125,
+          "min": 0.031374999999997044,
+          "max": 0.6177910000000111
         }
       },
       {
@@ -3000,32 +3003,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 37.89039299999999,
-            "p95": 51.745656,
-            "min": 25.469763999999998,
-            "max": 51.745656
+            "median": 17.897917000000007,
+            "p95": 169.73066599999999,
+            "min": 14.53433299999999,
+            "max": 169.73066599999999
           },
           "load": {
             "n": 12,
-            "median": 14.145982000000004,
-            "p95": 18.945659000000006,
-            "min": 9.938780999999977,
-            "max": 18.945659000000006
+            "median": 6.611249999999998,
+            "p95": 138.034041,
+            "min": 4.415040999999988,
+            "max": 138.034041
           },
           "render": {
             "n": 12,
-            "median": 21.587203999999986,
-            "p95": 32.79999699999999,
-            "min": 15.53098300000002,
-            "max": 32.79999699999999
+            "median": 11.362125000000006,
+            "p95": 31.696624999999983,
+            "min": 7.906207999999992,
+            "max": 31.696624999999983
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.956308000000007,
-          "p95": 2.4837520000000097,
-          "min": 0.4223209999999824,
-          "max": 3.8656349999999975
+          "median": 0.8292080000000084,
+          "p95": 5.194458999999995,
+          "min": 0.32858299999999474,
+          "max": 10.173124999999999
         }
       },
       {
@@ -3035,32 +3038,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 14.242076000000012,
-            "p95": 17.180509999999998,
-            "min": 10.658547000000013,
-            "max": 17.180509999999998
+            "median": 10.788207999999997,
+            "p95": 18.027333,
+            "min": 5.987082999999998,
+            "max": 18.027333
           },
           "load": {
             "n": 12,
-            "median": 7.718080999999984,
-            "p95": 11.921779000000015,
-            "min": 6.919175999999993,
-            "max": 11.921779000000015
+            "median": 7.25545799999999,
+            "p95": 13.441833000000003,
+            "min": 4.161916000000005,
+            "max": 13.441833000000003
           },
           "render": {
             "n": 12,
-            "median": 4.258053000000018,
-            "p95": 7.338250000000016,
-            "min": 3.644922000000008,
-            "max": 7.338250000000016
+            "median": 3.387999999999991,
+            "p95": 5.980124999999987,
+            "min": 1.8251669999999933,
+            "max": 5.980124999999987
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.6211000000000126,
-          "p95": 1.2534750000000088,
-          "min": 0.4873720000000219,
-          "max": 2.9426559999999995
+          "median": 0.509332999999998,
+          "p95": 1.1310000000000002,
+          "min": 0.27754200000001106,
+          "max": 5.150791999999996
         }
       },
       {
@@ -3070,32 +3073,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 44.106865,
-            "p95": 58.97089399999999,
-            "min": 41.100657999999996,
-            "max": 58.97089399999999
+            "median": 44.42441600000001,
+            "p95": 172.46004199999993,
+            "min": 23.068249999999992,
+            "max": 172.46004199999993
           },
           "load": {
             "n": 12,
-            "median": 10.326474000000005,
-            "p95": 15.543385000000015,
-            "min": 9.391914,
-            "max": 15.543385000000015
+            "median": 10.166792000000001,
+            "p95": 70.33420900000002,
+            "min": 5.051749999999998,
+            "max": 70.33420900000002
           },
           "render": {
             "n": 12,
-            "median": 33.84587800000001,
-            "p95": 45.61361499999998,
-            "min": 31.708743999999996,
-            "max": 45.61361499999998
+            "median": 33.859042,
+            "p95": 128.83137499999998,
+            "min": 18.016499999999994,
+            "max": 128.83137499999998
           }
         },
         "warm": {
           "n": 30,
-          "median": 4.941841999999951,
-          "p95": 13.948822000000007,
-          "min": 4.143215999999995,
-          "max": 14.06037200000003
+          "median": 3.489292000000006,
+          "p95": 7.454957999999991,
+          "min": 2.2306250000000034,
+          "max": 8.819208000000003
         }
       },
       {
@@ -3105,32 +3108,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 13.642286999999982,
-            "p95": 17.099148999999983,
-            "min": 10.428775000000002,
-            "max": 17.099148999999983
+            "median": 11.342540999999983,
+            "p95": 12.798000000000002,
+            "min": 4.869541999999996,
+            "max": 12.798000000000002
           },
           "load": {
             "n": 12,
-            "median": 7.5887369999999805,
-            "p95": 10.244013999999993,
-            "min": 6.630097000000006,
-            "max": 10.244013999999993
+            "median": 7.9026250000000005,
+            "p95": 9.832958000000005,
+            "min": 3.4565839999999994,
+            "max": 9.832958000000005
           },
           "render": {
             "n": 12,
-            "median": 5.155344999999997,
-            "p95": 8.130103999999989,
-            "min": 3.398272999999989,
-            "max": 8.130103999999989
+            "median": 2.399124999999998,
+            "p95": 4.240749999999991,
+            "min": 1.4129579999999962,
+            "max": 4.240749999999991
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.22084499999999707,
-          "p95": 0.49190300000000775,
-          "min": 0.15093400000000656,
-          "max": 3.8691530000000114
+          "median": 0.1267090000000053,
+          "p95": 0.6455839999999995,
+          "min": 0.09629200000000537,
+          "max": 2.0391660000000087
         }
       },
       {
@@ -3140,32 +3143,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 28.447611999999992,
-            "p95": 31.464224,
-            "min": 24.24736800000001,
-            "max": 31.464224
+            "median": 16.307000000000002,
+            "p95": 52.255917,
+            "min": 11.855583000000003,
+            "max": 52.255917
           },
           "load": {
             "n": 12,
-            "median": 11.092507999999995,
-            "p95": 15.770206000000002,
-            "min": 9.825552000000002,
-            "max": 15.770206000000002
+            "median": 5.976292000000001,
+            "p95": 37.02716699999999,
+            "min": 4.572749999999999,
+            "max": 37.02716699999999
           },
           "render": {
             "n": 12,
-            "median": 15.338464999999985,
-            "p95": 18.186056999999977,
-            "min": 14.421816000000007,
-            "max": 18.186056999999977
+            "median": 10.571541999999994,
+            "p95": 15.734207999999995,
+            "min": 7.282833000000004,
+            "max": 15.734207999999995
           }
         },
         "warm": {
           "n": 30,
-          "median": 0.3841319999999939,
-          "p95": 1.0004320000000178,
-          "min": 0.26747100000000046,
-          "max": 1.131180999999998
+          "median": 0.18170800000000042,
+          "p95": 0.5085829999999874,
+          "min": 0.10795799999999645,
+          "max": 0.5608749999999958
         }
       },
       {
@@ -3175,32 +3178,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 16.59116299999998,
-            "p95": 23.180975000000004,
-            "min": 14.639914999999988,
-            "max": 23.180975000000004
+            "median": 8.156584000000002,
+            "p95": 11.702791999999988,
+            "min": 7.124167,
+            "max": 11.702791999999988
           },
           "load": {
             "n": 12,
-            "median": 6.741144000000006,
-            "p95": 12.717039999999997,
-            "min": 6.436976000000001,
-            "max": 12.717039999999997
+            "median": 4.007167000000003,
+            "p95": 5.584499999999991,
+            "min": 3.729875,
+            "max": 5.584499999999991
           },
           "render": {
             "n": 12,
-            "median": 9.740252999999996,
-            "p95": 15.934360999999996,
-            "min": 8.101342999999986,
-            "max": 15.934360999999996
+            "median": 4.155042000000002,
+            "p95": 6.118291999999997,
+            "min": 3.394292,
+            "max": 6.118291999999997
           }
         },
         "warm": {
           "n": 30,
-          "median": 1.9142549999999972,
-          "p95": 2.6429490000000158,
-          "min": 1.8125119999999981,
-          "max": 4.4912499999999795
+          "median": 1.024917000000002,
+          "p95": 1.945999999999998,
+          "min": 0.8095409999999958,
+          "max": 2.348875000000021
         }
       },
       {
@@ -3210,32 +3213,32 @@
         "cold": {
           "total": {
             "n": 12,
-            "median": 31.47398799999999,
-            "p95": 35.263046999999986,
-            "min": 27.95037699999999,
-            "max": 35.263046999999986
+            "median": 16.640290999999998,
+            "p95": 39.69425000000001,
+            "min": 13.814334000000002,
+            "max": 39.69425000000001
           },
           "load": {
             "n": 12,
-            "median": 9.836669,
-            "p95": 13.013694000000001,
-            "min": 9.345182999999992,
-            "max": 13.013694000000001
+            "median": 5.055957999999997,
+            "p95": 12.762792000000005,
+            "min": 4.2364999999999995,
+            "max": 12.762792000000005
           },
           "render": {
             "n": 12,
-            "median": 19.289720000000017,
-            "p95": 25.18121099999999,
-            "min": 18.605193999999997,
-            "max": 25.18121099999999
+            "median": 10.770499999999998,
+            "p95": 26.931458000000006,
+            "min": 9.577834000000003,
+            "max": 26.931458000000006
           }
         },
         "warm": {
           "n": 30,
-          "median": 1.6718040000000087,
-          "p95": 3.2326050000000066,
-          "min": 1.461133999999987,
-          "max": 3.8892789999999877
+          "median": 1.269291999999993,
+          "p95": 2.8020000000000067,
+          "min": 0.7812920000000076,
+          "max": 3.8406249999999886
         }
       }
     ],
@@ -3246,46 +3249,46 @@
         "lines": 6658,
         "wholeFileTokens": {
           "n": 10,
-          "median": 9.223832000000016,
-          "p95": 14.271341000000007,
-          "min": 5.008164000000022,
-          "max": 14.271341000000007
+          "median": 4.557207999999946,
+          "p95": 17.12008400000002,
+          "min": 2.6655000000000086,
+          "max": 17.12008400000002
         },
         "streamFirstScreen": {
           "n": 10,
-          "median": 0.9306630000000098,
-          "p95": 4.9856519999999875,
-          "min": 0.5310839999999644,
-          "max": 4.9856519999999875
+          "median": 0.44429099999999266,
+          "p95": 0.8870419999999797,
+          "min": 0.30475000000001273,
+          "max": 0.8870419999999797
         },
         "streamCharsPushed": 16384,
         "liveFirstScreen": {
           "n": 10,
-          "median": 3.6206470000000195,
-          "p95": 4.331512000000004,
-          "min": 2.1602290000000153,
-          "max": 4.331512000000004
+          "median": 2.4599170000000186,
+          "p95": 16.227082999999993,
+          "min": 1.7094999999999914,
+          "max": 16.227082999999993
         },
         "liveFlushRest": {
           "n": 10,
-          "median": 12.975242000000037,
-          "p95": 14.884886999999992,
-          "min": 7.387857999999994,
-          "max": 14.884886999999992
+          "median": 5.740584000000013,
+          "p95": 10.393624999999986,
+          "min": 3.971416999999974,
+          "max": 10.393624999999986
         },
         "coldImportPlusStreamFirstScreen": {
           "n": 12,
-          "median": 16.421753999999993,
-          "p95": 22.572778999999997,
-          "min": 12.656044999999992,
-          "max": 22.572778999999997
+          "median": 7.338708999999994,
+          "p95": 26.015500000000003,
+          "min": 6.292749999999998,
+          "max": 26.015500000000003
         },
         "coldImportOnly": {
           "n": 12,
-          "median": 8.64345800000001,
-          "p95": 15.245364000000023,
-          "min": 6.91034599999999,
-          "max": 15.245364000000023
+          "median": 4.288249999999991,
+          "p95": 11.760125000000002,
+          "min": 3.6437919999999906,
+          "max": 11.760125000000002
         }
       },
       {
@@ -3294,46 +3297,46 @@
         "lines": 27129,
         "wholeFileTokens": {
           "n": 10,
-          "median": 29.19771800000001,
-          "p95": 36.390184999999974,
-          "min": 23.618490000000065,
-          "max": 36.390184999999974
+          "median": 18.56758400000001,
+          "p95": 108.84924999999998,
+          "min": 12.444500000000062,
+          "max": 108.84924999999998
         },
         "streamFirstScreen": {
           "n": 10,
-          "median": 0.7513439999999605,
-          "p95": 1.0036340000000337,
-          "min": 0.6865470000000187,
-          "max": 1.0036340000000337
+          "median": 0.47858300000001464,
+          "p95": 1.4858750000000214,
+          "min": 0.3675420000000713,
+          "max": 1.4858750000000214
         },
         "streamCharsPushed": 16384,
         "liveFirstScreen": {
           "n": 10,
-          "median": 7.575035999999955,
-          "p95": 10.01899000000003,
-          "min": 6.848801999999978,
-          "max": 10.01899000000003
+          "median": 7.052999999999997,
+          "p95": 15.714832999999999,
+          "min": 5.238040999999953,
+          "max": 15.714832999999999
         },
         "liveFlushRest": {
           "n": 10,
-          "median": 34.031543,
-          "p95": 54.17910600000005,
-          "min": 30.372022000000015,
-          "max": 54.17910600000005
+          "median": 19.755750000000035,
+          "p95": 56.88262500000002,
+          "min": 16.662458000000015,
+          "max": 56.88262500000002
         },
         "coldImportPlusStreamFirstScreen": {
           "n": 12,
-          "median": 16.47744200000001,
-          "p95": 19.420180999999985,
-          "min": 13.466467000000009,
-          "max": 19.420180999999985
+          "median": 7.469999999999999,
+          "p95": 16.21766600000001,
+          "min": 6.449458,
+          "max": 16.21766600000001
         },
         "coldImportOnly": {
           "n": 12,
-          "median": 8.037572000000011,
-          "p95": 10.712119000000001,
-          "min": 7.4959460000000036,
-          "max": 10.712119000000001
+          "median": 4.296666999999999,
+          "p95": 12.257000000000005,
+          "min": 3.735875,
+          "max": 12.257000000000005
         }
       }
     ]
@@ -3374,9 +3377,9 @@
       }
     },
     "client": {
-      "fileHighlightsChunks": {
-        "bytes": 522211,
-        "gzipBytes": 194638
+      "fileDiffAlone": {
+        "bytes": 339211,
+        "gzipBytes": 93957
       },
       "fileDiffInitial": {
         "bytes": 403522,
@@ -3386,13 +3389,29 @@
         "bytes": 403518,
         "gzipBytes": 110530
       },
-      "fileInitialNotInFileDiff": {
+      "bothInitial": {
+        "bytes": 403749,
+        "gzipBytes": 110672
+      },
+      "firstTimeAdded": {
+        "bytes": 64538,
+        "gzipBytes": 16715
+      },
+      "fileDiffGrowth": {
+        "bytes": 64311,
+        "gzipBytes": 16577
+      },
+      "perNavigation": {
         "bytes": 227,
         "gzipBytes": 138
       },
       "fileLazy": {
         "bytes": 11063608,
         "gzipBytes": 2145781
+      },
+      "fileHighlightsChunks": {
+        "bytes": 522211,
+        "gzipBytes": 194638
       },
       "shippedJs": {
         "bytes": 23164731,
