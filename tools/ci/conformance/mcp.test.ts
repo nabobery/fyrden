@@ -5,13 +5,14 @@
 // baselined check that starts passing, fails this test. The suite sends no
 // token, so a local proxy adds one (Fyrden's MCP server takes no anonymous
 // request). And the authorization server's metadata scenario.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, request, type Server } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startWranglerDev, type WranglerDev } from "../e2e/wrangler-dev.ts";
 
 /** The suite's version, pinned: a new one is adopted deliberately, with its baseline. */
 const CONFORMANCE = "@modelcontextprotocol/conformance@0.2.0-alpha.12";
@@ -51,13 +52,12 @@ function run(command: string, args: string[], cwd: string): Promise<Run> {
 }
 
 describe("MCP conformance", () => {
-  const port = 40_000 + Math.floor(Math.random() * 10_000);
+  let port = 0;
   let proxyPort = 0;
   const bootstrapSecret = `conformance-${crypto.randomUUID()}`;
   let scratch = "";
-  let dev: ChildProcess | undefined;
+  let dev: WranglerDev | undefined;
   let proxy: Server | undefined;
-  let output = "";
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), "fyrden-conformance-"));
@@ -81,48 +81,19 @@ describe("MCP conformance", () => {
       );
       expect(migrated.code, migrated.output).toBe(0);
     }
-    dev = spawn(
-      process.execPath,
-      [
-        wranglerBin,
-        "dev",
+    dev = await startWranglerDev({
+      args: [
         "-c",
         apiConfig,
         "--persist-to",
         persist,
         "--var",
         `BOOTSTRAP_SECRET:${bootstrapSecret}`,
-        "--ip",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        // Its own inspector port: concurrent servers each probing up from
-        // 9229 can pick the same one, and the later fails to bind.
-        "--inspector-port",
-        String(port + 1),
       ],
-      {
-        cwd: join(root, "apps/api"),
-        env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
-      },
-    );
-    const child = dev;
-    await new Promise<void>((ready, fail) => {
-      const timer = setTimeout(
-        () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-        60_000,
-      );
-      const onData = (d: Buffer) => {
-        output += d;
-        if (/Ready on/.test(output)) {
-          clearTimeout(timer);
-          ready();
-        }
-      };
-      child.stdout?.on("data", onData);
-      child.stderr?.on("data", onData);
-      child.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
+      cwd: join(root, "apps/api"),
+      onOutput: () => {},
     });
+    port = dev.port;
     const boot = await fetch(`http://127.0.0.1:${port}/v0/admin/bootstrap`, {
       method: "POST",
       headers: { "X-Fyrden-Bootstrap-Secret": bootstrapSecret, "Content-Type": "application/json" },
@@ -161,11 +132,13 @@ describe("MCP conformance", () => {
     proxyPort = address.port;
   }, 180_000);
 
+  // Long enough for stop: SIGTERM, 10 s, SIGKILL, then waiting for it to go.
   afterAll(async () => {
     proxy?.close();
-    if (dev && dev.exitCode === null) dev.kill("SIGTERM");
+    // Its state is removed next: make sure it is gone first.
+    await dev?.stop();
     if (scratch) await rm(scratch, { recursive: true, force: true });
-  });
+  }, 60_000);
 
   it("passes every check of the revision's requirements but the baselined ones", async () => {
     const result = await run(
