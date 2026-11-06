@@ -1,10 +1,11 @@
 // fyrden-api under `wrangler dev` for the interoperability suites: fresh
 // local storage in a temporary directory, one bootstrapped user, and the
 // whole output kept so the suite can check that no token was logged.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
+import { startWranglerDev } from "../e2e/wrangler-dev.ts";
 
 /**
  * The checkout whose Worker is served. FYRDEN_INTEROP_ROOT points the suite
@@ -28,6 +29,8 @@ export interface ServerOptions {
   readonly plan?: "free" | "paid";
   /** Extra `--var` values, e.g. a small push body limit. */
   readonly vars?: Readonly<Record<string, string>>;
+  /** Ports for each start (see `startWranglerDev`); a test's way to make one taken. */
+  readonly pickPorts?: () => Promise<[number, number]>;
 }
 
 export interface Server {
@@ -55,27 +58,14 @@ export interface Server {
    */
   waitForOutput(until: (output: string) => boolean, timeoutMs?: number): Promise<boolean>;
   /**
-   * Stops wrangler: SIGTERM, then SIGKILL if it has not exited within
-   * 10 seconds. Resolves only once the process has closed, so its storage can
-   * be removed; rejects if it never does.
+   * Stops wrangler and everything it started (see `WranglerDev.stop`).
+   * Resolves only once they have all gone, so the storage can be removed.
    */
   stop(): Promise<void>;
 }
 
-/** How long stop() waits after SIGTERM, then after SIGKILL. */
-const TERM_GRACE_MS = 10_000;
-const KILL_GRACE_MS = 5_000;
 /** Default bound for waitForOutput. */
 const OUTPUT_WAIT_MS = 10_000;
-
-const within = (promise: Promise<void>, ms: number): Promise<boolean> =>
-  new Promise((done) => {
-    const timer = setTimeout(() => done(false), ms);
-    void promise.then(() => {
-      clearTimeout(timer);
-      done(true);
-    });
-  });
 
 interface Exit {
   code: number | null;
@@ -119,15 +109,14 @@ export async function startServer(options: ServerOptions): Promise<Server> {
   );
   if (migrate.code !== 0) throw new Error(`D1 migrations failed:\n${migrate.output}`);
 
-  const port = 40_000 + Math.floor(Math.random() * 10_000);
-  const origin = `http://127.0.0.1:${port}`;
   const bootstrapSecret = `interop-${crypto.randomUUID()}`;
   const vars = { FYRDEN_PLAN: options.plan ?? "free", ...options.vars };
-  const dev: ChildProcess = spawn(
-    process.execPath,
-    [
-      wranglerBin,
-      "dev",
+  let output = "";
+  /** Called on every chunk of output and when wrangler closes. */
+  const watchers = new Set<() => void>();
+  let exited = false;
+  const dev = await startWranglerDev({
+    args: [
       "-c",
       apiConfig,
       "--persist-to",
@@ -135,31 +124,17 @@ export async function startServer(options: ServerOptions): Promise<Server> {
       "--var",
       `BOOTSTRAP_SECRET:${bootstrapSecret}`,
       ...Object.entries(vars).flatMap(([key, value]) => ["--var", `${key}:${value}`]),
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      // Its own inspector port, so it can run beside other suites' servers.
-      "--inspector-port",
-      String(port + 1),
     ],
-    {
-      cwd: apiDir,
-      env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
+    cwd: apiDir,
+    onOutput: (text) => {
+      output += text;
+      for (const watch of watchers) watch();
     },
-  );
-  let output = "";
-  const closed = new Promise<void>((done) => dev.once("close", () => done()));
-  const exited = () => dev.exitCode !== null || dev.signalCode !== null;
-  /** Called on every chunk of output and when wrangler closes. */
-  const watchers = new Set<() => void>();
-  const onData = (d: Buffer) => {
-    output += d;
-    for (const watch of watchers) watch();
-  };
-  dev.stdout?.on("data", onData);
-  dev.stderr?.on("data", onData);
-  void closed.then(() => {
+    ...(options.pickPorts ? { pickPorts: options.pickPorts } : {}),
+  });
+  const origin = `http://127.0.0.1:${dev.port}`;
+  void dev.closed.then(() => {
+    exited = true;
     for (const watch of watchers) watch();
   });
 
@@ -172,35 +147,16 @@ export async function startServer(options: ServerOptions): Promise<Server> {
       };
       const watch = () => {
         if (until(output)) finish(true);
-        else if (exited()) finish(false);
+        else if (exited) finish(false);
       };
       const timer = setTimeout(() => finish(until(output)), timeoutMs);
       watchers.add(watch);
       watch();
     });
 
-  const stop = async () => {
-    if (!exited()) dev.kill("SIGTERM");
-    if (await within(closed, TERM_GRACE_MS)) return;
-    dev.kill("SIGKILL");
-    if (!(await within(closed, KILL_GRACE_MS)))
-      throw new Error(`wrangler dev (pid ${dev.pid}) did not exit after SIGTERM and SIGKILL`);
-  };
-
   // From here on, any failure stops wrangler before it reaches the caller,
   // which never gets a handle to stop it with.
   try {
-    let failed: unknown;
-    const started = waitForOutput((text) => /Ready on/.test(text), 60_000);
-    const onExit = (code: number | null) => {
-      failed = new Error(`wrangler dev exited (${code}):\n${output}`);
-    };
-    dev.once("exit", onExit);
-    const ready = await started;
-    dev.off("exit", onExit);
-    if (failed) throw failed;
-    if (!ready) throw new Error(`wrangler dev did not start:\n${output}`);
-
     const handle = `interop${Date.now().toString(36)}`;
     const boot = await fetch(`${origin}/v0/admin/bootstrap`, {
       method: "POST",
@@ -254,10 +210,10 @@ export async function startServer(options: ServerOptions): Promise<Server> {
       tokenLines: () => output.split("\n").filter(mentionsToken),
       output: () => output,
       waitForOutput,
-      stop,
+      stop: dev.stop,
     };
   } catch (error) {
-    await stop();
+    await dev.stop();
     throw error;
   }
 }

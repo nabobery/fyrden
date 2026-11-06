@@ -28,6 +28,8 @@ const GONE_POLL_MS = 50;
 export interface WranglerDev {
   /** The HTTP port, on 127.0.0.1. */
   readonly port: number;
+  /** Resolves once wrangler has exited and its output pipes have closed (`close`, not `exit`). */
+  readonly closed: Promise<void>;
   /**
    * Ends wrangler and every process it started: SIGTERM, then SIGKILL if
    * any is still running after a grace period. Resolves once they are all
@@ -124,7 +126,7 @@ export function spawnOwned(
   args: readonly string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv },
   graceMs = STOP_GRACE_MS,
-): { child: ChildProcess; stop: () => Promise<void> } {
+): { child: ChildProcess; closed: Promise<void>; stop: () => Promise<void> } {
   const child = spawn(command, args, { ...options, detached: true });
   // On `close`, not `exit`: output can still arrive between the two.
   const closed = new Promise<void>((done) => child.once("close", () => done()));
@@ -175,6 +177,7 @@ export function spawnOwned(
   let stopping: Promise<void> | undefined;
   return {
     child,
+    closed,
     stop: () => {
       stopping ??= stop();
       return stopping;
@@ -192,10 +195,13 @@ export async function startWranglerDev(options: {
   readonly cwd: string;
   readonly onOutput: (text: string) => void;
   readonly timeoutMs?: number;
+  /** The HTTP and inspector ports for each start; a test's way to make one taken. */
+  readonly pickPorts?: () => Promise<[number, number]>;
 }): Promise<WranglerDev> {
+  const pickPorts = options.pickPorts ?? (() => freePorts(2) as Promise<[number, number]>);
   for (let attempt = 1; ; attempt++) {
-    const [port, inspectorPort] = (await freePorts(2)) as [number, number];
-    const { child, stop } = spawnOwned(
+    const [port, inspectorPort] = await pickPorts();
+    const { child, closed, stop } = spawnOwned(
       process.execPath,
       [
         wranglerBin,
@@ -241,14 +247,14 @@ export async function startWranglerDev(options: {
         );
       });
     });
-    if (started === "ready") return { port, stop };
+    if (started === "ready") return { port, closed, stop };
     await stop();
     if (started instanceof Error) throw started;
   }
 }
 
 /** `count` distinct ports free on 127.0.0.1 at the time of asking. */
-async function freePorts(count: number): Promise<number[]> {
+export async function freePorts(count: number): Promise<number[]> {
   const servers: Server[] = [];
   try {
     const ports: number[] = [];
