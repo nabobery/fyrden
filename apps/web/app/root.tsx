@@ -9,6 +9,7 @@ import {
   Scripts,
   ScrollRestoration,
   type ShouldRevalidateFunctionArgs,
+  useLocation,
   useRouteLoaderData,
 } from "react-router";
 import type { Route } from "./+types/root";
@@ -16,7 +17,9 @@ import "./app.css";
 import { type SessionUser, signedInUser } from "./lib/api.server.js";
 import { api } from "./lib/cloudflare.server.js";
 import { logServerError } from "./lib/log-error.server.js";
+import { themePreference } from "./lib/theme.js";
 import { LiveHints } from "./lib/use-live.js";
+import { useThemeMode } from "./lib/use-theme-mode.js";
 
 /**
  * Who is signed in and the API's version, for the header and footer. A
@@ -33,7 +36,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     signedInUser(context, request).catch(logged),
     api(context).rpcVersion().catch(logged),
   ]);
-  return { user, apiRpcVersion };
+  return { user, apiRpcVersion, theme: themePreference(request) };
 }
 
 /**
@@ -56,6 +59,29 @@ function SiteFooter() {
     <footer className="muted" style={{ padding: "1rem", textAlign: "center" }}>
       Fyrden · API RPC version {data?.apiRpcVersion ?? "?"}
     </footer>
+  );
+}
+
+/** System, Light or Dark: a native form, as the whole page draws again in the choice. */
+function ThemeControl() {
+  const mode = useThemeMode();
+  const { pathname, search } = useLocation();
+  return (
+    <form method="post" action="/appearance" className="theme-control" aria-label="Colour scheme">
+      <input type="hidden" name="return" value={`${pathname}${search}`} />
+      {(["system", "light", "dark"] as const).map((choice) => (
+        <button
+          key={choice}
+          type="submit"
+          name="mode"
+          value={choice}
+          aria-pressed={mode === choice}
+        >
+          {choice[0]?.toUpperCase()}
+          {choice.slice(1)}
+        </button>
+      ))}
+    </form>
   );
 }
 
@@ -86,6 +112,7 @@ function SiteHeader() {
           <input id="site-search" name="q" type="search" placeholder="Search (repo:owner/name …)" />
         </Form>
       )}
+      <ThemeControl />
       {user ? (
         <form method="post" action="/sign-out" className="row">
           <span className="muted">{user.handle}</span>
@@ -109,8 +136,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const data = useRouteLoaderData("root") as { user: SessionUser | null } | undefined;
   const viewer = useRef<string | null>(null);
   if (data?.user) viewer.current = data.user.id;
+  const mode = useThemeMode();
   return (
-    <html lang="en">
+    <html lang="en" data-theme={mode === "system" ? undefined : mode}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

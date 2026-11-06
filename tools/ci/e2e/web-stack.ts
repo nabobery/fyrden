@@ -181,13 +181,17 @@ export async function reload(page: Page): Promise<void> {
   await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
 }
 
-/** `page` has no WCAG 2.x A or AA violation axe can find. */
+/** `page` has no WCAG 2.x A or AA violation axe can find, in either colour scheme. */
 export async function accessible(page: Page, name: string): Promise<void> {
-  const result = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
-    .analyze();
-  expect(
-    result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`),
-    name,
-  ).toEqual([]);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    const result = await new AxeBuilder({ page })
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(
+      result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`),
+      `${name}, ${colorScheme}`,
+    ).toEqual([]);
+  }
+  await page.emulateMedia({ colorScheme: "light" });
 }

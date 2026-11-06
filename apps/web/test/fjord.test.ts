@@ -93,9 +93,9 @@ describe("Fjord", () => {
       "--diff-selected": scheme.diff.selected,
     });
     expect(tokensIn(css, ":root {")).toEqual(expected(FJORD.light));
-    expect(tokensIn(css, "@media (prefers-color-scheme: dark) {\n  :root {")).toEqual(
-      expected(FJORD.dark),
-    );
+    // Followed from the operating system, and picked in the site header.
+    expect(tokensIn(css, ':root:not([data-theme="light"]) {')).toEqual(expected(FJORD.dark));
+    expect(tokensIn(css, ':root[data-theme="dark"] {')).toEqual(expected(FJORD.dark));
   });
 
   it("gives Highlights and Shiki the same colours for the same kinds of code", () => {

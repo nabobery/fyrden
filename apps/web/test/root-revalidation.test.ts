@@ -100,6 +100,7 @@ describe("a page holding conflict edits, read again", () => {
     expect(router.state.loaderData.root).toEqual({
       user: { id: VIEWER, handle: "ada" },
       apiRpcVersion: 1,
+      theme: "system",
     });
     const rootRuns = state.rpcCalls;
 
@@ -123,6 +124,7 @@ describe("a page holding conflict edits, read again", () => {
     expect(router.state.loaderData.root).toEqual({
       user: { id: VIEWER, handle: "ada" },
       apiRpcVersion: 1,
+      theme: "system",
     });
     router.dispose();
   });
@@ -151,7 +153,7 @@ describe("a page holding conflict edits, read again", () => {
       context,
       params: {},
     } as never);
-    expect(data).toEqual({ user: null, apiRpcVersion: null });
+    expect(data).toEqual({ user: null, apiRpcVersion: null, theme: "system" });
     const at = (path: string) => new URL(`https://fyrden.test${path}`);
     const args = (from: string, to: string) => ({
       currentUrl: at(from),

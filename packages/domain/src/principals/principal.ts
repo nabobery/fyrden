@@ -59,6 +59,7 @@ const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "unsubscribe",
   "v0",
   // The web's own pages, and the built assets served before it runs.
+  "appearance",
   "assets",
   "healthz",
   "notifications",

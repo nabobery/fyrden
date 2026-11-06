@@ -675,10 +675,7 @@ describe("issues in the web UI", () => {
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
     expect(loaded.filter((url) => /highlight\.client-/.test(url))).toHaveLength(1);
     expect(stack.refused).toEqual([]);
-    await accessible("highlighted code, light");
-    await page.emulateMedia({ colorScheme: "dark" });
-    await accessible("highlighted code, dark");
-    await page.emulateMedia({ colorScheme: "light" });
+    await accessible("highlighted code");
   });
 
   it("highlights 200 blocks a page, each page shown its own budget, a return included", async () => {

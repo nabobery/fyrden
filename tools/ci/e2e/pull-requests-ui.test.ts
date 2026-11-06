@@ -220,14 +220,6 @@ async function hold(
   return { release: end("continue"), abort: end("abort") };
 }
 
-/** `page` passes axe in the light and the dark colour scheme. */
-async function accessibleInBoth(name: string): Promise<void> {
-  await accessible(page, `${name}, light`);
-  await page.emulateMedia({ colorScheme: "dark" });
-  await accessible(page, `${name}, dark`);
-  await page.emulateMedia({ colorScheme: "light" });
-}
-
 /** `#rrggbb` as `getComputedStyle` reports it. */
 function rgb(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
@@ -407,7 +399,18 @@ describe("pull requests in the web UI", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
     await page.emulateMedia({ colorScheme: "light" });
-    await accessibleInBoth("files");
+    await accessible(page, "files");
+    // A scheme picked in the site header reaches the renderer, over the operating system's.
+    await page.getByRole("button", { name: "Dark", exact: true }).click();
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.waitForLoadState("load");
+    await highlightedWith(file, "highlights", "workers");
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
+    await page.getByRole("button", { name: "System", exact: true }).click();
+    await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+    await page.waitForLoadState("load");
+    await highlightedWith(file, "highlights", "workers");
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.light));
     // Selected lines take Fjord's fill too, unchanged and changed alike, in both schemes.
     for (const type of ["context", "change-addition"]) {
       await file
@@ -432,7 +435,7 @@ describe("pull requests in the web UI", () => {
     try {
       await visit(page, files);
       await highlightedWith(file, "shiki-js", "workers");
-      await accessibleInBoth("files drawn by Shiki");
+      await accessible(page, "files drawn by Shiki");
     } finally {
       await page.unroute(blocked);
     }
@@ -499,7 +502,7 @@ describe("pull requests in the web UI", () => {
     await crash();
     await highlightedWith(file, "shiki-js", "none");
     await see(thread.getByLabel("Reply")).toHaveValue("An unsent reply.");
-    await accessibleInBoth("files drawn without workers");
+    await accessible(page, "files drawn without workers");
     // The session keeps it: the files drawn again on another page, the same way.
     await page.getByRole("link", { name: "Split" }).click();
     await see(page).toHaveURL(/[?&]style=split/);
@@ -548,7 +551,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       await file.getByLabel(/^Comment \(Markdown/).fill("Read as text.");
       await file.getByRole("button", { name: "Add comment" }).click();
       await see(view.locator(".thread").getByText("Read as text.")).toBeVisible();
-      await accessibleInBoth("files as text");
+      await accessible(page, "files as text");
     } finally {
       await page.unroute(refused);
     }
@@ -656,7 +659,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       await see(text).toHaveAttribute("data-highlighter", "shiki-js", { timeout: 30_000 });
       await see(text.locator("pre.patch-text")).toContainText("+const html");
       await see(text.locator(".thread").getByText("Still reachable.")).toBeVisible();
-      await accessibleInBoth("a file drawn as text");
+      await accessible(page, "a file drawn as text");
     } finally {
       await page.unroute(workers);
     }
@@ -1050,7 +1053,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await lineNumber(3).click();
     await see(last).toHaveValue("3");
     await see(first).toHaveValue("");
-    await accessibleInBoth("a line picked with the mouse");
+    await accessible(page, "a line picked with the mouse");
     await see(button).toBeVisible();
     // A pointer's control: not a stop for the keyboard, where it would do nothing.
     await see(button).toHaveAttribute("tabindex", "-1");
@@ -1070,7 +1073,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await see(last).toHaveValue("7");
     // With a range picked the button sits at its end and picks the whole range, so its
     // name has to cover that as well as a single line.
-    await accessibleInBoth("a range picked from the gutter's button");
+    await accessible(page, "a range picked from the gutter's button");
     await first.fill("");
     await last.fill("");
     await button.click();

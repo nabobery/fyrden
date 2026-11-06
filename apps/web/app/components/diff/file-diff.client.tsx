@@ -40,6 +40,7 @@ import {
 } from "react";
 import { FJORD_RENDERER_CSS, FJORD_THEME_NAMES } from "../../lib/fjord.js";
 import type { Thread } from "../../lib/pulls.js";
+import { useThemeMode } from "../../lib/use-theme-mode.js";
 import { fileDiffOf } from "./file-diff.js";
 import { registerFjordThemes } from "./fjord-themes.client.js";
 import { type Engine, highlighterChoice, STEP_TIMEOUT_MS, within } from "./highlighter.js";
@@ -218,6 +219,7 @@ export default function FileDiffView({
       ),
     [threads],
   );
+  const mode = useThemeMode();
   const options = useMemo(() => {
     const pick = (
       range: {
@@ -242,7 +244,7 @@ export default function FileDiffView({
       unsafeCSS: FJORD_RENDERER_CSS,
       // Read only without a pool (which carries its own).
       ...(engine && { preferredHighlighter: engine }),
-      themeType: "system" as const,
+      themeType: mode,
       disableFileHeader: true,
       overflow: "scroll" as const,
       hunkSeparators: "line-info" as const,
@@ -257,7 +259,7 @@ export default function FileDiffView({
         if (node.shadowRoot?.querySelector("[data-error-wrapper]")) setFailedOn(fileDiff ?? null);
       },
     };
-  }, [diffStyle, canAct, onPick, engine, fileDiff]);
+  }, [diffStyle, canAct, onPick, engine, fileDiff, mode]);
   const virtualizer = useWindowVirtualizer();
   if (!fileDiff) return <p className="error">These changes could not be read.</p>;
   if (!highlighter) return <p className="muted">Drawing changes…</p>;

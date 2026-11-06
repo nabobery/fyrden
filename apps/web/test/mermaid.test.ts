@@ -11,7 +11,7 @@ const render = vi.hoisted(() =>
 const initialize = vi.hoisted(() => vi.fn());
 vi.mock("mermaid", () => ({ default: { initialize, render } }));
 
-const { drawDiagrams } = await import("../app/lib/mermaid.client.js");
+const { drawDiagrams, redrawDiagrams } = await import("../app/lib/mermaid.client.js");
 const { FJORD } = await import("../app/lib/fjord.js");
 
 /** An element as the stubbed document makes it: what was set on it and put in it. */
@@ -34,10 +34,29 @@ function block(code: string) {
   return { element: element as unknown as Element, placed };
 }
 
+/** The operating system's scheme, and who listens for it changing. */
+const scheme = { matches: false, listeners: [] as (() => void)[] };
+const media = {
+  get matches() {
+    return scheme.matches;
+  },
+  addEventListener: (_type: string, listener: () => void) => scheme.listeners.push(listener),
+};
+/** The figures on the page. */
+const figures: unknown[] = [];
+/** The page's `<html data-theme>`. */
+const dataset: { theme?: string } = {};
+
 beforeEach(() => {
-  render.mockClear();
-  vi.stubGlobal("window", { matchMedia: () => ({ matches: false }) });
+  delete dataset.theme;
+  figures.length = 0;
+  render.mockReset();
+  render.mockImplementation(async (id: string) => ({ svg: `<svg id="${id}"></svg>` }));
+  scheme.matches = false;
+  vi.stubGlobal("window", { matchMedia: () => media });
   vi.stubGlobal("document", {
+    documentElement: { dataset },
+    querySelectorAll: () => figures,
     createElement: (tag: string): Made & { appendChild(child: Made): void } => {
       const children: Made[] = [];
       return { tag, children, appendChild: (child) => children.push(child) };
@@ -55,22 +74,105 @@ describe("drawing Mermaid diagrams", () => {
     ["dark", true, FJORD.dark],
   ])(
     "draws over Mermaid's %s theme in Fjord's colours, which no diagram may change",
-    async (theme, dark, scheme) => {
-      vi.stubGlobal("window", { matchMedia: () => ({ matches: dark }) });
+    async (theme, dark, colours) => {
+      scheme.matches = dark;
       await drawDiagrams([block("graph TD\n  A --> B").element], () => false);
       expect(initialize).toHaveBeenLastCalledWith(
         expect.objectContaining({
           theme,
           themeVariables: expect.objectContaining({
-            primaryColor: scheme.page.panel,
-            primaryTextColor: scheme.page.fg,
-            lineColor: scheme.page.muted,
+            primaryColor: colours.page.panel,
+            primaryTextColor: colours.page.fg,
+            lineColor: colours.page.muted,
+            // Mermaid's is a pale shadow, which reads as a glow on a dark page.
+            dropShadow: "none",
           }),
           secure: expect.arrayContaining(["theme", "themeVariables"]),
         }),
       );
     },
   );
+
+  it.each([
+    ["dark", false, "dark"],
+    ["light", true, "default"],
+  ])("draws in a %s scheme picked over the operating system's", async (picked, os, theme) => {
+    scheme.matches = os;
+    dataset.theme = picked;
+    await drawDiagrams([block("graph TD\n  A --> B").element], () => false);
+    expect(initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme }));
+  });
+
+  it("draws the page's diagrams again, each image in the scheme now in force", async () => {
+    const { element, placed } = block("graph TD\n  Follow --> Me");
+    await drawDiagrams([element], () => false);
+    figures.push(...placed);
+    render.mockImplementation(async (id: string) => ({
+      svg: `<svg id="${id}" data-scheme="${scheme.matches ? "dark" : "light"}"></svg>`,
+    }));
+    scheme.matches = true;
+    await redrawDiagrams();
+    expect(initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "dark" }));
+    expect(decodeURIComponent(placed[0]?.children[0]?.src ?? "")).toContain('data-scheme="dark"');
+  });
+
+  it("draws again when the scheme changes while a drawing is under way", async () => {
+    render.mockImplementationOnce(async (id: string) => {
+      // The operating system changes while Mermaid draws in the old scheme.
+      scheme.matches = true;
+      return { svg: `<svg id="${id}" data-scheme="stale"></svg>` };
+    });
+    const { element, placed } = block("graph TD\n  During --> It");
+    await drawDiagrams([element], () => false);
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(initialize).toHaveBeenLastCalledWith(expect.objectContaining({ theme: "dark" }));
+    expect(decodeURIComponent(placed[0]?.children[0]?.src ?? "")).not.toContain("stale");
+  });
+
+  it("configures and draws one diagram at a time, as Mermaid's settings are global", async () => {
+    const steps: string[] = [];
+    initialize.mockImplementation(() => steps.push("configure"));
+    let finishFirst = () => {};
+    const firstStarted = Promise.withResolvers<void>();
+    render.mockImplementationOnce(async (id: string) => {
+      steps.push("first starts");
+      firstStarted.resolve();
+      await new Promise<void>((finish) => {
+        finishFirst = finish;
+      });
+      steps.push("first ends");
+      return { svg: `<svg id="${id}"></svg>` };
+    });
+    render.mockImplementationOnce(async (id: string) => {
+      steps.push("second starts");
+      return { svg: `<svg id="${id}"></svg>` };
+    });
+    const first = drawDiagrams([block("graph TD\n  One --> Two").element], () => false);
+    await firstStarted.promise;
+    const second = drawDiagrams([block("graph TD\n  Three --> Four").element], () => false);
+    // Turns enough for the second to reach the renderer, were nothing holding it back.
+    for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+    finishFirst();
+    await Promise.all([first, second]);
+    initialize.mockReset();
+    expect(steps).toEqual([
+      "configure",
+      "first starts",
+      "first ends",
+      "configure",
+      "second starts",
+    ]);
+  });
+
+  it("listens once for the operating system, and ignores it under a picked scheme", async () => {
+    await drawDiagrams([block("graph TD\n  A --> B").element], () => false);
+    await drawDiagrams([block("graph TD\n  C --> D").element], () => false);
+    expect(scheme.listeners).toHaveLength(1);
+    dataset.theme = "light";
+    render.mockClear();
+    scheme.listeners[0]?.();
+    expect(render).not.toHaveBeenCalled();
+  });
 
   it("gives every diagram on the page its own id, across components", async () => {
     // A description's diagram, then a comment's two drawn later by another component.

@@ -6,7 +6,10 @@
  * Mermaid's sanitizing. A client-only module: the server build never
  * carries Mermaid.
  */
+import type MermaidModule from "mermaid";
 import { FJORD, type Scheme } from "./fjord.js";
+
+type Mermaid = typeof MermaidModule;
 
 /**
  * Fjord's surfaces and text over Mermaid's own light or dark theme. Not over its
@@ -29,6 +32,7 @@ function mermaidColors({ page }: Scheme) {
     taskBkgColor: page.panel,
     taskTextColor: page.fg,
     taskBorderColor: page.border,
+    dropShadow: "none",
   };
 }
 
@@ -49,9 +53,15 @@ const SECURE_KEYS = [
  */
 let drawn = 0;
 
-export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean): Promise<void> {
-  const { default: mermaid } = await import("mermaid");
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+const DARK_SCHEME = "(prefers-color-scheme: dark)";
+
+/** A forced scheme from the site header's choice, else the operating system's. */
+function isDark(): boolean {
+  const forced = document.documentElement.dataset.theme;
+  return forced ? forced === "dark" : window.matchMedia(DARK_SCHEME).matches;
+}
+
+function configure(mermaid: Mermaid, dark: boolean): void {
   mermaid.initialize({
     startOnLoad: false,
     securityLevel: "strict",
@@ -64,19 +74,74 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
     theme: dark ? "dark" : "default",
     themeVariables: mermaidColors(dark ? FJORD.dark : FJORD.light),
   });
+}
+
+/** The drawing under way: Mermaid's settings are global, so one configures and draws at a time. */
+let turn: Promise<unknown> = Promise.resolve();
+
+/** `source` as an SVG in the scheme in force when it finished: drawn again if that changed. */
+function renderInScheme(mermaid: Mermaid, source: string): Promise<string> {
+  const drawing = turn.then(async () => {
+    for (;;) {
+      const dark = isDark();
+      configure(mermaid, dark);
+      const { svg } = await mermaid.render(`mermaid-${drawn++}`, source);
+      if (dark === isDark()) return svg;
+    }
+  });
+  turn = drawing.catch(() => undefined);
+  return drawing;
+}
+
+/** An SVG as an image's `src`: an image runs and loads nothing. */
+const imageSource = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
+/** Each figure's image and source, gone with the figure. */
+const drawings = new WeakMap<object, { image: HTMLImageElement; source: string }>();
+
+/** Draws the page's diagrams again in the scheme now in force, each keeping its drawing on failure. */
+export async function redrawDiagrams(): Promise<void> {
+  const { default: mermaid } = await import("mermaid");
+  for (const figure of document.querySelectorAll("figure.mermaid")) {
+    const drawing = drawings.get(figure);
+    if (!drawing) continue;
+    try {
+      drawing.image.src = imageSource(await renderInScheme(mermaid, drawing.source));
+    } catch {
+      // It keeps the drawing it has.
+    }
+  }
+}
+
+let following = false;
+
+/** Follows the operating system's scheme, which a scheme picked in the site header overrides. */
+function followScheme(): void {
+  if (following) return;
+  following = true;
+  window.matchMedia(DARK_SCHEME).addEventListener("change", () => {
+    if (!document.documentElement.dataset.theme) void redrawDiagrams();
+  });
+}
+
+export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean): Promise<void> {
+  const { default: mermaid } = await import("mermaid");
+  followScheme();
   for (const code of blocks) {
     if (isCancelled()) return;
     try {
-      const { svg } = await mermaid.render(`mermaid-${drawn++}`, code.textContent ?? "");
+      const source = code.textContent ?? "";
+      const svg = await renderInScheme(mermaid, source);
       // The component may have gone (or rendered again) while this one was drawn.
       if (isCancelled()) return;
       const image = document.createElement("img");
       image.alt = "Diagram";
-      image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      image.src = imageSource(svg);
       const figure = document.createElement("figure");
       figure.className = "mermaid";
       figure.appendChild(image);
       code.parentElement?.replaceWith(figure);
+      drawings.set(figure, { image, source });
     } catch {
       // A diagram Mermaid cannot draw stays as its source.
     }
