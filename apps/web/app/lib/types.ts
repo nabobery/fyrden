@@ -36,15 +36,29 @@ export const encodePath = (path: string): string =>
     .map(encodeURIComponent)
     .join("/");
 
+/** What a file's bytes are, read once: NUL means binary, whether or not the rest decodes. */
+export function classifyBytes(
+  bytes: Uint8Array,
+): { kind: "text"; text: string } | { kind: "binary" } | { kind: "undecodable" } {
+  if (bytes.includes(0)) return { kind: "binary" };
+  try {
+    return {
+      kind: "text",
+      text: new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes),
+    };
+  } catch {
+    return { kind: "undecodable" };
+  }
+}
+
+export function bytesOfBase64(base64: string): Uint8Array {
+  return Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+}
+
 /** Base64 to text (UTF-8), or undefined for bytes that are not text. */
 export function decodeText(base64: string): string | undefined {
-  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
-  if (bytes.includes(0)) return undefined;
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
-  } catch {
-    return undefined;
-  }
+  const read = classifyBytes(bytesOfBase64(base64));
+  return read.kind === "text" ? read.text : undefined;
 }
 
 /** Text to base64 (UTF-8). */

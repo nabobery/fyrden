@@ -212,6 +212,90 @@ button.danger {
 .panel.linked {
   border-color: var(--accent);
 }
+.file-view {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+/* Laid out for the renderer's virtualizer, unseen until it has rows to show. */
+.file-view-unseen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+}
+/* The renderer's metrics and font, so its rows land where these lines were. */
+.file-lines,
+.file-lines code {
+  font-family:
+    "SF Mono", Monaco, Consolas, "Ubuntu Mono", "Liberation Mono", "Courier New", monospace;
+}
+.file-lines {
+  margin: 0;
+  border: 0;
+  padding: 8px 0;
+  background: none;
+  line-height: 20px;
+}
+.file-lines code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+.file-line {
+  display: flex;
+  min-height: 20px;
+  color: inherit;
+  background: none;
+}
+.file-line > a {
+  position: sticky;
+  left: 0;
+  flex: none;
+  box-sizing: content-box;
+  min-width: max(3ch, var(--file-gutter));
+  padding-inline: 2ch 1ch;
+  border-right: 2px solid var(--bg);
+  text-align: right;
+  color: var(--muted);
+  background: var(--bg);
+  text-decoration: none;
+  user-select: none;
+  scroll-margin-top: 16px;
+}
+.file-line > a:hover {
+  text-decoration: underline;
+}
+/* A fragment focuses its line, whose ring the rows around it would otherwise paint over. */
+.file-line > a:focus-visible {
+  outline-offset: -2px;
+}
+.file-line > span {
+  flex: 1;
+  padding-inline: 1ch;
+  white-space: pre;
+}
+mark.file-line,
+mark.file-line > a {
+  background: var(--diff-selected);
+}
+mark.file-line > a {
+  color: var(--accent);
+}
+.file-paging,
+.file-goto {
+  align-items: center;
+  margin-block: 0.5rem;
+}
+.file-goto label {
+  display: inline;
+  margin: 0;
+}
+.file-goto input {
+  width: 6rem;
+}
 /* Highlighted code: each token's colour for the scheme in use (lib/highlight-palette.ts). */
 pre.highlights span {
   color: var(--hls-light, var(--fg));

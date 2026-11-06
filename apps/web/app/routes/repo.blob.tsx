@@ -1,10 +1,12 @@
 import type { getCodeOwnersErrors, Output } from "@fyrden/api-contract";
 import { data, Link, redirect } from "react-router";
+import { NumberedFile } from "../components/file-view.js";
 import { Markdown } from "../components/markdown.js";
 import { apiCall, bodyOf } from "../lib/api.server.js";
+import { type FileState, fileState, gotoTarget, rawBytesUrl } from "../lib/file-view.js";
 import { dirOf } from "../lib/markdown-place.js";
-import { refAndPath } from "../lib/target.js";
-import { type Contents, decodeText, encodePath } from "../lib/types.js";
+import { pageUrl, refAndPath } from "../lib/target.js";
+import { type Contents, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.blob";
 
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
@@ -79,10 +81,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     throw redirect(
       `/${params.owner}/${params.repo}/tree/${encodeURIComponent(ref)}/${encodePath(path)}`,
     );
-  const text =
-    contents.type === "file" && contents.encoding === "base64"
-      ? decodeText(contents.content)
-      : undefined;
+  const page = pageUrl(new URL(request.url));
+  const markdown = /\.(md|markdown)$/i.test(path);
+  const file = fileState(contents, page.searchParams, { markdown });
+  if (page.searchParams.has("goto"))
+    throw redirect(gotoTarget(page, file.state === "text" ? file.totalLines : null));
   const codeOwners =
     contents.type === "file" && CODEOWNERS_PATHS.includes(path)
       ? await codeOwnersOf(context, request, base, ref, path, contents.sha)
@@ -95,11 +98,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     codeOwners,
     kind: contents.type,
     size: contents.type === "file" ? contents.size : null,
-    target: contents.type === "symlink" ? contents.target : null,
-    text: text ?? null,
+    file,
     // Rendered in the browser (see components/markdown.tsx), with its links into the repository.
     markdownAt:
-      text !== undefined && /\.(md|markdown)$/i.test(path)
+      file.state === "markdown"
         ? {
             base: `/${params.owner}/${params.repo}`,
             ref: encodeURIComponent(ref),
@@ -108,6 +110,15 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
         : null,
   };
 }
+
+/** What the page says of a file it has no lines to show for. */
+const MESSAGES: Partial<Record<FileState["state"], string>> = {
+  empty: "This file is empty.",
+  binary: "This is a binary file.",
+  undecodable: "This file isn't valid UTF-8.",
+  "too-large": "This file is too large to show here.",
+  "too-large-for-raw": "This file is too large to view or download here.",
+};
 
 export default function Blob({ loaderData }: Route.ComponentProps) {
   if (loaderData.kind === "missing") {
@@ -125,9 +136,10 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
       </main>
     );
   }
-  const { owner, repo, ref, path, kind, size, target, text, markdownAt, codeOwners } = loaderData;
+  const { owner, repo, ref, path, kind, size, file, markdownAt, codeOwners } = loaderData;
   const base = `/${owner}/${repo}`;
   const at = `${encodeURIComponent(ref)}/${encodePath(path)}`;
+  const message = MESSAGES[file.state];
   return (
     <main>
       <h1>
@@ -139,15 +151,20 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         </span>
       </h1>
       <div className="row">
-        {kind === "file" && (
-          <a className="button" href={`${base}/raw/${at}`}>
+        {kind === "file" && file.state !== "too-large-for-raw" && (
+          <a className="button" href={rawBytesUrl(owner, repo, ref, path)}>
             Raw
           </a>
         )}
-        {kind === "file" && text !== null && (
+        {(file.state === "text" || file.state === "markdown" || file.state === "empty") && (
           <Link className="button" to={`${base}/edit/${at}`}>
             Edit
           </Link>
+        )}
+        {file.state === "markdown" && (
+          <a className="button" href="?plain=1">
+            Source
+          </a>
         )}
         <Link className="button" to={`${base}/commits/${at}`}>
           History
@@ -155,20 +172,30 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         {size !== null && <span className="muted">{size} bytes</span>}
       </div>
       {codeOwners && <CodeOwnersNotes notes={codeOwners} owner={owner} repo={repo} gitRef={ref} />}
-      {kind === "symlink" ? (
+      {file.state === "symlink" ? (
         <p>
-          A symbolic link to <code>{target}</code>
+          A symbolic link to <code>{file.target}</code>.
         </p>
-      ) : text !== null && markdownAt !== null ? (
+      ) : file.state === "submodule" ? (
+        <p>
+          A submodule at commit <code>{file.sha}</code>.
+        </p>
+      ) : file.state === "markdown" && markdownAt !== null ? (
         <div className="panel">
-          <Markdown source={text} at={markdownAt} />
+          <Markdown source={file.source} at={markdownAt} />
         </div>
-      ) : text !== null ? (
-        <pre>
-          <code>{text}</code>
-        </pre>
+      ) : file.state === "text" ? (
+        <NumberedFile
+          // Another file or commit: its selection and drawing start over.
+          key={`${file.sha}/${path}/${file.plain}`}
+          file={file}
+          owner={owner}
+          repo={repo}
+          gitRef={ref}
+          path={path}
+        />
       ) : (
-        <p className="muted">This file is binary or too large to show; download it raw.</p>
+        <p className="muted">{message}</p>
       )}
     </main>
   );
