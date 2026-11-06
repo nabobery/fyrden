@@ -100,6 +100,134 @@ describe("browsing a repository", () => {
     expect(response.headers.get("Location")).toBe("/ada/demo/tree/topic%2Fnext/docs");
   });
 
+  describe("a file's history", () => {
+    const REPO = { name: "demo", owner: "ada", default_branch: "main" };
+    const commit = (sha: string) => ({
+      sha,
+      commit: {
+        message: `Commit ${sha}\n\nMore.`,
+        author: { name: "Ada", date: "2026-11-06T00:00:00Z" },
+        verification: { verified: false, reason: "unsigned" },
+      },
+    });
+    const history =
+      (commits: unknown, status = 200) =>
+      (r: Request) =>
+        new URL(r.url).pathname.endsWith("/commits") ? json(commits, status) : json(REPO);
+    const commitsCall = (calls: Request[]) =>
+      apiPath(calls.find((c) => new URL(c.url).pathname.endsWith("/commits")));
+    const state = (outcome: unknown) => (outcome as { value: { history: unknown } }).value.history;
+
+    it("asks for the revision and path a page names, each as written", async () => {
+      const { calls } = await run(
+        commits,
+        "/ada/demo/commits/topic%2Fnext/docs/a%252Fb.md?cursor=abc",
+        history({ commits: [commit("a".repeat(40))], next_cursor: "n" }),
+      );
+      expect(commitsCall(calls)).toBe(
+        "/api/repos/ada/demo/commits?per_page=50&sha=topic%2Fnext&path=docs%2Fa%252Fb.md&cursor=abc",
+      );
+    });
+
+    it("leaves the path out of a revision's whole history", async () => {
+      for (const page of ["/ada/demo/commits/main", "/ada/demo/commits/main/"]) {
+        const { calls } = await run(commits, page, history({ commits: [], next_cursor: null }));
+        expect(commitsCall(calls)).toBe("/api/repos/ada/demo/commits?per_page=50&sha=main");
+      }
+    });
+
+    it("keeps today's page for the default branch", async () => {
+      const { calls } = await run(
+        commits,
+        "/ada/demo/commits",
+        history({ commits: [], next_cursor: null }),
+      );
+      expect(commitsCall(calls)).toBe("/api/repos/ada/demo/commits?per_page=50");
+    });
+
+    it("costs the repository and one page of history, however many rows", async () => {
+      const rows = Array.from({ length: 50 }, (_, i) => commit(String(i).padStart(40, "0")));
+      const { calls } = await run(
+        commits,
+        "/ada/demo/commits/main/a.md",
+        history({ commits: rows, next_cursor: "n" }),
+      );
+      expect(calls).toHaveLength(2);
+    });
+
+    it("links pages within the revision and path", async () => {
+      const outcome = await run(
+        commits,
+        "/ada/demo/commits/topic%2Fnext/docs/a%252Fb.md",
+        history({ commits: [commit("a".repeat(40))], next_cursor: "n" }),
+      );
+      expect((outcome as { value: { firstPage: string } }).value.firstPage).toBe(
+        "/ada/demo/commits/topic%2Fnext/docs/a%252Fb.md",
+      );
+    });
+
+    it.each([
+      ["rows", { commits: [commit("a".repeat(40))], next_cursor: "n" }, 200, "", "commits"],
+      ["an empty stretch", { commits: [], next_cursor: "n" }, 200, "?cursor=c", "stretch-empty"],
+      ["an empty first stretch", { commits: [], next_cursor: "n" }, 200, "", "stretch-empty"],
+      ["a path nothing changed", { commits: [], next_cursor: null }, 200, "", "none-here"],
+      ["the walk's end", { commits: [], next_cursor: null }, 200, "?cursor=c", "no-older"],
+      ["a wide history", { code: "history_too_wide", detail: "x" }, 422, "?cursor=c", "too-wide"],
+      ["an old cursor", { code: "invalid_cursor", detail: "x" }, 422, "?cursor=c", "stale-cursor"],
+    ])("reads %s", async (_name, answer, status, query, expected) => {
+      const outcome = await run(
+        commits,
+        `/ada/demo/commits/main/a.md${query}`,
+        history(answer, status),
+      );
+      expect(state(outcome)).toBe(expected);
+    });
+
+    it("says a revision has no commits, without a path to blame", async () => {
+      const outcome = await run(
+        commits,
+        "/ada/demo/commits/main",
+        history({ commits: [], next_cursor: null }),
+      );
+      expect(state(outcome)).toBe("none-at-revision");
+    });
+
+    it("says an empty repository has no commits yet", async () => {
+      const outcome = await run(
+        commits,
+        "/ada/demo/commits/main/a.md",
+        history({ code: "repo_empty", detail: "x" }, 409),
+      );
+      expect(state(outcome)).toBe("repo-empty");
+    });
+
+    it("still fails as itself for anything else", async () => {
+      const outcome = await run(
+        commits,
+        "/ada/demo/commits/main/a.md",
+        history({ code: "invalid_path", detail: "x" }, 422),
+      );
+      expect((outcome as { thrown: { init: { status: number } } }).thrown.init.status).toBe(422);
+    });
+  });
+
+  describe("a file that isn't there", () => {
+    it("answers 404, naming where its history is, for a ref needing encoding", async () => {
+      const outcome = await run(blob, "/ada/demo/blob/topic%2Fnext/gone/a%252Fb.md", () =>
+        json({ code: "not_found", detail: "Not found" }, 404),
+      );
+      const { data: page, init } = (
+        outcome as { value: { data: unknown; init: { status: number } } }
+      ).value;
+      expect(init.status).toBe(404);
+      expect(page).toMatchObject({
+        kind: "missing",
+        ref: "topic/next",
+        path: "gone/a%2Fb.md",
+      });
+    });
+  });
+
   it("shows an empty history for an empty repository, and any other failure as one", async () => {
     const repo = { name: "demo", owner: { login: "ada" }, default_branch: "main" };
     const answer = (status: number, body: unknown) => (r: Request) =>

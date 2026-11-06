@@ -1,7 +1,7 @@
 import type { getCodeOwnersErrors, Output } from "@fyrden/api-contract";
-import { Link, redirect } from "react-router";
+import { data, Link, redirect } from "react-router";
 import { Markdown } from "../components/markdown.js";
-import { apiCall, apiGet } from "../lib/api.server.js";
+import { apiCall, bodyOf } from "../lib/api.server.js";
 import { dirOf } from "../lib/markdown-place.js";
 import { refAndPath } from "../lib/target.js";
 import { type Contents, decodeText, encodePath } from "../lib/types.js";
@@ -61,11 +61,19 @@ async function codeOwnersOf(
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const { ref, path } = refAndPath(request);
   const base = `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}`;
-  const contents = await apiGet<Contents>(
+  const answer = await apiCall<Contents>(
     context,
     request,
+    "GET",
     `${base}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
   );
+  // A commit that deleted a file links here from its history, so this page leads back to it.
+  if (answer.status === 404)
+    return data(
+      { kind: "missing" as const, owner: params.owner, repo: params.repo, ref, path },
+      { status: 404 },
+    );
+  const contents = bodyOf(answer, request);
   // A directory (a README's link without a trailing slash): its listing.
   if (contents.type === "dir")
     throw redirect(
@@ -102,6 +110,21 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 }
 
 export default function Blob({ loaderData }: Route.ComponentProps) {
+  if (loaderData.kind === "missing") {
+    const { owner, repo, ref, path } = loaderData;
+    const history = `/${owner}/${repo}/commits/${encodeURIComponent(ref)}/${encodePath(path)}`;
+    return (
+      <main>
+        <h1>Not found</h1>
+        <p>
+          This file doesn't exist at <code>{ref}</code>.
+        </p>
+        <p>
+          <Link to={history}>See this path's history</Link>
+        </p>
+      </main>
+    );
+  }
   const { owner, repo, ref, path, kind, size, target, text, markdownAt, codeOwners } = loaderData;
   const base = `/${owner}/${repo}`;
   const at = `${encodeURIComponent(ref)}/${encodePath(path)}`;
@@ -126,6 +149,9 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
             Edit
           </Link>
         )}
+        <Link className="button" to={`${base}/commits/${at}`}>
+          History
+        </Link>
         {size !== null && <span className="muted">{size} bytes</span>}
       </div>
       {codeOwners && <CodeOwnersNotes notes={codeOwners} owner={owner} repo={repo} gitRef={ref} />}
