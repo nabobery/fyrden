@@ -4,9 +4,9 @@ import { safeReturnPath, themeCookie, themeModeOf } from "../lib/theme.js";
 import type { Route } from "./+types/appearance";
 
 /**
- * `POST /appearance`: keeps the colour scheme picked in the site header, for
- * anyone, signed in or not, and returns to the page. A native form, so the whole
- * page draws again in it, with or without JavaScript.
+ * `POST /appearance`: keeps the colour scheme picked in the site header, for anyone,
+ * signed in or not. A page with its scripts posts in the background and changes in
+ * place; without them the form posts natively, and returns to the page drawn in it.
  */
 export async function action({ request }: Route.ActionArgs) {
   assertSameOrigin(request);

@@ -27,6 +27,13 @@ let page: Page;
 let origin = "";
 let token = "";
 
+/** Picks a colour scheme in the header, and waits until the server has kept it. */
+async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
+  const kept = page.waitForResponse((res) => new URL(res.url()).pathname === "/appearance");
+  await page.getByRole("button", { name, exact: true }).click();
+  await kept;
+}
+
 /** The page has no WCAG 2.x A or AA violation axe can find. */
 const accessible = (name: string) => axe(page, name);
 
@@ -221,8 +228,8 @@ describe("the web UI", () => {
     expect(await theme()).toBeNull();
 
     // Picked: the same page again, in the choice, whatever the operating system says.
-    await page.getByRole("button", { name: "Dark", exact: true }).click();
-    await see(page).toHaveURL(`${origin}${path}?from=header`);
+    await pickScheme("Dark");
+    expect(page.url()).toBe(`${origin}${path}?from=header`);
     await pressed("Dark");
     expect(await theme()).toBe("dark");
     await backgroundIs(DARK);
@@ -235,7 +242,7 @@ describe("the web UI", () => {
     await page.reload();
     await backgroundIs(DARK);
 
-    await page.getByRole("button", { name: "Light", exact: true }).click();
+    await pickScheme("Light");
     await pressed("Light");
     await page.emulateMedia({ colorScheme: "dark" });
     await backgroundIs(LIGHT);
@@ -243,7 +250,7 @@ describe("the web UI", () => {
     await accessible("forced light");
 
     // System: the choice is gone, and the page follows the operating system again.
-    await page.getByRole("button", { name: "System", exact: true }).click();
+    await pickScheme("System");
     await pressed("System");
     expect(await theme()).toBeNull();
     expect((await page.context().cookies()).some((c) => c.name === "fyrden_theme")).toBe(false);
@@ -251,6 +258,41 @@ describe("the web UI", () => {
     await page.emulateMedia({ colorScheme: "dark" });
     await backgroundIs(DARK);
     await page.emulateMedia({ colorScheme: "light" });
+  });
+
+  it("keeps what is being written when the colour scheme changes", async () => {
+    await page.goto(`${origin}/ada/demo/edit/main/?new=1`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    const content = page.getByLabel("Content");
+    await content.fill("Half a thought");
+    // Set on this document: a reload or a navigation would lose it.
+    await page.evaluate(() => {
+      (globalThis as { sameDocument?: boolean }).sameDocument = true;
+    });
+    const url = page.url();
+    await pickScheme("Dark");
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await see(page.locator("body")).toHaveCSS("background-color", rgbOf(FJORD.dark.page.bg));
+    await see(content).toHaveValue("Half a thought");
+    expect(page.url()).toBe(url);
+    expect(await page.evaluate(() => (globalThis as { sameDocument?: boolean }).sameDocument)).toBe(
+      true,
+    );
+    // Kept for the next page, by the server.
+    await page.reload();
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    // A choice that could not be kept is not shown as if it were.
+    await page.route("**/appearance", (route) => route.abort());
+    await page.getByRole("button", { name: "Light", exact: true }).click();
+    await see(page.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.unroute("**/appearance");
+    await pickScheme("System");
+    await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
   });
 
   it("keeps the header's control on screen on a phone", async () => {

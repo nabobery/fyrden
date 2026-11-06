@@ -22,6 +22,7 @@ interface Made {
   src?: string;
   innerHTML?: string;
   children: Made[];
+  isConnected?: boolean;
 }
 
 /** A `pre > code.language-mermaid` block: where its figure went, if anywhere. */
@@ -35,12 +36,12 @@ function block(code: string) {
 }
 
 /** The operating system's scheme, and who listens for it changing. */
-const scheme = { matches: false, listeners: [] as (() => void)[] };
+const scheme = { matches: false, listeners: [] as (() => unknown)[] };
 const media = {
   get matches() {
     return scheme.matches;
   },
-  addEventListener: (_type: string, listener: () => void) => scheme.listeners.push(listener),
+  addEventListener: (_type: string, listener: () => unknown) => scheme.listeners.push(listener),
 };
 /** The figures on the page. */
 const figures: unknown[] = [];
@@ -59,7 +60,7 @@ beforeEach(() => {
     querySelectorAll: () => figures,
     createElement: (tag: string): Made & { appendChild(child: Made): void } => {
       const children: Made[] = [];
-      return { tag, children, appendChild: (child) => children.push(child) };
+      return { tag, children, isConnected: true, appendChild: (child) => children.push(child) };
     },
   });
 });
@@ -164,14 +165,54 @@ describe("drawing Mermaid diagrams", () => {
     ]);
   });
 
+  it("skips a diagram whose page left while it waited for its turn", async () => {
+    let finishFirst = () => {};
+    const firstStarted = Promise.withResolvers<void>();
+    render.mockImplementationOnce(async (id: string) => {
+      firstStarted.resolve();
+      await new Promise<void>((finish) => {
+        finishFirst = finish;
+      });
+      return { svg: `<svg id="${id}"></svg>` };
+    });
+    const first = drawDiagrams([block("graph TD\n  One --> Two").element], () => false);
+    await firstStarted.promise;
+    let left = false;
+    const second = drawDiagrams([block("graph TD\n  Gone --> Away").element], () => left);
+    // Turns enough for the second to be waiting in the queue before its page leaves.
+    for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+    left = true;
+    finishFirst();
+    await Promise.all([first, second]);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not draw again for a page that left during a scheme change", async () => {
+    let left = false;
+    render.mockImplementationOnce(async (id: string) => {
+      scheme.matches = true;
+      left = true;
+      return { svg: `<svg id="${id}"></svg>` };
+    });
+    await drawDiagrams([block("graph TD\n  Left --> During").element], () => left);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
   it("listens once for the operating system, and ignores it under a picked scheme", async () => {
-    await drawDiagrams([block("graph TD\n  A --> B").element], () => false);
+    const { element, placed } = block("graph TD\n  A --> B");
+    await drawDiagrams([element], () => false);
     await drawDiagrams([block("graph TD\n  C --> D").element], () => false);
+    figures.push(...placed);
     expect(scheme.listeners).toHaveLength(1);
+
     dataset.theme = "light";
     render.mockClear();
-    scheme.listeners[0]?.();
+    await scheme.listeners[0]?.();
     expect(render).not.toHaveBeenCalled();
+
+    delete dataset.theme;
+    await scheme.listeners[0]?.();
+    expect(render).toHaveBeenCalledTimes(1);
   });
 
   it("gives every diagram on the page its own id, across components", async () => {

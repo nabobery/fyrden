@@ -264,6 +264,14 @@ function renderedFills(file: Locator) {
     });
 }
 
+/** `file`'s changed lines are filled in `scheme`'s colours. */
+async function filledAs(file: Locator, scheme: Scheme): Promise<void> {
+  const line = (type: string) =>
+    file.locator(`diffs-container [data-line][data-line-type="${type}"]`).first();
+  await see(line("change-addition")).toHaveCSS("background-color", rgb(scheme.diff.added));
+  await see(line("change-deletion")).toHaveCSS("background-color", rgb(scheme.diff.removed));
+}
+
 /** The line a click in its gutter picked, and that gutter cell, are filled as selected. */
 async function selectedIn(file: Locator, fill: string): Promise<void> {
   const drawn = file.locator("diffs-container").first();
@@ -403,14 +411,10 @@ describe("pull requests in the web UI", () => {
     // A scheme picked in the site header reaches the renderer, over the operating system's.
     await page.getByRole("button", { name: "Dark", exact: true }).click();
     await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    await page.waitForLoadState("load");
-    await highlightedWith(file, "highlights", "workers");
-    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
+    await filledAs(file, FJORD.dark);
     await page.getByRole("button", { name: "System", exact: true }).click();
     await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
-    await page.waitForLoadState("load");
-    await highlightedWith(file, "highlights", "workers");
-    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.light));
+    await filledAs(file, FJORD.light);
     // Selected lines take Fjord's fill too, unchanged and changed alike, in both schemes.
     for (const type of ["context", "change-addition"]) {
       await file

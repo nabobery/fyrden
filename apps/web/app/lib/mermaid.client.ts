@@ -79,10 +79,18 @@ function configure(mermaid: Mermaid, dark: boolean): void {
 /** The drawing under way: Mermaid's settings are global, so one configures and draws at a time. */
 let turn: Promise<unknown> = Promise.resolve();
 
-/** `source` as an SVG in the scheme in force when it finished: drawn again if that changed. */
-function renderInScheme(mermaid: Mermaid, source: string): Promise<string> {
+/**
+ * `source` as an SVG in the scheme in force when it finished, drawn again if that
+ * changed; null once `isCancelled`, so a page that left holds up no other diagram.
+ */
+function renderInScheme(
+  mermaid: Mermaid,
+  source: string,
+  isCancelled: () => boolean,
+): Promise<string | null> {
   const drawing = turn.then(async () => {
     for (;;) {
+      if (isCancelled()) return null;
       const dark = isDark();
       configure(mermaid, dark);
       const { svg } = await mermaid.render(`mermaid-${drawn++}`, source);
@@ -106,7 +114,8 @@ export async function redrawDiagrams(): Promise<void> {
     const drawing = drawings.get(figure);
     if (!drawing) continue;
     try {
-      drawing.image.src = imageSource(await renderInScheme(mermaid, drawing.source));
+      const svg = await renderInScheme(mermaid, drawing.source, () => !figure.isConnected);
+      if (svg !== null) drawing.image.src = imageSource(svg);
     } catch {
       // It keeps the drawing it has.
     }
@@ -119,9 +128,11 @@ let following = false;
 function followScheme(): void {
   if (following) return;
   following = true;
-  window.matchMedia(DARK_SCHEME).addEventListener("change", () => {
-    if (!document.documentElement.dataset.theme) void redrawDiagrams();
-  });
+  window
+    .matchMedia(DARK_SCHEME)
+    .addEventListener("change", () =>
+      document.documentElement.dataset.theme ? undefined : redrawDiagrams(),
+    );
 }
 
 export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean): Promise<void> {
@@ -131,9 +142,9 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
     if (isCancelled()) return;
     try {
       const source = code.textContent ?? "";
-      const svg = await renderInScheme(mermaid, source);
+      const svg = await renderInScheme(mermaid, source, isCancelled);
       // The component may have gone (or rendered again) while this one was drawn.
-      if (isCancelled()) return;
+      if (svg === null || isCancelled()) return;
       const image = document.createElement("img");
       image.alt = "Diagram";
       image.src = imageSource(svg);
