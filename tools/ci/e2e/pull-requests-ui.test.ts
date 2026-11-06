@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { type Locator, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FJORD, type Scheme } from "../../../apps/web/app/lib/fjord.js";
 import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
@@ -227,6 +228,63 @@ async function accessibleInBoth(name: string): Promise<void> {
   await page.emulateMedia({ colorScheme: "light" });
 }
 
+/** `#rrggbb` as `getComputedStyle` reports it. */
+function rgb(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
+const fillsOf = (scheme: Scheme) => ({
+  added: rgb(scheme.diff.added),
+  removed: rgb(scheme.diff.removed),
+  keyword: rgb(scheme.syntax.keyword),
+});
+
+/** The colours `file`'s renderer actually drew, from inside its shadow root. */
+function renderedFills(file: Locator) {
+  return file
+    .locator("diffs-container")
+    .first()
+    .evaluate((host) => {
+      const { getComputedStyle } = globalThis as unknown as {
+        getComputedStyle(element: unknown): { backgroundColor: string; color: string };
+      };
+      const root = (
+        host as unknown as {
+          shadowRoot: {
+            querySelector(selector: string): unknown;
+            querySelectorAll(selector: string): Iterable<{ textContent: string | null }>;
+          };
+        }
+      ).shadowRoot;
+      const fill = (selector: string) => {
+        const line = root.querySelector(selector);
+        return line ? getComputedStyle(line).backgroundColor : null;
+      };
+      const keyword = [...root.querySelectorAll("[data-line] span")].find(
+        (span) => span.textContent?.trim() === "const",
+      );
+      return {
+        added: fill('[data-line][data-line-type="change-addition"]'),
+        removed: fill('[data-line][data-line-type="change-deletion"]'),
+        keyword: keyword ? getComputedStyle(keyword).color : null,
+      };
+    });
+}
+
+/** The line a click in its gutter picked, and that gutter cell, are filled as selected. */
+async function selectedIn(file: Locator, fill: string): Promise<void> {
+  const drawn = file.locator("diffs-container").first();
+  await see(drawn.locator("[data-line][data-selected-line]").first()).toHaveCSS(
+    "background-color",
+    fill,
+  );
+  await see(drawn.locator("[data-column-number][data-selected-line]").first()).toHaveCSS(
+    "background-color",
+    fill,
+  );
+}
+
 /** Opens the form for a comment on lines of `file`, from the keyboard. */
 async function openLineComment(file: Locator): Promise<void> {
   await file.getByText("Comment on lines").focus();
@@ -344,7 +402,23 @@ describe("pull requests in the web UI", () => {
     // additions, deletions and word changes too) pass axe's contrast in both schemes.
     const file = page.locator("section.file", { hasText: "src/app.ts" });
     await highlightedWith(file, "highlights", "workers");
+    // Axe alone cannot show Fjord reached the renderer: today's colours would pass it too.
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.light));
+    await page.emulateMedia({ colorScheme: "dark" });
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
+    await page.emulateMedia({ colorScheme: "light" });
     await accessibleInBoth("files");
+    // Selected lines take Fjord's fill too, unchanged and changed alike, in both schemes.
+    for (const type of ["context", "change-addition"]) {
+      await file
+        .locator(`diffs-container [data-column-number][data-line-type="${type}"]`)
+        .first()
+        .click();
+      await selectedIn(file, rgb(FJORD.light.diff.selected));
+      await page.emulateMedia({ colorScheme: "dark" });
+      await selectedIn(file, rgb(FJORD.dark.diff.selected));
+      await page.emulateMedia({ colorScheme: "light" });
+    }
     expect(stack.refused).toEqual([]);
   });
 
@@ -504,7 +578,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     const number = await openPull(await pushTopic(), "Themes held");
     const file = page.locator("section.file", { hasText: "src/app.ts" });
     // The pool waits on its themes before it starts any worker.
-    const themes = await hold(page, /\/assets\/github-(light|dark)-high-contrast-[^/]+\.js$/);
+    const themes = await hold(page, /\/assets\/fjord-themes-[^/]+\.js$/);
     try {
       await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
       await drawnWith(file, "shiki-js", "workers");

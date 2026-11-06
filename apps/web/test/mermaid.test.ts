@@ -8,9 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const render = vi.hoisted(() =>
   vi.fn(async (id: string, _code: string) => ({ svg: `<svg id="${id}"></svg>` })),
 );
-vi.mock("mermaid", () => ({ default: { initialize: () => undefined, render } }));
+const initialize = vi.hoisted(() => vi.fn());
+vi.mock("mermaid", () => ({ default: { initialize, render } }));
 
 const { drawDiagrams } = await import("../app/lib/mermaid.client.js");
+const { FJORD } = await import("../app/lib/fjord.js");
 
 /** An element as the stubbed document makes it: what was set on it and put in it. */
 interface Made {
@@ -48,6 +50,28 @@ afterEach(() => {
 });
 
 describe("drawing Mermaid diagrams", () => {
+  it.each([
+    ["default", false, FJORD.light],
+    ["dark", true, FJORD.dark],
+  ])(
+    "draws over Mermaid's %s theme in Fjord's colours, which no diagram may change",
+    async (theme, dark, scheme) => {
+      vi.stubGlobal("window", { matchMedia: () => ({ matches: dark }) });
+      await drawDiagrams([block("graph TD\n  A --> B").element], () => false);
+      expect(initialize).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          theme,
+          themeVariables: expect.objectContaining({
+            primaryColor: scheme.page.panel,
+            primaryTextColor: scheme.page.fg,
+            lineColor: scheme.page.muted,
+          }),
+          secure: expect.arrayContaining(["theme", "themeVariables"]),
+        }),
+      );
+    },
+  );
+
   it("gives every diagram on the page its own id, across components", async () => {
     // A description's diagram, then a comment's two drawn later by another component.
     const description = block("graph TD\n  A --> B");

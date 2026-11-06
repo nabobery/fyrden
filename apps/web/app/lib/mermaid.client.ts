@@ -6,6 +6,32 @@
  * Mermaid's sanitizing. A client-only module: the server build never
  * carries Mermaid.
  */
+import { FJORD, type Scheme } from "./fjord.js";
+
+/**
+ * Fjord's surfaces and text over Mermaid's own light or dark theme. Not over its
+ * `base` theme, whose per-diagram defaults (Gantt markers, Cynefin domains, gitGraph
+ * labels) stay light-scheme colours; these two carry readable ones for their scheme.
+ */
+function mermaidColors({ page }: Scheme) {
+  return {
+    background: page.bg,
+    primaryColor: page.panel,
+    primaryTextColor: page.fg,
+    primaryBorderColor: page.border,
+    lineColor: page.muted,
+    textColor: page.fg,
+    mainBkg: page.panel,
+    nodeBorder: page.border,
+    noteBkgColor: page.panel,
+    noteTextColor: page.fg,
+    noteBorderColor: page.border,
+    taskBkgColor: page.panel,
+    taskTextColor: page.fg,
+    taskBorderColor: page.border,
+  };
+}
+
 /** Mermaid's own keys no diagram may set (its default `secure` list, 12.x). */
 const SECURE_KEYS = [
   "secure",
@@ -34,8 +60,9 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
     // A diagram's own directives and front matter may not change these back.
     // All of `flowchart` (its cosmetic settings too): Mermaid still reads
     // `flowchart.htmlLabels` directly for some labels (swimlanes, 12.2).
-    secure: [...SECURE_KEYS, "htmlLabels", "flowchart"],
+    secure: [...SECURE_KEYS, "htmlLabels", "flowchart", "theme", "themeVariables"],
     theme: dark ? "dark" : "default",
+    themeVariables: mermaidColors(dark ? FJORD.dark : FJORD.light),
   });
   for (const code of blocks) {
     if (isCancelled()) return;

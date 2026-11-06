@@ -38,17 +38,17 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { FJORD_RENDERER_CSS, FJORD_THEME_NAMES } from "../../lib/fjord.js";
 import type { Thread } from "../../lib/pulls.js";
 import { fileDiffOf } from "./file-diff.js";
+import { registerFjordThemes } from "./fjord-themes.client.js";
 import { type Engine, highlighterChoice, STEP_TIMEOUT_MS, within } from "./highlighter.js";
 import { apiSide, rendererSide } from "./patch.js";
 import { type LinePick, ThreadView } from "./thread.js";
 import { type VirtualizerOwner, VirtualizerOwnerContext } from "./window-virtualizer.js";
 
-// High-contrast themes: the default ones' token colours fail WCAG AA contrast on the
-// changed lines' tints (measured with axe in the end-to-end test; these pass it, on
-// either highlighter).
-const THEMES = { dark: "github-dark-high-contrast", light: "github-light-high-contrast" } as const;
+const THEMES = { dark: FJORD_THEME_NAMES.dark, light: FJORD_THEME_NAMES.light } as const;
+registerFjordThemes();
 /** Lines longer than this are neither tokenized nor compared word by word (as the renderer's own limit). */
 const MAX_TOKENIZED_LINE = 1000;
 /**
@@ -239,6 +239,7 @@ export default function FileDiffView({
     return {
       diffStyle,
       theme: THEMES,
+      unsafeCSS: FJORD_RENDERER_CSS,
       // Read only without a pool (which carries its own).
       ...(engine && { preferredHighlighter: engine }),
       themeType: "system" as const,
