@@ -364,7 +364,8 @@ CREATE TABLE live_recovery_targets (
       AND json_extract(local_cleanup_debt, '$.queue_ops') = 0,
       0
     ))
-) STRICT, WITHOUT ROWID;
+, turn_debt INTEGER NOT NULL DEFAULT 0
+  CHECK (turn_debt IN (0, 1))) STRICT, WITHOUT ROWID;
 
 -- table live_socket_deps
 CREATE TABLE live_socket_deps (
@@ -829,6 +830,10 @@ CREATE INDEX live_admissions_day ON live_admissions (day, principal_id);
 
 -- index live_budget_receipts_expiry
 CREATE INDEX live_budget_receipts_expiry ON live_budget_receipts (expires_at, seq);
+
+-- index live_budget_receipts_overdue
+CREATE INDEX live_budget_receipts_overdue ON live_budget_receipts (expires_at)
+  WHERE kind NOT IN ('maintenance', 'revocation_page');
 
 -- index live_budget_receipts_recipient
 CREATE INDEX live_budget_receipts_recipient

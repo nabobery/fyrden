@@ -21,7 +21,7 @@ import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { dpopKey } from "./helpers/dpop.js";
 import { entry } from "./helpers/feed.js";
-import { until } from "./helpers/live-sockets.js";
+import { runTurns, until } from "./helpers/live-sockets.js";
 import { scopedToken } from "./helpers/principals.js";
 
 afterEach(() => {
@@ -212,7 +212,7 @@ const change = (who: Who, repo: { id: string; conversation: string }, version: n
 /** Applies a change and runs the feed's alarm (its pump). */
 async function pump(who: Who, repo: { id: string; conversation: string }, version: number) {
   await feedOf(who).applyFeed([change(who, repo, version)]);
-  await runDurableObjectAlarm(feedOf(who));
+  await runTurns(who);
 }
 
 const updated = (who: Who) => ({

@@ -42,8 +42,11 @@ export const LISTEN_POLICY = {
   renewReserveLife: 4,
   /** How long an unanswered renewal waits before it is sent again. */
   renewRetryMs: 60_000,
-  /** How far past the socket's renewal threshold a renewal is sent (the object's clock leads). */
-  renewMarginMs: 30_000,
+  /**
+   * How long before the socket's deadline it is renewed: late, as a browser's
+   * is, since each renewal is a turn of the feed's (a few tries before it).
+   */
+  renewBeforeMs: 3 * 60_000,
 } as const;
 
 /** The feed's resource template and a principal's feed URI. */
@@ -174,7 +177,10 @@ export class ListenStream {
   #refusal: Refusal | null = null;
   #done = false;
   #cancelled = false;
+  /** The socket's deadline on this bridge's clock (the object's may differ). */
   #deadline: number;
+  /** When the renewal waiting for its answer was first sent, and last sent. */
+  #renewAskedAt: number | null = null;
   #renewSentAt: number | null = null;
   /** Controls sent: in the socket's life, and their times within the last minute. */
   #controls = 0;
@@ -342,7 +348,11 @@ export class ListenStream {
       this.#heard = frame.n;
       this.#poke();
     } else if (frame.t === "renewed" && typeof frame.until === "number") {
-      this.#deadline = frame.until;
+      // Counted from when it was first asked, on this clock (the object renews from when the
+      // renewal reached it, no sooner), never past the object's own answer.
+      const asked = this.#renewAskedAt ?? this.#clock.now();
+      this.#deadline = Math.min(frame.until, asked + LIVE_POLICY.renewMs);
+      this.#renewAskedAt = null;
       this.#renewSentAt = null;
       this.#refresh = true;
       this.#poke();
@@ -372,10 +382,11 @@ export class ListenStream {
       return;
     }
     this.#acknowledge();
-    const due = now >= this.#deadline - LIVE_POLICY.renewMs / 2 + LISTEN_POLICY.renewMarginMs;
+    const due = now >= this.#deadline - LISTEN_POLICY.renewBeforeMs;
     const waiting =
       this.#renewSentAt !== null && now - this.#renewSentAt < LISTEN_POLICY.renewRetryMs;
     if (due && !waiting && this.#control(0, 0)) {
+      this.#renewAskedAt ??= now;
       this.#renewSentAt = now;
       this.#send({ t: "renew" });
     }

@@ -6,10 +6,11 @@
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import { makeLiveGrant, reserveLive } from "../src/live/budget.js";
+import { LIVE_RECEIPTS_OVERDUE, makeLiveGrant, reserveLive } from "../src/live/budget.js";
 import { extendLease, reaping } from "../src/live/directory.js";
 import {
   liveMaintenanceDue,
+  liveMaintenanceWork,
   runLiveMaintenance,
   settleStrandedOwners,
 } from "../src/live/maintenance.js";
@@ -61,6 +62,70 @@ describe("live maintenance", () => {
           .first(),
       ).toEqual({ n: 0 });
       // Its own grant was a cleanup one, its owner gone once accounted.
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT count(*) AS n FROM live_duration_owners WHERE object_type = 'MaintenanceDO'",
+        ).first(),
+      ).toEqual({ n: 0 });
+    }));
+
+  it("waits for expired receipts until they call for cleanup: two hours on, or a page", () =>
+    isolated(async () => {
+      for (let i = 0; i < 20 && (await liveMaintenanceDue(env.DIRECTORY)); i++)
+        await runLiveMaintenance(env);
+      // A grant whose receipt expired an hour ago (its validity plus two days).
+      const now = await ledgerNow();
+      const from = now - 2 * DAY - 60_000 - 60 * 60_000;
+      const granted = await reserveLive(
+        clockedD1(env.DIRECTORY, { now: from }),
+        await makeLiveGrant(
+          await plan({ day: Math.floor(from / DAY), from, recipient: `usr_${uniqueId("late")}` }),
+        ),
+      );
+      if (granted.status !== "granted") throw new Error(granted.reason);
+      const due = (at: number) => liveMaintenanceDue(clockedD1(env.DIRECTORY, { now: at }));
+      expect(await due(now)).toBe(false);
+      expect(await due(now + LIVE_RECEIPTS_OVERDUE.graceMs - 60 * 60_000)).toBe(true);
+    }));
+
+  it("pays for routine work and revocations each with a grant of its own, both when both are due", () =>
+    isolated(async () => {
+      for (let i = 0; i < 20 && (await liveMaintenanceDue(env.DIRECTORY)); i++)
+        await runLiveMaintenance(env);
+      // A receipt long expired, and a revocation resting on no socket.
+      const from = (await ledgerNow()) - 3 * DAY;
+      const old = await reserveLive(
+        clockedD1(env.DIRECTORY, { now: from }),
+        await makeLiveGrant(
+          await plan({ day: Math.floor(from / DAY), from, recipient: `usr_${uniqueId("both")}` }),
+        ),
+      );
+      if (old.status !== "granted") throw new Error(old.reason);
+      await env.DIRECTORY.prepare(
+        "INSERT INTO revocations (subject, at, expanded) VALUES (?, ?, 0)",
+      )
+        .bind(`dep_${uniqueId("none")}`, Date.now())
+        .run();
+      expect(await liveMaintenanceWork(env.DIRECTORY)).toEqual({
+        routine: true,
+        revocations: true,
+      });
+      const kinds = () =>
+        env.DIRECTORY.prepare(
+          `SELECT sum(kind = 'maintenance') AS maintenance, sum(kind = 'revocation_page') AS pages
+           FROM live_budget_receipts`,
+        ).first<{ maintenance: number; pages: number }>();
+      const before = await kinds();
+      expect(await runLiveMaintenance(env)).toMatchObject({ status: "funded", accounted: true });
+      expect(await kinds()).toEqual({
+        maintenance: (before?.maintenance ?? 0) + 1,
+        pages: (before?.pages ?? 0) + 1,
+      });
+      // Both done: nothing left due, and neither owner holding its place.
+      expect(await liveMaintenanceWork(env.DIRECTORY)).toEqual({
+        routine: false,
+        revocations: false,
+      });
       expect(
         await env.DIRECTORY.prepare(
           "SELECT count(*) AS n FROM live_duration_owners WHERE object_type = 'MaintenanceDO'",

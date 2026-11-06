@@ -5,7 +5,7 @@
 // whole (a test hook), and a test waits for the count by round trips, a
 // bounded number of them (no timer).
 
-import { runInDurableObject } from "cloudflare:test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { feedHooks, type UserDO } from "../../src/do/UserDO.js";
 import type { Who } from "./api.js";
@@ -59,4 +59,28 @@ export async function until(who: Who, check: (sql: SqlStorage) => boolean, what:
     if (holds) return;
   }
   throw new Error(`never ${what}`);
+}
+
+/**
+ * Runs `who`'s feed's alarm, then again while its prepared turn is a pump
+ * already due (a turn of renewals only leaves a change marked meanwhile to
+ * the pump after it, which the next alarm runs at once): a few at most.
+ */
+export async function runTurns(who: Who): Promise<void> {
+  await runDurableObjectAlarm(feedOf(who));
+  for (let i = 0; i < 3; i++) {
+    const due = await runInDurableObject(feedOf(who), (_: UserDO, state) => {
+      const row = state.storage.sql
+        .exec<{ phase: string; intended_at: number; envelope_json: string }>(
+          "SELECT phase, intended_at, envelope_json FROM live_turn",
+        )
+        .toArray()[0];
+      const kind = row
+        ? (JSON.parse(row.envelope_json) as { plan: { kind: string } }).plan.kind
+        : null;
+      return row?.phase === "prepared" && kind === "pump" && row.intended_at <= Date.now();
+    });
+    if (!due) return;
+    await runDurableObjectAlarm(feedOf(who));
+  }
 }

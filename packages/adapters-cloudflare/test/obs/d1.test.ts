@@ -3,6 +3,7 @@ import { createFakeDataset } from "../../src/obs/fake-dataset.js";
 import {
   countedD1,
   currentInvocation,
+  d1RowsRun,
   d1StatementsRun,
   measureInvocation,
 } from "../../src/obs/index.js";
@@ -87,10 +88,13 @@ describe("a counted D1 binding", () => {
       const row = await db.prepare("SELECT x").first();
       const column = await db.prepare("SELECT x").first("x");
       await db.prepare("UPDATE t").run();
+      // What the invocation has counted so far, as its own work asks.
+      const sofar = d1RowsRun();
       await db.batch([db.prepare("A"), db.prepare("B")]);
-      return [row, column];
+      return [row, column, sofar, d1RowsRun()];
     });
-    expect(first).toEqual([{ x: 7 }, 7]);
+    expect(first).toEqual([{ x: 7 }, 7, { read: 9, written: 3 }, { read: 15, written: 5 }]);
+    expect(d1RowsRun()).toEqual({ read: 0, written: 0 });
     expect(
       points.filter((p) => p.name === "d1.invocation_rows").map((p) => [p.blobs, p.value]),
     ).toEqual([

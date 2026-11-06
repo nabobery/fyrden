@@ -17,8 +17,12 @@
 export const LIVE_POLICY = {
   /** How long a ticket can be redeemed. */
   ticketMs: 30_000,
-  /** How long a renewal keeps a socket (never past its absolute expiry). */
-  renewMs: 10 * 60_000,
+  /**
+   * How long a renewal keeps a socket (never past its absolute expiry); one is
+   * taken in the second half only. Each renewal is a turn of the feed's, so
+   * this sets how many a socket costs a day (about 50 from a browser).
+   */
+  renewMs: 30 * 60_000,
   /** A socket's longest life (its credential's expiry if sooner). */
   lifeMs: 24 * 60 * 60_000,
   /** Frames sent and not acknowledged at most. */
@@ -36,15 +40,28 @@ export const LIVE_POLICY = {
   streamsPerFrame: 20,
   /** Conversations a dirty stream keeps as causes at most. */
   candidatesPerStream: 20,
-  /** How long an access decision stands. */
-  decisionMs: 10 * 60_000,
   /** How long a revoked dependency is kept (a socket's longest life). */
   revokedMs: 24 * 60 * 60_000,
   /** Dirty streams one pump unit reads at most (its progress stops at the page's end). */
   dirtyPage: 20,
-  /** Rows of each kind one pruning or clearing step deletes at most. */
-  pruneRows: 500,
+  /**
+   * Rows of each kind one prune deletes at most (Proposed): a bounded page,
+   * paid for by the unit that prunes (a pump turn; ticket storage prunes
+   * expired tickets only). What a page leaves waits for the next.
+   */
+  prunePage: { dirty: 20, candidates: 40, tickets: 8, revoked: 8 },
 } as const;
+
+/** Rows of each kind one prune deletes at most. */
+export interface LivePrunePage {
+  readonly dirty: number;
+  readonly candidates: number;
+  readonly tickets: number;
+  readonly revoked: number;
+}
+
+/** What ticket storage prunes: expired tickets only (a pump turn prunes the rest). */
+export const LIVE_TICKET_PRUNE: LivePrunePage = { dirty: 0, candidates: 0, tickets: 8, revoked: 0 };
 
 /** Close codes: expired (renew or reconnect with a new ticket), resync (reread everything). */
 export const CLOSE_EXPIRED = 4401;
@@ -517,56 +534,85 @@ export class Live {
   }
 
   /**
-   * Deletes what every socket has heard of (dirty rows and causes at or
-   * below the lowest progress, a socket being confirmed's included; all of
-   * them with no socket), expired tickets, and revocations past a socket's
-   * longest life: a page of each kind, each through its index; whether a
-   * kind had more. A stream's causes are never newer than its dirty row
-   * (each change moves both), so causes whose row a page took go with a
-   * later page of their own (through their index), never kept for good.
+   * Whether the feed has live work beyond renewals: an admission still
+   * being confirmed (to forget, if it never is), a socket past its deadline
+   * or life, or a slow consumer past its limit (to end, or forget when
+   * nothing is left to pay for its end), a
+   * change an open socket has not heard of, or anything a prune would delete
+   * (so its next turn is a pump, not one of renewals only).
    */
-  prune(now: number): boolean {
+  hasPumpWork(now: number): boolean {
     const lowest =
       this.sql.exec<{ p: number | null }>("SELECT min(delivered_seq) AS p FROM live_local").one()
         .p ?? this.seq();
-    const page = LIVE_POLICY.pruneRows;
-    const deleted = [
+    return (
       this.sql
-        .exec(
-          `DELETE FROM live_dirty WHERE stream IN
-           (SELECT stream FROM live_dirty INDEXED BY live_dirty_seq WHERE seq <= ? ORDER BY seq LIMIT ?) RETURNING 1`,
+        .exec<{ more: number }>(
+          `SELECT EXISTS (SELECT 1 FROM live_local WHERE phase = 'confirming'
+               OR deadline <= ?2 OR expires_at <= ?2
+               OR (blocked_since IS NOT NULL AND blocked_since <= ?4))
+             OR EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq
+               WHERE seq > (SELECT min(delivered_seq) FROM live_local WHERE phase = 'open'))
+             OR EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq WHERE seq <= ?1)
+             OR EXISTS (SELECT 1 FROM live_candidates INDEXED BY live_candidates_last
+               WHERE max(direct_seq, ordinary_seq) <= ?1)
+             OR EXISTS (SELECT 1 FROM live_tickets INDEXED BY live_tickets_expiry
+               WHERE expires_at <= ?2)
+             OR EXISTS (SELECT 1 FROM live_revoked INDEXED BY live_revoked_at WHERE at <= ?3)
+             AS more`,
           lowest,
-          page,
-        )
-        .toArray().length,
-      this.sql
-        .exec(
-          `DELETE FROM live_candidates WHERE (stream, conversation) IN
-           (SELECT stream, conversation FROM live_candidates INDEXED BY live_candidates_last
-             WHERE max(direct_seq, ordinary_seq) <= ? LIMIT ?) RETURNING 1`,
-          lowest,
-          page,
-        )
-        .toArray().length,
-      this.sql
-        .exec(
-          `DELETE FROM live_tickets WHERE ticket_hash IN
-           (SELECT ticket_hash FROM live_tickets INDEXED BY live_tickets_expiry
-             WHERE expires_at <= ? LIMIT ?) RETURNING 1`,
           now,
-          page,
-        )
-        .toArray().length,
-      this.sql
-        .exec(
-          `DELETE FROM live_revoked WHERE dependency IN
-           (SELECT dependency FROM live_revoked INDEXED BY live_revoked_at WHERE at <= ? LIMIT ?) RETURNING 1`,
           now - LIVE_POLICY.revokedMs,
-          page,
+          now - LIVE_POLICY.slowMs,
         )
-        .toArray().length,
+        .one().more === 1
+    );
+  }
+
+  /**
+   * Deletes what every socket has heard of (dirty rows and causes at or
+   * below the lowest progress, a socket being confirmed's included; all of
+   * them with no socket), expired tickets, and revocations past a socket's
+   * longest life: at most `page`'s rows of each kind (a kind of none is
+   * left alone), each through its index; whether a kind had more. A stream's causes are never newer than its dirty row
+   * (each change moves both), so causes whose row a page took go with a
+   * later page of their own (through their index), never kept for good.
+   */
+  prune(now: number, page: LivePrunePage = LIVE_POLICY.prunePage): boolean {
+    const lowest = () =>
+      this.sql.exec<{ p: number | null }>("SELECT min(delivered_seq) AS p FROM live_local").one()
+        .p ?? this.seq();
+    const deleted = (limit: number, query: string, bound: () => number) =>
+      limit > 0 && this.sql.exec(query, bound(), limit).toArray().length >= limit;
+    const more = [
+      deleted(
+        page.dirty,
+        `DELETE FROM live_dirty WHERE stream IN
+         (SELECT stream FROM live_dirty INDEXED BY live_dirty_seq WHERE seq <= ? ORDER BY seq LIMIT ?) RETURNING 1`,
+        lowest,
+      ),
+      deleted(
+        page.candidates,
+        `DELETE FROM live_candidates WHERE (stream, conversation) IN
+         (SELECT stream, conversation FROM live_candidates INDEXED BY live_candidates_last
+           WHERE max(direct_seq, ordinary_seq) <= ? LIMIT ?) RETURNING 1`,
+        lowest,
+      ),
+      deleted(
+        page.tickets,
+        `DELETE FROM live_tickets WHERE ticket_hash IN
+         (SELECT ticket_hash FROM live_tickets INDEXED BY live_tickets_expiry
+           WHERE expires_at <= ? LIMIT ?) RETURNING 1`,
+        () => now,
+      ),
+      deleted(
+        page.revoked,
+        `DELETE FROM live_revoked WHERE dependency IN
+         (SELECT dependency FROM live_revoked INDEXED BY live_revoked_at WHERE at <= ? LIMIT ?) RETURNING 1`,
+        () => now - LIVE_POLICY.revokedMs,
+      ),
     ];
-    return deleted.some((n) => n >= page);
+    return more.some(Boolean);
   }
 
   /**

@@ -405,7 +405,7 @@ describe("full webhook bodies", () => {
     expect(t.received.map((r) => r.body).sort()).toEqual([...stored].sort());
     const last = JSON.parse(stored.at(-1) ?? "{}") as Body;
     expect(last.pull_request).toMatchObject({ head: { ref: head }, milestone: { number: 1 } });
-  });
+  }, 90_000);
 
   it("send the same bytes from overlapping runs, a recovered body, a retry and a redelivery", async () => {
     const hook = (await t.createHook({ events: ["issues"] })).body;

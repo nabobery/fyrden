@@ -345,6 +345,12 @@ export function currentInvocation(): Invocation | undefined {
   return scope.getStore();
 }
 
+/** D1's reported rows the invocation the caller runs in has read and written so far (none outside any). */
+export function d1RowsRun(): { readonly read: number; readonly written: number } {
+  const tally = scope.getStore()?.tally;
+  return { read: tally?.d1RowsRead ?? 0, written: tally?.d1RowsWritten ?? 0 };
+}
+
 /** D1 statements the platform invocation the caller runs in has run (0 outside any). */
 export function d1StatementsRun(): number {
   return scope.getStore()?.tally.d1 ?? 0;

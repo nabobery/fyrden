@@ -58,8 +58,8 @@ export const LIVE_BLOCK_MS = 6 * 60 * 60_000;
 export const LIVE_REQUIRED_COMPONENTS: Partial<Record<LiveManifestUnit, readonly AlarmUnit[]>> = {
   pump: [
     "pump",
-    // Its successor's grant, and its account confirmation's.
-    "grant",
+    // Its successor's grant (a turn's), and its account confirmation's.
+    "turnGrant",
     "grant",
     "coverage",
     "admitOwner",
@@ -70,7 +70,7 @@ export const LIVE_REQUIRED_COMPONENTS: Partial<Record<LiveManifestUnit, readonly
   ],
   renewal: [
     "renewal",
-    "grant",
+    "turnGrant",
     "coverage",
     "admitOwner",
     "dispatchOwner",
@@ -110,6 +110,13 @@ export interface LiveManifestEntry {
   readonly components: readonly AlarmUnit[];
   /** The fixtures it was measured on, each with the most it was observed to use. */
   readonly observed: Readonly<Record<string, ResourceVector>>;
+  /**
+   * A turn's composition, when the unit is a feed's turn: its rows priced
+   * as its end and its costliest kind of work (`work`: alternatives, each a
+   * list of steps), every step at its most as the meter checks it, and no
+   * less than its measured whole turn with the margin (`measured`).
+   */
+  readonly turn?: LiveTurnComposition;
   /** The Durable Object requests one admission may make (entries, callbacks, child calls). */
   readonly requests: number;
   /**
@@ -200,7 +207,10 @@ export function liveManifestError(
     const fixtures = Object.values(entry.observed);
     if (fixtures.length === 0) return `${unit}: no fixture observed`;
     if (!fixtures.every(isLiveVector)) return `${unit}: an observation is not a live vector`;
-    const price = livePrice(fixtures, entry.requests, entry.duration, entry.maxQuantity);
+    const price = {
+      ...livePrice(fixtures, entry.requests, entry.duration, entry.maxQuantity),
+      ...(entry.turn && liveTurnRows(entry.turn, fixtures)),
+    };
     for (const counter of R)
       if (entry.resources[counter] !== price[counter])
         return `${unit}: ${counter} is ${entry.resources[counter]}, its price by the rule ${price[counter]}`;
@@ -233,16 +243,22 @@ function estimated(
 /**
  * The prices of live work's units, from measurements: each unit's rows in
  * the feed's object by the live suite's fixtures (its most cases among
- * them: a pump over a full page with a credential's most sockets, a mark
- * of a stream at its most causes), and D1's rows per invocation on Workers
+ * them: a pump over a full page of streams each at its most causes, for a
+ * credential's most sockets on a feed with its most, with a full page to
+ * prune, its D1 counted too; a mark of a stream at its most causes, or one
+ * of its causes changed again, on a feed with its most sockets (their
+ * windows full) and at its pool's low water, the feed's own work for the
+ * same change taken out), and D1's rows per invocation on Workers
  * Free (2026-11-01: an upgrade's whole D1 priced on its transport, the
  * admission's, terminal's and blocks' grants within it; a turn's on the
- * pump; maintenance's, its recoveries' within it). A recovery's rows are
+ * pump), and maintenance's from its pages full (`LIVE_MAINTENANCE_MEASURED`;
+ * its recoveries' pages funded on their own). A recovery's rows are
  * its page's bound, its D1 an estimate. The margin and the allowances are
  * Proposed.
  *
  * - `ticket`: the issuance's counter and transport rows, one call of the
- *   feed's object and its ticket's row, its owner's accounting; leaving
+ *   feed's object and its ticket's row (with a page of expired tickets
+ *   pruned), its owner's accounting; leaving
  *   the ticket's local row and the directory's rows to clean up.
  * - `upgrade_transport`: the whole upgrade attempt, owned: the transport's
  *   claim, the redemption's call of the feed's object, the admission's
@@ -263,8 +279,10 @@ function estimated(
  *   them, installed into the pool whole.
  */
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
+  // Its D1 as measured on Free (191 read, 35 written), its two receipts written to the overdue
+  // index too (two written more).
   ticket: estimated(
-    { do_rows_read: 26, do_rows_written: 4, d1_rows_read: 191, d1_rows_written: 35 },
+    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 191, d1_rows_written: 37 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -276,8 +294,11 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       dayCleanupDebt: ZERO,
     },
   ),
+  // Its D1 as measured on Free (422 read, 67 written), its turn's grant removing a full page of
+  // the feed's done turns (at most 111 read and 2 written more, a ledger probe), and its five grants'
+  // receipts written to the overdue index too (five written more).
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 422, d1_rows_written: 67 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 533, d1_rows_written: 74 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -326,7 +347,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
   ),
   mark: estimated(
-    { do_rows_read: 25, do_rows_written: 20 },
+    { do_rows_read: 103, do_rows_written: 13 },
     {
       validity: { maxMs: LIVE_BLOCK_MS, days: 2 },
       duration: "synchronous",
@@ -381,27 +402,177 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
   });
 }
 
+/** Queued renewals one turn runs at most. */
+export const LIVE_TURN_RENEWALS = 2;
+
+/**
+ * What each step of a feed's turn uses at most (rows in the feed's object
+ * and in D1), measured by the live suite's fixtures: the turn starts a step
+ * only while what it used, the step's most and its own end fit its grant
+ * (see `TurnMeter`). `end`: what a turn uses outside its meter (its claim,
+ * dispatch, successor's grant and accounting, and the alarm's own reads
+ * around it, which grow with the feed's sockets: an idle turn's whole at a
+ * feed's most sockets, less what its meter counted); `housekeep`: its
+ * sockets looked over (expired and slow ones ended on their provisions, each
+ * looked for), at a feed's most sockets, the step every turn runs first;
+ * `forget`: one admission
+ * never confirmed, forgotten with its lease released; `renewal`: one queued
+ * renewal authorized; `refill`: one refill granted and installed;
+ * `delivery`: one credential's page delivered to its sockets (its
+ * credential, repositories, preferences and account checked); `prune`: one
+ * page pruned. A refill granted across a midnight, its pool's expired
+ * balances removed on both days, was measured apart (an isolated probe at
+ * 23:50 UTC: 43 and 15 object rows, 74 and 9 D1 rows), the fixtures'
+ * ledger running on D1's own clock.
+ */
+export const LIVE_TURN_STEPS = {
+  // Its D1 at a midnight (a two-day successor and settlement): an isolated probe at 23:50 UTC
+  // (146 read, 25 written), the successor's grant now reading the feed's done turns (155 read at
+  // 20 sockets) and removing a full page of them (at most 111 read and 2 written more, a ledger probe),
+  // its receipt written to the overdue index too (one written more).
+  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 266, d1_rows_written: 28 },
+  housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
+  forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
+  renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
+  // Its D1 over a midnight (a two-day block), its receipt written to the overdue index too.
+  refill: { do_rows_read: 43, do_rows_written: 15, d1_rows_read: 74, d1_rows_written: 10 },
+  delivery: { do_rows_read: 496, do_rows_written: 20, d1_rows_read: 955, d1_rows_written: 7 },
+  // Its reads its bound, not one run's (they vary with what its index scans pass, 318 to 420
+  // seen): about five a row it deletes (76 a page), its sockets' progress scanned (20), and more.
+  prune: { do_rows_read: 440, do_rows_written: 76, d1_rows_read: 0, d1_rows_written: 0 },
+} as const;
+
+const TURN_COUNTERS = [
+  "do_rows_read",
+  "do_rows_written",
+  "d1_rows_read",
+  "d1_rows_written",
+] as const;
+const turnRows = (f: (r: (typeof TURN_COUNTERS)[number]) => number) =>
+  Object.fromEntries(TURN_COUNTERS.map((r) => [r, f(r)])) as Record<
+    (typeof TURN_COUNTERS)[number],
+    number
+  >;
+
+/**
+ * Each step's most as a turn's meter checks it: its measurement with the
+ * manifest's margin, ceil(1.25 x most) + 2, as every price takes it.
+ */
+export const LIVE_TURN_STEP_MOST = Object.fromEntries(
+  Object.entries(LIVE_TURN_STEPS).map(([step, rows]) => [
+    step,
+    turnRows((r) => (rows[r] === 0 ? 0 : Math.ceil(1.25 * rows[r]) + 2)),
+  ]),
+) as Record<keyof typeof LIVE_TURN_STEPS, Record<(typeof TURN_COUNTERS)[number], number>>;
+
+/** A turn's kinds of work, each a list of steps (see `LiveManifestEntry.turn`). */
+export interface LiveTurnComposition {
+  readonly work: readonly (readonly (keyof typeof LIVE_TURN_STEPS)[])[];
+}
+
+/**
+ * A turn's rows at most: its end, its housekeeping and its costliest kind
+ * of work, each step at its most as the meter checks it (the margin taken
+ * once a step), and no less than its observations (a measured whole turn)
+ * by the rule.
+ */
+export function liveTurnRows(
+  turn: LiveTurnComposition,
+  observed: readonly ResourceVector[],
+): Record<(typeof TURN_COUNTERS)[number], number> {
+  const s = LIVE_TURN_STEP_MOST;
+  const most = (r: (typeof TURN_COUNTERS)[number]) => Math.max(0, ...observed.map((o) => o[r]));
+  return turnRows((r) =>
+    Math.max(
+      most(r) === 0 ? 0 : Math.ceil(1.25 * most(r)) + 2,
+      s.end[r] +
+        s.housekeep[r] +
+        Math.max(...turn.work.map((steps) => steps.reduce((n, step) => n + s[step][r], 0))),
+    ),
+  );
+}
+
+/** A feed's turn of `turn`'s composition: its rows by `liveTurnRows`, the rest by the rule. */
+function turnUnit(
+  turn: LiveTurnComposition,
+  measured: Partial<ResourceVector>,
+  entry: Omit<LiveManifestEntry, "resources" | "observed" | "components" | "turn"> &
+    Partial<Pick<LiveManifestEntry, "components">>,
+): LiveManifestEntry {
+  const observed = vector(measured);
+  const rows = liveTurnRows(turn, [observed]);
+  return {
+    components: [],
+    ...entry,
+    turn,
+    observed: { [MEASURED]: observed },
+    resources: {
+      ...livePrice([observed], entry.requests, entry.duration, entry.maxQuantity),
+      ...rows,
+    },
+  };
+}
+
 /**
  * - `pump`: a feed's execution turn, one alarm's live work, owned: its
  *   housekeeping (confirmations never finished forgotten, expired and slow
  *   sockets ended), then one kind of work (up to `LIVE_TURN_RENEWALS`
  *   queued renewals, one refill's grant and installation, or one pump
  *   unit: one credential's sockets, one owning account's page, its call of
- *   that account's object paid for by a grant of its own), and its
- *   successor's grant; its owner's whole accounting reserved with it.
+ *   that account's object paid for by a grant of its own, then a page of
+ *   what every socket heard of pruned), and its successor's grant; its
+ *   owner's whole accounting reserved with it.
  */
-LIVE_PRICES.pump = estimated(
-  { do_rows_read: 429, do_rows_written: 51, d1_rows_read: 132, d1_rows_written: 24 },
+/**
+ * The pump turn as measured whole (a full delivery and prune, its alarm's reads around it; 712
+ * D1 rows read and 31 written, its receipts in the overdue index), with its successor's grant
+ * removing a full page of done turns (at most 111 read, 2 written).
+ */
+const PUMP_MEASURED = {
+  do_rows_read: 1_197,
+  do_rows_written: 87,
+  d1_rows_read: 823,
+  d1_rows_written: 33,
+};
+
+const TURN_ENTRY = {
+  validity: { maxMs: 30 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 30_000,
+  maxQuantity: 1,
+  requests: 8,
+  directoryCleanupDebt: vector({ d1_rows_written: 2 }),
+  localCleanupDebt: vector({ do_rows_written: 2 }),
+  dayCleanupDebt: ZERO,
+} as const;
+
+const RENEWALS = Array.from({ length: LIVE_TURN_RENEWALS }, () => "renewal" as const);
+
+LIVE_PRICES.pump = turnUnit(
+  { work: [["delivery", "prune"], ["refill"], RENEWALS] },
+  PUMP_MEASURED,
   {
-    validity: { maxMs: 30 * 60_000, days: 2 },
-    duration: "owner",
-    pendingMs: 30_000,
-    maxQuantity: 1,
-    requests: 8,
-    directoryCleanupDebt: vector({ d1_rows_written: 2 }),
-    localCleanupDebt: vector({ do_rows_written: 2 }),
-    dayCleanupDebt: ZERO,
+    ...TURN_ENTRY,
     components: LIVE_REQUIRED_COMPONENTS.pump as readonly AlarmUnit[],
+  },
+);
+
+/**
+ * - `renewal`: a feed's turn granted when nothing but renewals is due (no
+ *   change to deliver, refill or page to prune): its end and its renewals,
+ *   its meter leaving anything else (a change marked since) to a pump turn
+ *   after it.
+ */
+LIVE_PRICES.renewal = turnUnit(
+  { work: [RENEWALS] },
+  {},
+  {
+    ...TURN_ENTRY,
+    // Each of its renewals' statements reserved in the alarm.
+    components: [
+      ...(LIVE_REQUIRED_COMPONENTS.renewal as readonly AlarmUnit[]),
+      ...RENEWALS.slice(1),
+    ],
   },
 );
 
@@ -413,10 +584,11 @@ LIVE_PRICES.pump = estimated(
  *   one probed, for a credential's readers) and writes (the restore
  *   generation it takes first in an instance of a restored account), both
  *   measured by the live suite's fixtures; the grant's own D1 (at most a
- *   turn's, which makes one) and the call's entry.
+ *   turn's, which makes one, its receipt written to the overdue index too)
+ *   and the call's entry.
  */
 LIVE_PRICES.org_confirmation = estimated(
-  { do_rows_read: 4_100, do_rows_written: 1, d1_rows_read: 132, d1_rows_written: 24 },
+  { do_rows_read: 4_100, do_rows_written: 1, d1_rows_read: 132, d1_rows_written: 25 },
   {
     validity: { maxMs: 60_000, days: 2 },
     duration: "synchronous",
@@ -431,24 +603,71 @@ LIVE_PRICES.org_confirmation = estimated(
 /**
  * - `maintenance`: one funded run of live maintenance (a cleanup unit):
  *   a page of expired receipts and of old days, a day's duration debt
- *   served, a few feeds' recoveries (each funded on its own), a page of
- *   leases reaped and a page of revocations told (see `LIVE_MAINTENANCE`).
+ *   served, a few feeds' recoveries (each funded on its own) and a page of
+ *   each kind reaped (see `LIVE_MAINTENANCE`).
+ * - `revocation_page`: one revocation expanded a page and one feed told,
+ *   granted apart from routine maintenance only while revocations are due
+ *   (a cleanup unit owned by the maintenance object; `LIVE_REVOCATION_PAGE`).
  * - `recovery`: one feed's recovery page (a cleanup unit, owned by its
  *   object while it runs).
  */
-LIVE_PRICES.maintenance = estimated(
-  { d1_rows_read: 262, d1_rows_written: 49 },
-  {
-    validity: { maxMs: 10 * 60_000, days: 2 },
-    duration: "owner",
-    pendingMs: 60_000,
-    maxQuantity: 1,
-    requests: 20,
-    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
-    localCleanupDebt: ZERO,
-    dayCleanupDebt: ZERO,
-  },
-);
+/**
+ * A maintenance run with every page full, at its worst (Proposed; measured
+ * locally by its fixture, D1's rows as an invocation counts them): the
+ * run's own grant over a midnight, owner and checks, with an overdue
+ * receipt removed (252 read, 39 written), 16 receipts each holding escrow
+ * on two days of its own (3,361, 49), a day (28, 2), a day's duration debt
+ * served (5, 2), 2 recovery targets adopted (10, 4) and 2 coordinated with
+ * their durations settled (93, 10; their pages funded on their own), each
+ * kind reaped a page, leases lapsed both ways (190, 46), and 2 owners
+ * settled two whole pages of days each and released (96, 32): 4,035 read,
+ * rounded up. Revocations are a page of their own (`revocation_page`).
+ */
+export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_100, d1_rows_written: 184 };
+
+LIVE_PRICES.maintenance = estimated(LIVE_MAINTENANCE_MEASURED, {
+  validity: { maxMs: 10 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 60_000,
+  maxQuantity: 1,
+  // Its own, and its 2 recoveries' calls (each also its recovery's: counted twice).
+  requests: 3,
+  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+  localCleanupDebt: ZERO,
+  dayCleanupDebt: ZERO,
+});
+/**
+ * A revocation page at its most (Proposed; measured locally): the run's own
+ * grant, owner and checks, 8 revocations expanded a socket each (8
+ * dependency rows, each socket's feed a target) and one feed told, its 20
+ * sockets' leases and dependency rows released (D1: 467 rows read, rounded
+ * up, and 166 written, the maintenance fixture); the feed's object closing and forgetting its 20
+ * sockets with their ends' provisions (160 rows read and 103 written with
+ * two dependencies a socket, the live suite's; a socket rests on five at
+ * most, an agent's derived credential, each one more a row read and
+ * written: 220 and 163). A feed whose principal is being deleted retires as
+ * it wakes, whoever wakes it (its deferred work and email queue dropped):
+ * that is the deletion's work, done once whichever call comes first, and
+ * not priced here.
+ */
+export const LIVE_REVOCATION_PAGE_MEASURED = {
+  do_rows_read: 220,
+  do_rows_written: 163,
+  d1_rows_read: 500,
+  d1_rows_written: 166,
+};
+
+LIVE_PRICES.revocation_page = estimated(LIVE_REVOCATION_PAGE_MEASURED, {
+  validity: { maxMs: 10 * 60_000, days: 2 },
+  duration: "owner",
+  pendingMs: 60_000,
+  maxQuantity: 1,
+  // The feed told, and its sockets' closes (each a callback of the feed's object).
+  requests: 22,
+  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+  localCleanupDebt: ZERO,
+  dayCleanupDebt: ZERO,
+});
 LIVE_PRICES.recovery = estimated(
   { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 10, d1_rows_written: 4 },
   {
@@ -462,9 +681,6 @@ LIVE_PRICES.recovery = estimated(
     dayCleanupDebt: ZERO,
   },
 );
-
-/** Queued renewals one turn runs at most. */
-export const LIVE_TURN_RENEWALS = 2;
 
 LIVE_PRICES.control_block = blockOf(LIVE_PRICES.control as LiveManifestEntry);
 

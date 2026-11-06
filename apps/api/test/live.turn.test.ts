@@ -13,8 +13,10 @@ import { describe, expect, it } from "vitest";
 import type { UserDO } from "../src/do/UserDO.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
 import { type LiveEnvelope, makeLiveGrant, reserveLive } from "../src/live/budget.js";
+import { planFor } from "../src/live/funding.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "../src/live/manifest.js";
 import { claimTransport, expireTransports, recordTransport } from "../src/live/transports.js";
-import { clockedD1, DAY, isolated, plan, vector } from "./helpers/live-budget.js";
+import { clockedD1, incarnation, isolated } from "./helpers/live-budget.js";
 
 describe("a ticket's transport", () => {
   it("is claimed once, by its credential, while unexpired; expired ones go oldest first", async () => {
@@ -51,20 +53,24 @@ describe("a ticket's transport", () => {
   });
 });
 
-/** A grant for `feed`, valid for a minute from a little before now. */
+/** A turn's grant for `feed` at today's price, valid for a minute from a little before now. */
 async function grantFor(feed: string, validMs = 60_000): Promise<LiveEnvelope> {
   const from = Date.now() - 5_000;
-  const request = await makeLiveGrant(
-    await plan({
-      day: Math.floor(from / DAY),
-      from,
-      validMs,
+  const priced = planFor(
+    LIVE_PRICES.pump as LiveManifestEntry,
+    {
+      incarnation: await incarnation(),
+      epoch: 0,
+      recipientType: "UserDO",
       recipient: feed,
+      class: "ordinary",
       kind: "pump",
       producesLocal: true,
-      resources: vector({ do_requests: 1 }),
-    }),
+    },
+    from,
   );
+  // Shorter than its unit allows (its holds still cover any run started while it is valid).
+  const request = await makeLiveGrant({ ...priced, validUntil: from + validMs });
   const granted = await reserveLive(clockedD1(env.DIRECTORY, { now: from }), request);
   if (granted.status !== "granted") throw new Error(granted.reason);
   return granted.grant;
