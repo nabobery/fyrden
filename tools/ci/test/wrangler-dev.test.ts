@@ -83,6 +83,21 @@ describe("stopping wrangler dev", () => {
     expect(groupRunning(child.pid as number)).toBe(false);
   });
 
+  it("closes only once the output pipes have, not when the launcher exits", async () => {
+    const { child, closed, stop } = await started(launcher(KEEP_RUNNING, true));
+    let settled = false;
+    void closed.then(() => {
+      settled = true;
+    });
+    if (child.exitCode === null) await once(child, "exit");
+    // The launcher is gone but its child still holds the pipes.
+    expect(child.stdout?.readableEnded).toBe(false);
+    expect(settled).toBe(false);
+    await stop();
+    await closed;
+    expect(child.stdout?.readableEnded).toBe(true);
+  });
+
   it("is safe to call again, and after the process has already exited", async () => {
     const { child, stop } = await started(
       'setImmediate(() => process.exit(0)); console.log("ready")',
