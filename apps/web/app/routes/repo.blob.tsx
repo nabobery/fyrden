@@ -1,10 +1,12 @@
 import type { getCodeOwnersErrors, Output } from "@fyrden/api-contract";
 import { data, Link, redirect } from "react-router";
+import { FilePreview } from "../components/file-preview.js";
 import { NumberedFile } from "../components/file-view.js";
 import { Markdown } from "../components/markdown.js";
 import { apiCall, bodyOf } from "../lib/api.server.js";
 import { type FileState, fileState, gotoTarget, rawBytesUrl } from "../lib/file-view.js";
 import { dirOf } from "../lib/markdown-place.js";
+import { previewOf, previewUrl } from "../lib/raster.js";
 import { pageUrl, refAndPath } from "../lib/target.js";
 import { type Contents, encodePath } from "../lib/types.js";
 import type { Route } from "./+types/repo.blob";
@@ -99,6 +101,13 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     kind: contents.type,
     size: contents.type === "file" ? contents.size : null,
     file,
+    // Bytes that decode as text are shown as text, though they start like an image: a browser
+    // draws text with a GIF's header as a blank image. PNG and JPEG never decode so; a GIF with
+    // no frames or no final NUL can, and is left to Raw.
+    preview:
+      contents.type === "file" && file.state !== "text" && file.state !== "markdown"
+        ? previewOf(contents, path)
+        : null,
     // Rendered in the browser (see components/markdown.tsx), with its links into the repository.
     markdownAt:
       file.state === "markdown"
@@ -136,7 +145,7 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
       </main>
     );
   }
-  const { owner, repo, ref, path, kind, size, file, markdownAt, codeOwners } = loaderData;
+  const { owner, repo, ref, path, kind, size, file, preview, markdownAt, codeOwners } = loaderData;
   const base = `/${owner}/${repo}`;
   const at = `${encodeURIComponent(ref)}/${encodePath(path)}`;
   const message = MESSAGES[file.state];
@@ -172,7 +181,16 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         {size !== null && <span className="muted">{size} bytes</span>}
       </div>
       {codeOwners && <CodeOwnersNotes notes={codeOwners} owner={owner} repo={repo} gitRef={ref} />}
-      {file.state === "symlink" ? (
+      {preview?.kind === "image" ? (
+        <FilePreview
+          src={previewUrl(base, preview.commit, path)}
+          alt={path}
+          width={preview.width}
+          height={preview.height}
+        />
+      ) : preview?.kind === "image-too-large" ? (
+        <p className="muted">This image is too large to preview.</p>
+      ) : file.state === "symlink" ? (
         <p>
           A symbolic link to <code>{file.target}</code>.
         </p>

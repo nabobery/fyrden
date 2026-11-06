@@ -344,6 +344,11 @@ li.reaction {
 .markdown img {
   max-width: 100%;
 }
+.file-preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
 .markdown table {
   width: auto;
 }
