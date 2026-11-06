@@ -55,7 +55,7 @@ describe("the settings pages' listings", () => {
       return json({ grants: [], next_cursor: null });
     });
     const request = new Request("https://fyrden.test/settings/agents?agents=A1&grants=G1", {
-      headers: { Cookie: "fyrden_session=s" },
+      headers: { Cookie: "__Host-fyrden_session=s" },
     });
     const data = await loader({ request, context, params: {} } as never);
     const asked = calls.map((c) => `${new URL(c.url).pathname}${new URL(c.url).search}`);
@@ -78,7 +78,7 @@ describe("the settings pages' listings", () => {
         : json({ tokens: [], next_cursor: "T2" }),
     );
     const request = new Request("https://fyrden.test/settings/tokens", {
-      headers: { Cookie: "fyrden_session=s" },
+      headers: { Cookie: "__Host-fyrden_session=s" },
     });
     const data = await loader({ request, context, params: {} } as never);
     expect(calls.map((c) => new URL(c.url).search)).toContain("?per_page=100");

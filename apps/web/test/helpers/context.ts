@@ -36,7 +36,7 @@ export const json = (body: unknown, status = 200, headers: Record<string, string
 export function formPost(path: string, fields: Record<string, string>): Request {
   return new Request(`${ORIGIN}${path}`, {
     method: "POST",
-    headers: { Origin: ORIGIN, Cookie: "fyrden_session=s" },
+    headers: { Origin: ORIGIN, Cookie: "__Host-fyrden_session=s" },
     body: new URLSearchParams(fields),
   });
 }

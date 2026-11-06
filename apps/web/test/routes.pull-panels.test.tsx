@@ -77,7 +77,7 @@ describe("the reviewers page", () => {
     });
     const data = await reviewersLoader({
       request: new Request(`${ORIGIN}/ada/demo/pull/7/reviewers`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,

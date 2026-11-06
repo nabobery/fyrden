@@ -4,6 +4,7 @@ export default [
   index("routes/_index.tsx"),
   route("healthz", "routes/healthz.ts"),
   route("sign-out", "routes/sign-out.ts"),
+  route("appearance", "routes/appearance.ts"),
   route("settings/tokens", "routes/settings.tokens.tsx"),
   route("settings/agents", "routes/settings.agents.tsx"),
   route("settings/emails/confirm", "routes/settings.emails.confirm.tsx"),

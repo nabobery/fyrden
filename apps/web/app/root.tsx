@@ -9,6 +9,7 @@ import {
   Scripts,
   ScrollRestoration,
   type ShouldRevalidateFunctionArgs,
+  useLocation,
   useRouteLoaderData,
 } from "react-router";
 import type { Route } from "./+types/root";
@@ -16,7 +17,9 @@ import "./app.css";
 import { type SessionUser, signedInUser } from "./lib/api.server.js";
 import { api } from "./lib/cloudflare.server.js";
 import { logServerError } from "./lib/log-error.server.js";
+import { type ThemeMode, themeModeOf, themePreference } from "./lib/theme.js";
 import { LiveHints } from "./lib/use-live.js";
+import { pickThemeMode, useServerThemeMode, useThemeMode } from "./lib/use-theme-mode.js";
 
 /**
  * Who is signed in and the API's version, for the header and footer. A
@@ -33,7 +36,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     signedInUser(context, request).catch(logged),
     api(context).rpcVersion().catch(logged),
   ]);
-  return { user, apiRpcVersion };
+  return { user, apiRpcVersion, theme: themePreference(request) };
 }
 
 /**
@@ -56,6 +59,65 @@ function SiteFooter() {
     <footer className="muted" style={{ padding: "1rem", textAlign: "center" }}>
       Fyrden · API RPC version {data?.apiRpcVersion ?? "?"}
     </footer>
+  );
+}
+
+/** Asks the server to keep `mode`. A redirect means kept: following it would read a page nobody shows. */
+async function keepThemeMode(action: string, mode: ThemeMode): Promise<void> {
+  const body = new URLSearchParams({ mode, return: "/" });
+  const res = await fetch(action, { method: "POST", body, redirect: "manual" });
+  if (res.type !== "opaqueredirect" && !res.ok) throw new Error(`Status ${res.status}`);
+}
+
+/**
+ * System, Light or Dark. With a script the page changes in place, so nothing being written
+ * is lost, and goes back if the choice cannot be kept. Without one, the form posts natively
+ * and the whole page draws again in the choice.
+ */
+function ThemeControl() {
+  const mode = useThemeMode();
+  const fromServer = useServerThemeMode();
+  const { pathname, search } = useLocation();
+  const shown = useRef(mode);
+  useEffect(() => {
+    if (shown.current === mode) return;
+    shown.current = mode;
+    // Diagrams are images: the page's colours cannot reach them.
+    if (document.querySelector("figure.mermaid")) {
+      void import("./lib/mermaid.client.js").then(({ redrawDiagrams }) => redrawDiagrams());
+    }
+  }, [mode]);
+  const pick = (event: React.FormEvent<HTMLFormElement>) => {
+    const { submitter } = event.nativeEvent as SubmitEvent;
+    if (!submitter) return;
+    event.preventDefault();
+    const choice = themeModeOf(submitter.getAttribute("value"));
+    if (!choice) return;
+    const action = event.currentTarget.action;
+    void pickThemeMode(choice, fromServer, (mode) => keepThemeMode(action, mode));
+  };
+  return (
+    <form
+      method="post"
+      action="/appearance"
+      className="theme-control"
+      aria-label="Colour scheme"
+      onSubmit={pick}
+    >
+      <input type="hidden" name="return" value={`${pathname}${search}`} />
+      {(["system", "light", "dark"] as const).map((choice) => (
+        <button
+          key={choice}
+          type="submit"
+          name="mode"
+          value={choice}
+          aria-pressed={mode === choice}
+        >
+          {choice[0]?.toUpperCase()}
+          {choice.slice(1)}
+        </button>
+      ))}
+    </form>
   );
 }
 
@@ -86,6 +148,7 @@ function SiteHeader() {
           <input id="site-search" name="q" type="search" placeholder="Search (repo:owner/name …)" />
         </Form>
       )}
+      <ThemeControl />
       {user ? (
         <form method="post" action="/sign-out" className="row">
           <span className="muted">{user.handle}</span>
@@ -109,8 +172,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const data = useRouteLoaderData("root") as { user: SessionUser | null } | undefined;
   const viewer = useRef<string | null>(null);
   if (data?.user) viewer.current = data.user.id;
+  const mode = useThemeMode();
   return (
-    <html lang="en">
+    <html lang="en" data-theme={mode === "system" ? undefined : mode}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

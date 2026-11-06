@@ -1,3 +1,4 @@
+import { SESSION_COOKIE } from "@fyrden/api-contract/session";
 import { generateToken, hashToken, parseToken, secureRandomBytes } from "@fyrden/domain";
 import { getCookie } from "hono/cookie";
 import { clock, newId } from "../services.js";
@@ -10,8 +11,7 @@ import type { OAuthContext } from "./params.js";
  * business; this is what everything else reads.
  */
 
-/** `__Host-`: set by this origin only, over HTTPS, for every path. */
-export const SESSION_COOKIE = "__Host-fyrden_session";
+export { SESSION_COOKIE };
 
 /** Proposed. */
 export const SESSION_POLICY = {

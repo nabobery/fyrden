@@ -442,7 +442,7 @@ describe("resolving conflicts", () => {
       method: "POST",
       headers: {
         Origin: ORIGIN,
-        Cookie: "fyrden_session=s",
+        Cookie: "__Host-fyrden_session=s",
         "Content-Type": "application/x-www-form-urlencoded",
         "Content-Length": String(13 * 1024 * 1024),
       },
@@ -595,7 +595,7 @@ describe("the conflicts form as a browser sends it", () => {
       data.append(name, value.replace(/\r?\n/g, "\r\n"));
     return new Request(`${ORIGIN}/ada/demo/pull/7/conflicts`, {
       method: "POST",
-      headers: { Origin: ORIGIN, Cookie: "fyrden_session=s" },
+      headers: { Origin: ORIGIN, Cookie: "__Host-fyrden_session=s" },
       body: data,
     });
   }

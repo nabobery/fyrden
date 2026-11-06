@@ -33,7 +33,7 @@ describe("the notification settings page", () => {
       return json(settings);
     });
     const request = new Request(`${ORIGIN}/settings/notifications`, {
-      headers: { Cookie: "fyrden_session=s" },
+      headers: { Cookie: "__Host-fyrden_session=s" },
     });
     expect(await loader({ request, context, params: {} } as never)).toEqual({
       addresses,
@@ -60,7 +60,7 @@ describe("the notification settings page", () => {
     const { context, calls } = fakeApi(() => json({}));
     const request = new Request(`${ORIGIN}/settings/notifications`, {
       method: "POST",
-      headers: { Origin: "https://evil.test", Cookie: "fyrden_session=s" },
+      headers: { Origin: "https://evil.test", Cookie: "__Host-fyrden_session=s" },
       body: new URLSearchParams({ intent: "add", email: "a@example.com" }),
     });
     const thrown = await action({ request, context, params: {} } as never).catch((e) => e);

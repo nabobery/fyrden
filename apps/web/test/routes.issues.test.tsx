@@ -371,7 +371,7 @@ describe("the issue pages' forms and viewers", () => {
     });
     const data = await issueLoader({
       request: new Request(`${ORIGIN}/ada/demo/issues/7`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,

@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { mentionsToken } from "@fyrden/domain";
 import { type Locator, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FJORD, type Scheme } from "../../../apps/web/app/lib/fjord.js";
 import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
@@ -219,12 +220,69 @@ async function hold(
   return { release: end("continue"), abort: end("abort") };
 }
 
-/** `page` passes axe in the light and the dark colour scheme. */
-async function accessibleInBoth(name: string): Promise<void> {
-  await accessible(page, `${name}, light`);
-  await page.emulateMedia({ colorScheme: "dark" });
-  await accessible(page, `${name}, dark`);
-  await page.emulateMedia({ colorScheme: "light" });
+/** `#rrggbb` as `getComputedStyle` reports it. */
+function rgb(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
+
+const fillsOf = (scheme: Scheme) => ({
+  added: rgb(scheme.diff.added),
+  removed: rgb(scheme.diff.removed),
+  keyword: rgb(scheme.syntax.keyword),
+});
+
+/** The colours `file`'s renderer actually drew, from inside its shadow root. */
+function renderedFills(file: Locator) {
+  return file
+    .locator("diffs-container")
+    .first()
+    .evaluate((host) => {
+      const { getComputedStyle } = globalThis as unknown as {
+        getComputedStyle(element: unknown): { backgroundColor: string; color: string };
+      };
+      const root = (
+        host as unknown as {
+          shadowRoot: {
+            querySelector(selector: string): unknown;
+            querySelectorAll(selector: string): Iterable<{ textContent: string | null }>;
+          };
+        }
+      ).shadowRoot;
+      const fill = (selector: string) => {
+        const line = root.querySelector(selector);
+        return line ? getComputedStyle(line).backgroundColor : null;
+      };
+      const keyword = [...root.querySelectorAll("[data-line] span")].find(
+        (span) => span.textContent?.trim() === "const",
+      );
+      return {
+        added: fill('[data-line][data-line-type="change-addition"]'),
+        removed: fill('[data-line][data-line-type="change-deletion"]'),
+        keyword: keyword ? getComputedStyle(keyword).color : null,
+      };
+    });
+}
+
+/** `file`'s changed lines are filled in `scheme`'s colours. */
+async function filledAs(file: Locator, scheme: Scheme): Promise<void> {
+  const line = (type: string) =>
+    file.locator(`diffs-container [data-line][data-line-type="${type}"]`).first();
+  await see(line("change-addition")).toHaveCSS("background-color", rgb(scheme.diff.added));
+  await see(line("change-deletion")).toHaveCSS("background-color", rgb(scheme.diff.removed));
+}
+
+/** The line a click in its gutter picked, and that gutter cell, are filled as selected. */
+async function selectedIn(file: Locator, fill: string): Promise<void> {
+  const drawn = file.locator("diffs-container").first();
+  await see(drawn.locator("[data-line][data-selected-line]").first()).toHaveCSS(
+    "background-color",
+    fill,
+  );
+  await see(drawn.locator("[data-column-number][data-selected-line]").first()).toHaveCSS(
+    "background-color",
+    fill,
+  );
 }
 
 /** Opens the form for a comment on lines of `file`, from the keyboard. */
@@ -344,7 +402,30 @@ describe("pull requests in the web UI", () => {
     // additions, deletions and word changes too) pass axe's contrast in both schemes.
     const file = page.locator("section.file", { hasText: "src/app.ts" });
     await highlightedWith(file, "highlights", "workers");
-    await accessibleInBoth("files");
+    // Axe alone cannot show Fjord reached the renderer: today's colours would pass it too.
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.light));
+    await page.emulateMedia({ colorScheme: "dark" });
+    expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
+    await page.emulateMedia({ colorScheme: "light" });
+    await accessible(page, "files");
+    // A scheme picked in the site header reaches the renderer, over the operating system's.
+    await page.getByRole("button", { name: "Dark", exact: true }).click();
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await filledAs(file, FJORD.dark);
+    await page.getByRole("button", { name: "System", exact: true }).click();
+    await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+    await filledAs(file, FJORD.light);
+    // Selected lines take Fjord's fill too, unchanged and changed alike, in both schemes.
+    for (const type of ["context", "change-addition"]) {
+      await file
+        .locator(`diffs-container [data-column-number][data-line-type="${type}"]`)
+        .first()
+        .click();
+      await selectedIn(file, rgb(FJORD.light.diff.selected));
+      await page.emulateMedia({ colorScheme: "dark" });
+      await selectedIn(file, rgb(FJORD.dark.diff.selected));
+      await page.emulateMedia({ colorScheme: "light" });
+    }
     expect(stack.refused).toEqual([]);
   });
 
@@ -358,7 +439,7 @@ describe("pull requests in the web UI", () => {
     try {
       await visit(page, files);
       await highlightedWith(file, "shiki-js", "workers");
-      await accessibleInBoth("files drawn by Shiki");
+      await accessible(page, "files drawn by Shiki");
     } finally {
       await page.unroute(blocked);
     }
@@ -425,7 +506,7 @@ describe("pull requests in the web UI", () => {
     await crash();
     await highlightedWith(file, "shiki-js", "none");
     await see(thread.getByLabel("Reply")).toHaveValue("An unsent reply.");
-    await accessibleInBoth("files drawn without workers");
+    await accessible(page, "files drawn without workers");
     // The session keeps it: the files drawn again on another page, the same way.
     await page.getByRole("link", { name: "Split" }).click();
     await see(page).toHaveURL(/[?&]style=split/);
@@ -474,7 +555,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       await file.getByLabel(/^Comment \(Markdown/).fill("Read as text.");
       await file.getByRole("button", { name: "Add comment" }).click();
       await see(view.locator(".thread").getByText("Read as text.")).toBeVisible();
-      await accessibleInBoth("files as text");
+      await accessible(page, "files as text");
     } finally {
       await page.unroute(refused);
     }
@@ -504,7 +585,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     const number = await openPull(await pushTopic(), "Themes held");
     const file = page.locator("section.file", { hasText: "src/app.ts" });
     // The pool waits on its themes before it starts any worker.
-    const themes = await hold(page, /\/assets\/github-(light|dark)-high-contrast-[^/]+\.js$/);
+    const themes = await hold(page, /\/assets\/fjord-themes-[^/]+\.js$/);
     try {
       await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}/files`);
       await drawnWith(file, "shiki-js", "workers");
@@ -582,7 +663,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       await see(text).toHaveAttribute("data-highlighter", "shiki-js", { timeout: 30_000 });
       await see(text.locator("pre.patch-text")).toContainText("+const html");
       await see(text.locator(".thread").getByText("Still reachable.")).toBeVisible();
-      await accessibleInBoth("a file drawn as text");
+      await accessible(page, "a file drawn as text");
     } finally {
       await page.unroute(workers);
     }
@@ -976,7 +1057,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await lineNumber(3).click();
     await see(last).toHaveValue("3");
     await see(first).toHaveValue("");
-    await accessibleInBoth("a line picked with the mouse");
+    await accessible(page, "a line picked with the mouse");
     await see(button).toBeVisible();
     // A pointer's control: not a stop for the keyboard, where it would do nothing.
     await see(button).toHaveAttribute("tabindex", "-1");
@@ -996,7 +1077,7 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await see(last).toHaveValue("7");
     // With a range picked the button sits at its end and picks the whole range, so its
     // name has to cover that as well as a single line.
-    await accessibleInBoth("a range picked from the gutter's button");
+    await accessible(page, "a range picked from the gutter's button");
     await first.fill("");
     await last.fill("");
     await button.click();

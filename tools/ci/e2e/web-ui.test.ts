@@ -12,13 +12,27 @@ import { createHmac, randomBytes } from "node:crypto";
 import { mentionsToken } from "@fyrden/domain";
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { FJORD } from "../../../apps/web/app/lib/fjord.js";
 import { accessible as axe, startWebStack, type WebStack } from "./web-stack.js";
+
+/** `#rrggbb` as `getComputedStyle` reports it. */
+function rgbOf(hex: string): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
+}
 
 let stack: WebStack | undefined;
 let page: Page;
 // localhost: a secure context, so the browser keeps the __Host- session cookie over http.
 let origin = "";
 let token = "";
+
+/** Picks a colour scheme in the header, and waits until the server has kept it. */
+async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
+  const kept = page.waitForResponse((res) => new URL(res.url()).pathname === "/appearance");
+  await page.getByRole("button", { name, exact: true }).click();
+  await kept;
+}
 
 /** The page has no WCAG 2.x A or AA violation axe can find. */
 const accessible = (name: string) => axe(page, name);
@@ -197,6 +211,134 @@ describe("the web UI", () => {
     const data = await page.request.get(`${origin}/ada/demo.data`);
     expect(data.status()).toBe(200);
     expect(data.headers()["cache-control"]).toBe("private, no-store");
+  });
+
+  it("keeps the colour scheme picked in the header, over the operating system's", async () => {
+    // Retrying: a page's elements are there before its stylesheet has loaded.
+    const backgroundIs = (colour: string) =>
+      see(page.locator("body")).toHaveCSS("background-color", colour);
+    const theme = () => page.locator("html").getAttribute("data-theme");
+    const pressed = (name: string) =>
+      see(page.getByRole("button", { name, exact: true })).toHaveAttribute("aria-pressed", "true");
+    const LIGHT = rgbOf(FJORD.light.page.bg);
+    const DARK = rgbOf(FJORD.dark.page.bg);
+    const path = "/ada/demo/commits";
+    await page.goto(`${origin}${path}?from=header`);
+    await pressed("System");
+    expect(await theme()).toBeNull();
+
+    // Picked: the same page again, in the choice, whatever the operating system says.
+    await pickScheme("Dark");
+    expect(page.url()).toBe(`${origin}${path}?from=header`);
+    await pressed("Dark");
+    expect(await theme()).toBe("dark");
+    await backgroundIs(DARK);
+    await accessible("forced dark");
+    await backgroundIs(DARK);
+
+    // Already there in the first bytes: no flash, and no script needed to apply it.
+    const html = await (await page.request.get(`${origin}${path}`)).text();
+    expect(html).toContain('<html lang="en" data-theme="dark"');
+    await page.reload();
+    await backgroundIs(DARK);
+
+    await pickScheme("Light");
+    await pressed("Light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await backgroundIs(LIGHT);
+    await page.emulateMedia({ colorScheme: "light" });
+    await accessible("forced light");
+
+    // System: the choice is gone, and the page follows the operating system again.
+    await pickScheme("System");
+    await pressed("System");
+    expect(await theme()).toBeNull();
+    expect((await page.context().cookies()).some((c) => c.name === "fyrden_theme")).toBe(false);
+    await backgroundIs(LIGHT);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await backgroundIs(DARK);
+    await page.emulateMedia({ colorScheme: "light" });
+  });
+
+  it("keeps what is being written when the colour scheme changes", async () => {
+    await page.goto(`${origin}/ada/demo/edit/main/?new=1`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    const content = page.getByLabel("Content");
+    await content.fill("Half a thought");
+    // Set on this document: a reload or a navigation would lose it.
+    await page.evaluate(() => {
+      (globalThis as { sameDocument?: boolean }).sameDocument = true;
+    });
+    const url = page.url();
+    await pickScheme("Dark");
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await see(page.locator("body")).toHaveCSS("background-color", rgbOf(FJORD.dark.page.bg));
+    await see(content).toHaveValue("Half a thought");
+    expect(page.url()).toBe(url);
+    expect(await page.evaluate(() => (globalThis as { sameDocument?: boolean }).sameDocument)).toBe(
+      true,
+    );
+    // Kept for the next page, by the server.
+    await page.reload();
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    // A choice that could not be kept is not shown as if it were.
+    await page.route("**/appearance", (route) => route.abort());
+    await page.getByRole("button", { name: "Light", exact: true }).click();
+    await see(page.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await page.unroute("**/appearance");
+    await pickScheme("System");
+    await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+  });
+
+  it("keeps the header's control on screen on a phone", async () => {
+    const before = page.viewportSize();
+    for (const width of [320, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto(`${origin}/ada/demo`);
+      for (const name of ["System", "Light", "Dark"]) {
+        await see(page.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+      }
+      const widest = await page.locator("html").evaluate((html) => html.scrollWidth);
+      expect(widest, `${width}px wide`).toBeLessThanOrEqual(width);
+    }
+    if (before) await page.setViewportSize(before);
+  });
+
+  it("draws a README's diagram again when the operating system's scheme changes", async () => {
+    await page.goto(`${origin}/ada/demo`);
+    const diagram = page.getByRole("img", { name: "Diagram" }).first();
+    await see(diagram).toBeVisible();
+    const light = await diagram.getAttribute("src");
+    const drawnIn = (colour: string) => new RegExp(encodeURIComponent(colour));
+    expect(light).toMatch(drawnIn(FJORD.light.page.panel));
+    await page.emulateMedia({ colorScheme: "dark" });
+    await see(diagram).toHaveAttribute("src", drawnIn(FJORD.dark.page.panel));
+    await page.emulateMedia({ colorScheme: "light" });
+    await see(diagram).toHaveAttribute("src", drawnIn(FJORD.light.page.panel));
+  });
+
+  it("takes a colour scheme without JavaScript, signed out", async () => {
+    const browser = page.context().browser();
+    if (!browser) throw new Error("The stack's page has no browser.");
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const visitor = await context.newPage();
+      await visitor.goto(`${origin}/`);
+      await visitor.getByRole("button", { name: "Dark", exact: true }).click();
+      await see(visitor.locator("html")).toHaveAttribute("data-theme", "dark");
+      await see(visitor.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await see(visitor).toHaveURL(`${origin}/`);
+    } finally {
+      await context.close();
+    }
   });
 
   it("takes no form post from another origin, and changes nothing", async () => {

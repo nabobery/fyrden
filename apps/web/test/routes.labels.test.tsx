@@ -80,7 +80,7 @@ describe("the labels page", () => {
     });
     const data = await loader({
       request: new Request(`${ORIGIN}/ada/demo/labels?cursor=C`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,

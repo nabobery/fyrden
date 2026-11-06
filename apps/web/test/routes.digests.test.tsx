@@ -11,7 +11,7 @@ import { fakeApi, json, ORIGIN } from "./helpers/context.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
 
 const get = (path: string) =>
-  new Request(`${ORIGIN}${path}`, { headers: { Cookie: "fyrden_session=s" } });
+  new Request(`${ORIGIN}${path}`, { headers: { Cookie: "__Host-fyrden_session=s" } });
 /** The API calls made, the session checks left out. */
 const paths = (calls: Request[]) =>
   calls

@@ -13,7 +13,7 @@ describe("the email confirmation page", () => {
   it("changes nothing when opened, only asking to confirm", async () => {
     const { context, calls } = fakeApi(() => json({ user: { id: "usr_1", handle: "ada" } }));
     const request = new Request(`${ORIGIN}/settings/emails/confirm?token=t1`, {
-      headers: { Cookie: "fyrden_session=s" },
+      headers: { Cookie: "__Host-fyrden_session=s" },
     });
     expect(await loader({ request, context, params: {} } as never)).toEqual({
       token: "t1",
@@ -37,7 +37,7 @@ describe("the email confirmation page", () => {
     const { context, calls } = fakeApi(() => json({ email: "a@example.com" }));
     const request = new Request(`${ORIGIN}/settings/emails/confirm`, {
       method: "POST",
-      headers: { Origin: "https://evil.test", Cookie: "fyrden_session=s" },
+      headers: { Origin: "https://evil.test", Cookie: "__Host-fyrden_session=s" },
       body: new URLSearchParams({ token: "t1" }),
     });
     const thrown = await action({ request, context, params: {} } as never).catch((e) => e);
