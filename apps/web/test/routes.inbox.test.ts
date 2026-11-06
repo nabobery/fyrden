@@ -13,7 +13,7 @@ import { fakeApi, formPost, json } from "./helpers/context.js";
 
 const ORIGIN = "https://fyrden.test";
 const get = (path: string) =>
-  new Request(`${ORIGIN}${path}`, { headers: { Cookie: "fyrden_session=s" } });
+  new Request(`${ORIGIN}${path}`, { headers: { Cookie: "__Host-fyrden_session=s" } });
 /** The API calls made, the session checks left out. */
 const paths = (calls: Request[]) =>
   calls

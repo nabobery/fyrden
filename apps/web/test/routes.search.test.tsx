@@ -66,7 +66,7 @@ interface Loaded {
 async function load(path: string, answer: () => Response = () => results([])): Promise<Loaded> {
   const { context, calls } = fakeApi(answer);
   const out = await loader({
-    request: new Request(`${ORIGIN}${path}`, { headers: { Cookie: "fyrden_session=s" } }),
+    request: new Request(`${ORIGIN}${path}`, { headers: { Cookie: "__Host-fyrden_session=s" } }),
     context,
     params: {},
   } as never);
@@ -81,7 +81,7 @@ async function thrownBy(
   const { context, calls } = fakeApi(answer);
   try {
     await loader({
-      request: new Request(`${ORIGIN}${path}`, { headers: { Cookie: "fyrden_session=s" } }),
+      request: new Request(`${ORIGIN}${path}`, { headers: { Cookie: "__Host-fyrden_session=s" } }),
       context,
       params: {},
     } as never);

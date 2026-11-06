@@ -130,7 +130,7 @@ describe("the conversation's merge box", () => {
     });
     const data = await loader({
       request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,

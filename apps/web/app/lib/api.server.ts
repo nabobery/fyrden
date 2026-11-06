@@ -1,3 +1,4 @@
+import { SESSION_COOKIE } from "@fyrden/api-contract/session";
 import { data, type RouterContextProvider, redirect } from "react-router";
 import { cloudflareContext } from "./cloudflare.server.js";
 import { pageUrl } from "./target.js";
@@ -201,6 +202,14 @@ export interface SessionUser {
   readonly handle: string;
 }
 
+/** The `Cookie` header, if it carries the session: other cookies alone never cost a session call. */
+function sessionCookieHeader(request: Request): string | null {
+  const cookie = request.headers.get("Cookie");
+  if (!cookie) return null;
+  const names = cookie.split(";").map((pair) => pair.split("=", 1)[0]?.trim());
+  return names.includes(SESSION_COOKIE) ? cookie : null;
+}
+
 /** Asks the API who the session cookie `cookie` is. */
 function fetchSession(
   context: Readonly<RouterContextProvider>,
@@ -217,7 +226,7 @@ export async function signedInUser(
   context: Readonly<RouterContextProvider>,
   request: Request,
 ): Promise<SessionUser | null> {
-  const cookie = request.headers.get("Cookie");
+  const cookie = sessionCookieHeader(request);
   if (!cookie) return null;
   const res = await fetchSession(context, request, cookie);
   if (!res.ok) return null;
@@ -238,7 +247,7 @@ export async function checkSession(
   context: Readonly<RouterContextProvider>,
   request: Request,
 ): Promise<SessionCheck> {
-  const cookie = request.headers.get("Cookie");
+  const cookie = sessionCookieHeader(request);
   if (!cookie) return { state: "signed-out" };
   let res: Response;
   try {

@@ -2,6 +2,7 @@ import { isPermission, permissionDef } from "@fyrden/domain";
 import { z } from "zod";
 import { answersNothing, type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
 import { Problem } from "./problem.js";
+import { SESSION_COOKIE } from "./session.js";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -101,7 +102,7 @@ export function openApiDocument(
     components: {
       securitySchemes: {
         bearer: { type: "http", scheme: "bearer" },
-        session: { type: "apiKey", in: "cookie", name: "__Host-fyrden_session" },
+        session: { type: "apiKey", in: "cookie", name: SESSION_COOKIE },
         sessionHeader: {
           type: "apiKey",
           in: "header",

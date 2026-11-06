@@ -499,7 +499,7 @@ describe("reactions on a pull request", () => {
       });
       const data = await pullLoader({
         request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
-          headers: { Cookie: "fyrden_session=s" },
+          headers: { Cookie: "__Host-fyrden_session=s" },
         }),
         context,
         params,
@@ -635,7 +635,7 @@ describe("a pull request page whose session could not be checked", () => {
     });
     const data = await pullLoader({
       request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,

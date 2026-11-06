@@ -546,7 +546,7 @@ describe("a page's ticket", () => {
     const { context, calls } = issuing(200, { ticket: "t1" });
     const request = new Request(`${ORIGIN}/notifications/live-ticket`, {
       method: "POST",
-      headers: { Origin: "https://evil.test", Cookie: "fyrden_session=s" },
+      headers: { Origin: "https://evil.test", Cookie: "__Host-fyrden_session=s" },
       body: new URLSearchParams({ viewer: "usr_ada" }),
     });
     const thrown = await ticketAction({ request, context, params: {} } as never).catch(

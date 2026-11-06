@@ -49,7 +49,7 @@ function stack() {
   context.set(cloudflareContext, { env: { API } as unknown as Env, ctx: {} as ExecutionContext });
   // The browser's session rides along on every request, as a page's would.
   const signedIn = (request: Request) =>
-    new Request(request.url, { headers: { Cookie: "fyrden_session=s" } });
+    new Request(request.url, { headers: { Cookie: "__Host-fyrden_session=s" } });
   // biome-ignore lint/suspicious/noExplicitAny: the loaders' own argument types
   const run = (loader: (args: any) => unknown) => (args: { request: Request; params: unknown }) =>
     loader({ ...args, request: signedIn(args.request), context });
@@ -145,7 +145,9 @@ describe("a page holding conflict edits, read again", () => {
       ctx: {} as ExecutionContext,
     });
     const data = await rootLoader({
-      request: new Request("https://fyrden.test/", { headers: { Cookie: "fyrden_session=s" } }),
+      request: new Request("https://fyrden.test/", {
+        headers: { Cookie: "__Host-fyrden_session=s" },
+      }),
       context,
       params: {},
     } as never);

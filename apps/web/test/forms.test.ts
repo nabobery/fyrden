@@ -97,7 +97,7 @@ describe("every form action", () => {
       const { context, calls } = fakeApi(() => json({}));
       const request = new Request(`${ORIGIN}/x`, {
         method: "POST",
-        headers: { Origin: "https://evil.example", Cookie: "fyrden_session=s" },
+        headers: { Origin: "https://evil.example", Cookie: "__Host-fyrden_session=s" },
         body: new URLSearchParams({ intent: "delete", confirm: "demo" }),
       });
       const outcome = await (act as (args: never) => Promise<unknown>)({

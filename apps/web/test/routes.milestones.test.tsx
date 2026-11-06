@@ -84,7 +84,7 @@ describe("the milestones page", () => {
     });
     const data = await loader({
       request: new Request(`${ORIGIN}/ada/demo/milestones?state=closed&cursor=C`, {
-        headers: { Cookie: "fyrden_session=s" },
+        headers: { Cookie: "__Host-fyrden_session=s" },
       }),
       context,
       params,
