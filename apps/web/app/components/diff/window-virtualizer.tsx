@@ -1,4 +1,11 @@
-import { createContext, type ReactNode, useEffect, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from "react";
 
 /** What the owner drives: the diff renderer's virtualizer, set up on the window's scroll. */
 export interface Attachable {
@@ -53,4 +60,16 @@ export function WindowVirtualizer({ children }: { children: ReactNode }) {
   return (
     <VirtualizerOwnerContext.Provider value={owner}>{children}</VirtualizerOwnerContext.Provider>
   );
+}
+
+/**
+ * The page's virtualizer (from the page's `WindowVirtualizer`), set up once
+ * this file's own parts have connected to it in their effects.
+ */
+export function useWindowVirtualizer<T extends Attachable>(create: () => T): T {
+  const owner = useContext(VirtualizerOwnerContext) as VirtualizerOwner<T> | null;
+  if (!owner) throw new Error("A drawn file needs a WindowVirtualizer above it.");
+  const [virtualizer] = useState(() => owner.instance(create));
+  useLayoutEffect(() => owner.ready(), [owner]);
+  return virtualizer;
 }
