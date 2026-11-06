@@ -960,6 +960,50 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     expect(comments.map((c) => [c.commit_id, c.line])).toEqual([[moved, 4]]);
   });
 
+  it("names the gutter's button, which picks a line and drags out a range", async () => {
+    await pushBranch("gutter", { "gutter.txt": `${lines(8).join("\n")}\n` });
+    const number = await openPull("gutter", "Gutter");
+    const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
+    await visit(page, files);
+    const file = page.locator("section.file", { hasText: "gutter.txt" });
+    const drawn = file.locator("diffs-container");
+    const lineNumber = (n: number) => drawn.locator(`[data-column-number="${n}"]`).first();
+    const button = drawn.getByRole("button", { name: "Comment on this line or selection" });
+    const first = file.getByLabel("First line (for a range)");
+    const last = file.getByLabel("Line", { exact: true });
+    await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
+    // A line number picks its line, and the button stays beside it.
+    await lineNumber(3).click();
+    await see(last).toHaveValue("3");
+    await see(first).toHaveValue("");
+    await accessibleInBoth("a line picked with the mouse");
+    await see(button).toBeVisible();
+    // A pointer's control: not a stop for the keyboard, where it would do nothing.
+    await see(button).toHaveAttribute("tabindex", "-1");
+    // With nothing picked, the button comes with the hovered line and picks it.
+    await visit(page, files);
+    await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
+    await lineNumber(5).hover();
+    await button.click();
+    await see(last).toHaveValue("5");
+    await see(first).toHaveValue("");
+    // Dragged from the button, a range.
+    await button.hover();
+    await page.mouse.down();
+    await lineNumber(7).hover();
+    await page.mouse.up();
+    await see(first).toHaveValue("5");
+    await see(last).toHaveValue("7");
+    // With a range picked the button sits at its end and picks the whole range, so its
+    // name has to cover that as well as a single line.
+    await accessibleInBoth("a range picked from the gutter's button");
+    await first.fill("");
+    await last.fill("");
+    await button.click();
+    await see(first).toHaveValue("5");
+    await see(last).toHaveValue("7");
+  });
+
   it("draws every diagram on the page, a later one leaving the earlier ones", async () => {
     await pushBranch("diagrams", { "diagrams.txt": "x\n" });
     const number = await openPull("diagrams", "Diagrams", {
