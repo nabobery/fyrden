@@ -10,91 +10,31 @@
  * a click on a line's gutter, or a selection of lines, picks them for a
  * new comment.
  */
-import {
-  canUseWASM,
-  DiffHunksRenderer,
-  disposeHighlighter,
-  getHighlighterOptions,
-  getSharedHighlighter,
-  InteractionManager,
-  Virtualizer,
-} from "@pierre/diffs";
+import { InteractionManager, Virtualizer } from "@pierre/diffs";
 import {
   type DiffLineAnnotation,
   FileDiff,
-  useWorkerPool,
   VirtualizerContext,
-  type WorkerInitializationRenderOptions,
   WorkerPoolContextProvider,
-  type WorkerPoolOptions,
 } from "@pierre/diffs/react";
-import { terminateWorkerPoolSingleton } from "@pierre/diffs/worker";
-import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
-import {
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
-import { FJORD_RENDERER_CSS, FJORD_THEME_NAMES } from "../../lib/fjord.js";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { FJORD_RENDERER_CSS } from "../../lib/fjord.js";
 import type { Thread } from "../../lib/pulls.js";
 import { useThemeMode } from "../../lib/use-theme-mode.js";
 import { fileDiffOf } from "./file-diff.js";
-import { registerFjordThemes } from "./fjord-themes.client.js";
-import { type Engine, highlighterChoice, STEP_TIMEOUT_MS, within } from "./highlighter.js";
+import {
+  MAX_TOKENIZED_LINE,
+  PoolWatch,
+  sessionHighlighter,
+  settingsOf,
+  THEMES,
+} from "./highlighter.js";
 import { apiSide, rendererSide } from "./patch.js";
+import { newPoolWorker } from "./pool-worker.client.js";
 import { type LinePick, ThreadView } from "./thread.js";
-import { type VirtualizerOwner, VirtualizerOwnerContext } from "./window-virtualizer.js";
+import { useWindowVirtualizer } from "./window-virtualizer.js";
 
-const THEMES = { dark: FJORD_THEME_NAMES.dark, light: FJORD_THEME_NAMES.light } as const;
-registerFjordThemes();
-/** Lines longer than this are neither tokenized nor compared word by word (as the renderer's own limit). */
-const MAX_TOKENIZED_LINE = 1000;
-/**
- * How long a pool may take to start: its themes and highlighter loaded and its workers
- * started (the pool's own limit, 10 s, covers its workers alone).
- */
-const POOL_START_MS = 20_000;
-
-const choice = highlighterChoice({
-  async teardown() {
-    // Drawing is suspended: let the files' renderers leave the page first.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    terminateWorkerPoolSingleton();
-    await disposeHighlighter();
-  },
-  async prepare({ name, pool }) {
-    // Without a pool, every file waits on the page's own highlighter: load it first, so
-    // one that cannot load (or never does) leaves the session plain, not undrawn.
-    if (name !== "plain" && !pool) {
-      await getSharedHighlighter(
-        getHighlighterOptions("text", { theme: THEMES, preferredHighlighter: name }),
-      );
-    }
-  },
-});
-// Chosen before any pool is built. The import is the one the renderer makes (one chunk).
-choice.choose(canUseWASM() && (await within(import("@pierre/highlights"), STEP_TIMEOUT_MS)));
-
-// A file's highlighting that fails in the renderer (a request the worker answers with an
-// error, the page's highlighter failing to load a language) is only logged by it: each
-// such failure steps the session down too. Cancellations and disposals never reach it. A
-// renderer gone from the page (its file scrolled away, another page shown, a step's
-// remount) may still see a load it started fail: that is not the current step's failure.
-const gone = new WeakSet<object>();
-const cleanUp = DiffHunksRenderer.prototype.cleanUp;
-DiffHunksRenderer.prototype.cleanUp = function (this: DiffHunksRenderer) {
-  gone.add(this);
-  cleanUp.call(this);
-};
-const logHighlightError = DiffHunksRenderer.prototype.onHighlightError;
-DiffHunksRenderer.prototype.onHighlightError = function (this: DiffHunksRenderer, error) {
-  logHighlightError.call(this, error);
-  const now = choice.current();
-  if (now && !gone.has(this)) void choice.fail(now.step);
-};
+const choice = await sessionHighlighter();
 
 // The renderer's gutter button has no name and no option to give it one. A button of our
 // own (`renderGutterUtility`) can't take `onGutterUtilityClick`, which the renderer refuses
@@ -112,71 +52,6 @@ InteractionManager.prototype["ensureGutterUtilityNode"] = function (
   // It answers the pointer only: from the keyboard, lines are picked with the page's own form.
   button?.setAttribute("tabindex", "-1");
 };
-
-/** Each step's pool settings, made once (the pool is built from the first it is given). */
-const settings = new Map<
-  number,
-  { pool: WorkerPoolOptions; highlighter: WorkerInitializationRenderOptions }
->();
-function settingsOf({ name, step }: { name: Engine; step: number }) {
-  let made = settings.get(step);
-  if (!made) {
-    made = {
-      pool: {
-        workerFactory: () => new DiffsWorker(),
-        poolSize: Math.max(1, Math.min(4, (globalThis.navigator?.hardwareConcurrency ?? 2) - 1)),
-        // A worker failing (blocked, crashed) steps the session down.
-        onWorkerError: () => void choice.fail(step),
-      },
-      highlighter: {
-        preferredHighlighter: name,
-        theme: THEMES,
-        tokenizeMaxLineLength: MAX_TOKENIZED_LINE,
-        maxLineDiffLength: MAX_TOKENIZED_LINE,
-      },
-    };
-    settings.set(step, made);
-  }
-  return made;
-}
-
-/**
- * Steps the session down when the pool fails to start (a worker that never answers, say),
- * or is still starting `POOL_START_MS` after it began.
- */
-function PoolWatch({ step }: { step: number }) {
-  const pool = useWorkerPool();
-  useEffect(() => {
-    if (!pool) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const leave = pool.subscribeToStatChanges((stats) => {
-      if (stats.workersFailed) void choice.fail(step);
-      else if (stats.managerState === "initializing") {
-        timer ??= setTimeout(() => {
-          // Checked when it fires: the pool's own reports pause in a hidden tab.
-          if (!pool.isInitialized()) void choice.fail(step);
-        }, POOL_START_MS);
-      }
-    });
-    return () => {
-      clearTimeout(timer);
-      leave();
-    };
-  }, [pool, step]);
-  return null;
-}
-
-/**
- * The page's virtualizer (from the page's `WindowVirtualizer`), set up once
- * this file's own parts have connected to it in their effects.
- */
-function useWindowVirtualizer(): Virtualizer {
-  const owner = useContext(VirtualizerOwnerContext) as VirtualizerOwner<Virtualizer> | null;
-  if (!owner) throw new Error("A drawn file needs a WindowVirtualizer above it.");
-  const [virtualizer] = useState(() => owner.instance(() => new Virtualizer()));
-  useLayoutEffect(() => owner.ready(), [owner]);
-  return virtualizer;
-}
 
 export default function FileDiffView({
   path,
@@ -260,7 +135,7 @@ export default function FileDiffView({
       },
     };
   }, [diffStyle, canAct, onPick, engine, fileDiff, mode]);
-  const virtualizer = useWindowVirtualizer();
+  const virtualizer = useWindowVirtualizer(() => new Virtualizer());
   if (!fileDiff) return <p className="error">These changes could not be read.</p>;
   if (!highlighter) return <p className="muted">Drawing changes…</p>;
   const failed = failedOn !== null && failedOn === fileDiff;
@@ -299,7 +174,10 @@ export default function FileDiffView({
       }}
     />
   );
-  const { pool, highlighter: highlighting } = settingsOf({ name: engine, step: highlighter.step });
+  const { pool, highlighter: highlighting } = settingsOf(choice, newPoolWorker, {
+    name: engine,
+    step: highlighter.step,
+  });
   return (
     <VirtualizerContext.Provider value={virtualizer}>
       <div
@@ -309,7 +187,7 @@ export default function FileDiffView({
       >
         {highlighter.pool ? (
           <WorkerPoolContextProvider poolOptions={pool} highlighterOptions={highlighting}>
-            <PoolWatch step={highlighter.step} />
+            <PoolWatch choice={choice} step={highlighter.step} />
             {drawn}
           </WorkerPoolContextProvider>
         ) : (
