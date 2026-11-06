@@ -16,6 +16,7 @@ import {
   disposeHighlighter,
   getHighlighterOptions,
   getSharedHighlighter,
+  InteractionManager,
   Virtualizer,
 } from "@pierre/diffs";
 import {
@@ -92,6 +93,23 @@ DiffHunksRenderer.prototype.onHighlightError = function (this: DiffHunksRenderer
   logHighlightError.call(this, error);
   const now = choice.current();
   if (now && !gone.has(this)) void choice.fail(now.step);
+};
+
+// The renderer's gutter button has no name and no option to give it one. A button of our
+// own (`renderGutterUtility`) can't take `onGutterUtilityClick`, which the renderer refuses
+// alongside it, and that is what picks lines and ranges from the button. So the renderer's
+// button is named where it is made. Both members are private: brackets keep them type-checked.
+const ensureGutterUtility = InteractionManager.prototype["ensureGutterUtilityNode"];
+InteractionManager.prototype["ensureGutterUtilityNode"] = function (
+  this: InteractionManager<"diff">,
+  ...args: unknown[]
+) {
+  ensureGutterUtility.apply(this, args);
+  const button = this["gutterUtilityButton"];
+  // It picks the lines already selected if there are any, so "this line" alone would be untrue.
+  button?.setAttribute("aria-label", "Comment on this line or selection");
+  // It answers the pointer only: from the keyboard, lines are picked with the page's own form.
+  button?.setAttribute("tabindex", "-1");
 };
 
 /** Each step's pool settings, made once (the pool is built from the first it is given). */
