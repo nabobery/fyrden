@@ -170,10 +170,14 @@ describe("the REST API under Schemathesis", () => {
 
   // Long enough for stop: SIGTERM, 10 s, SIGKILL, then waiting for it to go.
   afterAll(async () => {
-    // Its state is removed next: make sure it is gone first.
-    await dev?.stop();
-    if (scratch) await rm(scratch, { recursive: true, force: true });
-    await rm(fuzzConfig, { force: true });
+    try {
+      // Its state is removed next: make sure it is gone first.
+      await dev?.stop();
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    } finally {
+      // In the checkout, and nothing running needs it.
+      await rm(fuzzConfig, { force: true });
+    }
   }, 60_000);
 
   it("answers every generated request without a server error, as documented", async () => {
