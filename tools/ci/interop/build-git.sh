@@ -36,9 +36,16 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
+# A release pinned with a C standard builds as it; git's own flags are kept.
+std="$(awk -v v="$version" '$1 == v { print $3 }' "$here/git-versions.txt")"
+flags=()
+if [ -n "$std" ]; then
+  flags=(CFLAGS="-g -O2 -Wall -std=$std")
+fi
+
 tar -xJf "$tarball" -C "$work"
 jobs="$(getconf _NPROCESSORS_ONLN 2> /dev/null || echo 4)"
-make -C "$work/git-$version" -j"$jobs" prefix="$prefix" \
+make -C "$work/git-$version" -j"$jobs" prefix="$prefix" ${flags[@]+"${flags[@]}"} \
   NO_TCLTK=1 NO_GETTEXT=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 \
   install > "$work/build.log" 2>&1 || {
   tail -50 "$work/build.log" >&2

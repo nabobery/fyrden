@@ -36,6 +36,7 @@ import {
   pushCommitter,
 } from "./commit.js";
 import { pushIndexEnv } from "./index-env.js";
+import { anyMergedAway, followMergedAway } from "./merged-deps.js";
 import { ACCESS_LOST } from "./reauthorize.js";
 import {
   INLINE_CURSOR_BYTES,
@@ -47,6 +48,7 @@ import {
   type SplitBody,
 } from "./record.js";
 import {
+  BUCKET_NAME,
   bodyKey,
   concatStoredBody,
   deleteScratch,
@@ -123,6 +125,13 @@ const INDEX_LOCK_MS = 5 * 60 * 1000;
  * without counting a failed attempt. Proposed.
  */
 const INDEX_BUSY_RETRY_MS = 5_000;
+/**
+ * How many times indexing follows dependencies merged away meanwhile before
+ * recording them as they are (the commit then refuses, retryably): each try
+ * ends with none merged away unless a compaction committed during
+ * its reads. Proposed.
+ */
+const FOLLOW_MERGED_TRIES = 3;
 
 /** How long finalize waits for the commit lock (held by other pushes and maintenance swaps). Proposed. */
 const COMMIT_LOCK_WAIT_MS = 10_000;
@@ -542,10 +551,26 @@ export class RepoPush {
       if (indexer.phase !== "done") return "more";
       const outcome = indexer.outcome();
       if (outcome.ok) {
-        this.git.uploads.markIndexed(uploadId, {
-          deps: outcome.deps,
-          objectCount: outcome.objectCount,
-        });
+        // A compaction may have merged a pack the check relied on since it was noted (and a
+        // retirement condemned it).
+        let deps = outcome.deps;
+        for (let i = 0; i < FOLLOW_MERGED_TRIES && anyMergedAway(this.git, deps); i++) {
+          const followed = await followMergedAway(
+            this.git,
+            deps,
+            {
+              counter: { calls: 0 },
+              onRead: () =>
+                this.metrics.count("r2.class_b", { bucket: BUCKET_NAME, op: "get_idx" }),
+            },
+            // Renewed between slices, so a long follow keeps the lock it runs under.
+            () => this.git.locks.renew(lock, INDEX_LOCK_MS) !== undefined,
+          );
+          if (!followed || !this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";
+          deps = followed;
+        }
+        // Recorded with no await since the last check: a later compaction rewrites them.
+        this.git.uploads.markIndexed(uploadId, { deps, objectCount: outcome.objectCount });
       }
       return "done";
     } finally {

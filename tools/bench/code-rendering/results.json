@@ -1,0 +1,3433 @@
+{
+  "date": "2026-11-05",
+  "commit": "484dd0c45f41c584707c58b46f2d5ce320983e67",
+  "machine": {
+    "cpu": "unknown",
+    "cores": 10,
+    "arch": "arm64",
+    "memoryGiB": 8,
+    "container": true,
+    "node": "v24.15.0"
+  },
+  "versions": {
+    "workerd": "1.20261023.1",
+    "@pierre/diffs": "1.6.1",
+    "@pierre/highlights": "0.2.0"
+  },
+  "runs": {
+    "cold": 12,
+    "warm": 30,
+    "warmLarge": 12,
+    "firstScreen": 10
+  },
+  "fixtures": [
+    {
+      "id": "ts-1k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 975,
+      "lines": 26
+    },
+    {
+      "id": "ts-2k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 2018,
+      "lines": 58
+    },
+    {
+      "id": "ts-4k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 4093,
+      "lines": 111
+    },
+    {
+      "id": "ts-8k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 8177,
+      "lines": 229
+    },
+    {
+      "id": "ts-16k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 16347,
+      "lines": 454
+    },
+    {
+      "id": "ts-32k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 32751,
+      "lines": 887
+    },
+    {
+      "id": "ts-64k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 65521,
+      "lines": 1668
+    },
+    {
+      "id": "ts-100k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 102341,
+      "lines": 2575
+    },
+    {
+      "id": "ts-128k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 130995,
+      "lines": 3291
+    },
+    {
+      "id": "ts-256k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 262084,
+      "lines": 6658
+    },
+    {
+      "id": "ts-512k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 524286,
+      "lines": 13456
+    },
+    {
+      "id": "ts-1024k",
+      "name": "file.ts",
+      "lang": "typescript",
+      "kind": "ts",
+      "source": "prefix of the repository's 1332 TypeScript sources, concatenated in path order",
+      "bytes": 1048576,
+      "lines": 27129
+    },
+    {
+      "id": "json-real",
+      "name": "file.json",
+      "lang": "json",
+      "kind": "json",
+      "source": "packages/git-core/test/corpus/protocol-violations/cases.json",
+      "bytes": 18704,
+      "lines": 819
+    },
+    {
+      "id": "json-100k",
+      "name": "file.json",
+      "lang": "json",
+      "kind": "json",
+      "source": "the repository's tracked file list as pretty-printed JSON, cut to 100 KiB",
+      "bytes": 102395,
+      "lines": 4387
+    },
+    {
+      "id": "md-real",
+      "name": "file.md",
+      "lang": "markdown",
+      "kind": "markdown",
+      "source": "AGENTS.md",
+      "bytes": 6490,
+      "lines": 102
+    },
+    {
+      "id": "md-100k",
+      "name": "file.md",
+      "lang": "markdown",
+      "kind": "markdown",
+      "source": "docs/**/*.md concatenated in path order, cut to 100 KiB",
+      "bytes": 100859,
+      "lines": 1079
+    },
+    {
+      "id": "minjs-10k",
+      "name": "file.min.js",
+      "lang": "javascript",
+      "kind": "minified-js",
+      "source": "the TypeScript sources minified by esbuild, joined into one line, cut to 10 KiB",
+      "bytes": 10061,
+      "lines": 2
+    },
+    {
+      "id": "minjs-100k",
+      "name": "file.min.js",
+      "lang": "javascript",
+      "kind": "minified-js",
+      "source": "the TypeScript sources minified by esbuild, joined into one line, cut to 100 KiB",
+      "bytes": 101927,
+      "lines": 2
+    }
+  ],
+  "workerd": {
+    "startup": {
+      "bench": {
+        "n": 12,
+        "median": 23.340125000000626,
+        "p95": 220.21095799999966,
+        "min": 17.19983299999967,
+        "max": 220.21095799999966
+      },
+      "withShiki": {
+        "n": 12,
+        "median": 100.55641700000069,
+        "p95": 406.07466699999986,
+        "min": 81.7954579999996,
+        "max": 406.07466699999986
+      },
+      "empty": {
+        "n": 12,
+        "median": 12.818458000000646,
+        "p95": 53.97929199999999,
+        "min": 9.227875000000495,
+        "max": 53.97929199999999
+      }
+    },
+    "bundleBytes": {
+      "bench": 1109220,
+      "withShiki": 11992216
+    },
+    "rows": [
+      {
+        "fixture": "ts-1k",
+        "mode": "highlights",
+        "bytes": 975,
+        "htmlBytes": 6993,
+        "spans": 105,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 6,
+            "min": 2,
+            "max": 6
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 3,
+            "min": 0,
+            "max": 3
+          },
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 1664,
+            "p95": 1920,
+            "min": 1664,
+            "max": 1920
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "batchedMeanMs": 0.011,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 80372
+        }
+      },
+      {
+        "fixture": "ts-1k",
+        "mode": "file",
+        "bytes": 975,
+        "htmlBytes": 65552,
+        "spans": 138,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 11,
+            "p95": 21,
+            "min": 9,
+            "max": 21
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 14,
+            "min": 5,
+            "max": 14
+          },
+          "render": {
+            "n": 12,
+            "median": 4,
+            "p95": 7,
+            "min": 4,
+            "max": 7
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9216,
+            "p95": 9344,
+            "min": 9088,
+            "max": 9344
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.086,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 100240
+        }
+      },
+      {
+        "fixture": "ts-2k",
+        "mode": "highlights",
+        "bytes": 2018,
+        "htmlBytes": 12976,
+        "spans": 193,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 1792,
+            "p95": 1792,
+            "min": 1664,
+            "max": 1792
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.011,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 81044
+        }
+      },
+      {
+        "fixture": "ts-2k",
+        "mode": "file",
+        "bytes": 2018,
+        "htmlBytes": 83563,
+        "spans": 279,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 10,
+            "p95": 15,
+            "min": 9,
+            "max": 15
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
+          "render": {
+            "n": 12,
+            "median": 5,
+            "p95": 6,
+            "min": 4,
+            "max": 6
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9472,
+            "p95": 9600,
+            "min": 9344,
+            "max": 9600
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.123,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 104676
+        }
+      },
+      {
+        "fixture": "ts-4k",
+        "mode": "highlights",
+        "bytes": 4093,
+        "htmlBytes": 27011,
+        "spans": 406,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 1792,
+            "p95": 1920,
+            "min": 1792,
+            "max": 1920
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 0,
+            "min": 0,
+            "max": 0
+          },
+          "batchedMeanMs": 0.021,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 81000
+        }
+      },
+      {
+        "fixture": "ts-4k",
+        "mode": "file",
+        "bytes": 4093,
+        "htmlBytes": 123199,
+        "spans": 636,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 10,
+            "p95": 15,
+            "min": 10,
+            "max": 15
+          },
+          "load": {
+            "n": 12,
+            "median": 5,
+            "p95": 7,
+            "min": 5,
+            "max": 7
+          },
+          "render": {
+            "n": 12,
+            "median": 5,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9728,
+            "p95": 9984,
+            "min": 9728,
+            "max": 9984
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.215,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 118928
+        }
+      },
+      {
+        "fixture": "ts-8k",
+        "mode": "highlights",
+        "bytes": 8177,
+        "htmlBytes": 54277,
+        "spans": 819,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 5376,
+            "p95": 5564,
+            "min": 4864,
+            "max": 5564
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.045,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 86396
+        }
+      },
+      {
+        "fixture": "ts-8k",
+        "mode": "file",
+        "bytes": 8177,
+        "htmlBytes": 204202,
+        "spans": 1337,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 11,
+            "p95": 17,
+            "min": 11,
+            "max": 17
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 8,
+            "min": 5,
+            "max": 8
+          },
+          "render": {
+            "n": 12,
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 11008,
+            "p95": 11136,
+            "min": 10880,
+            "max": 11136
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.453,
+          "processCpuPerRequestMs": 2,
+          "peakRssKiB": 109020
+        }
+      },
+      {
+        "fixture": "ts-16k",
+        "mode": "highlights",
+        "bytes": 16347,
+        "htmlBytes": 104850,
+        "spans": 1573,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 5,
+            "min": 2,
+            "max": 5
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 4,
+            "min": 1,
+            "max": 4
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 8192,
+            "p95": 8832,
+            "min": 7936,
+            "max": 8832
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.086,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 93424
+        }
+      },
+      {
+        "fixture": "ts-16k",
+        "mode": "file",
+        "bytes": 16347,
+        "htmlBytes": 366890,
+        "spans": 2776,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 13,
+            "p95": 27,
+            "min": 12,
+            "max": 27
+          },
+          "load": {
+            "n": 12,
+            "median": 5,
+            "p95": 8,
+            "min": 5,
+            "max": 8
+          },
+          "render": {
+            "n": 12,
+            "median": 8,
+            "p95": 19,
+            "min": 7,
+            "max": 19
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 17280,
+            "p95": 17720,
+            "min": 15360,
+            "max": 17720
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 3,
+            "min": 1,
+            "max": 4
+          },
+          "batchedMeanMs": 0.98,
+          "processCpuPerRequestMs": 3.7,
+          "peakRssKiB": 118184
+        }
+      },
+      {
+        "fixture": "ts-32k",
+        "mode": "highlights",
+        "bytes": 32751,
+        "htmlBytes": 199167,
+        "spans": 2960,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 3,
+            "p95": 9,
+            "min": 3,
+            "max": 9
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
+          },
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 8,
+            "min": 2,
+            "max": 8
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9600,
+            "p95": 11904,
+            "min": 9216,
+            "max": 11904
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.165,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 100556
+        }
+      },
+      {
+        "fixture": "ts-32k",
+        "mode": "file",
+        "bytes": 32751,
+        "htmlBytes": 647884,
+        "spans": 5115,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 17,
+            "p95": 21,
+            "min": 15,
+            "max": 21
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 8,
+            "min": 5,
+            "max": 8
+          },
+          "render": {
+            "n": 12,
+            "median": 12,
+            "p95": 15,
+            "min": 10,
+            "max": 15
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 19328,
+            "p95": 19456,
+            "min": 19128,
+            "max": 19456
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
+          },
+          "batchedMeanMs": 1.8,
+          "processCpuPerRequestMs": 4,
+          "peakRssKiB": 156060
+        }
+      },
+      {
+        "fixture": "ts-64k",
+        "mode": "highlights",
+        "bytes": 65521,
+        "htmlBytes": 361891,
+        "spans": 5274,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 4,
+            "p95": 5,
+            "min": 3,
+            "max": 5
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 4,
+            "p95": 4,
+            "min": 2,
+            "max": 4
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 12804,
+            "p95": 14976,
+            "min": 10372,
+            "max": 14976
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.587,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 110608
+        }
+      },
+      {
+        "fixture": "ts-64k",
+        "mode": "file",
+        "bytes": 65521,
+        "htmlBytes": 1148409,
+        "spans": 9166,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 19,
+            "p95": 29,
+            "min": 18,
+            "max": 29
+          },
+          "load": {
+            "n": 12,
+            "median": 5,
+            "p95": 10,
+            "min": 5,
+            "max": 10
+          },
+          "render": {
+            "n": 12,
+            "median": 14,
+            "p95": 20,
+            "min": 13,
+            "max": 20
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 26112,
+            "p95": 26496,
+            "min": 25984,
+            "max": 26496
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 3,
+            "p95": 5,
+            "min": 3,
+            "max": 6
+          },
+          "batchedMeanMs": 3.549,
+          "processCpuPerRequestMs": 7.3,
+          "peakRssKiB": 175212
+        }
+      },
+      {
+        "fixture": "ts-100k",
+        "mode": "highlights",
+        "bytes": 102341,
+        "htmlBytes": 575081,
+        "spans": 8414,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 4,
+            "p95": 246,
+            "min": 4,
+            "max": 246
+          },
+          "load": {
+            "n": 12,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 4,
+            "p95": 245,
+            "min": 3,
+            "max": 245
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 15580,
+            "p95": 17608,
+            "min": 15400,
+            "max": 17608
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.993,
+          "processCpuPerRequestMs": 2,
+          "peakRssKiB": 119776
+        }
+      },
+      {
+        "fixture": "ts-100k",
+        "mode": "file",
+        "bytes": 102341,
+        "htmlBytes": 1777534,
+        "spans": 14508,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 26,
+            "p95": 49,
+            "min": 23,
+            "max": 49
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
+          },
+          "render": {
+            "n": 12,
+            "median": 20,
+            "p95": 42,
+            "min": 18,
+            "max": 42
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 29880,
+            "p95": 30044,
+            "min": 29696,
+            "max": 30044
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 5,
+            "p95": 10,
+            "min": 4,
+            "max": 121
+          },
+          "batchedMeanMs": 6.9,
+          "processCpuPerRequestMs": 14.7,
+          "peakRssKiB": 203828
+        }
+      },
+      {
+        "fixture": "ts-128k",
+        "mode": "highlights",
+        "bytes": 130995,
+        "htmlBytes": 738805,
+        "spans": 10818,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 6,
+            "p95": 63,
+            "min": 4,
+            "max": 63
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 10,
+            "min": 0,
+            "max": 10
+          },
+          "render": {
+            "n": 12,
+            "median": 5,
+            "p95": 53,
+            "min": 4,
+            "max": 53
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 16040,
+            "p95": 16176,
+            "min": 13872,
+            "max": 16176
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 2,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "batchedMeanMs": 1.707,
+          "processCpuPerRequestMs": 3.7,
+          "peakRssKiB": 123328
+        }
+      },
+      {
+        "fixture": "ts-128k",
+        "mode": "file",
+        "bytes": 130995,
+        "htmlBytes": 2303282,
+        "spans": 19112,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 28,
+            "p95": 34,
+            "min": 23,
+            "max": 34
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
+          },
+          "render": {
+            "n": 12,
+            "median": 23,
+            "p95": 26,
+            "min": 18,
+            "max": 26
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 38736,
+            "p95": 39120,
+            "min": 38520,
+            "max": 39120
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 6,
+            "p95": 14,
+            "min": 6,
+            "max": 18
+          },
+          "batchedMeanMs": 7.704,
+          "processCpuPerRequestMs": 17.3,
+          "peakRssKiB": 238200
+        }
+      },
+      {
+        "fixture": "ts-256k",
+        "mode": "highlights",
+        "bytes": 262084,
+        "htmlBytes": 1523447,
+        "spans": 22448,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 8,
+            "p95": 13,
+            "min": 7,
+            "max": 13
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 7,
+            "p95": 12,
+            "min": 6,
+            "max": 12
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 19188,
+            "p95": 21248,
+            "min": 18924,
+            "max": 21248
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "batchedMeanMs": 2.427,
+          "processCpuPerRequestMs": 5,
+          "peakRssKiB": 174376
+        }
+      },
+      {
+        "fixture": "ts-256k",
+        "mode": "file",
+        "bytes": 262084,
+        "htmlBytes": 4628241,
+        "spans": 38871,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 59,
+            "p95": 133,
+            "min": 37,
+            "max": 133
+          },
+          "load": {
+            "n": 12,
+            "median": 7,
+            "p95": 14,
+            "min": 5,
+            "max": 14
+          },
+          "render": {
+            "n": 12,
+            "median": 53,
+            "p95": 121,
+            "min": 32,
+            "max": 121
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 59564,
+            "p95": 60172,
+            "min": 59324,
+            "max": 60172
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 43,
+            "p95": 74,
+            "min": 18,
+            "max": 74
+          },
+          "batchedMeanMs": 31.5,
+          "processCpuPerRequestMs": 80,
+          "peakRssKiB": 257952
+        }
+      },
+      {
+        "fixture": "ts-512k",
+        "mode": "highlights",
+        "bytes": 524286,
+        "htmlBytes": 3084078,
+        "spans": 45553,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 14,
+            "p95": 24,
+            "min": 11,
+            "max": 24
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
+          },
+          "render": {
+            "n": 12,
+            "median": 13,
+            "p95": 22,
+            "min": 10,
+            "max": 22
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 23196,
+            "p95": 23440,
+            "min": 22964,
+            "max": 23440
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 5,
+            "p95": 6,
+            "min": 5,
+            "max": 6
+          },
+          "batchedMeanMs": 5.4,
+          "processCpuPerRequestMs": 13.3,
+          "peakRssKiB": 200160
+        }
+      },
+      {
+        "fixture": "ts-512k",
+        "mode": "file",
+        "bytes": 524286,
+        "htmlBytes": 9298289,
+        "spans": 78264,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 76,
+            "p95": 98,
+            "min": 68,
+            "max": 98
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 10,
+            "min": 5,
+            "max": 10
+          },
+          "render": {
+            "n": 12,
+            "median": 70,
+            "p95": 88,
+            "min": 62,
+            "max": 88
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 104340,
+            "p95": 108308,
+            "min": 104088,
+            "max": 108308
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 64,
+            "p95": 2119,
+            "min": 40,
+            "max": 2119
+          },
+          "batchedMeanMs": 77.333,
+          "processCpuPerRequestMs": 558.3,
+          "peakRssKiB": 855196
+        }
+      },
+      {
+        "fixture": "ts-1024k",
+        "mode": "highlights",
+        "bytes": 1048576,
+        "htmlBytes": 6227680,
+        "spans": 92185,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 21,
+            "p95": 86,
+            "min": 17,
+            "max": 86
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 3,
+            "min": 0,
+            "max": 3
+          },
+          "render": {
+            "n": 12,
+            "median": 20,
+            "p95": 84,
+            "min": 17,
+            "max": 84
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 40040,
+            "p95": 40232,
+            "min": 39808,
+            "max": 40232
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 11,
+            "p95": 12,
+            "min": 10,
+            "max": 12
+          },
+          "batchedMeanMs": 16.8,
+          "processCpuPerRequestMs": 24.2,
+          "peakRssKiB": 298168
+        }
+      },
+      {
+        "fixture": "ts-1024k",
+        "mode": "file",
+        "bytes": 1048576,
+        "htmlBytes": 18636675,
+        "spans": 156369,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 128,
+            "p95": 174,
+            "min": 118,
+            "max": 174
+          },
+          "load": {
+            "n": 12,
+            "median": 5,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
+          "render": {
+            "n": 12,
+            "median": 123,
+            "p95": 165,
+            "min": 113,
+            "max": 165
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 194288,
+            "p95": 195072,
+            "min": 192452,
+            "max": 195072
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 12,
+            "median": 117,
+            "p95": 128,
+            "min": 107,
+            "max": 128
+          },
+          "batchedMeanMs": 116.667,
+          "processCpuPerRequestMs": 294.2,
+          "peakRssKiB": 1641328
+        }
+      },
+      {
+        "fixture": "json-real",
+        "mode": "highlights",
+        "bytes": 18704,
+        "htmlBytes": 114988,
+        "spans": 1717,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 4,
+            "min": 2,
+            "max": 4
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 4,
+            "min": 1,
+            "max": 4
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 5504,
+            "p95": 5632,
+            "min": 5376,
+            "max": 5632
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.063,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 94104
+        }
+      },
+      {
+        "fixture": "json-real",
+        "mode": "file",
+        "bytes": 18704,
+        "htmlBytes": 395259,
+        "spans": 2161,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 14,
+            "p95": 22,
+            "min": 12,
+            "max": 22
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
+          "render": {
+            "n": 12,
+            "median": 8,
+            "p95": 15,
+            "min": 7,
+            "max": 15
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 16384,
+            "p95": 17152,
+            "min": 12672,
+            "max": 17152
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
+          },
+          "batchedMeanMs": 1.253,
+          "processCpuPerRequestMs": 4,
+          "peakRssKiB": 135724
+        }
+      },
+      {
+        "fixture": "json-100k",
+        "mode": "highlights",
+        "bytes": 102395,
+        "htmlBytes": 804151,
+        "spans": 12529,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 3,
+            "p95": 4,
+            "min": 2,
+            "max": 4
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 13440,
+            "p95": 13568,
+            "min": 13312,
+            "max": 13568
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.225,
+          "processCpuPerRequestMs": 1,
+          "peakRssKiB": 163124
+        }
+      },
+      {
+        "fixture": "json-100k",
+        "mode": "file",
+        "bytes": 102395,
+        "htmlBytes": 2092686,
+        "spans": 13782,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 29,
+            "p95": 38,
+            "min": 22,
+            "max": 38
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
+          },
+          "render": {
+            "n": 12,
+            "median": 19,
+            "p95": 29,
+            "min": 17,
+            "max": 29
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 31744,
+            "p95": 32128,
+            "min": 31488,
+            "max": 32128
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 6,
+            "p95": 13,
+            "min": 5,
+            "max": 20
+          },
+          "batchedMeanMs": 8.556,
+          "processCpuPerRequestMs": 12.7,
+          "peakRssKiB": 181144
+        }
+      },
+      {
+        "fixture": "md-real",
+        "mode": "highlights",
+        "bytes": 6490,
+        "htmlBytes": 15294,
+        "spans": 150,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 1,
+            "p95": 2,
+            "min": 1,
+            "max": 2
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 1792,
+            "p95": 1920,
+            "min": 1792,
+            "max": 1920
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.025,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 81008
+        }
+      },
+      {
+        "fixture": "md-real",
+        "mode": "file",
+        "bytes": 6490,
+        "htmlBytes": 97448,
+        "spans": 274,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 11,
+            "p95": 13,
+            "min": 10,
+            "max": 13
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 7,
+            "min": 5,
+            "max": 7
+          },
+          "render": {
+            "n": 12,
+            "median": 5,
+            "p95": 6,
+            "min": 4,
+            "max": 6
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9856,
+            "p95": 9984,
+            "min": 9660,
+            "max": 9984
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.188,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 119876
+        }
+      },
+      {
+        "fixture": "md-100k",
+        "mode": "highlights",
+        "bytes": 100859,
+        "htmlBytes": 180775,
+        "spans": 1391,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 3,
+            "p95": 6,
+            "min": 2,
+            "max": 6
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 3,
+            "min": 0,
+            "max": 3
+          },
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 9856,
+            "p95": 9984,
+            "min": 9728,
+            "max": 9984
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.268,
+          "processCpuPerRequestMs": 1.7,
+          "peakRssKiB": 120624
+        }
+      },
+      {
+        "fixture": "md-100k",
+        "mode": "file",
+        "bytes": 100859,
+        "htmlBytes": 600071,
+        "spans": 2987,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 21,
+            "p95": 38,
+            "min": 16,
+            "max": 38
+          },
+          "load": {
+            "n": 12,
+            "median": 7,
+            "p95": 9,
+            "min": 5,
+            "max": 9
+          },
+          "render": {
+            "n": 12,
+            "median": 13,
+            "p95": 31,
+            "min": 11,
+            "max": 31
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 19840,
+            "p95": 20096,
+            "min": 19584,
+            "max": 20096
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 2,
+            "p95": 4,
+            "min": 1,
+            "max": 5
+          },
+          "batchedMeanMs": 2.307,
+          "processCpuPerRequestMs": 5.7,
+          "peakRssKiB": 156568
+        }
+      },
+      {
+        "fixture": "minjs-10k",
+        "mode": "highlights",
+        "bytes": 10061,
+        "htmlBytes": 94228,
+        "spans": 1499,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 2,
+            "max": 3
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 2,
+            "p95": 3,
+            "min": 1,
+            "max": 3
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 8704,
+            "p95": 8832,
+            "min": 8192,
+            "max": 8832
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.079,
+          "processCpuPerRequestMs": 0.3,
+          "peakRssKiB": 86024
+        }
+      },
+      {
+        "fixture": "minjs-10k",
+        "mode": "file",
+        "bytes": 10061,
+        "htmlBytes": 59633,
+        "spans": 1,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 11,
+            "p95": 11,
+            "min": 9,
+            "max": 11
+          },
+          "load": {
+            "n": 12,
+            "median": 6,
+            "p95": 7,
+            "min": 5,
+            "max": 7
+          },
+          "render": {
+            "n": 12,
+            "median": 4,
+            "p95": 5,
+            "min": 4,
+            "max": 5
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 12544,
+            "p95": 12732,
+            "min": 12416,
+            "max": 12732
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 0,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "batchedMeanMs": 0.116,
+          "processCpuPerRequestMs": 0.7,
+          "peakRssKiB": 91980
+        }
+      },
+      {
+        "fixture": "minjs-100k",
+        "mode": "highlights",
+        "bytes": 101927,
+        "htmlBytes": 845458,
+        "spans": 13242,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 6,
+            "p95": 12,
+            "min": 5,
+            "max": 12
+          },
+          "load": {
+            "n": 12,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 1
+          },
+          "render": {
+            "n": 12,
+            "median": 5,
+            "p95": 11,
+            "min": 5,
+            "max": 11
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 13568,
+            "p95": 13696,
+            "min": 13440,
+            "max": 13696
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 2,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.74,
+          "processCpuPerRequestMs": 1.7,
+          "peakRssKiB": 112708
+        }
+      },
+      {
+        "fixture": "minjs-100k",
+        "mode": "file",
+        "bytes": 101927,
+        "htmlBytes": 153019,
+        "spans": 1,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 15,
+            "p95": 24,
+            "min": 12,
+            "max": 24
+          },
+          "load": {
+            "n": 12,
+            "median": 7,
+            "p95": 8,
+            "min": 5,
+            "max": 8
+          },
+          "render": {
+            "n": 12,
+            "median": 7,
+            "p95": 16,
+            "min": 6,
+            "max": 16
+          },
+          "peakRssDeltaKiB": {
+            "n": 12,
+            "median": 13440,
+            "p95": 13696,
+            "min": 13184,
+            "max": 13696
+          }
+        },
+        "warm": {
+          "perCall": {
+            "n": 30,
+            "median": 1,
+            "p95": 1,
+            "min": 0,
+            "max": 2
+          },
+          "batchedMeanMs": 0.693,
+          "processCpuPerRequestMs": 1.3,
+          "peakRssKiB": 89772
+        }
+      }
+    ]
+  },
+  "node": {
+    "rows": [
+      {
+        "fixture": "ts-1k",
+        "mode": "highlights",
+        "bytes": 975,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 6.059540999999996,
+            "p95": 18.750833999999998,
+            "min": 5.512999999999991,
+            "max": 18.750833999999998
+          },
+          "load": {
+            "n": 12,
+            "median": 4.826874999999994,
+            "p95": 14.425083999999998,
+            "min": 3.8392499999999927,
+            "max": 14.425083999999998
+          },
+          "render": {
+            "n": 12,
+            "median": 1.4044999999999987,
+            "p95": 4.325749999999999,
+            "min": 1.2326660000000018,
+            "max": 4.325749999999999
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.02520900000000381,
+          "p95": 0.33612499999999557,
+          "min": 0.015416000000001873,
+          "max": 0.5839169999999996
+        }
+      },
+      {
+        "fixture": "ts-1k",
+        "mode": "file",
+        "bytes": 975,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 14.35454200000001,
+            "p95": 27.21054199999999,
+            "min": 11.597499999999997,
+            "max": 27.21054199999999
+          },
+          "load": {
+            "n": 12,
+            "median": 5.27624999999999,
+            "p95": 18.678541999999993,
+            "min": 4.239624999999997,
+            "max": 18.678541999999993
+          },
+          "render": {
+            "n": 12,
+            "median": 7.888541000000004,
+            "p95": 17.055333000000005,
+            "min": 7.209708999999997,
+            "max": 17.055333000000005
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.35437499999999034,
+          "p95": 1.0610420000000005,
+          "min": 0.10487499999999272,
+          "max": 2.8794579999999996
+        }
+      },
+      {
+        "fixture": "ts-2k",
+        "mode": "highlights",
+        "bytes": 2018,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.279207999999997,
+            "p95": 10.204916999999995,
+            "min": 4.791041999999997,
+            "max": 10.204916999999995
+          },
+          "load": {
+            "n": 12,
+            "median": 3.946583000000004,
+            "p95": 8.378167000000005,
+            "min": 3.492582999999996,
+            "max": 8.378167000000005
+          },
+          "render": {
+            "n": 12,
+            "median": 1.404332999999994,
+            "p95": 2.713832999999994,
+            "min": 1.2823340000000059,
+            "max": 2.713832999999994
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.035125000000007844,
+          "p95": 0.08237499999999898,
+          "min": 0.02637500000000159,
+          "max": 0.6742909999999966
+        }
+      },
+      {
+        "fixture": "ts-2k",
+        "mode": "file",
+        "bytes": 2018,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 12.937583000000004,
+            "p95": 14.908708000000004,
+            "min": 11.932333,
+            "max": 14.908708000000004
+          },
+          "load": {
+            "n": 12,
+            "median": 4.643166999999991,
+            "p95": 5.419832999999997,
+            "min": 4.454541000000006,
+            "max": 5.419832999999997
+          },
+          "render": {
+            "n": 12,
+            "median": 8.158249999999995,
+            "p95": 10.365791999999999,
+            "min": 7.405625000000001,
+            "max": 10.365791999999999
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.25241599999999664,
+          "p95": 0.7112500000000068,
+          "min": 0.1581249999999983,
+          "max": 0.7151670000000081
+        }
+      },
+      {
+        "fixture": "ts-4k",
+        "mode": "highlights",
+        "bytes": 4093,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.032457999999998,
+            "p95": 13.299750000000003,
+            "min": 4.366915999999996,
+            "max": 13.299750000000003
+          },
+          "load": {
+            "n": 12,
+            "median": 3.739457999999999,
+            "p95": 11.616792000000004,
+            "min": 3.049790999999999,
+            "max": 11.616792000000004
+          },
+          "render": {
+            "n": 12,
+            "median": 1.321125000000002,
+            "p95": 1.6829579999999993,
+            "min": 1.2410829999999962,
+            "max": 1.6829579999999993
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.11470899999999062,
+          "p95": 0.6776669999999996,
+          "min": 0.024083000000004517,
+          "max": 2.0628329999999977
+        }
+      },
+      {
+        "fixture": "ts-4k",
+        "mode": "file",
+        "bytes": 4093,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 13.139790999999995,
+            "p95": 17.61712500000001,
+            "min": 11.832166999999998,
+            "max": 17.61712500000001
+          },
+          "load": {
+            "n": 12,
+            "median": 4.439540999999998,
+            "p95": 5.678999999999988,
+            "min": 4.165416999999998,
+            "max": 5.678999999999988
+          },
+          "render": {
+            "n": 12,
+            "median": 8.610709,
+            "p95": 12.943375000000003,
+            "min": 7.66675,
+            "max": 12.943375000000003
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.9657079999999922,
+          "p95": 3.5853330000000057,
+          "min": 0.3474999999999966,
+          "max": 7.220292000000001
+        }
+      },
+      {
+        "fixture": "ts-8k",
+        "mode": "highlights",
+        "bytes": 8177,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.462249999999997,
+            "p95": 9.321624999999997,
+            "min": 4.797499999999999,
+            "max": 9.321624999999997
+          },
+          "load": {
+            "n": 12,
+            "median": 3.906041000000002,
+            "p95": 7.606875000000002,
+            "min": 3.4273329999999973,
+            "max": 7.606875000000002
+          },
+          "render": {
+            "n": 12,
+            "median": 1.6193340000000092,
+            "p95": 1.9881249999999966,
+            "min": 1.3701670000000021,
+            "max": 1.9881249999999966
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.06479199999999707,
+          "p95": 0.16904199999999747,
+          "min": 0.057749999999998636,
+          "max": 0.8089169999999939
+        }
+      },
+      {
+        "fixture": "ts-8k",
+        "mode": "file",
+        "bytes": 8177,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 14.383375000000001,
+            "p95": 22.812124999999995,
+            "min": 13.889084000000004,
+            "max": 22.812124999999995
+          },
+          "load": {
+            "n": 12,
+            "median": 4.441375000000001,
+            "p95": 8.818915999999987,
+            "min": 4.2136660000000035,
+            "max": 8.818915999999987
+          },
+          "render": {
+            "n": 12,
+            "median": 9.957667000000008,
+            "p95": 13.993209000000007,
+            "min": 9.447709000000003,
+            "max": 13.993209000000007
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.8031249999999943,
+          "p95": 2.0877499999999998,
+          "min": 0.49133299999999736,
+          "max": 2.8862499999999898
+        }
+      },
+      {
+        "fixture": "ts-16k",
+        "mode": "highlights",
+        "bytes": 16347,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.745042000000005,
+            "p95": 11.324666000000008,
+            "min": 5.069541999999998,
+            "max": 11.324666000000008
+          },
+          "load": {
+            "n": 12,
+            "median": 3.9991249999999994,
+            "p95": 6.688083000000006,
+            "min": 3.4817919999999987,
+            "max": 6.688083000000006
+          },
+          "render": {
+            "n": 12,
+            "median": 1.588957999999991,
+            "p95": 4.636583000000002,
+            "min": 1.509916000000004,
+            "max": 4.636583000000002
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.1124590000000012,
+          "p95": 0.23649999999999238,
+          "min": 0.08754100000000165,
+          "max": 0.289709000000002
+        }
+      },
+      {
+        "fixture": "ts-16k",
+        "mode": "file",
+        "bytes": 16347,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 17.727208000000005,
+            "p95": 53.62175000000002,
+            "min": 15.341209,
+            "max": 53.62175000000002
+          },
+          "load": {
+            "n": 12,
+            "median": 4.642250000000004,
+            "p95": 28.750083000000004,
+            "min": 4.158999999999999,
+            "max": 28.750083000000004
+          },
+          "render": {
+            "n": 12,
+            "median": 13.084958,
+            "p95": 24.871667000000016,
+            "min": 11.182209,
+            "max": 24.871667000000016
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 1.4475839999999778,
+          "p95": 6.078416000000004,
+          "min": 0.9460410000000081,
+          "max": 7.023832999999996
+        }
+      },
+      {
+        "fixture": "ts-32k",
+        "mode": "highlights",
+        "bytes": 32751,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.603708000000005,
+            "p95": 8.992250000000006,
+            "min": 5.228875000000002,
+            "max": 8.992250000000006
+          },
+          "load": {
+            "n": 12,
+            "median": 3.634833999999998,
+            "p95": 5.957332999999998,
+            "min": 3.3924999999999983,
+            "max": 5.957332999999998
+          },
+          "render": {
+            "n": 12,
+            "median": 1.9297920000000062,
+            "p95": 3.034917000000007,
+            "min": 1.7525410000000008,
+            "max": 3.034917000000007
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.2032920000000047,
+          "p95": 0.4102499999999907,
+          "min": 0.18320899999999085,
+          "max": 0.596082999999993
+        }
+      },
+      {
+        "fixture": "ts-32k",
+        "mode": "file",
+        "bytes": 32751,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 19.748082999999994,
+            "p95": 23.136666999999996,
+            "min": 18.007250000000006,
+            "max": 23.136666999999996
+          },
+          "load": {
+            "n": 12,
+            "median": 4.203749999999999,
+            "p95": 5.355333000000002,
+            "min": 4.113333999999995,
+            "max": 5.355333000000002
+          },
+          "render": {
+            "n": 12,
+            "median": 15.554665999999997,
+            "p95": 18.828167,
+            "min": 13.865291999999997,
+            "max": 18.828167
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 3.039999999999992,
+          "p95": 6.384749999999997,
+          "min": 1.8450420000000065,
+          "max": 8.173666999999995
+        }
+      },
+      {
+        "fixture": "ts-64k",
+        "mode": "highlights",
+        "bytes": 65521,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 6.724542000000007,
+            "p95": 12.102875000000012,
+            "min": 6.178666999999997,
+            "max": 12.102875000000012
+          },
+          "load": {
+            "n": 12,
+            "median": 3.9122079999999997,
+            "p95": 5.939667,
+            "min": 3.5892079999999993,
+            "max": 5.939667
+          },
+          "render": {
+            "n": 12,
+            "median": 2.812334000000007,
+            "p95": 6.163208000000012,
+            "min": 2.491250000000001,
+            "max": 6.163208000000012
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.5812499999999972,
+          "p95": 0.9151669999999967,
+          "min": 0.4877919999999989,
+          "max": 1.5962090000000018
+        }
+      },
+      {
+        "fixture": "ts-64k",
+        "mode": "file",
+        "bytes": 65521,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 27.536749999999998,
+            "p95": 116.68170799999999,
+            "min": 23.882416000000006,
+            "max": 116.68170799999999
+          },
+          "load": {
+            "n": 12,
+            "median": 5.304667000000002,
+            "p95": 15.652290999999991,
+            "min": 4.352000000000004,
+            "max": 15.652290999999991
+          },
+          "render": {
+            "n": 12,
+            "median": 22.90625,
+            "p95": 101.029417,
+            "min": 19.051374999999993,
+            "max": 101.029417
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 7.765874999999994,
+          "p95": 25.730333,
+          "min": 4.540666000000044,
+          "max": 28.786666999999966
+        }
+      },
+      {
+        "fixture": "ts-100k",
+        "mode": "highlights",
+        "bytes": 102341,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 8.629957999999995,
+            "p95": 12.209667000000003,
+            "min": 7.617875000000005,
+            "max": 12.209667000000003
+          },
+          "load": {
+            "n": 12,
+            "median": 4.044457999999992,
+            "p95": 5.702834000000003,
+            "min": 3.4272920000000013,
+            "max": 5.702834000000003
+          },
+          "render": {
+            "n": 12,
+            "median": 4.421542000000002,
+            "p95": 6.506833,
+            "min": 3.8550419999999903,
+            "max": 6.506833
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.9130419999999901,
+          "p95": 1.2071660000000008,
+          "min": 0.7638749999999987,
+          "max": 1.9133329999999944
+        }
+      },
+      {
+        "fixture": "ts-100k",
+        "mode": "file",
+        "bytes": 102341,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 34.910458999999996,
+            "p95": 57.707542000000004,
+            "min": 31.259915999999997,
+            "max": 57.707542000000004
+          },
+          "load": {
+            "n": 12,
+            "median": 4.281542000000002,
+            "p95": 6.970417000000012,
+            "min": 4.1442909999999955,
+            "max": 6.970417000000012
+          },
+          "render": {
+            "n": 12,
+            "median": 30.379041,
+            "p95": 50.73712499999999,
+            "min": 27.107749999999996,
+            "max": 50.73712499999999
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 12.166415999999913,
+          "p95": 24.177082999999982,
+          "min": 7.128083000000004,
+          "max": 33.80758400000002
+        }
+      },
+      {
+        "fixture": "ts-128k",
+        "mode": "highlights",
+        "bytes": 130995,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 8.712542,
+            "p95": 19.296249999999986,
+            "min": 8.193832999999998,
+            "max": 19.296249999999986
+          },
+          "load": {
+            "n": 12,
+            "median": 4.052374999999998,
+            "p95": 8.298582999999994,
+            "min": 3.4159579999999963,
+            "max": 8.298582999999994
+          },
+          "render": {
+            "n": 12,
+            "median": 5.076833000000008,
+            "p95": 10.997666999999993,
+            "min": 4.30379099999999,
+            "max": 10.997666999999993
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 1.2316670000000016,
+          "p95": 2.1595410000000044,
+          "min": 1.017832999999996,
+          "max": 3.5210419999999942
+        }
+      },
+      {
+        "fixture": "ts-128k",
+        "mode": "file",
+        "bytes": 130995,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 43.604917,
+            "p95": 64.233458,
+            "min": 34.761207999999996,
+            "max": 64.233458
+          },
+          "load": {
+            "n": 12,
+            "median": 4.893667000000001,
+            "p95": 9.991540999999998,
+            "min": 4.326833000000001,
+            "max": 9.991540999999998
+          },
+          "render": {
+            "n": 12,
+            "median": 38.499832999999995,
+            "p95": 55.913208,
+            "min": 30.159999999999997,
+            "max": 55.913208
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 10.672875000000033,
+          "p95": 24.466959000000003,
+          "min": 8.048000000000002,
+          "max": 24.73079100000001
+        }
+      },
+      {
+        "fixture": "ts-256k",
+        "mode": "highlights",
+        "bytes": 262084,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 10.612833000000002,
+            "p95": 12.478333,
+            "min": 8.513041999999999,
+            "max": 12.478333
+          },
+          "load": {
+            "n": 12,
+            "median": 4.230125000000001,
+            "p95": 4.898999999999994,
+            "min": 3.008624999999995,
+            "max": 4.898999999999994
+          },
+          "render": {
+            "n": 12,
+            "median": 6.420832999999995,
+            "p95": 7.9048329999999964,
+            "min": 5.464916000000009,
+            "max": 7.9048329999999964
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 2.2725830000000116,
+          "p95": 3.693583999999987,
+          "min": 1.9387920000000065,
+          "max": 3.693583999999987
+        }
+      },
+      {
+        "fixture": "ts-256k",
+        "mode": "file",
+        "bytes": 262084,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 79.455834,
+            "p95": 214.93924999999996,
+            "min": 67.586916,
+            "max": 214.93924999999996
+          },
+          "load": {
+            "n": 12,
+            "median": 4.575167,
+            "p95": 21.670249999999996,
+            "min": 4.176416000000003,
+            "max": 21.670249999999996
+          },
+          "render": {
+            "n": 12,
+            "median": 74.789959,
+            "p95": 200.630291,
+            "min": 63.30820799999999,
+            "max": 200.630291
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 28.26925,
+          "p95": 42.038792,
+          "min": 16.52183400000007,
+          "max": 42.038792
+        }
+      },
+      {
+        "fixture": "ts-512k",
+        "mode": "highlights",
+        "bytes": 524286,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 15.281958000000003,
+            "p95": 20.776249999999997,
+            "min": 12.324374999999996,
+            "max": 20.776249999999997
+          },
+          "load": {
+            "n": 12,
+            "median": 4.36604100000001,
+            "p95": 5.651665999999999,
+            "min": 3.7844589999999982,
+            "max": 5.651665999999999
+          },
+          "render": {
+            "n": 12,
+            "median": 10.469875000000002,
+            "p95": 15.124583999999999,
+            "min": 8.390208000000001,
+            "max": 15.124583999999999
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 4.466750000000019,
+          "p95": 5.9609999999999985,
+          "min": 3.58695800000001,
+          "max": 5.9609999999999985
+        }
+      },
+      {
+        "fixture": "ts-512k",
+        "mode": "file",
+        "bytes": 524286,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 157.882,
+            "p95": 775.0716259999999,
+            "min": 101.38216700000001,
+            "max": 775.0716259999999
+          },
+          "load": {
+            "n": 12,
+            "median": 4.444625000000002,
+            "p95": 269.997709,
+            "min": 4.071167000000003,
+            "max": 269.997709
+          },
+          "render": {
+            "n": 12,
+            "median": 147.947375,
+            "p95": 529.491208,
+            "min": 97.154875,
+            "max": 529.491208
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 58.612583000000086,
+          "p95": 117.47537499999999,
+          "min": 41.50454100000002,
+          "max": 117.47537499999999
+        }
+      },
+      {
+        "fixture": "ts-1024k",
+        "mode": "highlights",
+        "bytes": 1048576,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 17.477292,
+            "p95": 27.05833299999999,
+            "min": 16.494999999999997,
+            "max": 27.05833299999999
+          },
+          "load": {
+            "n": 12,
+            "median": 3.908834000000006,
+            "p95": 4.580708999999999,
+            "min": 3.4054160000000024,
+            "max": 4.580708999999999
+          },
+          "render": {
+            "n": 12,
+            "median": 13.866917,
+            "p95": 22.663999999999987,
+            "min": 12.694333,
+            "max": 22.663999999999987
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 7.551249999999982,
+          "p95": 10.422000000000025,
+          "min": 6.9519579999999905,
+          "max": 10.422000000000025
+        }
+      },
+      {
+        "fixture": "ts-1024k",
+        "mode": "file",
+        "bytes": 1048576,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 180.658708,
+            "p95": 325.292042,
+            "min": 152.965833,
+            "max": 325.292042
+          },
+          "load": {
+            "n": 12,
+            "median": 4.1319580000000045,
+            "p95": 9.697082999999992,
+            "min": 3.9056660000000036,
+            "max": 9.697082999999992
+          },
+          "render": {
+            "n": 12,
+            "median": 176.62025,
+            "p95": 320.80112499999996,
+            "min": 148.005542,
+            "max": 320.80112499999996
+          }
+        },
+        "warm": {
+          "n": 12,
+          "median": 151.76337599999988,
+          "p95": 275.28425100000004,
+          "min": 119.52975000000015,
+          "max": 275.28425100000004
+        }
+      },
+      {
+        "fixture": "json-real",
+        "mode": "highlights",
+        "bytes": 18704,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.2356670000000065,
+            "p95": 6.877832999999995,
+            "min": 4.018625,
+            "max": 6.877832999999995
+          },
+          "load": {
+            "n": 12,
+            "median": 4.076250000000002,
+            "p95": 5.754541000000003,
+            "min": 2.8999590000000026,
+            "max": 5.754541000000003
+          },
+          "render": {
+            "n": 12,
+            "median": 1.159125000000003,
+            "p95": 1.6761660000000091,
+            "min": 1.1118749999999977,
+            "max": 1.6761660000000091
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.08158399999999943,
+          "p95": 0.14624999999999488,
+          "min": 0.04258300000000759,
+          "max": 0.23712499999999181
+        }
+      },
+      {
+        "fixture": "json-real",
+        "mode": "file",
+        "bytes": 18704,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 17.521208,
+            "p95": 40.149,
+            "min": 14.938416999999994,
+            "max": 40.149
+          },
+          "load": {
+            "n": 12,
+            "median": 4.620625000000004,
+            "p95": 11.447874999999996,
+            "min": 4.084417000000002,
+            "max": 11.447874999999996
+          },
+          "render": {
+            "n": 12,
+            "median": 12.470749999999995,
+            "p95": 29.605791999999994,
+            "min": 10.853999999999992,
+            "max": 29.605791999999994
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 1.4553750000000036,
+          "p95": 7.632333000000017,
+          "min": 1.228459000000015,
+          "max": 8.789000000000001
+        }
+      },
+      {
+        "fixture": "json-100k",
+        "mode": "highlights",
+        "bytes": 102395,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 7.825707999999999,
+            "p95": 105.36862500000001,
+            "min": 5.612707999999998,
+            "max": 105.36862500000001
+          },
+          "load": {
+            "n": 12,
+            "median": 5.6150829999999985,
+            "p95": 55.61625000000001,
+            "min": 3.6373339999999956,
+            "max": 55.61625000000001
+          },
+          "render": {
+            "n": 12,
+            "median": 2.7915419999999926,
+            "p95": 49.752375,
+            "min": 1.8952079999999967,
+            "max": 49.752375
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.46479200000000276,
+          "p95": 0.6871249999999947,
+          "min": 0.3106250000000017,
+          "max": 2.0801249999999953
+        }
+      },
+      {
+        "fixture": "json-100k",
+        "mode": "file",
+        "bytes": 102395,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 39.967333,
+            "p95": 50.63312500000001,
+            "min": 36.606958,
+            "max": 50.63312500000001
+          },
+          "load": {
+            "n": 12,
+            "median": 4.707167000000027,
+            "p95": 5.300708,
+            "min": 4.071124999999995,
+            "max": 5.300708
+          },
+          "render": {
+            "n": 12,
+            "median": 35.6435,
+            "p95": 45.60495800000001,
+            "min": 32.233582999999996,
+            "max": 45.60495800000001
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 11.922583999999972,
+          "p95": 30.811499999999967,
+          "min": 7.139291999999955,
+          "max": 31.85012499999999
+        }
+      },
+      {
+        "fixture": "md-real",
+        "mode": "highlights",
+        "bytes": 6490,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 5.015709000000001,
+            "p95": 6.765874999999994,
+            "min": 4.450583000000002,
+            "max": 6.765874999999994
+          },
+          "load": {
+            "n": 12,
+            "median": 3.7399169999999984,
+            "p95": 4.937916999999999,
+            "min": 3.230792000000001,
+            "max": 4.937916999999999
+          },
+          "render": {
+            "n": 12,
+            "median": 1.2376250000000013,
+            "p95": 1.8279579999999953,
+            "min": 1.1792500000000032,
+            "max": 1.8279579999999953
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.038584000000000174,
+          "p95": 0.14399999999999125,
+          "min": 0.031374999999997044,
+          "max": 0.6177910000000111
+        }
+      },
+      {
+        "fixture": "md-real",
+        "mode": "file",
+        "bytes": 6490,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 17.897917000000007,
+            "p95": 169.73066599999999,
+            "min": 14.53433299999999,
+            "max": 169.73066599999999
+          },
+          "load": {
+            "n": 12,
+            "median": 6.611249999999998,
+            "p95": 138.034041,
+            "min": 4.415040999999988,
+            "max": 138.034041
+          },
+          "render": {
+            "n": 12,
+            "median": 11.362125000000006,
+            "p95": 31.696624999999983,
+            "min": 7.906207999999992,
+            "max": 31.696624999999983
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.8292080000000084,
+          "p95": 5.194458999999995,
+          "min": 0.32858299999999474,
+          "max": 10.173124999999999
+        }
+      },
+      {
+        "fixture": "md-100k",
+        "mode": "highlights",
+        "bytes": 100859,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 10.788207999999997,
+            "p95": 18.027333,
+            "min": 5.987082999999998,
+            "max": 18.027333
+          },
+          "load": {
+            "n": 12,
+            "median": 7.25545799999999,
+            "p95": 13.441833000000003,
+            "min": 4.161916000000005,
+            "max": 13.441833000000003
+          },
+          "render": {
+            "n": 12,
+            "median": 3.387999999999991,
+            "p95": 5.980124999999987,
+            "min": 1.8251669999999933,
+            "max": 5.980124999999987
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.509332999999998,
+          "p95": 1.1310000000000002,
+          "min": 0.27754200000001106,
+          "max": 5.150791999999996
+        }
+      },
+      {
+        "fixture": "md-100k",
+        "mode": "file",
+        "bytes": 100859,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 44.42441600000001,
+            "p95": 172.46004199999993,
+            "min": 23.068249999999992,
+            "max": 172.46004199999993
+          },
+          "load": {
+            "n": 12,
+            "median": 10.166792000000001,
+            "p95": 70.33420900000002,
+            "min": 5.051749999999998,
+            "max": 70.33420900000002
+          },
+          "render": {
+            "n": 12,
+            "median": 33.859042,
+            "p95": 128.83137499999998,
+            "min": 18.016499999999994,
+            "max": 128.83137499999998
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 3.489292000000006,
+          "p95": 7.454957999999991,
+          "min": 2.2306250000000034,
+          "max": 8.819208000000003
+        }
+      },
+      {
+        "fixture": "minjs-10k",
+        "mode": "highlights",
+        "bytes": 10061,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 11.342540999999983,
+            "p95": 12.798000000000002,
+            "min": 4.869541999999996,
+            "max": 12.798000000000002
+          },
+          "load": {
+            "n": 12,
+            "median": 7.9026250000000005,
+            "p95": 9.832958000000005,
+            "min": 3.4565839999999994,
+            "max": 9.832958000000005
+          },
+          "render": {
+            "n": 12,
+            "median": 2.399124999999998,
+            "p95": 4.240749999999991,
+            "min": 1.4129579999999962,
+            "max": 4.240749999999991
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.1267090000000053,
+          "p95": 0.6455839999999995,
+          "min": 0.09629200000000537,
+          "max": 2.0391660000000087
+        }
+      },
+      {
+        "fixture": "minjs-10k",
+        "mode": "file",
+        "bytes": 10061,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 16.307000000000002,
+            "p95": 52.255917,
+            "min": 11.855583000000003,
+            "max": 52.255917
+          },
+          "load": {
+            "n": 12,
+            "median": 5.976292000000001,
+            "p95": 37.02716699999999,
+            "min": 4.572749999999999,
+            "max": 37.02716699999999
+          },
+          "render": {
+            "n": 12,
+            "median": 10.571541999999994,
+            "p95": 15.734207999999995,
+            "min": 7.282833000000004,
+            "max": 15.734207999999995
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 0.18170800000000042,
+          "p95": 0.5085829999999874,
+          "min": 0.10795799999999645,
+          "max": 0.5608749999999958
+        }
+      },
+      {
+        "fixture": "minjs-100k",
+        "mode": "highlights",
+        "bytes": 101927,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 8.156584000000002,
+            "p95": 11.702791999999988,
+            "min": 7.124167,
+            "max": 11.702791999999988
+          },
+          "load": {
+            "n": 12,
+            "median": 4.007167000000003,
+            "p95": 5.584499999999991,
+            "min": 3.729875,
+            "max": 5.584499999999991
+          },
+          "render": {
+            "n": 12,
+            "median": 4.155042000000002,
+            "p95": 6.118291999999997,
+            "min": 3.394292,
+            "max": 6.118291999999997
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 1.024917000000002,
+          "p95": 1.945999999999998,
+          "min": 0.8095409999999958,
+          "max": 2.348875000000021
+        }
+      },
+      {
+        "fixture": "minjs-100k",
+        "mode": "file",
+        "bytes": 101927,
+        "cold": {
+          "total": {
+            "n": 12,
+            "median": 16.640290999999998,
+            "p95": 39.69425000000001,
+            "min": 13.814334000000002,
+            "max": 39.69425000000001
+          },
+          "load": {
+            "n": 12,
+            "median": 5.055957999999997,
+            "p95": 12.762792000000005,
+            "min": 4.2364999999999995,
+            "max": 12.762792000000005
+          },
+          "render": {
+            "n": 12,
+            "median": 10.770499999999998,
+            "p95": 26.931458000000006,
+            "min": 9.577834000000003,
+            "max": 26.931458000000006
+          }
+        },
+        "warm": {
+          "n": 30,
+          "median": 1.269291999999993,
+          "p95": 2.8020000000000067,
+          "min": 0.7812920000000076,
+          "max": 3.8406249999999886
+        }
+      }
+    ],
+    "firstScreen": [
+      {
+        "fixture": "ts-256k",
+        "bytes": 262084,
+        "lines": 6658,
+        "wholeFileTokens": {
+          "n": 10,
+          "median": 4.557207999999946,
+          "p95": 17.12008400000002,
+          "min": 2.6655000000000086,
+          "max": 17.12008400000002
+        },
+        "streamFirstScreen": {
+          "n": 10,
+          "median": 0.44429099999999266,
+          "p95": 0.8870419999999797,
+          "min": 0.30475000000001273,
+          "max": 0.8870419999999797
+        },
+        "streamCharsPushed": 16384,
+        "liveFirstScreen": {
+          "n": 10,
+          "median": 2.4599170000000186,
+          "p95": 16.227082999999993,
+          "min": 1.7094999999999914,
+          "max": 16.227082999999993
+        },
+        "liveFlushRest": {
+          "n": 10,
+          "median": 5.740584000000013,
+          "p95": 10.393624999999986,
+          "min": 3.971416999999974,
+          "max": 10.393624999999986
+        },
+        "coldImportPlusStreamFirstScreen": {
+          "n": 12,
+          "median": 7.338708999999994,
+          "p95": 26.015500000000003,
+          "min": 6.292749999999998,
+          "max": 26.015500000000003
+        },
+        "coldImportOnly": {
+          "n": 12,
+          "median": 4.288249999999991,
+          "p95": 11.760125000000002,
+          "min": 3.6437919999999906,
+          "max": 11.760125000000002
+        }
+      },
+      {
+        "fixture": "ts-1024k",
+        "bytes": 1048576,
+        "lines": 27129,
+        "wholeFileTokens": {
+          "n": 10,
+          "median": 18.56758400000001,
+          "p95": 108.84924999999998,
+          "min": 12.444500000000062,
+          "max": 108.84924999999998
+        },
+        "streamFirstScreen": {
+          "n": 10,
+          "median": 0.47858300000001464,
+          "p95": 1.4858750000000214,
+          "min": 0.3675420000000713,
+          "max": 1.4858750000000214
+        },
+        "streamCharsPushed": 16384,
+        "liveFirstScreen": {
+          "n": 10,
+          "median": 7.052999999999997,
+          "p95": 15.714832999999999,
+          "min": 5.238040999999953,
+          "max": 15.714832999999999
+        },
+        "liveFlushRest": {
+          "n": 10,
+          "median": 19.755750000000035,
+          "p95": 56.88262500000002,
+          "min": 16.662458000000015,
+          "max": 56.88262500000002
+        },
+        "coldImportPlusStreamFirstScreen": {
+          "n": 12,
+          "median": 7.469999999999999,
+          "p95": 16.21766600000001,
+          "min": 6.449458,
+          "max": 16.21766600000001
+        },
+        "coldImportOnly": {
+          "n": 12,
+          "median": 4.296666999999999,
+          "p95": 12.257000000000005,
+          "min": 3.735875,
+          "max": 12.257000000000005
+        }
+      }
+    ]
+  },
+  "bundle": {
+    "server": {
+      "webOnly": {
+        "totalKiB": 1438.49,
+        "gzipKiB": 310.46
+      },
+      "withRenderer": {
+        "upload": {
+          "totalKiB": 13071.88,
+          "gzipKiB": 2272.46
+        },
+        "rendererModule": {
+          "bytes": 11728915,
+          "gzipBytes": 1921495
+        },
+        "wasmModule": {
+          "bytes": 183180,
+          "gzipBytes": 85886
+        }
+      },
+      "withRendererNoShiki": {
+        "upload": {
+          "totalKiB": 2444.21,
+          "gzipKiB": 504.85
+        },
+        "rendererModule": {
+          "bytes": 846175,
+          "gzipBytes": 112805
+        },
+        "wasmModule": {
+          "bytes": 183180,
+          "gzipBytes": 85886
+        }
+      }
+    },
+    "client": {
+      "fileDiffAlone": {
+        "bytes": 339211,
+        "gzipBytes": 93957
+      },
+      "fileDiffInitial": {
+        "bytes": 403522,
+        "gzipBytes": 110534
+      },
+      "fileInitial": {
+        "bytes": 403518,
+        "gzipBytes": 110530
+      },
+      "bothInitial": {
+        "bytes": 403749,
+        "gzipBytes": 110672
+      },
+      "firstTimeAdded": {
+        "bytes": 64538,
+        "gzipBytes": 16715
+      },
+      "fileDiffGrowth": {
+        "bytes": 64311,
+        "gzipBytes": 16577
+      },
+      "perNavigation": {
+        "bytes": 227,
+        "gzipBytes": 138
+      },
+      "fileLazy": {
+        "bytes": 11063608,
+        "gzipBytes": 2145781
+      },
+      "fileHighlightsChunks": {
+        "bytes": 522211,
+        "gzipBytes": 194638
+      },
+      "shippedJs": {
+        "bytes": 23164731,
+        "gzipBytes": 5064936
+      },
+      "shippedWasm": {
+        "bytes": 0,
+        "gzipBytes": 0
+      },
+      "workerChunks": [
+        {
+          "name": "worker-D2BMDDs9.js",
+          "bytes": 46276,
+          "gzipBytes": 15689
+        }
+      ]
+    }
+  }
+}

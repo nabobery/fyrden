@@ -115,13 +115,16 @@ describe("issues in the web UI", () => {
 
   it("clears the filter fields with the filters", async () => {
     await visit(page, `${stack.origin}/${handle}/${name}/issues`);
-    await page.getByText("Filters").click();
+    // The disclosure, exactly: "Clear filters" matches the text too while it is shown.
+    await page.getByText("Filters", { exact: true }).click();
     await page.getByLabel(/^Labels/).fill("bug");
     await page.getByRole("button", { name: "Filter" }).click();
     await see(page).toHaveURL(/labels=bug/);
     await page.getByRole("link", { name: "Clear filters" }).click();
     await see(page).not.toHaveURL(/labels=/);
-    await page.getByText("Filters").click();
+    // The URL changes before the list is drawn again: wait for the filtered page to go.
+    await see(page.getByRole("link", { name: "Clear filters" })).toHaveCount(0);
+    await page.getByText("Filters", { exact: true }).click();
     await see(page.getByLabel(/^Labels/)).toHaveValue("");
     await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
   });
