@@ -228,3 +228,76 @@ export const getTree = defineOperation({
     readOnly: true,
   },
 });
+
+export const listPaths = defineOperation({
+  id: "repos.paths.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/paths",
+  summary: "List a tree's file paths",
+  description:
+    "Every file path of a branch, tag or commit, in git's order and in pages: files, symlinks and submodules, no directories. Loop until `next_cursor` is null, then read `state`. A page may be short or even empty and still have a next one. `complete` comes only on the last page; `incomplete` with a reason other than `more_pages` is true as far as it goes but will never be whole (the rest of the tree is not described); `unavailable` is an answer to try again later (`busy`: after `retry_after_ms`, with the same cursor). Names that are not valid UTF-8 are left out and counted in each page's `unlisted_names`.",
+  input: z.object({
+    owner: Owner,
+    repo: Repo,
+    ref: Ref,
+    cursor: z
+      .string()
+      .max(8192)
+      .optional()
+      .describe("From a previous page's `next_cursor`; it pins the commit, so `ref` is ignored."),
+    per_page: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10_000)
+      .default(1000)
+      .describe("Paths per page at most, 1-10000; a page can hold fewer."),
+  }),
+  output: z.object({
+    commit: Sha.describe("The commit listed."),
+    tree: Sha.describe("Its root tree."),
+    state: z.enum(["complete", "incomplete", "unavailable"]),
+    reason: z
+      .enum([
+        "more_pages",
+        "too_many_paths",
+        "too_many_bytes",
+        "tree_too_large",
+        "too_deep",
+        "path_too_long",
+        "malformed_tree",
+        "too_much_work",
+        "busy",
+        "unreadable",
+      ])
+      .nullable()
+      .describe("Why the answer is not `complete`; null when it is."),
+    paths: z.array(z.string()),
+    visited: z.number().int().describe("Paths passed so far, this page's and left-out ones too."),
+    total_paths: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Every path, left-out ones too, when a finished stored list knows it; else null."),
+    unlisted_names: z
+      .number()
+      .int()
+      .describe("Names left out of this page because they are not valid UTF-8; add them up."),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` for the next page; null when there is no next one."),
+    retry_after_ms: z.number().int().nullable().describe("With `busy`: how long to wait."),
+  }),
+  permission: "contents:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_paths",
+    title: "List every file path",
+    description:
+      "Every file path of a branch, tag or commit, in pages; use list_files for modes and SHAs.",
+    readOnly: true,
+  },
+});

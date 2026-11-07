@@ -51,6 +51,7 @@ const CASES: Record<
   "repos.contents.root": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.readme.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.trees.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  "repos.paths.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.archives.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
   "repos.forks.list": { input: {}, expected: { status: 200 } },
   // To its own owner: refused after authorization, with its own code.

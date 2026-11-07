@@ -118,6 +118,7 @@ import {
   getTreeOperation,
   listBranchesOperation,
   listCommitsOperation,
+  listPathsOperation,
   listTagsOperation,
 } from "../repos/browse.js";
 import {
@@ -659,6 +660,7 @@ export const handlers: Handlers = {
   "repos.readme.get": getReadmeOperation,
   "repos.codeowners.errors": getCodeOwnersErrorsOperation,
   "repos.trees.get": getTreeOperation,
+  "repos.paths.list": listPathsOperation,
   "repos.archives.get": getArchiveOperation,
 
   // File writes (repos/file-writes).

@@ -11,11 +11,13 @@ import type {
   Input,
   listBranches,
   listCommits,
+  listPaths,
   listTags,
   Output,
 } from "@fyrden/api-contract";
 import type { Browsed } from "../do/repo/browse.js";
 import type { ContentsView, DirCursor } from "../do/repo/contents.js";
+import type { PathCursor } from "../do/repo/path-lists.js";
 import { repoFor } from "../git/chunked/operations.js";
 import {
   decodeBytesCursor,
@@ -309,6 +311,87 @@ export async function getTreeOperation(
   const recursive = input.recursive === "1" || input.recursive === "true";
   const listing = value(await stub.browseTree(input.tree_sha, recursive));
   return { sha: listing.sha, tree: listing.entries, truncated: listing.truncated };
+}
+
+/** The longest path a cursor may name (`DEFAULT_MAX_PATH_BYTES`). */
+const MAX_CURSOR_PATH_BYTES = 4096;
+const HEX_COMMIT = /^[0-9a-f]{40}$/;
+const CURSOR_KEYS = ["b", "c", "n", "w"];
+
+function encodePathCursor(cursor: object | null): string | null {
+  return cursor && encodeBytesCursor(new TextEncoder().encode(JSON.stringify(cursor)));
+}
+
+/**
+ * A path list's cursor, checked for shape only: its numbers and names change
+ * only what its own caller is told, and its commit is resolved like any ref.
+ */
+function decodePathCursor(cursor: string): PathCursor {
+  const bytes = decodeBytesCursor(cursor);
+  let value: unknown;
+  try {
+    value =
+      bytes && JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes));
+  } catch {
+    throw invalidCursor();
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw invalidCursor();
+  const { c, n, b, w } = value as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === "number" && Number.isSafeInteger(x) && x >= 0;
+  if (
+    Object.keys(value).sort().join() !== CURSOR_KEYS.join() ||
+    typeof c !== "string" ||
+    !HEX_COMMIT.test(c) ||
+    !count(n) ||
+    !count(b) ||
+    !(w === null || validPosition(w))
+  )
+    throw invalidCursor();
+  return value as PathCursor;
+}
+
+/** `[base64 of a path's bytes, kind]`: 0 a file handled, 1 a directory handled, 2 one to enter. */
+function validPosition(w: unknown): boolean {
+  if (!Array.isArray(w) || w.length !== 2 || typeof w[0] !== "string") return false;
+  if (w[1] !== 0 && w[1] !== 1 && w[1] !== 2) return false;
+  let text: string;
+  try {
+    text = atob(w[0]);
+  } catch {
+    return false;
+  }
+  if (text.length === 0 || text.length > MAX_CURSOR_PATH_BYTES) return false;
+  if (text.includes("\0")) return false;
+  return text.split("/").every((name) => name.length > 0);
+}
+
+/** The `repos.paths.list` operation. */
+export async function listPathsOperation(
+  ctx: OpContext,
+  input: Input<typeof listPaths>,
+): Promise<Output<typeof listPaths>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  const cursor = input.cursor === undefined ? undefined : decodePathCursor(input.cursor);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "browsePaths" });
+  const page = value(
+    await stub.browsePaths({
+      ...(input.ref !== undefined && { ref: input.ref }),
+      ...(cursor && { cursor }),
+      perPage: input.per_page,
+    }),
+  );
+  return {
+    commit: page.commit,
+    tree: page.tree,
+    state: page.state,
+    reason: page.reason,
+    paths: page.paths,
+    visited: page.visited,
+    total_paths: page.totalPaths,
+    unlisted_names: page.unlistedNames,
+    next_cursor: encodePathCursor(page.next),
+    retry_after_ms: page.retryAfterMs,
+  };
 }
 
 /** The `repos.archives.get` operation: starts or finds the archive, and links the download route. */

@@ -562,6 +562,27 @@ CREATE TABLE packs (
     superseded_at INTEGER,
     condemned_at INTEGER
   ) STRICT;
+CREATE TABLE path_list_segments (
+        tree_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        first INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        body BLOB NOT NULL,
+        PRIMARY KEY (tree_sha, limits, first)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE path_lists (
+        tree_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('building', 'complete', 'capped', 'walk_only')),
+        reason TEXT,
+        cursor TEXT,
+        visited INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        slices INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        PRIMARY KEY (tree_sha, limits)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE pending_commits (
     upload_id TEXT NOT NULL,
     oid BLOB NOT NULL CHECK (length(oid) = 20),

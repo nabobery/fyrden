@@ -482,6 +482,52 @@ network has is not found.
 | Names that are not valid UTF-8 | Shown with replacement characters; such a file cannot be asked for by path (clone the repository) |
 | A directory page's cursor | Valid for that version of the directory; after the branch moves it answers `cursor_stale` |
 
+## File path lists
+
+`GET /repos/{owner}/{repo}/paths` (the `list_paths` MCP tool) lists every file
+path of a branch, tag or commit, in git's order, in pages: files, symlinks and
+submodules, no directories. Loop until `next_cursor` is null, then read
+`state`. A cursor holds the commit and the last path it consumed, so it resumes
+the walk by itself: stored lists only save work, and losing one never changes
+an answer. The SDK's `paginate` does not offer this operation, since it yields
+items alone and would hide `state`, `reason` and `retry_after_ms`: loop over
+`call`. Every value is Proposed.
+
+| What | Value |
+|---|---|
+| Page size | 1 to 10,000 paths, default 1,000. A page also ends at a slice's end or at 1 MiB of JSON, escapes counted, so it may be shorter or empty; it holds one path at least |
+| Paths in one list | 200,000; more answers `incomplete`, `too_many_paths`. A tree of exactly 200,000 is `complete` |
+| Bytes in one list | 16 MiB, each path charging its length plus one, left-out names too; more answers `too_many_bytes` |
+| The longest path | 4,096 bytes; longer answers `path_too_long` |
+| Directories deep | 64; deeper answers `too_deep` |
+| The largest tree | 1 MiB, about 37,000 entries in one directory; larger answers `tree_too_large` |
+| One slice | 10,000 paths, 512 KiB of them, 200,000 tree entries, 2 MiB of trees, about 400 R2 reads (800 at most) and 64 MiB of objects built, whichever comes first |
+| A malformed tree | One with names out of git's order, a duplicate name or a name holding a slash, which a push refuses: `incomplete`, `malformed_tree`, with the paths before it. A cursor's seek needs that order, and without it a walk could go round for ever |
+| A cursor that cannot move | `too_much_work`, when its own path costs more than one slice may spend; it may depend on cached blocks, so a later open can get further |
+| `busy` | The object's memory is taken: no paths, the same cursor, `retry_after_ms` 500; retry three times at most |
+| `unreadable` | An object cannot be read now; nothing is stored as final, and a later open tries again |
+| Stored lists | In the repository's object, for the default branch's tip only, 2 lists and 32 MiB a repository, the oldest evicted first; erased with the repository. A list finishing in its first slice having read fewer than 16 trees is not stored. A build stops growing after 256 slices, and answers go on by walking |
+| Other branches, tags and commits | Walked on each open; they write nothing, so reads cannot spend the day's row writes |
+| Cost, page from a stored list | One Durable Object request, 2 rows read in these tables, no row written, no R2 read (beside the access check and the ref's lookup) |
+| Cost, stored slice | 2 rows written and at most 5 rows read in these tables, and its R2 reads; evicting a list of N segments writes N + 1 more |
+| Names that are not valid UTF-8 | Left out, and counted per page in `unlisted_names`: they cannot be opened by path, and two can decode to one string |
+| A write that fails | Costs the stored list, never the answer: logged, and counted as `do.rows_written` with `op` `path_lists.write_failed`. Each failure so adds one to a sum of that metric over every `op`, so read `path_lists.write` for rows written |
+| A cursor's length | About 7.4 KiB at most (for a 4,096-byte path); the input accepts 8,192 characters |
+| `total_paths` | Known only from a finished, complete stored list; a capped list does not know how many paths lie beyond it |
+
+**A limit on what is listed:** a tree over a cap is `incomplete`, listing only
+its first paths in git's order, and nothing tells a reader what lies beyond
+them.
+
+Peeling an annotated tag, before there is any commit to answer about, keeps the
+errors of other browse requests: `409 busy`, `422 too_expensive`.
+
+Measured or verified so far: none of these against a deployed Worker. The
+declared workload, 30,000 files across 600 directories
+(`tools/bench/path-finder/wide-30k.ts`), is asserted locally as work, not time:
+3 slices, 6 rows written on the first open, nothing written and no R2 read on
+later ones.
+
 ## Archives
 
 `GET /repos/{owner}/{repo}/tarball[/{ref}]` and `/zipball[/{ref}]` serve a
@@ -668,7 +714,7 @@ shared after that.
 
 | What | Value |
 |---|---|
-| Tools | 77; `tools/list` answers about 161 KB |
+| Tools | 78; `tools/list` answers about 161 KB |
 | Browser requests | Only from the deployment's own hosts (`Origin`, against DNS rebinding): on `workers.dev`, both Fyrden Workers on the request's account subdomain; the hosts in `FYRDEN_OWN_HOSTS`; loopback. Native clients send no `Origin` |
 | Request body | 8 MiB, as REST |
 | CPU per request | **Measured** on Workers Free (2026-10-14, `wrangler tail`): `tools/list` 5 ms on a warm isolate with 63 tools (45 to 160 ms before tool schemas were converted once per isolate); `whoami` 32 ms and `resources/read` 16 ms (measured before that change) |

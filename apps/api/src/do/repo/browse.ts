@@ -11,6 +11,7 @@ import {
   mergeBases,
   type ObjectReader,
   type Oid,
+  oidEquals,
   oidFromHex,
   oidToHex,
   type PathEntryLookup,
@@ -377,6 +378,13 @@ export class RepoBrowse {
     const [row] = this.deps.git.commitGraph.readSync([resolved.value], "verified");
     if (!row) return refNotFound(ref ?? "");
     return { ok: true, value: { commit: resolved.value, tree: row.tree } };
+  }
+
+  /** Whether `commit` is the default branch's tip right now. */
+  isDefaultTip(commit: Oid): boolean {
+    const snapshot = this.deps.git.refStore.readRefsSync();
+    const head = snapshot.head ? snapshot.refs.get(snapshot.head) : undefined;
+    return head !== undefined && oidEquals(head, commit);
   }
 
   /** Runs `use` with this request's reader (see `#withReader`). */

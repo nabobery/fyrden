@@ -78,11 +78,19 @@ function jsonSchema(schema: z.ZodType, io: "input" | "output"): Schema {
 }
 
 /**
+ * Operations paged with `call`, not `paginate`, which yields items alone: a
+ * path list's `state`, `reason` and `retry_after_ms` say how it ended, or how
+ * long to wait, and hiding them would pass a truncated list off as whole.
+ */
+const NOT_ITEM_PAGED: ReadonlySet<string> = new Set(["repos.paths.list"]);
+
+/**
  * The array property a paginated output carries beside `next_cursor`, if
  * it is one: in the output itself, or in one variant of a union (a
  * directory among a path's contents).
  */
 function pageItems(op: OperationDef): string | undefined {
+  if (NOT_ITEM_PAGED.has(op.id)) return undefined;
   const input = jsonSchema(op.input, "input");
   const inProps = (input.properties ?? {}) as Record<string, Schema>;
   if (!("cursor" in inProps)) return undefined;

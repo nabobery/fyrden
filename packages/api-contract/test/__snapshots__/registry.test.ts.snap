@@ -23799,6 +23799,207 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/paths": {
+      "get": {
+        "description": "Every file path of a branch, tag or commit, in git's order and in pages: files, symlinks and submodules, no directories. Loop until \`next_cursor\` is null, then read \`state\`. A page may be short or even empty and still have a next one. \`complete\` comes only on the last page; \`incomplete\` with a reason other than \`more_pages\` is true as far as it goes but will never be whole (the rest of the tree is not described); \`unavailable\` is an answer to try again later (\`busy\`: after \`retry_after_ms\`, with the same cursor). Names that are not valid UTF-8 are left out and counted in each page's \`unlisted_names\`.",
+        "operationId": "repos.paths.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, a tag or a full commit SHA; the default branch when absent.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`; it pins the commit, so \`ref\` is ignored.",
+              "maxLength": 8192,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "description": "Paths per page at most, 1-10000; a page can hold fewer.",
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "commit": {
+                      "description": "The commit listed.",
+                      "type": "string",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null when there is no next one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "paths": {
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "reason": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "more_pages",
+                            "too_many_paths",
+                            "too_many_bytes",
+                            "tree_too_large",
+                            "too_deep",
+                            "path_too_long",
+                            "malformed_tree",
+                            "too_much_work",
+                            "busy",
+                            "unreadable",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Why the answer is not \`complete\`; null when it is.",
+                    },
+                    "retry_after_ms": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "With \`busy\`: how long to wait.",
+                    },
+                    "state": {
+                      "enum": [
+                        "complete",
+                        "incomplete",
+                        "unavailable",
+                      ],
+                      "type": "string",
+                    },
+                    "total_paths": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Every path, left-out ones too, when a finished stored list knows it; else null.",
+                    },
+                    "tree": {
+                      "description": "Its root tree.",
+                      "type": "string",
+                    },
+                    "unlisted_names": {
+                      "description": "Names left out of this page because they are not valid UTF-8; add them up.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "visited": {
+                      "description": "Paths passed so far, this page's and left-out ones too.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "commit",
+                    "tree",
+                    "state",
+                    "reason",
+                    "paths",
+                    "visited",
+                    "total_paths",
+                    "unlisted_names",
+                    "next_cursor",
+                    "retry_after_ms",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List a tree's file paths",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/pulls": {
       "get": {
         "description": "The repository's pull requests, newest first.",
