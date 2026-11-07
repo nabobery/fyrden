@@ -64,6 +64,11 @@ describe("Fjord", () => {
       expect(contrast(scheme.page.accentFg, accent)).toBeGreaterThanOrEqual(4.5);
     });
 
+    it("page text stays readable on a selected row", () => {
+      expect(contrast(scheme.page.fg, scheme.diff.selected)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(scheme.page.accent, scheme.diff.selected)).toBeGreaterThanOrEqual(3);
+    });
+
     it("line numbers and change markers stay readable on the line fills", () => {
       const { muted, ok, danger } = scheme.page;
       const { added, removed, selected } = scheme.diff;

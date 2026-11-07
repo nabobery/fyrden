@@ -1,5 +1,6 @@
 import type { getCodeOwnersErrors, Output } from "@fyrden/api-contract";
 import { data, Link, redirect } from "react-router";
+import { FileFinder } from "../components/file-finder.js";
 import { FilePreview } from "../components/file-preview.js";
 import { NumberedFile } from "../components/file-view.js";
 import { Markdown } from "../components/markdown.js";
@@ -160,6 +161,7 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         </span>
       </h1>
       <div className="row">
+        <FileFinder owner={owner} repo={repo} gitRef={ref} />
         {kind === "file" && file.state !== "too-large-for-raw" && (
           <a className="button" href={rawBytesUrl(owner, repo, ref, path)}>
             Raw
