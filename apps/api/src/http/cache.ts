@@ -17,10 +17,15 @@ export function notModified(
   const condition = request.headers.get("If-None-Match");
   if (condition === null || (request.method !== "GET" && request.method !== "HEAD"))
     return undefined;
-  const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
-  const matches =
-    condition.trim() === "*" || condition.split(",").some((tag) => opaque(tag) === opaque(etag));
-  return matches
+  return matchesIfNoneMatch(condition, etag)
     ? new Response(null, { status: 304, headers: { ...headers, ETag: etag } })
     : undefined;
+}
+
+/** An `If-None-Match` value against `etag`: weak comparison, `*` for any. */
+export function matchesIfNoneMatch(condition: string, etag: string): boolean {
+  const opaque = (tag: string) => tag.trim().replace(/^W\//, "");
+  return (
+    condition.trim() === "*" || condition.split(",").some((tag) => opaque(tag) === opaque(etag))
+  );
 }

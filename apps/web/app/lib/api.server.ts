@@ -35,18 +35,48 @@ function forwarded(request: Request): Headers {
   return headers;
 }
 
+/** For a download that resumes, is revalidated and answers HEAD: a request's own conditions. */
+export const ASSET_DOWNLOAD = {
+  forward: [
+    "Range",
+    "If-Range",
+    "If-Match",
+    "If-None-Match",
+    "If-Modified-Since",
+    "If-Unmodified-Since",
+  ],
+  expose: [
+    "Content-Range",
+    "Accept-Ranges",
+    "Last-Modified",
+    "X-Frame-Options",
+    "Cross-Origin-Resource-Policy",
+  ],
+} as const;
+
 /**
  * A download from the API (raw file bytes, an archive) as the browser gets
  * it: the API's own headers (its type, `nosniff`, a sandboxing CSP, the
- * attachment name) and status, streamed.
+ * attachment name) and status, streamed. `resumable` passes on what a
+ * resumable download needs; without it nothing of that goes either way, since
+ * forwarding `If-None-Match` would turn a raw file's 200 into a 304.
  */
 export async function apiDownload(
   context: Readonly<RouterContextProvider>,
   request: Request,
   path: string,
+  resumable?: typeof ASSET_DOWNLOAD,
 ): Promise<Response> {
+  const sent = forwarded(request);
+  for (const name of resumable?.forward ?? []) {
+    const value = request.headers.get(name);
+    if (value !== null) sent.set(name, value);
+  }
   const res = await binding(context).fetch(
-    new Request(`${new URL(request.url).origin}/api${path}`, { headers: forwarded(request) }),
+    new Request(`${new URL(request.url).origin}/api${path}`, {
+      method: resumable ? request.method : "GET",
+      headers: sent,
+    }),
   );
   const headers = new Headers();
   for (const name of [
@@ -57,6 +87,7 @@ export async function apiDownload(
     "Content-Security-Policy",
     "ETag",
     "Retry-After",
+    ...(resumable?.expose ?? []),
   ]) {
     const value = res.headers.get(name);
     if (value !== null) headers.set(name, value);

@@ -33,21 +33,36 @@ export function isApiPath(path: string): boolean {
   );
 }
 
+const RELEASE_DOWNLOAD = /^\/[^/]+\/[^/]+\/releases\/download\/./i;
+
+/** Whether React Router would take `path` for a release's download: it ignores case and decodes. */
+function isReleaseDownload(path: string): boolean {
+  try {
+    // decodeURI leaves an encoded slash encoded, so a segment stays one segment.
+    return RELEASE_DOWNLOAD.test(decodeURI(path));
+  } catch {
+    // A bad escape: React Router then matches the path as it stands.
+    return RELEASE_DOWNLOAD.test(path);
+  }
+}
+
 /**
  * Where a browser opening `url` must go instead: React Router takes any
  * path ending in `.data` for its own data request (it strips the suffix),
  * so a page whose last segment ends so (a file `notes.data`, a repository
  * `demo.data`) is opened with a trailing slash, which the pages ignore.
- * Its own data requests are fetches, never navigations.
+ * Its own data requests are fetches, never navigations. A release's download
+ * is moved whatever asks for it, HEAD too: it is a resource with no page, so
+ * no data request targets it, and a client's fetch must not get a data
+ * response's 200 in place of the file.
  */
 export function dataSuffixRedirect(request: Request): Response | undefined {
   const url = new URL(request.url);
-  if (
-    request.method !== "GET" ||
-    request.headers.get("Sec-Fetch-Mode") !== "navigate" ||
-    !url.pathname.endsWith(".data")
-  )
-    return undefined;
+  if (!url.pathname.endsWith(".data")) return undefined;
+  const moved = isReleaseDownload(url.pathname)
+    ? request.method === "GET" || request.method === "HEAD"
+    : request.method === "GET" && request.headers.get("Sec-Fetch-Mode") === "navigate";
+  if (!moved) return undefined;
   url.pathname = `${url.pathname}/`;
   return Response.redirect(url.toString(), 308);
 }
