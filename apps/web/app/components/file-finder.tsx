@@ -7,9 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation, useNavigate } from "react-router";
 import {
-  countLine,
+  countParts,
   isComposingKey,
   listNotice,
   PathLoader,
@@ -69,6 +69,7 @@ export function FileFinder({
   const at = encodeURIComponent(gitRef);
   const treeHref = `${base}/tree/${at}/`;
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const [loader, setLoader] = useState<PathLoader | null>(null);
@@ -77,6 +78,7 @@ export function FileFinder({
   const [chosen, setChosen] = useState<string | null>(null);
   const [shortcut, setShortcut] = useState(true);
   const stop = useRef<AbortController | null>(null);
+  const listedAt = useRef<string | null>(null);
 
   // Another ref or repository is another list, which opening the dialog again starts.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these name the list being dropped
@@ -98,10 +100,13 @@ export function FileFinder({
     setChosen(null);
     box.showModal();
     input.current?.focus();
-    if (loader) {
+    // Another page may mean the branch has moved: only this page's list is kept for reopening.
+    if (loader && listedAt.current === pathname) {
       void loader.resume();
       return;
     }
+    stop.current?.abort();
+    listedAt.current = pathname;
     const controller = new AbortController();
     stop.current = controller;
     const { signal } = controller;
@@ -185,6 +190,7 @@ export function FileFinder({
   }
 
   const notice = loader && listNotice(loader);
+  const parts = loader && countParts({ status: loader.status, query, shown: shown.length, total });
   return (
     <>
       <a
@@ -234,8 +240,9 @@ export function FileFinder({
           }}
           onKeyDown={onKeyDown}
         />
-        <p role="status" className="muted file-finder-count">
-          {loader ? countLine({ status: loader.status, query, shown: shown.length, total }) : ""}
+        <p className="muted file-finder-count">
+          <span role="status">{parts?.live}</span>
+          {parts?.quiet ? ` ${parts.quiet}` : null}
         </p>
         <p role="status" className="file-finder-notice">
           {notice?.text}
@@ -256,9 +263,17 @@ export function FileFinder({
           </p>
         )}
         {shown.length > 0 && (
-          <div id="file-finder-list" role="listbox" aria-label="Matching files">
+          // Out of the tab order, where browsers put a scrolling box. A press anywhere on it,
+          // its scrollbar too, leaves focus in the input, which takes the keys.
+          <div
+            id="file-finder-list"
+            role="listbox"
+            aria-label="Matching files"
+            tabIndex={-1}
+            onMouseDown={(event) => event.preventDefault()}
+          >
             {shown.map((path, i) => (
-              // The input keeps focus and takes the keys: a click only chooses.
+              // A click only chooses.
               // biome-ignore lint/a11y/useKeyWithClickEvents: the combobox's input takes the keys
               // biome-ignore lint/a11y/useFocusableInteractive: focus stays in the input, by `aria-activedescendant`
               <div
@@ -266,7 +281,6 @@ export function FileFinder({
                 id={optionId(i)}
                 role="option"
                 aria-selected={i === active}
-                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => go(path)}
               >
                 {path}

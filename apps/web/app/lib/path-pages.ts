@@ -299,15 +299,14 @@ export function listNotice(
     return { text: left ? `${said} ${left}` : said, retry: true, browse: true };
   }
   if (status === "partial") {
-    const said =
-      "This list isn't whole yet: this tree takes many requests to read. Continue loading, or browse folders.";
+    const said = "This list isn't whole yet: this tree takes many requests to read.";
     return { text: left ? `${said} ${left}` : said, retry: true, browse: true, continues: true };
   }
   if (status === "truncated") {
     const size = list.index.size;
     const start = size === 0 ? "No files can be shown" : `Showing the first ${number(size)} files`;
     const why = STOPPED[reason ?? ""] ?? ": the rest of this list can't be read.";
-    const said = `${start}${why} Browse folders to find the rest.`;
+    const said = `${start}${why}`;
     return { text: left ? `${said} ${left}` : said, retry: false, browse: true };
   }
   return left ? { text: left, retry: false, browse: false } : null;
@@ -321,18 +320,42 @@ export interface CountInput {
   readonly total: number;
 }
 
-/** The line that says how much of the list or its matches is shown. */
-export function countLine({ status, query, shown, total }: CountInput): string {
-  const growing = status === "loading" || status === "waiting";
-  const unfinished = growing || status === "paused" || status === "partial";
+/** The two halves of the count line. */
+export interface CountParts {
+  /** For the live region, so it mustn't change with every page of a list. */
+  readonly live: string;
+  /** Shown beside it, and said by no one until someone reads it. */
+  readonly quiet: string;
+}
+
+/**
+ * The line that says how much of the list or its matches is shown. While the list grows the
+ * live region says "Loading…" once and the outcome once: a list can take 64 pages and more,
+ * and a screen reader would read out a count for each.
+ */
+export function countParts(input: CountInput): CountParts {
+  const { status, query, shown, total } = input;
+  if (status !== "loading" && status !== "waiting") return { live: countLine(input), quiet: "" };
+  return { live: "Loading…", quiet: progress(query, shown, total) };
+}
+
+function progress(query: string, shown: number, total: number): string {
+  const first = `showing the first ${number(shown)} of ${number(total)}`;
+  if (query.trim() === "") {
+    if (total === 0) return "";
+    if (shown < total) return `${first} files so far`;
+    return total === 1 ? "1 file so far" : `${number(total)} files so far`;
+  }
+  if (total === 0) return "no files match so far";
+  if (shown < total) return `${first} matches so far`;
+  return total === 1 ? "1 file matches so far" : `${number(total)} files match so far`;
+}
+
+function countLine({ status, query, shown, total }: CountInput): string {
+  const unfinished = status === "paused" || status === "partial";
   const soFar = unfinished ? " so far" : "";
   if (query.trim() === "") {
     if (status === "unavailable" && total === 0) return "";
-    if (growing && total === 0) return "Loading…";
-    if (growing)
-      return shown < total
-        ? `Loading… showing the first ${number(shown)} of ${number(total)} files so far`
-        : `Loading… ${number(total)} files so far`;
     if (total === 0) return `No files${soFar}`;
     if (shown < total)
       return `Showing the first ${number(shown)} of ${number(total)} files${soFar || ". Type to narrow them."}`;

@@ -500,6 +500,7 @@ many there are; drawing 100 rows costs about a tenth of a search over 200,000
 paths at 4x CPU throttling, and 1,000 about as much as the search (measured in
 Chromium). It waits `retry_after_ms` on `busy`, up to three times, then offers
 Retry. It stops asking when its dialog closes, and goes on when it opens again.
+Opened on another page, it reads the list again, since the branch may have moved.
 A list takes at most 64 requests before it says it isn't whole yet and waits for
 Continue loading, since a tree of endless empty directories reaches no cap. Long
 lists can need it too: names of control characters at both caps take about 97

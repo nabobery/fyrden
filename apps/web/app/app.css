@@ -426,6 +426,8 @@ main.wide {
 dialog.file-finder {
   width: min(48rem, calc(100vw - 2rem));
   max-height: calc(100vh - 2rem);
+  /* Not centred: the input would move as results come and go. */
+  margin-top: 1rem;
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -456,8 +458,9 @@ dialog.file-finder::backdrop {
 .file-finder-notice {
   margin: 0.5rem 0 0;
 }
+/* Takes no room, but stays a live region: one that appears along with its text may go unheard. */
 .file-finder-notice:empty {
-  display: none;
+  margin: 0;
 }
 .file-finder [role="listbox"] {
   margin: 0.5rem 0 0;

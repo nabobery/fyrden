@@ -4,7 +4,7 @@
 import { listPaths } from "@fyrden/api-contract";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  countLine,
+  countParts,
   isComposingKey,
   listNotice,
   PATH_REQUEST_BUDGET,
@@ -308,7 +308,7 @@ describe("a list that goes on and on", () => {
     expect(notice?.retry).toBe(true);
     expect(notice?.continues).toBe(true);
     expect(notice?.browse).toBe(true);
-    expect(notice?.text).toContain("isn't whole yet");
+    expect(notice?.text).toBe("This list isn't whole yet: this tree takes many requests to read.");
     await loader.retry();
     expect(queries).toHaveLength(2 * PATH_REQUEST_BUDGET);
     expect(queries.at(-1)?.cursor).toBe(`c${2 * PATH_REQUEST_BUDGET - 1}`);
@@ -407,7 +407,7 @@ describe("a list that goes on and on", () => {
 
   it("says how much it has so far", () => {
     const line = (query: string, shown: number, total: number) =>
-      countLine({ status: "partial", query, shown, total });
+      countParts({ status: "partial", query, shown, total }).live;
     expect(line("", 2, 2)).toBe("2 files so far");
     expect(line("", 100, 300)).toBe("Showing the first 100 of 300 files so far");
     expect(line("", 0, 0)).toBe("No files so far");
@@ -692,13 +692,13 @@ describe("what a person is told", () => {
 
   it("tells a cap and a malformed tree what is shown and where the rest is", async () => {
     expect(listNotice(await ended("too_many_paths"))).toEqual({
-      text: "Showing the first 1,234 files; this repository has more. Browse folders to find the rest.",
+      text: "Showing the first 1,234 files; this repository has more.",
       retry: false,
       browse: true,
     });
     const malformed = listNotice(await ended("malformed_tree"));
     expect(malformed?.text).toMatch(/^Showing the first 1,234 files: .*damaged/);
-    expect(malformed?.text).toContain("Browse folders to find the rest.");
+    expect(malformed?.text).not.toContain("Browse folders");
     expect(malformed?.browse).toBe(true);
     expect(malformed?.retry).toBe(false);
   });
@@ -730,7 +730,8 @@ describe("what a person is told", () => {
       page({ state: "incomplete", reason: "too_deep", unlisted_names: 1, paths: ["a"] }),
     );
     await loader.run();
-    expect(listNotice(loader)?.text).toMatch(/Browse folders to find the rest\. 1 file has a name/);
+    expect(listNotice(loader)?.text).toMatch(/\w\. 1 file has a name/);
+    expect(listNotice(loader)?.text).not.toContain("Browse folders");
   });
 
   it("says it is waiting, with nothing to press", async () => {
@@ -753,17 +754,34 @@ describe("what a person is told", () => {
     });
   });
 
+  it("says Loading once while the list grows, and keeps the growing count out of it", () => {
+    const parts = (status: string, query: string, shown: number, total: number) =>
+      countParts({ status: status as never, query, shown, total });
+    const live = "Loading…";
+    expect(parts("loading", "", 0, 0)).toEqual({ live, quiet: "" });
+    expect(parts("loading", "", 50, 20000)).toEqual({
+      live,
+      quiet: "showing the first 50 of 20,000 files so far",
+    });
+    expect(parts("loading", "", 2, 2)).toEqual({ live, quiet: "2 files so far" });
+    expect(parts("loading", "", 1, 1)).toEqual({ live, quiet: "1 file so far" });
+    expect(parts("waiting", "", 50, 20000)).toEqual({
+      live,
+      quiet: "showing the first 50 of 20,000 files so far",
+    });
+    expect(parts("loading", "x", 0, 0)).toEqual({ live, quiet: "no files match so far" });
+    expect(parts("loading", "x", 1, 1)).toEqual({ live, quiet: "1 file matches so far" });
+    expect(parts("loading", "x", 2, 2)).toEqual({ live, quiet: "2 files match so far" });
+    expect(parts("loading", "x", 50, 90)).toEqual({
+      live,
+      quiet: "showing the first 50 of 90 matches so far",
+    });
+    expect(parts("complete", "", 3, 3)).toEqual({ live: "3 files", quiet: "" });
+  });
+
   it("counts what is shown, in every state of the list and the search", () => {
     const line = (status: string, query: string, shown: number, total: number) =>
-      countLine({ status: status as never, query, shown, total });
-    expect(line("loading", "", 0, 0)).toBe("Loading…");
-    expect(line("loading", "", 50, 20000)).toBe(
-      "Loading… showing the first 50 of 20,000 files so far",
-    );
-    expect(line("loading", "", 2, 2)).toBe("Loading… 2 files so far");
-    expect(line("waiting", "", 50, 20000)).toBe(
-      "Loading… showing the first 50 of 20,000 files so far",
-    );
+      countParts({ status: status as never, query, shown, total }).live;
     expect(line("complete", "", 3, 3)).toBe("3 files");
     expect(line("complete", "", 1, 1)).toBe("1 file");
     expect(line("complete", "", 0, 0)).toBe("No files");
@@ -779,9 +797,6 @@ describe("what a person is told", () => {
     expect(line("truncated", "x", 50, 1234)).toBe(
       "Showing the first 50 of 1,234 matches. Type more to narrow them.",
     );
-    expect(line("loading", "x", 0, 0)).toBe("No files match so far");
-    expect(line("loading", "x", 2, 2)).toBe("2 files match so far");
-    expect(line("loading", "x", 50, 90)).toBe("Showing the first 50 of 90 matches so far");
     expect(line("unavailable", "", 0, 0)).toBe("");
   });
 });

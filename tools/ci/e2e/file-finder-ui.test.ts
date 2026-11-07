@@ -6,6 +6,7 @@
 
 import {
   type Browser,
+  type BrowserType,
   type ConsoleMessage,
   chromium,
   firefox,
@@ -34,6 +35,8 @@ const box = (on: Page = page) => on.getByRole("combobox", { name: /File path/ })
 const dialog = (on: Page = page) => on.getByRole("dialog", { name: "Go to file" });
 const options = (on: Page = page) => on.getByRole("option");
 const activeOption = (on: Page = page) => on.locator('[role="option"][aria-selected="true"]');
+const spoken = () => dialog().getByRole("status").first();
+const countShown = () => dialog().locator(".file-finder-count");
 
 /** Answers the page's path requests in turn, and counts them. */
 async function answering(on: Page, ...replies: unknown[]) {
@@ -136,6 +139,21 @@ describe("Go to file", () => {
     await see(plain).toHaveURL(`${home()}/tree/main/`);
     await see(plain.getByRole("link", { name: "README.md" })).toBeVisible();
     await context?.close();
+  });
+
+  it("has both live regions in the tree before they have anything to say", async () => {
+    await openFinder();
+    await see(spoken()).toHaveText(`${FILES.length} files`);
+    await see(dialog().getByRole("status")).toHaveCount(2);
+  });
+
+  it("keeps the input where it is as the results change", async () => {
+    await openFinder();
+    await see(spoken()).toHaveText(`${FILES.length} files`);
+    const before = await box().boundingBox();
+    await box().fill("nothing-is-named-this");
+    await see(spoken()).toHaveText("No files match");
+    expect((await box().boundingBox())?.y).toBe(before?.y);
   });
 
   it("is on the home, folder and file pages", async () => {
@@ -265,9 +283,11 @@ describe("Go to file", () => {
     });
     await visit(page, home());
     await opener().click();
-    await see(dialog().getByRole("status").first()).toHaveText("Loading… 2 files so far");
+    await see(countShown()).toHaveText("Loading… 2 files so far");
+    await see(spoken()).toHaveText("Loading…");
     await box().fill("a/");
-    await see(dialog().getByRole("status").first()).toHaveText("2 files match so far");
+    await see(countShown()).toHaveText("Loading… 2 files match so far");
+    await see(spoken()).toHaveText("Loading…");
     await box().press("ArrowDown");
     await see(activeOption()).toHaveText("a/2");
     release();
@@ -608,6 +628,31 @@ describe("a dialog that closes and opens", () => {
   });
 });
 
+describe("a list that may have moved", () => {
+  it("is read again when opened after going to another page, not before", async () => {
+    const asked = await answering(
+      page,
+      answer({ paths: ["README.md", "docs/Guide.md"] }),
+      answer({ paths: ["README.md", "docs/Guide.md", "new.md"] }),
+    );
+    await visit(page, `${home()}/blob/main/README.md`);
+    await opener().click();
+    await see(options()).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await see(dialog()).toBeHidden();
+    await opener().click();
+    await see(options()).toHaveCount(2);
+    expect(asked).toHaveLength(1);
+    await options().filter({ hasText: "docs/Guide.md" }).click();
+    await see(page).toHaveURL(`${home()}/blob/main/docs/Guide.md`);
+    await see(dialog()).toBeHidden();
+    await opener().click();
+    await see(options()).toHaveCount(3);
+    expect(asked).toHaveLength(2);
+    expect(asked[1]?.searchParams.get("ref")).toBe("main");
+  });
+});
+
 describe("a list that starts over", () => {
   it("drops the old options as soon as a cursor's commit is gone", async () => {
     await page.unroute("**/ada/finder/paths*");
@@ -651,22 +696,174 @@ describe("a list that starts over", () => {
   });
 });
 
+/** What `run` gives up on can hang as well, and a report mustn't. */
+const within = <T>(ms: number, run: Promise<T>): Promise<T | string> =>
+  Promise.race([
+    run,
+    new Promise<string>((done) => setTimeout(() => done(`no answer in ${ms} ms`), ms)),
+  ]);
+
+/** Notes what a page's browser says about it: the only trace of a failure on another machine. */
+function watch(on: Page, notes: string[]) {
+  on.on("console", (message) => notes.push(`console ${message.type()}: ${message.text()}`));
+  on.on("pageerror", (error) => notes.push(`pageerror: ${error.message}`));
+  on.on("crash", () => notes.push("the page crashed"));
+  on.on("requestfailed", (request) =>
+    notes.push(`request failed: ${request.url()}: ${request.failure()?.errorText}`),
+  );
+  on.on("response", (response) => {
+    if (response.request().isNavigationRequest())
+      notes.push(`document ${response.status()} ${response.url()}`);
+    else if (response.status() >= 400) notes.push(`${response.status()} ${response.url()}`);
+  });
+}
+
+/** The state of a page that didn't get where it should, and whether its scripts can be loaded. */
+async function report(on: Page, browser: Browser): Promise<string[]> {
+  const state = await within(
+    5_000,
+    on.evaluate<string>(
+      `JSON.stringify({
+        readyState: document.readyState,
+        path: location.pathname,
+        title: document.title,
+        hydrated: "hydrated" in document.documentElement.dataset,
+        secureContext: isSecureContext,
+        randomUUID: typeof crypto.randomUUID,
+        scripts: document.scripts.length,
+        routerContext: typeof window.__reactRouterContext,
+        router: typeof window.__reactRouterDataRouter,
+        resources: performance.getEntriesByType("resource").length,
+        userAgent: navigator.userAgent,
+      })`,
+    ),
+  );
+  const imports = await within(
+    10_000,
+    on.evaluate<string>(
+      `Promise.all(
+        [...document.querySelectorAll('link[rel="modulepreload"]')].slice(0, 4).map((link) =>
+          import(link.href).then(
+            () => "loaded " + link.href,
+            (error) => link.href + ": " + error,
+          ),
+        ),
+      ).then((all) => all.join("; ") || "no module preloads")`,
+    ),
+  );
+  // With no session, on a page that hydrates for anyone: is it the session or the browser?
+  const bare: string[] = [];
+  const plain = await (await browser.newContext()).newPage();
+  watch(plain, bare);
+  await within(5_000, plain.goto(`${stack.origin}/`));
+  const hydrated = await plain
+    .locator("html[data-hydrated]")
+    .waitFor({ state: "attached", timeout: 8_000 })
+    .then(
+      () => true,
+      () => false,
+    );
+  return [
+    `page: ${state}`,
+    `imports: ${imports}`,
+    `the home page with no session: hydrated ${hydrated}`,
+    ...bare.map((note) => `  ${note}`),
+  ];
+}
+
+/**
+ * Runs `test` in a browser with this session. The browser can't hold it: WebKit won't store a
+ * `Secure` cookie over http://localhost (measured, WebKit 26.6). So Playwright sends the page's
+ * requests itself, adding the cookie, whatever the browser's network stack does with a header.
+ * A failure says what the page saw.
+ */
+async function inBrowser(type: BrowserType, test: (on: Page) => Promise<void>) {
+  const browser: Browser = await type.launch();
+  try {
+    const cookies = await page.context().cookies();
+    const Cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+    // Whether a header alone would carry it here: with no session a private repository sends
+    // the browser to the sign-in page, which never hydrates.
+    const asHeader = await browser.newContext({ extraHTTPHeaders: { Cookie } });
+    const tried = await asHeader.newPage();
+    await tried.goto(home());
+    // Not console.log: vitest drops that for a test that passes, and this is worth a green run.
+    process.stderr.write(
+      `${type.name()} ${browser.version()}: the session as a header ends at ${new URL(tried.url()).pathname}\n`,
+    );
+    await asHeader.close();
+    const context = await browser.newContext();
+    await context.route("**/*", async (route) => {
+      const response = await route.fetch({
+        headers: { ...route.request().headers(), Cookie },
+      });
+      await route.fulfill({ response });
+    });
+    const on = await context.newPage();
+    const notes = [`${type.name()} ${browser.version()}`];
+    watch(on, notes);
+    try {
+      await test(on);
+    } catch (error) {
+      // The state first: a page whose every script fails says so far more than 40 times.
+      const state = await report(on, browser);
+      const lines = [...state, ...notes.slice(0, 40)].map((note) => note.slice(0, 400));
+      throw new Error(`${error instanceof Error ? error.message : error}\n${lines.join("\n")}`, {
+        cause: error,
+      });
+    } finally {
+      // Requests still under way when the browser goes aren't failures.
+      await context.unrouteAll({ behavior: "ignoreErrors" });
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
 describe("the keyboard", () => {
   it.each([
     ["Chromium", chromium],
     ["Firefox", firefox],
     ["WebKit", webkit],
+  ] as const)("doesn't stop at a long list on Tab in %s", async (_name, type) => {
+    await inBrowser(type, async (on) => {
+      await on.route("**/ada/finder/paths*", (route: Route) =>
+        route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify(
+            answer({ paths: Array.from({ length: 100 }, (_, i) => `row/${i}.ts`) }),
+          ),
+        }),
+      );
+      await visit(on, home());
+      await opener(on).click();
+      await see(options(on)).toHaveCount(100);
+      await see(box(on)).toBeFocused();
+      await on.keyboard.press("Tab");
+      const role = await on.evaluate<string | null>(`document.activeElement.getAttribute("role")`);
+      expect(role).not.toBe("listbox");
+    });
+  });
+
+  it("keeps focus in the input when the list itself is pressed", async () => {
+    await page.unroute("**/ada/finder/paths*");
+    await openFinder(answer({ paths: Array.from({ length: 100 }, (_, i) => `row/${i}.ts`) }));
+    await see(options()).toHaveCount(100);
+    // Its scrollbar or border, say, which a real press can't be aimed at in every browser. The
+    // list can take focus by a press, so only preventing the press keeps focus in the input.
+    const prevented = await page.evaluate<boolean>(
+      `!document.querySelector('[role="listbox"]').dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+      )`,
+    );
+    expect(prevented).toBe(true);
+  });
+
+  it.each([
+    ["Chromium", chromium],
+    ["Firefox", firefox],
+    ["WebKit", webkit],
   ] as const)("takes the whole path in %s", async (_name, type) => {
-    const browser: Browser = await type.launch();
-    try {
-      // The session as a header: WebKit won't store a `Secure` cookie over http://localhost
-      // (measured, WebKit 26.6), though it sends one given this way.
-      const cookies = await page.context().cookies();
-      const Cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
-      const context = await browser.newContext({ extraHTTPHeaders: { Cookie } });
-      await keyboardPath(await context.newPage());
-    } finally {
-      await browser.close();
-    }
+    await inBrowser(type, keyboardPath);
   });
 });
