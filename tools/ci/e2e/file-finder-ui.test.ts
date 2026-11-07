@@ -697,11 +697,21 @@ describe("a list that starts over", () => {
 });
 
 /** What `run` gives up on can hang as well, and a report mustn't. */
-const within = <T>(ms: number, run: Promise<T>): Promise<T | string> =>
-  Promise.race([
-    run,
-    new Promise<string>((done) => setTimeout(() => done(`no answer in ${ms} ms`), ms)),
-  ]);
+const within = async <T>(ms: number, run: Promise<T>): Promise<T | string> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      run,
+      new Promise<string>((done) => {
+        timer = setTimeout(() => done(`no answer in ${ms} ms`), ms);
+      }),
+    ]);
+  } catch (error) {
+    return `failed: ${error instanceof Error ? error.message : error}`;
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 /** Notes what a page's browser says about it: the only trace of a failure on another machine. */
 function watch(on: Page, notes: string[]) {
@@ -753,16 +763,16 @@ async function report(on: Page, browser: Browser): Promise<string[]> {
   );
   // With no session, on a page that hydrates for anyone: is it the session or the browser?
   const bare: string[] = [];
-  const plain = await (await browser.newContext()).newPage();
-  watch(plain, bare);
-  await within(5_000, plain.goto(`${stack.origin}/`));
-  const hydrated = await plain
-    .locator("html[data-hydrated]")
-    .waitFor({ state: "attached", timeout: 8_000 })
-    .then(
-      () => true,
-      () => false,
-    );
+  const hydrated = await within(
+    15_000,
+    (async () => {
+      const plain = await (await browser.newContext()).newPage();
+      watch(plain, bare);
+      await plain.goto(`${stack.origin}/`);
+      await plain.locator("html[data-hydrated]").waitFor({ state: "attached", timeout: 8_000 });
+      return true;
+    })(),
+  );
   return [
     `page: ${state}`,
     `imports: ${imports}`,
@@ -782,6 +792,7 @@ async function inBrowser(type: BrowserType, test: (on: Page) => Promise<void>) {
   try {
     const cookies = await page.context().cookies();
     const Cookie = cookies.map(({ name, value }) => `${name}=${value}`).join("; ");
+    // On Linux, WebKit 26.6 loses a Cookie header: it ends at the sign-in page (measured in CI).
     // Whether a header alone would carry it here: with no session a private repository sends
     // the browser to the sign-in page, which never hydrates.
     const asHeader = await browser.newContext({ extraHTTPHeaders: { Cookie } });
@@ -813,12 +824,25 @@ async function inBrowser(type: BrowserType, test: (on: Page) => Promise<void>) {
       });
     } finally {
       // Requests still under way when the browser goes aren't failures.
-      await context.unrouteAll({ behavior: "ignoreErrors" });
+      await context.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
     }
   } finally {
     await browser.close();
   }
 }
+
+describe("a failure in another browser", () => {
+  it.each([
+    ["its page has closed", (on: Page) => on.close()],
+    ["its browser has gone", (on: Page) => on.context().browser()?.close()],
+  ] as const)("still says what failed when %s", async (_name, end) => {
+    const failing = inBrowser(chromium, async (on) => {
+      await end(on);
+      throw new Error("what failed");
+    });
+    await expect(failing).rejects.toThrow("what failed");
+  });
+});
 
 describe("the keyboard", () => {
   it.each([
