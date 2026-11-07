@@ -24,6 +24,7 @@ import { HEX_OID } from "../../git/cache/object-access.js";
 import { pathSegments } from "../../git/cache/object-check.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { peelOid } from "../../git/peel.js";
+import type { PreparedTag } from "./releases.js";
 import { checkSignature, type SignatureCheck } from "./signature.js";
 
 /*
@@ -454,6 +455,26 @@ export class RepoBrowse {
       return commit ? { ok: true, value: commit } : refNotFound(ref);
     }
     return refNotFound(ref);
+  }
+
+  /**
+   * What publishing a tag would record, read from its one ref row: the tag's
+   * object and the commit it is or peels to. The caller checks again, with
+   * no await, before recording it.
+   */
+  async tagTarget(tag: string): Promise<PreparedTag> {
+    const [row] = this.deps.git.context.storage.sql
+      .exec<{ oid: ArrayBuffer }>(
+        "SELECT oid FROM refs WHERE name = ? AND kind = 'direct'",
+        `refs/tags/${tag}`,
+      )
+      .toArray();
+    if (!row) return { refused: "tag_not_found" };
+    const oid = new Uint8Array(row.oid) as Oid;
+    const commit = await this.#commitOf(oid);
+    return commit
+      ? { tag, tagOid: oidToHex(oid), commitOid: oidToHex(commit) }
+      : { refused: "tag_not_a_commit" };
   }
 
   /** The commit a ref's object is or peels to (an annotated tag), if this repository has it. */

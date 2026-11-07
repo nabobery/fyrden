@@ -60,7 +60,7 @@ import { systemClock, type WatchClock } from "../git/import/watch.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
-import { scheduleAfterCommit } from "../git/maintenance/schedule.js";
+import { scheduleAfterCommit, scheduleGc } from "../git/maintenance/schedule.js";
 import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
@@ -240,6 +240,7 @@ import {
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
 import { type IncomingReferences, RepoReferences } from "./repo/references.js";
+import { type PreparedTag, RepoReleases } from "./repo/releases.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
 import {
   MERGE_CONFIRM_POLICY,
@@ -464,6 +465,9 @@ export class RepoDO extends MigratingDO {
   /** Labels and milestones, and what issues and pull requests carry of them and who is assigned. */
   readonly subjectMeta: RepoSubjectMeta;
 
+  /** Releases: drafts, and published tags and commits kept as roots. */
+  readonly releases: RepoReleases;
+
   /** Reactions to issues, pull requests and their comments. */
   readonly reactions: RepoReactions;
 
@@ -581,6 +585,11 @@ export class RepoDO extends MigratingDO {
       resolve: async (owner, name) =>
         (await resolveRepo(this.env, owner, name, { metrics: this.git.context.metrics }))?.id ??
         null,
+    });
+    this.releases = new RepoReleases({
+      git: this.git,
+      events: this.events,
+      collect: () => scheduleGc(this.git, this.git.context.now() + this.maintenance.gcDelayMs),
     });
     this.subjectMeta = new RepoSubjectMeta({
       git: this.git,
@@ -2271,6 +2280,81 @@ export class RepoDO extends MigratingDO {
     );
   }
 
+  /** A page of the repository's releases (see `RepoReleases.list`); null when gone. */
+  listReleases(query: Parameters<RepoReleases["list"]>[0]) {
+    return this.#measured("listReleases", () =>
+      this.#refusesReads() ? null : this.releases.list(query),
+    );
+  }
+
+  /** One release; null when the repository is gone, undefined for none. */
+  getRelease(id: number) {
+    return this.#measured("getRelease", () =>
+      this.#refusesReads() ? null : this.releases.get(id),
+    );
+  }
+
+  /** The release of a tag name; null when the repository is gone, undefined for none. */
+  getReleaseByTag(tag: string) {
+    return this.#measured("getReleaseByTag", () =>
+      this.#refusesReads() ? null : this.releases.byTag(tag),
+    );
+  }
+
+  /** The newest published release that isn't a prerelease; null when gone, undefined for none. */
+  getLatestRelease() {
+    return this.#measured("getLatestRelease", () =>
+      this.#refusesReads() ? null : this.releases.latest(),
+    );
+  }
+
+  /** Creates a release; one published peels its tag first, and writes nothing until the recheck. */
+  createRelease(input: Parameters<RepoReleases["create"]>[0], actor: RefActor) {
+    return this.#pullChange(
+      "createRelease",
+      actor,
+      (caller, prepared) => this.#withIdentity(() => this.releases.create(input, caller, prepared)),
+      input.draft ? undefined : () => this.#peeledTag(input.tagName),
+    );
+  }
+
+  /** Changes a release; `draft: false` on a draft peels its tag first. */
+  updateRelease(
+    id: number,
+    patch: Parameters<RepoReleases["update"]>[1],
+    actor: RefActor,
+    expected?: number,
+  ) {
+    return this.#pullChange(
+      "updateRelease",
+      actor,
+      (caller, prepared) =>
+        this.#withIdentity(() => this.releases.update(id, patch, caller, prepared, expected)),
+      async () => {
+        const current = this.releases.get(id);
+        return patch.draft === false && current?.draft
+          ? this.#peeledTag(patch.tagName ?? current.tagName)
+          : undefined;
+      },
+    );
+  }
+
+  /** Deletes a release; its tag stays. */
+  deleteRelease(id: number, actor: RefActor) {
+    return this.#pullChange("deleteRelease", actor, (caller) =>
+      this.#withIdentity(() => this.releases.delete(id, caller)),
+    );
+  }
+
+  async #peeledTag(tag: string): Promise<PreparedTag> {
+    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#memoryBlocks() });
+    try {
+      return await browse.tagTarget(tag);
+    } finally {
+      browse.close();
+    }
+  }
+
   /** A page of the repository's milestones (see `RepoSubjectMeta.milestones`); null when gone. */
   listMilestones(query: MilestoneQuery) {
     return this.#measured("listMilestones", () =>
@@ -2942,7 +3026,7 @@ export class RepoDO extends MigratingDO {
 
   /** What garbage collection keeps besides what the refs and the reflog reach. */
   gcRoots(): Oid[] {
-    return this.pulls.recordedBases();
+    return [...this.pulls.recordedBases(), ...this.releases.roots()];
   }
 
   #log() {
@@ -3470,6 +3554,7 @@ export class RepoDO extends MigratingDO {
       policy: () => this.maintenance,
       log: () => this.#log(),
       detachHooks: () => this.detachHooks,
+      roots: () => this.releases.roots(),
     });
     return this.#networkOps;
   }

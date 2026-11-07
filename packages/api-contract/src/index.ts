@@ -22,6 +22,7 @@ export * from "../ops/pulls.js";
 export * from "../ops/quotas.js";
 export * from "../ops/reactions.js";
 export * from "../ops/read-model.js";
+export * from "../ops/releases.js";
 export * from "../ops/repos.js";
 export * from "../ops/review-comments.js";
 export * from "../ops/reviews.js";

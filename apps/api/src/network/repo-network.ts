@@ -1,6 +1,6 @@
 import type { JobHandler, RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { Logger } from "@fyrden/adapters-cloudflare/obs";
-import type { BlockCache } from "@fyrden/git-core";
+import type { BlockCache, Oid } from "@fyrden/git-core";
 import type { MaintenancePolicy } from "../git/maintenance/policy.js";
 import type { RewriteOutcome } from "../git/maintenance/rewrite.js";
 import { beginDetach, type DetachHooks, detachHandler } from "./detach.js";
@@ -33,6 +33,8 @@ export interface RepoNetworkWiring {
   readonly policy: () => MaintenancePolicy;
   readonly log: () => Logger;
   readonly detachHooks: () => DetachHooks;
+  /** What the repository keeps besides what its refs reach. */
+  readonly roots: () => readonly Oid[];
 }
 
 /** Most commit rows one page of a fork's graph copy carries. Proposed. */
@@ -146,6 +148,7 @@ export class RepoNetwork {
       log: this.wiring.log(),
       blocks: this.wiring.blocks,
       hooks: this.wiring.detachHooks,
+      roots: this.wiring.roots,
       notify: detachNotifier(this.wiring.env, this.wiring.repoId),
     });
   }
