@@ -90,6 +90,13 @@ async function runJobs(rounds = 8): Promise<void> {
       sql.exec("UPDATE jobs SET next_run_at = ? WHERE state = 'queued'", now);
       sql.exec("UPDATE code_owner_jobs SET requested_at = ?", now);
       sql.exec("UPDATE code_owner_request_jobs SET requested_at = ?", now);
+      // Hold the outbox: what the jobs append stays there to be read (a drain, due a second
+      // after an append, would send and delete it once a slow run's alarms pass that second).
+      sql.exec(
+        `INSERT INTO outbox_state (id, next_drain_at) VALUES (1, ?1)
+         ON CONFLICT (id) DO UPDATE SET next_drain_at = ?1`,
+        now + 24 * 60 * 60_000,
+      );
       await r.alarm();
     });
 }
@@ -343,6 +350,7 @@ describe("teams and code owners, acceptance", () => {
         .filter((e) => e.type === "pull_request.review_requested")
         .map((e) => (e.data as { reviewer?: string } | null)?.reviewer ?? null),
     );
+    expect(asked).toContain(bob.principalId);
     expect(asked).not.toContain(alice.principalId);
   });
 });

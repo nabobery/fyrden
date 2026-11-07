@@ -175,9 +175,23 @@ const dueNow = () =>
     );
   });
 
-/** Runs the repository's due jobs, a few rounds. */
+/**
+ * Runs the repository's due jobs, a few rounds. The outbox is held before each
+ * alarm: what the jobs append stays there to be read (a drain, due a second
+ * after an append, would send and delete it once a slow run's alarms pass that
+ * second).
+ */
 const runJobs = async () => {
-  for (let i = 0; i < 3; i++) await inRepo(stub(), (r: RepoDO) => r.alarm());
+  for (let i = 0; i < 3; i++) {
+    await inRepo(stub(), (r: RepoDO) => {
+      r.git.context.storage.sql.exec(
+        `INSERT INTO outbox_state (id, next_drain_at) VALUES (1, ?1)
+         ON CONFLICT (id) DO UPDATE SET next_drain_at = ?1`,
+        r.git.context.now() + 24 * 60 * 60_000,
+      );
+      return r.alarm();
+    });
+  }
 };
 
 async function commitOn(branch: string, content: string): Promise<string> {
