@@ -1483,4 +1483,38 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    version: 47,
+    // Every file path of a tree (`path_lists`, by the tree and the limits it
+    // was listed under), kept to save walking it again and never needed for
+    // an answer: built in slices for the default branch's tip, one segment
+    // row a slice, each holding its paths' raw bytes with a NUL between them.
+    // `cursor` is the server's own position in the walk (null once finished);
+    // a build's `epoch_gen` fences it from a restore. No secondary index: each
+    // entry would be one more row written per keep.
+    name: "path_lists",
+    sql: `
+      CREATE TABLE path_lists (
+        tree_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('building', 'complete', 'capped', 'walk_only')),
+        reason TEXT,
+        cursor TEXT,
+        visited INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        slices INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        PRIMARY KEY (tree_sha, limits)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE path_list_segments (
+        tree_sha TEXT NOT NULL,
+        limits TEXT NOT NULL,
+        first INTEGER NOT NULL,
+        count INTEGER NOT NULL,
+        body BLOB NOT NULL,
+        PRIMARY KEY (tree_sha, limits, first)
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];

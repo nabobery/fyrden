@@ -243,6 +243,7 @@ export default function setup(project: TestProject): () => void {
     root: lsTree(["main"]),
     many: lsTree(["main", "many/"]),
     recursive: lsTree(["-r", "-t", "main"]),
+    files: lsTree(["-r", "main"]),
   };
 
   const fixtures: BrowseFixtures = {

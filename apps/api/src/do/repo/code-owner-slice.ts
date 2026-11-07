@@ -15,6 +15,7 @@ import {
   TreeDiffLimitError,
   type TreeEntry,
 } from "@fyrden/git-core";
+import { sameCursor } from "./diff-cursors.js";
 import { ReadsTooLargeError } from "./held-reads.js";
 
 /*
@@ -300,19 +301,6 @@ export function deserializeEvaluation(
 
 /** An example's bytes as the text they were: every byte, a leading byte order mark too. */
 const exampleText = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
-
-function sameCursor(a: DiffCursor | null, b: DiffCursor | null): boolean {
-  if (a === null || b === null) return a === b;
-  if (a.enter !== b.enter || a.path.length !== b.path.length) return false;
-  return a.path.every((n, i) => {
-    const m = b.path[i] as CursorName;
-    return (
-      n.tree === m.tree &&
-      n.name.length === m.name.length &&
-      n.name.every((x, k) => x === m.name[k])
-    );
-  });
-}
 
 /** `text` cut to at most `EXAMPLE_BYTES` of UTF-8, at a character's end. */
 function cutText(text: string): string {

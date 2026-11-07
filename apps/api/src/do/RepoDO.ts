@@ -121,6 +121,7 @@ import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/arc
 import { RepoAuthority } from "./repo/authority.js";
 import {
   type Browsed,
+  type BrowsePolicy,
   type CommitView,
   type CompareView,
   fail,
@@ -205,6 +206,13 @@ import {
 } from "./repo/issues.js";
 import { MERGE_POLICY, type MergeMade, type MergePolicy } from "./repo/merge.js";
 import { MERGEABILITY_POLICY, type PullView, RepoMergeability } from "./repo/mergeability.js";
+import {
+  PATHS_POLICY,
+  PathLists,
+  type PathsInput,
+  type PathsPage,
+  type PathsPolicy,
+} from "./repo/path-lists.js";
 import {
   type AudienceFit,
   type NewReviewComment,
@@ -421,6 +429,9 @@ export class RepoDO extends MigratingDO {
 
   /** The CODEOWNERS errors endpoint's budgets. Tests may replace them. */
   codeOwnersErrorsPolicy: CodeOwnersErrorsPolicy = CODEOWNERS_ERRORS_POLICY;
+
+  /** A tree's path lists: caps and slices. Tests may replace them. */
+  pathsPolicy: PathsPolicy = PATHS_POLICY;
 
   /** Asking code owners to review: a slice's budgets. Tests may replace them. */
   codeOwnerRequestPolicy: CodeOwnerRequestPolicy = CODE_OWNER_REQUEST_POLICY;
@@ -2688,8 +2699,16 @@ export class RepoDO extends MigratingDO {
   }
 
   /** One browse request, its reader released when it ends. */
-  #browse<R>(method: string, use: (browse: RepoBrowse) => R | Promise<R>): Promise<R> {
-    const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#memoryBlocks() });
+  #browse<R>(
+    method: string,
+    use: (browse: RepoBrowse) => R | Promise<R>,
+    policy?: Partial<BrowsePolicy>,
+  ): Promise<R> {
+    const browse = new RepoBrowse({
+      git: this.git,
+      memoryBlocks: this.#memoryBlocks(),
+      ...(policy && { policy }),
+    });
     return this.#measured(method, async () => {
       try {
         return await use(browse);
@@ -2860,6 +2879,27 @@ export class RepoDO extends MigratingDO {
 
   browseTree(ref: string | undefined, recursive: boolean): Promise<Browsed<TreeListing>> {
     return this.#browse("browseTree", (b) => treeListing(b, ref, recursive));
+  }
+
+  /** One page of a tree's file paths (see `path-lists.ts`). */
+  browsePaths(input: PathsInput): Promise<Browsed<PathsPage>> {
+    const { walkReads, maxReads, maxBuiltBytes } = this.pathsPolicy;
+    return this.#browse(
+      "browsePaths",
+      (b) =>
+        // Past `#measured`'s epoch check: a stored list outlives the start of a deletion.
+        this.#refusesReads()
+          ? fail(404, "repo_not_found", REPO_DELETED)
+          : guarded(() =>
+              new PathLists({
+                git: this.git,
+                epochGen: () => this.events.epochGen(),
+                policy: () => this.pathsPolicy,
+                log: () => this.#log(),
+              }).page(b, input),
+            ),
+      { walkReads, maxReads, maxBuiltBytes },
+    );
   }
 
   browseRaw(

@@ -7142,6 +7142,42 @@ export type ReposTreesGetOutput = {
   truncated: boolean;
 };
 
+/** Input of `repos.paths.list`: List a tree's file paths. */
+export type ReposPathsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A branch, a tag or a full commit SHA; the default branch when absent. */
+  ref?: string;
+  /** From a previous page's `next_cursor`; it pins the commit, so `ref` is ignored. */
+  cursor?: string;
+  /** Paths per page at most, 1-10000; a page can hold fewer. */
+  per_page?: number;
+};
+
+/** Output of `repos.paths.list`. */
+export type ReposPathsListOutput = {
+  /** The commit listed. */
+  commit: string;
+  /** Its root tree. */
+  tree: string;
+  state: "complete" | "incomplete" | "unavailable";
+  /** Why the answer is not `complete`; null when it is. */
+  reason: "more_pages" | "too_many_paths" | "too_many_bytes" | "tree_too_large" | "too_deep" | "path_too_long" | "malformed_tree" | "too_much_work" | "busy" | "unreadable" | null;
+  paths: string[];
+  /** Paths passed so far, this page's and left-out ones too. */
+  visited: number;
+  /** Every path, left-out ones too, when a finished stored list knows it; else null. */
+  total_paths: number | null;
+  /** Names left out of this page because they are not valid UTF-8; add them up. */
+  unlisted_names: number;
+  /** Pass as `cursor` for the next page; null when there is no next one. */
+  next_cursor: string | null;
+  /** With `busy`: how long to wait. */
+  retry_after_ms: number | null;
+};
+
 /** Input of `repos.archives.get`: Get an archive link. */
 export type ReposArchivesGetInput = {
   /** The owner's handle. */
@@ -8113,6 +8149,7 @@ export const OPERATIONS = {
   "repos.readme.get": { method: "GET", path: "/repos/{owner}/{repo}/readme", pathParams: ["owner","repo"], idempotent: false },
   "repos.codeowners.errors": { method: "GET", path: "/repos/{owner}/{repo}/codeowners/errors", pathParams: ["owner","repo"], idempotent: false },
   "repos.trees.get": { method: "GET", path: "/repos/{owner}/{repo}/git/trees/{tree_sha+}", pathParams: ["owner","repo","tree_sha"], idempotent: false },
+  "repos.paths.list": { method: "GET", path: "/repos/{owner}/{repo}/paths", pathParams: ["owner","repo"], idempotent: false },
   "repos.archives.get": { method: "GET", path: "/repos/{owner}/{repo}/archives/{format}", pathParams: ["owner","repo","format"], idempotent: false },
   "repos.contents.put": { method: "PUT", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: true },
   "repos.contents.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: true },
@@ -8518,6 +8555,8 @@ export interface Operations {
   "repos.codeowners.errors": { input: ReposCodeownersErrorsInput; output: ReposCodeownersErrorsOutput };
   /** Get a tree. The root tree of a branch, tag or commit (`tree_sha` names one of them: a bare tree SHA is not accepted), with `recursive` every file and directory below it, as `git ls-tree -r -t` lists them. A listing of more than 10,000 entries, or of more trees than one request may read, is `truncated`. */
   "repos.trees.get": { input: ReposTreesGetInput; output: ReposTreesGetOutput };
+  /** List a tree's file paths. Every file path of a branch, tag or commit, in git's order and in pages: files, symlinks and submodules, no directories. Follow `next_cursor` until it is null, then read `state`; check each page's `state` first, since `busy` repeats its cursor, to send again only after `retry_after_ms`. A page may be short or even empty and still have a next one. `complete` comes only on the last page; `incomplete` with a reason other than `more_pages` is true as far as it goes but will never be whole (the rest of the tree is not described); `unavailable` is an answer to try again later. Names that are not valid UTF-8 are left out and counted in each page's `unlisted_names`. */
+  "repos.paths.list": { input: ReposPathsListInput; output: ReposPathsListOutput };
   /** Get an archive link. Prepares the files of a branch, tag or commit as a tar.gz or zip archive and gives its link (`download_url`, GitHub's tarball or zipball route; the same token works). A large archive is built in the background: `state` is `building` until it is `ready`; ask again, or fetch the link, which answers 202 until then. Archives hold 1 GiB of files at most, each file 24 MiB at most, a zip 65,535 entries. */
   "repos.archives.get": { input: ReposArchivesGetInput; output: ReposArchivesGetOutput };
   /** Create or update a file. Writes one file as a new commit on a branch (GitHub's contents API). To update a file, give its current blob `sha`; without `sha` the file must not exist yet. Fails with 409 when the file or the branch changed meanwhile. */

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { OPERATIONS } from "../src/generated.js";
 import { FyrdenClient, FyrdenError } from "../src/index.js";
 
 type Sent = { url: string; method: string; headers: Record<string, string>; body?: string };
@@ -289,6 +290,36 @@ describe("FyrdenClient", () => {
     }))
       none.push(entry);
     expect(none).toEqual([]);
+  });
+
+  it("does not page an answer that says how its list ended: only its items would be left", async () => {
+    expect(OPERATIONS["repos.paths.list"]).not.toHaveProperty("items");
+    // Other answers with a `state` page as they did.
+    expect(OPERATIONS["pulls.code_owners.get"]).toHaveProperty("items", "rules");
+    expect(OPERATIONS["repos.hooks.deliveries.get"]).toHaveProperty("items", "attempts_made");
+    const client = new FyrdenClient({
+      baseUrl: "https://f.test",
+      fetch: fake([]).fetchFn,
+    });
+    // Never run: what the compiler must refuse.
+    const refused = () =>
+      // @ts-expect-error `state`, `reason` and `retry_after_ms` would be lost: read them with `call`.
+      client.paginate("repos.paths.list", { owner: "me", repo: "r" });
+    expect(refused).toBeTypeOf("function");
+  });
+
+  it("refuses an operation with no items before it sends anything, for a caller without types", async () => {
+    const { fetchFn, sent } = fake([]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test", fetch: fetchFn });
+    const unpaged = client.paginate(
+      "repos.paths.list" as never,
+      {
+        owner: "me",
+        repo: "r",
+      } as never,
+    );
+    await expect(unpaged.next()).rejects.toThrow(/repos\.paths\.list.*call/);
+    expect(sent).toHaveLength(0);
   });
 
   it("types the items of a union of paginated operations", async () => {

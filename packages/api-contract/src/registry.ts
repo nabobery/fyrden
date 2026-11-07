@@ -49,6 +49,7 @@ import {
   getReadme,
   getRootContents,
   getTree,
+  listPaths,
 } from "../ops/contents.js";
 import {
   addUserEmails,
@@ -431,6 +432,7 @@ export const registry = defineRegistry([
   getReadme,
   getCodeOwnersErrors,
   getTree,
+  listPaths,
   getArchive,
   putContents,
   deleteContents,
