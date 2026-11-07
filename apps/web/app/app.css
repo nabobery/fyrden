@@ -341,6 +341,10 @@ li.reaction {
 .secret {
   word-break: break-all;
 }
+/* Not `anywhere`: that also lets a table's columns shrink until its words break. */
+.markdown {
+  overflow-wrap: break-word;
+}
 .markdown img {
   max-width: 100%;
 }
