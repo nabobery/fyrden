@@ -104,6 +104,8 @@ export interface GcHooks {
   readonly onSlice?: (cursor: GcCursor | undefined) => Promise<void> | void;
   /** In the swap, after the catch-up walk and before the swap is prepared (R2 reads follow). For tests. */
   readonly afterCatchUp?: () => Promise<void> | void;
+  /** After a run's refs, reflog and roots are read and saved, before it marks. For tests. */
+  readonly afterSnapshot?: () => Promise<void> | void;
 }
 
 export function gcHandler(
@@ -220,6 +222,9 @@ class GcSlice {
     // from, or an update after `reflogSeq` the swap's catch-up walks from, reach it. And a
     // later run reads it before condemning anything this run leaves garbage.
     for (const oid of this.roots()) roots.set(Array.from(oid).join(","), oid);
+    // In the same synchronous block as the reflog and the roots: a root recorded during the await
+    // below and its ref deleted then would be in neither, and the catch-up follows only new ids.
+    const refRoots = [...git.refStore.readRefsSync().refs.values()];
     const packed = new Uint8Array(roots.size * 20);
     let at = 0;
     for (const oid of roots.values()) {
@@ -244,7 +249,8 @@ class GcSlice {
       seq: 0,
       reflogRoots: roots.size,
     };
-    return this.#mark(cursor, [...git.refStore.readRefsSync().refs.values()]);
+    await this.hooks.afterSnapshot?.();
+    return this.#mark(cursor, refRoots);
   }
 
   async #mark(cursor: GcCursor, refRoots?: readonly Oid[]): Promise<SliceResult> {

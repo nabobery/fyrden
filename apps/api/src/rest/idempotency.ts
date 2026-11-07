@@ -206,12 +206,14 @@ const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
 // `read_model_maintenance`: answered only when nothing was written (refused before it ran, or its
 // write refused whole by the read model's barrier).
 // `requeue_failed`: a failed envelope's replay whose send failed, answered once its claim is given back.
+// `tag_moving`: a tag moved while it was being peeled, answered with nothing written; sent again, it peels afresh.
 const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   "busy",
   "network_busy",
   "merge_in_progress",
   "read_model_maintenance",
   "requeue_failed",
+  "tag_moving",
 ]);
 
 /** Answers that are not final: the same request has more to do when it is sent again. */

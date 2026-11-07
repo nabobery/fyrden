@@ -169,6 +169,15 @@ import {
   stepReadModelRecovery,
 } from "../ops/read-model.js";
 import {
+  createRelease,
+  deleteRelease,
+  getLatestRelease,
+  getRelease,
+  getReleaseByTag,
+  listReleases,
+  updateRelease,
+} from "../ops/releases.js";
+import {
   createOrgRepo,
   createRepo,
   deleteRepo,
@@ -367,6 +376,13 @@ export const registry = defineRegistry([
   removeAssignees,
   getDefaultLabels,
   setDefaultLabels,
+  listReleases,
+  getLatestRelease,
+  getReleaseByTag,
+  getRelease,
+  createRelease,
+  updateRelease,
+  deleteRelease,
   listMilestones,
   getMilestone,
   createMilestone,

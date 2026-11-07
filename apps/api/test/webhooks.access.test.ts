@@ -1,7 +1,7 @@
 // Who may manage a repository's webhooks and read their deliveries: a hook
 // exports issue and pull request contents, so every hook operation needs,
-// besides its hook permission, the content reads (`issues:read`,
-// `pull_requests:read`) in the caller's own scopes.
+// besides its hook permission, the content permissions (`issues:read`,
+// `pull_requests:read`, `contents:write`) in the caller's own scopes.
 import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attemptDelivery } from "../src/webhooks/deliver.js";
@@ -30,7 +30,7 @@ async function tokenWith(scopes: string[]): Promise<string> {
 }
 
 const HOOKS = ["repository_hooks:read", "repository_hooks:write"];
-const CONTENT = ["issues:read", "pull_requests:read"];
+const CONTENT = ["issues:read", "pull_requests:read", "contents:write"];
 
 /** Every hook operation, as the token `token` asks it. */
 async function everyOperation(token: string, hook: number, delivery: string) {
@@ -68,7 +68,12 @@ async function hookWithDelivery() {
 describe("managing webhooks and reading their deliveries", () => {
   it("is refused to a token with the hook permissions but not the content reads", async () => {
     const { hook, delivery } = await hookWithDelivery();
-    for (const scopes of [HOOKS, [...HOOKS, "issues:read"], [...HOOKS, "pull_requests:read"]]) {
+    for (const scopes of [
+      HOOKS,
+      [...HOOKS, "issues:read"],
+      [...HOOKS, "pull_requests:read"],
+      [...HOOKS, "issues:read", "pull_requests:read"],
+    ]) {
       const statuses = await everyOperation(await tokenWith(scopes), hook, delivery);
       expect(Object.values(statuses).every((status) => status === 403)).toBe(true);
     }
@@ -76,7 +81,7 @@ describe("managing webhooks and reading their deliveries", () => {
     expect((await api("GET", `${t.path}/hooks/${hook}`, t.owner.token)).status).toBe(200);
   });
 
-  it("is allowed with the hook permissions and both content reads", async () => {
+  it("is allowed with the hook permissions and every content permission", async () => {
     const { hook, delivery } = await hookWithDelivery();
     const statuses = await everyOperation(await tokenWith([...HOOKS, ...CONTENT]), hook, delivery);
     expect(statuses).toEqual({

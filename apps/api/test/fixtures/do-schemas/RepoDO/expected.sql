@@ -51,6 +51,7 @@ CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX releases_order ON releases (draft, published_at, id);
 CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
 CREATE INDEX review_comments_thread ON review_comments (thread_id, comment_id);
@@ -708,6 +709,23 @@ CREATE TABLE refs (
     CHECK ((kind = 'direct' AND oid IS NOT NULL AND target IS NULL)
         OR (kind = 'symbolic' AND oid IS NULL AND target IS NOT NULL))
   ) STRICT;
+CREATE TABLE releases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tag_name TEXT NOT NULL UNIQUE,
+        name TEXT,
+        body TEXT,
+        draft INTEGER NOT NULL CHECK (draft IN (0, 1)),
+        prerelease INTEGER NOT NULL CHECK (prerelease IN (0, 1)),
+        author TEXT NOT NULL,
+        tag_oid BLOB,
+        commit_oid BLOB,
+        published_at INTEGER,
+        version INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((draft = 1 AND tag_oid IS NULL AND commit_oid IS NULL AND published_at IS NULL)
+            OR (draft = 0 AND tag_oid IS NOT NULL AND commit_oid IS NOT NULL AND published_at IS NOT NULL))
+      ) STRICT;
 CREATE TABLE repo_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         repo_id TEXT NOT NULL,
