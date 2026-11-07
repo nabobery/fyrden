@@ -382,7 +382,7 @@ describe("a listen stream", () => {
     const sixth = await listen([feedUri(owner)], bearer(owner.token));
     expect(await sixth.next()).toMatchObject({
       id: "listen-1",
-      error: { data: { status: 429, code: "too_many_sockets" } },
+      error: { data: { status: 429, code: "too_many_sockets", reason: "feed_cap" } },
     });
     expect((await socketsOf(owner)).leases).toBe(LIVE_POLICY.perCredential);
     for (const stream of streams) stream.abort.abort();

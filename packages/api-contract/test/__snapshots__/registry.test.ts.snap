@@ -23,6 +23,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "missing_permission": {
             "type": "string",
           },
+          "reason": {
+            "description": "Fyrden: with a live hints refusal, which check refused it. Diagnostic only: names may change.",
+            "type": "string",
+          },
           "request_id": {
             "type": "string",
           },

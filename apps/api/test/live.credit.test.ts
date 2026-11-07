@@ -12,7 +12,12 @@ import { describe, expect, it } from "vitest";
 import type { UserDO } from "../src/do/UserDO.js";
 import { Live } from "../src/do/user/live.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
-import { type LiveEnvelope, makeLiveGrant, reserveLive } from "../src/live/budget.js";
+import {
+  expireLiveReceipts,
+  type LiveEnvelope,
+  makeLiveGrant,
+  reserveLive,
+} from "../src/live/budget.js";
 import { planFor } from "../src/live/funding.js";
 import {
   LIVE_BLOCK_UNITS,
@@ -118,7 +123,10 @@ describe("a pool of controls", () => {
       const feed = `usr_${uniqueId("days")}`;
       const morning = (Math.floor(Date.now() / DAY) + 4) * DAY + 3_600_000;
       const evening = morning + 21 * 3_600_000;
-      const [early, late] = [await block(feed, morning), await block(feed, evening)];
+      const early = await block(feed, morning);
+      // What the cron's maintenance does long before the evening.
+      await expireLiveReceipts(clockedD1(env.DIRECTORY, { now: evening }));
+      const late = await block(feed, evening);
       const days = await runInDurableObject(env.USER.getByName(feed), (_: UserDO, state) => {
         const budget = new LiveBudget(state.storage.sql);
         budget.takeEpoch(0, early.plan.incarnation);

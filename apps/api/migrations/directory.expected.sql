@@ -228,7 +228,7 @@ CREATE TABLE live_budget_days (
   CHECK (duration_breach IN (0, 1))) STRICT;
 
 -- table live_budget_receipts
-CREATE TABLE live_budget_receipts (
+CREATE TABLE "live_budget_receipts" (
   seq INTEGER PRIMARY KEY CHECK (seq BETWEEN 1 AND 9007199254740991),
   operation_id TEXT NOT NULL UNIQUE,
   mint TEXT NOT NULL,
@@ -267,16 +267,17 @@ CREATE TABLE live_budget_receipts (
     )),
   settle_until INTEGER NOT NULL CHECK (settle_until >= valid_until),
   expires_at INTEGER NOT NULL CHECK (
-    expires_at >= valid_until + 172800000 AND expires_at >= settle_until
+    expires_at >= valid_until + 3600000 AND expires_at >= settle_until
   ),
   settled_at INTEGER,
   completion TEXT CHECK (
     completion IS NULL OR (json_valid(completion) AND json_type(completion) = 'object')
   ),
-  settlement_mint TEXT, released_owners TEXT NOT NULL DEFAULT '[]' CHECK (
-  json_valid(released_owners) AND json_type(released_owners) = 'array'
-    AND json_array_length(released_owners) <= 1
-),
+  settlement_mint TEXT,
+  released_owners TEXT NOT NULL DEFAULT '[]' CHECK (
+    json_valid(released_owners) AND json_type(released_owners) = 'array'
+      AND json_array_length(released_owners) <= 1
+  ),
   CHECK (
     (settled_at IS NULL AND completion IS NULL AND settlement_mint IS NULL)
     OR (settled_at IS NOT NULL AND completion IS NOT NULL AND settlement_mint IS NOT NULL)
@@ -842,12 +843,6 @@ CREATE INDEX live_budget_receipts_recipient
 -- index live_budget_receipts_turn
 CREATE INDEX live_budget_receipts_turn ON live_budget_receipts (recipient, valid_until)
   WHERE kind = 'pump' AND settled_at IS NULL;
-
--- index live_duration_owners_class
-CREATE INDEX live_duration_owners_class ON live_duration_owners (class, status);
-
--- index live_duration_owners_object
-CREATE INDEX live_duration_owners_object ON live_duration_owners (object_type, object_id, class);
 
 -- index live_duration_owners_operation
 CREATE UNIQUE INDEX live_duration_owners_operation ON live_duration_owners (operation_id);

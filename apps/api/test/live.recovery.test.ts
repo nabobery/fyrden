@@ -1231,7 +1231,11 @@ describe("live recovery's maintenance", () => {
       clock.now = (day + 3) * DAY;
       expect((await expireLiveReceipts(db)).expired).toBe(1);
       const seq = (await ledger())?.grant_seq;
-      expect(await reserveLive(db, request)).toEqual({ status: "refused", reason: "expired" });
+      expect(await reserveLive(db, request)).toEqual({
+        status: "refused",
+        reason: "expired",
+        gate: "validity",
+      });
       expect((await ledger())?.grant_seq).toBe(seq);
     });
   });

@@ -13,7 +13,7 @@ import {
   d1RowsRun,
   measureInvocation,
 } from "@fyrden/adapters-cloudflare/obs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   expireLiveReceipts,
   type LiveDayCharge,
@@ -30,7 +30,11 @@ import {
   runLiveMaintenance,
   settleStrandedOwners,
 } from "../src/live/maintenance.js";
-import { LIVE_MAINTENANCE_MEASURED, LIVE_REVOCATION_PAGE_MEASURED } from "../src/live/manifest.js";
+import {
+  LIVE_MAINTENANCE_LIGHT_MEASURED,
+  LIVE_MAINTENANCE_MEASURED,
+  LIVE_REVOCATION_PAGE_MEASURED,
+} from "../src/live/manifest.js";
 import {
   admitLiveOwners,
   LIVE_OWNER_LIMITS,
@@ -389,7 +393,7 @@ describe("a maintenance run's pages, full", () => {
       // Nothing routine due (earlier files' leftovers cleared), revocations due.
       for (let i = 0; i < 20 && (await liveMaintenanceWork(env.DIRECTORY)).routine; i++)
         await runLiveMaintenance(env);
-      expect(await liveMaintenanceWork(env.DIRECTORY)).toEqual({
+      expect(await liveMaintenanceWork(env.DIRECTORY)).toMatchObject({
         routine: false,
         revocations: true,
       });
@@ -458,5 +462,72 @@ describe("a maintenance run's pages, full", () => {
           "DELETE FROM live_sockets WHERE socket_id LIKE 'sx_%' OR socket_id LIKE 'st_%'",
         ),
       ]);
+    }));
+});
+
+describe("a light maintenance run", () => {
+  it("costs no more than its price was measured at, its pages full", () =>
+    isolated(async () => {
+      for (const table of [
+        "live_sockets",
+        "live_socket_deps",
+        "live_admissions",
+        "live_ticket_days",
+      ])
+        await env.DIRECTORY.prepare(`DELETE FROM ${table}`).run();
+      await env.DIRECTORY.prepare("DELETE FROM live_ticket_transports").run();
+      await env.DIRECTORY.prepare("DELETE FROM revocations").run();
+      await env.DIRECTORY.prepare(
+        "UPDATE live_budget_state SET duration_debt_ms = 0, ordinary_duration_blocked = 0",
+      ).run();
+      const day = testDay(30);
+      // A page of receipts holding escrow on two days each, a page of them on days still kept.
+      // Latest first: an earlier one granted later would find the later ones overdue.
+      for (let i = LIVE_MAINTENANCE.receipts - 1; i >= 0; i--)
+        await overMidnight(day + Math.floor(i / 3), `usr_light_${i}`);
+      // Half a minute before a midnight: the run's own grant is charged to two days.
+      const now = (day + 8) * DAY - 30_000;
+      const fill: D1PreparedStatement[] = [];
+      for (let i = 0; i <= LIVE_MAINTENANCE.reap.transports; i++)
+        fill.push(
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at,
+               operation_id) VALUES (?, 'usr_light', 'tok_light', ?, 'op')`,
+          ).bind(`light_${i}`, now - DAY),
+        );
+      await env.DIRECTORY.batch(fill);
+      expect(await liveMaintenanceWork(clockedD1(env.DIRECTORY, { now }))).toMatchObject({
+        routine: true,
+        full: false,
+      });
+      // (Transports are reaped by this Worker's clock.)
+      vi.setSystemTime(now);
+      const rows = await measureInvocation(
+        createMetrics(env.METRICS),
+        { where: "do", op: "liveMaintenance", doClass: "MaintenanceDO" },
+        async () => {
+          const before = d1RowsRun();
+          const run = await runLiveMaintenance({
+            ...env,
+            DIRECTORY: countedD1(clockedD1(env.DIRECTORY, { now })),
+          } as typeof env);
+          if (run?.status !== "funded") throw new Error(JSON.stringify(run));
+          const after = d1RowsRun();
+          return { read: after.read - before.read, written: after.written - before.written };
+        },
+      );
+      // Its pages were full, and it went no further.
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT count(*) AS n FROM live_budget_receipts WHERE recipient LIKE 'usr_light_%'",
+        ).first(),
+      ).toEqual({ n: 0 });
+      expect(
+        await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_ticket_transports").first(),
+      ).toEqual({ n: 1 });
+      expect(rows).toEqual({
+        read: Math.min(rows.read, LIVE_MAINTENANCE_LIGHT_MEASURED.d1_rows_read),
+        written: Math.min(rows.written, LIVE_MAINTENANCE_LIGHT_MEASURED.d1_rows_written),
+      });
     }));
 });

@@ -384,6 +384,7 @@ describe("funding a grant", () => {
       expect(await fund(db, { ...forged, operationId: request.operationId })).toEqual({
         status: "refused",
         reason: "temporary",
+        gate: "validity",
       });
       // A retry must send the request it made (its identity and nonce): a fresh nonce is another
       // operation, granted and charged again.
@@ -421,6 +422,7 @@ describe("funding a grant", () => {
         status: "refused",
         reason: "daily",
         retryAt: (day + 1) * DAY,
+        gate: "daily_total",
       });
     }));
 });
@@ -491,7 +493,7 @@ describe("owned live work", () => {
         },
         { ledger, pendingMs: 20 },
       );
-      expect(run).toEqual({ status: "refused", reason: "temporary" });
+      expect(run).toEqual({ status: "refused", reason: "temporary", gate: "given_up" });
       expect(stopped).toBe(true);
       expect((await ownerRow(ownerId))?.status).toBe("dispatched");
     }));
