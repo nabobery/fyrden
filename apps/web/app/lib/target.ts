@@ -19,6 +19,16 @@ export function refAndPath(request: Request): { ref: string; path: string } {
   }
 }
 
+/** A tag a release page names (`/:owner/:repo/releases/<view>/<tag>`), as `refAndPath` reads a ref. */
+export function tagOfPage(request: Request): string {
+  const tag = pagePath(request).split("/").slice(5);
+  try {
+    return withoutTrailingSlashes(tag.map(decodeURIComponent).join("/"));
+  } catch {
+    throw data("Not found", { status: 404 });
+  }
+}
+
 /**
  * The page's path, as React Router matched it: a navigation's data request
  * (`<path>.data`, or `<path>/_.data` for one ending in a slash) reaches the

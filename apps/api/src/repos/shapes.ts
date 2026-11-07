@@ -4,6 +4,7 @@ import type {
   getLabel,
   getMilestone,
   getPull,
+  getRelease,
   getReview,
   getReviewComment,
   Output,
@@ -13,6 +14,7 @@ import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
 import type { PullView } from "../do/repo/mergeability.js";
 import type { PullRecord } from "../do/repo/pulls.js";
 import type { OwnReaction, Reacted, ReactionCounts } from "../do/repo/reactions.js";
+import type { ReleaseRecord } from "../do/repo/releases.js";
 import type { ReviewCommentRecord } from "../do/repo/review-comments.js";
 import type { ReviewRecord } from "../do/repo/reviews.js";
 import type { LabelRecord, MilestoneRecord, SubjectMeta } from "../do/repo/subject-meta.js";
@@ -33,6 +35,28 @@ export function labelOutput(label: LabelRecord): Output<typeof getLabel> {
     description: label.description,
     default: label.isDefault,
     version: label.version,
+  };
+}
+
+/** A release as the API answers it. Assets arrive with their own slice. */
+export function releaseOutput(release: ReleaseRecord): Output<typeof getRelease> {
+  return {
+    id: release.id,
+    tag_name: release.tagName,
+    name: release.name,
+    body: release.body,
+    draft: release.draft,
+    prerelease: release.prerelease,
+    author: { id: release.author },
+    tag_sha: release.tagOid,
+    commit_sha: release.commitOid,
+    current_tag_sha: release.currentTagOid,
+    tag_state: release.tagState,
+    published_at: release.publishedAt,
+    created_at: release.createdAt,
+    updated_at: release.updatedAt,
+    version: release.version,
+    assets: [],
   };
 }
 

@@ -1435,7 +1435,7 @@ export type ReposHooksCreateInput = {
     url: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "release" | "*")[];
   active?: boolean;
 };
 
@@ -1510,9 +1510,9 @@ export type ReposHooksUpdateInput = {
     url?: string;
     content_type?: "json";
   };
-  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
-  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
-  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "*")[];
+  events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "release" | "*")[];
+  add_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "release" | "*")[];
+  remove_events?: ("push" | "pull_request" | "pull_request_review" | "pull_request_review_comment" | "issue_comment" | "issues" | "label" | "milestone" | "release" | "*")[];
   active?: boolean;
 };
 
@@ -5031,6 +5031,322 @@ export type OrgsDefaultLabelsSetOutput = {
   })[];
 };
 
+/** Input of `releases.list`: List releases. */
+export type ReleasesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, 1-100. Fyrden: a page also ends once its items pass 1 MiB of JSON (always one item at least), with `next_cursor` to go on. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `releases.list`. */
+export type ReleasesListOutput = {
+  releases: ({
+    id: number;
+    tag_name: string;
+    name: string | null;
+    body: string | null;
+    draft: boolean;
+    prerelease: boolean;
+    author: {
+      id: string;
+    };
+    /** The tag's object as recorded at publication; null on a draft. */
+    tag_sha: string | null;
+    /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+    commit_sha: string | null;
+    /** Where the tag is now, when it has moved. */
+    current_tag_sha: string | null;
+    /** What became of the tag since publication; null on a draft. */
+    tag_state: "current" | "moved" | "deleted" | null;
+    published_at: number | null;
+    created_at: number;
+    updated_at: number;
+    version: number;
+    assets: {
+      id: number;
+      name: string;
+      content_type: string;
+      size: number;
+      uploader: {
+        id: string;
+      };
+      created_at: number;
+      updated_at: number;
+      download_url: string;
+    }[];
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `releases.latest`: Get the latest release. */
+export type ReleasesLatestInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `releases.latest`. */
+export type ReleasesLatestOutput = {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  author: {
+    id: string;
+  };
+  /** The tag's object as recorded at publication; null on a draft. */
+  tag_sha: string | null;
+  /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+  commit_sha: string | null;
+  /** Where the tag is now, when it has moved. */
+  current_tag_sha: string | null;
+  /** What became of the tag since publication; null on a draft. */
+  tag_state: "current" | "moved" | "deleted" | null;
+  published_at: number | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  assets: {
+    id: number;
+    name: string;
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    download_url: string;
+  }[];
+};
+
+/** Input of `releases.get_by_tag`: Get a release by its tag. */
+export type ReleasesGetByTagInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The tag's name, without `refs/tags/`. May contain slashes. */
+  tag: string;
+};
+
+/** Output of `releases.get_by_tag`. */
+export type ReleasesGetByTagOutput = {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  author: {
+    id: string;
+  };
+  /** The tag's object as recorded at publication; null on a draft. */
+  tag_sha: string | null;
+  /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+  commit_sha: string | null;
+  /** Where the tag is now, when it has moved. */
+  current_tag_sha: string | null;
+  /** What became of the tag since publication; null on a draft. */
+  tag_state: "current" | "moved" | "deleted" | null;
+  published_at: number | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  assets: {
+    id: number;
+    name: string;
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    download_url: string;
+  }[];
+};
+
+/** Input of `releases.get`: Get a release. */
+export type ReleasesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The release's id. */
+  release_id: number;
+};
+
+/** Output of `releases.get`. */
+export type ReleasesGetOutput = {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  author: {
+    id: string;
+  };
+  /** The tag's object as recorded at publication; null on a draft. */
+  tag_sha: string | null;
+  /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+  commit_sha: string | null;
+  /** Where the tag is now, when it has moved. */
+  current_tag_sha: string | null;
+  /** What became of the tag since publication; null on a draft. */
+  tag_state: "current" | "moved" | "deleted" | null;
+  published_at: number | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  assets: {
+    id: number;
+    name: string;
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    download_url: string;
+  }[];
+};
+
+/** Input of `releases.create`: Create a release. */
+export type ReleasesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The tag's name, without `refs/tags/`. May contain slashes. */
+  tag_name: string;
+  name?: string;
+  body?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+};
+
+/** Output of `releases.create`. */
+export type ReleasesCreateOutput = {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  author: {
+    id: string;
+  };
+  /** The tag's object as recorded at publication; null on a draft. */
+  tag_sha: string | null;
+  /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+  commit_sha: string | null;
+  /** Where the tag is now, when it has moved. */
+  current_tag_sha: string | null;
+  /** What became of the tag since publication; null on a draft. */
+  tag_state: "current" | "moved" | "deleted" | null;
+  published_at: number | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  assets: {
+    id: number;
+    name: string;
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    download_url: string;
+  }[];
+};
+
+/** Input of `releases.update`: Update a release. */
+export type ReleasesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The release's id. */
+  release_id: number;
+  /** The tag's name, without `refs/tags/`. May contain slashes. */
+  tag_name?: string;
+  /** Null clears it. */
+  name?: string | null;
+  /** Null clears it. */
+  body?: string | null;
+  draft?: boolean;
+  prerelease?: boolean;
+  /** Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since. */
+  expected_version?: number;
+};
+
+/** Output of `releases.update`. */
+export type ReleasesUpdateOutput = {
+  id: number;
+  tag_name: string;
+  name: string | null;
+  body: string | null;
+  draft: boolean;
+  prerelease: boolean;
+  author: {
+    id: string;
+  };
+  /** The tag's object as recorded at publication; null on a draft. */
+  tag_sha: string | null;
+  /** The commit the tag peeled to at publication, which the source archives use; null on a draft. */
+  commit_sha: string | null;
+  /** Where the tag is now, when it has moved. */
+  current_tag_sha: string | null;
+  /** What became of the tag since publication; null on a draft. */
+  tag_state: "current" | "moved" | "deleted" | null;
+  published_at: number | null;
+  created_at: number;
+  updated_at: number;
+  version: number;
+  assets: {
+    id: number;
+    name: string;
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    download_url: string;
+  }[];
+};
+
+/** Input of `releases.delete`: Delete a release. */
+export type ReleasesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The release's id. */
+  release_id: number;
+};
+
+/** Output of `releases.delete`. */
+export type ReleasesDeleteOutput = {
+  id: number;
+  state: "deleted";
+};
+
 /** Input of `milestones.list`: List milestones. */
 export type MilestonesListInput = {
   /** The owner's handle. */
@@ -8084,6 +8400,13 @@ export const OPERATIONS = {
   "issues.assignees.remove": { method: "DELETE", path: "/repos/{owner}/{repo}/issues/{issue_number}/assignees", pathParams: ["owner","repo","issue_number"], idempotent: true },
   "orgs.default_labels.get": { method: "GET", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: false },
   "orgs.default_labels.set": { method: "PUT", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: true },
+  "releases.list": { method: "GET", path: "/repos/{owner}/{repo}/releases", pathParams: ["owner","repo"], idempotent: false, items: "releases" },
+  "releases.latest": { method: "GET", path: "/repos/{owner}/{repo}/releases/latest", pathParams: ["owner","repo"], idempotent: false },
+  "releases.get_by_tag": { method: "GET", path: "/repos/{owner}/{repo}/releases/tags/{tag+}", pathParams: ["owner","repo","tag"], idempotent: false },
+  "releases.get": { method: "GET", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: false },
+  "releases.create": { method: "POST", path: "/repos/{owner}/{repo}/releases", pathParams: ["owner","repo"], idempotent: true },
+  "releases.update": { method: "PATCH", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: true },
+  "releases.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: true },
   "milestones.list": { method: "GET", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: false, items: "milestones" },
   "milestones.get": { method: "GET", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: false },
   "milestones.create": { method: "POST", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: true },
@@ -8265,27 +8588,27 @@ export interface Operations {
   "repos.rulesets.update": { input: ReposRulesetsUpdateInput; output: ReposRulesetsUpdateOutput };
   /** Delete a ruleset. Removes a ruleset. Administrators only. */
   "repos.rulesets.delete": { input: ReposRulesetsDeleteInput; output: ReposRulesetsDeleteOutput };
-  /** List repository webhooks. The repository's webhooks. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** List repository webhooks. The repository's webhooks. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.list": { input: ReposHooksListInput; output: ReposHooksListOutput };
-  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, or `*`. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Create a repository webhook. Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, `release`, or `*`. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.create": { input: ReposHooksCreateInput; output: ReposHooksCreateOutput };
-  /** Get a repository webhook. One webhook. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Get a repository webhook. One webhook. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.get": { input: ReposHooksGetInput; output: ReposHooksGetOutput };
-  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Update a repository webhook. Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.update": { input: ReposHooksUpdateInput; output: ReposHooksUpdateOutput };
-  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Delete a repository webhook. Removes a webhook; its waiting deliveries are cancelled. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.delete": { input: ReposHooksDeleteInput; output: ReposHooksDeleteOutput };
-  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Ping a repository webhook. Sends the webhook a `ping` delivery. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.pings.create": { input: ReposHooksPingsCreateInput; output: ReposHooksPingsCreateOutput };
-  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Rotate a webhook's secret. Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.secret.rotate": { input: ReposHooksSecretRotateInput; output: ReposHooksSecretRotateOutput };
-  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Drop a webhook's previous secret. Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.secret.drop": { input: ReposHooksSecretDropInput; output: ReposHooksSecretDropOutput };
-  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** List deliveries for a repository webhook. The webhook's deliveries of the last 30 days, newest first. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.deliveries.list": { input: ReposHooksDeliveriesListInput; output: ReposHooksDeliveriesListOutput };
-  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Get a delivery for a repository webhook. One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.deliveries.get": { input: ReposHooksDeliveriesGetInput; output: ReposHooksDeliveriesGetOutput };
-  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only, with `issues:read` and `pull_requests:read` (a webhook carries their contents). */
+  /** Redeliver a delivery for a repository webhook. Sends a finished delivery (`done` or `failed`) once more: its original body, the same `webhook-id`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 `delivery_pending`), while a 410 from its receiver is turning the hook off (409 `hook_being_disabled`), for a delivery that was cancelled or dropped (422 `not_redeliverable`), once its body is gone (422 `payload_gone`), once it has made 50 attempts (422 `too_many_attempts`), for an inactive hook (422 `hook_inactive`), and while the hook has 1,000 deliveries waiting (409 `too_many_outstanding`). Administrators only, with `issues:read`, `pull_requests:read` and `contents:write` (a webhook carries issue, pull request and draft release contents). */
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
@@ -8425,6 +8748,20 @@ export interface Operations {
   "orgs.default_labels.get": { input: OrgsDefaultLabelsGetInput; output: OrgsDefaultLabelsGetOutput };
   /** Set an organization's default labels. Fyrden: replaces the labels the organization's new repositories get (at most 100, names unique ignoring case); repositories made before keep theirs. For its owners. */
   "orgs.default_labels.set": { input: OrgsDefaultLabelsSetInput; output: OrgsDefaultLabelsSetOutput };
+  /** List releases. Drafts first, newest first, for a caller who can see them; then published releases by publication, newest first. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
+  "releases.list": { input: ReleasesListInput; output: ReleasesListOutput };
+  /** Get the latest release. The newest published release by publication that isn't a prerelease. Takes the `contents:read` permission. */
+  "releases.latest": { input: ReleasesLatestInput; output: ReleasesLatestOutput };
+  /** Get a release by its tag. The release of a tag name, draft or published. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
+  "releases.get_by_tag": { input: ReleasesGetByTagInput; output: ReleasesGetByTagOutput };
+  /** Get a release. One release, with what became of its tag. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
+  "releases.get": { input: ReleasesGetInput; output: ReleasesGetOutput };
+  /** Create a release. Creates a draft, which needs no tag, or publishes at once, which needs the tag to exist (422 `tag_not_found`; push it first) and to be or peel to a commit (422 `tag_not_a_commit`). Publishing records the tag object and its commit for good. Answers 409 `tag_moving`, with nothing changed, when the tag moved meanwhile; send it again. Takes the `contents:write` permission. */
+  "releases.create": { input: ReleasesCreateInput; output: ReleasesCreateOutput };
+  /** Update a release. Changes a release's title, notes or prerelease flag; on a draft, its tag too. `draft: false` publishes a draft, under the same conditions as creating one published. A published release can't go back to draft or change its tag (422 `release_published`). Takes the `contents:write` permission. */
+  "releases.update": { input: ReleasesUpdateInput; output: ReleasesUpdateOutput };
+  /** Delete a release. Deletes a release. Its tag stays. Answers what was deleted (GitHub answers 204). Takes the `contents:write` permission. */
+  "releases.delete": { input: ReleasesDeleteInput; output: ReleasesDeleteOutput };
   /** List milestones. The repository's milestones by due date, then number; one without a due date counts as due after every date (last ascending, first descending). GitHub's `completeness` order is not offered. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
   "milestones.list": { input: MilestonesListInput; output: MilestonesListOutput };
   /** Get a milestone. One milestone, with its open and closed counts as they stand. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */

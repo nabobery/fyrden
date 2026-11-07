@@ -229,6 +229,19 @@ const CASES: Record<
     input: {},
     expected: { status: 404, code: "comment_not_found" },
   },
+  "releases.list": { input: {}, expected: { status: 200 } },
+  "releases.latest": { input: {}, expected: { status: 404, code: "release_not_found" } },
+  "releases.get_by_tag": { input: {}, expected: { status: 404, code: "release_not_found" } },
+  "releases.get": { input: {}, expected: { status: 404, code: "release_not_found" } },
+  "releases.create": {
+    input: { tag_name: "checked", draft: true },
+    expected: { status: 409, code: "repo_not_ready" },
+  },
+  "releases.update": {
+    input: { name: "checked" },
+    expected: { status: 409, code: "repo_not_ready" },
+  },
+  "releases.delete": { input: {}, expected: { status: 409, code: "repo_not_ready" } },
   // Labels and milestones serve both kinds: either kind's permission lets a caller through
   // (see EITHER_KIND below).
   "labels.list": { input: {}, expected: MISSING_KIND },
@@ -344,6 +357,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")
     .replace("{milestone_number}", "1")
+    .replace("{release_id}", "1")
+    .replace("{tag+}", "checked")
     .replace("{reaction_id}", "1")
     .replace("{name}", "checked")
     .replace("{comment_id}", "1")
@@ -420,13 +435,18 @@ describe("operations answering with file contents", () => {
 
 /** A webhook operation: a hook carries issue and pull request contents out. */
 const isHookOp = (op: OperationDef) => op.id.startsWith("repos.hooks.");
-const HOOK_CONTENT = ["issues:read", "pull_requests:read"];
+const HOOK_CONTENT = ["issues:read", "pull_requests:read", "contents:write"];
 
 describe("webhook operations", () => {
   it.each(repoOps.filter(isHookOp).map((op) => [op.id, op] as const))(
-    "%s needs both content reads beside the permission it declares",
+    "%s needs every content permission beside the one it declares",
     async (_, op) => {
-      for (const extra of [[], ["issues:read"], ["pull_requests:read"]]) {
+      for (const extra of [
+        [],
+        ["issues:read"],
+        ["pull_requests:read"],
+        ["issues:read", "pull_requests:read"],
+      ]) {
         const token = await scopedToken(owner.principalId, [op.permission, ...extra]);
         expect(await outcome(await call(op, token))).toEqual({ status: 403, code: "forbidden" });
       }

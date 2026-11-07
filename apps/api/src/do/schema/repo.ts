@@ -1517,4 +1517,32 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    version: 48,
+    // Releases. A draft has no git state; a published release holds the tag's
+    // object and the commit it peeled to, which keep those objects through
+    // collection and detach. `tag_name` is unique across drafts and published
+    // ones. Ids aren't reused within one restore line; a restore can reissue one.
+    name: "releases",
+    sql: `
+      CREATE TABLE releases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tag_name TEXT NOT NULL UNIQUE,
+        name TEXT,
+        body TEXT,
+        draft INTEGER NOT NULL CHECK (draft IN (0, 1)),
+        prerelease INTEGER NOT NULL CHECK (prerelease IN (0, 1)),
+        author TEXT NOT NULL,
+        tag_oid BLOB,
+        commit_oid BLOB,
+        published_at INTEGER,
+        version INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK ((draft = 1 AND tag_oid IS NULL AND commit_oid IS NULL AND published_at IS NULL)
+            OR (draft = 0 AND tag_oid IS NOT NULL AND commit_oid IS NOT NULL AND published_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX releases_order ON releases (draft, published_at, id);
+    `,
+  },
 ];

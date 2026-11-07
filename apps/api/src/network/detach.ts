@@ -115,6 +115,8 @@ export interface DetachWiring {
   readonly log: Logger;
   readonly blocks?: () => BlockCache;
   readonly hooks?: () => DetachHooks;
+  /** What the fork keeps besides what its refs reach (published releases' tags and commits). */
+  readonly roots: () => readonly Oid[];
   /** After the swap: tell both networks and the directory. Throws to be retried. */
   readonly notify: (oldNetworkId: string, newNetworkId: string) => Promise<void>;
 }
@@ -246,7 +248,7 @@ class DetachSlice {
       after: undefined,
       drops: undefined,
     };
-    return this.#mark(next, [...refs.refs.values()]);
+    return this.#mark(next, [...refs.refs.values(), ...this.wiring.roots()]);
   }
 
   #readable(cursor: DetachCursor): boolean {
@@ -364,7 +366,7 @@ class DetachSlice {
     if (this.#moved(cursor)) return this.#next({ ...cursor, phase: "swap" });
     const check = cursor.check ?? 0;
     const prune: DetachCursor = { ...cursor, phase: "prune", after: undefined, drops: 0 };
-    const refs = [...git.refStore.readRefsSync().refs.values()];
+    const refs = [...git.refStore.readRefsSync().refs.values(), ...this.wiring.roots()];
     if (refs.length === 0) return this.#next(prune);
     const packs = this.#newPacks(cursor);
     if (packs.length === 0) return this.#closureMissing(cursor);

@@ -217,6 +217,15 @@ import {
   listReviewCommentReactionsOperation,
 } from "../repos/reactions.js";
 import {
+  createReleaseOperation,
+  deleteReleaseOperation,
+  getLatestReleaseOperation,
+  getReleaseByTagOperation,
+  getReleaseOperation,
+  listReleasesOperation,
+  updateReleaseOperation,
+} from "../repos/releases.js";
+import {
   applySuggestionsOperation,
   createReviewCommentOperation,
   deleteReviewCommentOperation,
@@ -570,6 +579,13 @@ export const handlers: Handlers = {
   "milestones.create": createMilestoneOperation,
   "milestones.update": updateMilestoneOperation,
   "milestones.delete": deleteMilestoneOperation,
+  "releases.list": listReleasesOperation,
+  "releases.latest": getLatestReleaseOperation,
+  "releases.get_by_tag": getReleaseByTagOperation,
+  "releases.get": getReleaseOperation,
+  "releases.create": createReleaseOperation,
+  "releases.update": updateReleaseOperation,
+  "releases.delete": deleteReleaseOperation,
   "issues.create": createIssueOperation,
   "issues.get": getIssueOperation,
   "issues.update": updateIssueOperation,
