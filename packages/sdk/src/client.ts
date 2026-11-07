@@ -164,7 +164,8 @@ export class FyrdenClient {
     input: Omit<AllOf<InputOf<K>>, "cursor">,
     options: Omit<CallOptions, "idempotencyKey"> = {},
   ): AsyncGenerator<ItemOf<K>> {
-    const field = (OPERATIONS[id] as { readonly items: string }).items;
+    const field = (OPERATIONS[id] as { readonly items?: string }).items;
+    if (field === undefined) throw new TypeError(`${id} has no items to page: use call`);
     let cursor: string | null | undefined;
     do {
       // Once a page answered, its cursor carries on from where `after` (a start given by id)

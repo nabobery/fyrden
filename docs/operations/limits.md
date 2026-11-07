@@ -486,8 +486,9 @@ network has is not found.
 
 `GET /repos/{owner}/{repo}/paths` (the `list_paths` MCP tool) lists every file
 path of a branch, tag or commit, in git's order, in pages: files, symlinks and
-submodules, no directories. Loop until `next_cursor` is null, then read
-`state`. A cursor holds the commit and the last path it consumed, so it resumes
+submodules, no directories. Follow `next_cursor` until it is null, then read
+`state`; check each page's `state` first, since `busy` repeats its cursor, to
+send again only after `retry_after_ms`. A cursor holds the commit and the last path it consumed, so it resumes
 the walk by itself: stored lists only save work, and losing one never changes
 an answer. The SDK's `paginate` does not offer this operation, since it yields
 items alone and would hide `state`, `reason` and `retry_after_ms`: loop over

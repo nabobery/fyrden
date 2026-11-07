@@ -235,7 +235,7 @@ export const listPaths = defineOperation({
   path: "/repos/{owner}/{repo}/paths",
   summary: "List a tree's file paths",
   description:
-    "Every file path of a branch, tag or commit, in git's order and in pages: files, symlinks and submodules, no directories. Loop until `next_cursor` is null, then read `state`. A page may be short or even empty and still have a next one. `complete` comes only on the last page; `incomplete` with a reason other than `more_pages` is true as far as it goes but will never be whole (the rest of the tree is not described); `unavailable` is an answer to try again later (`busy`: after `retry_after_ms`, with the same cursor). Names that are not valid UTF-8 are left out and counted in each page's `unlisted_names`.",
+    "Every file path of a branch, tag or commit, in git's order and in pages: files, symlinks and submodules, no directories. Follow `next_cursor` until it is null, then read `state`; check each page's `state` first, since `busy` repeats its cursor, to send again only after `retry_after_ms`. A page may be short or even empty and still have a next one. `complete` comes only on the last page; `incomplete` with a reason other than `more_pages` is true as far as it goes but will never be whole (the rest of the tree is not described); `unavailable` is an answer to try again later. Names that are not valid UTF-8 are left out and counted in each page's `unlisted_names`.",
   input: z.object({
     owner: Owner,
     repo: Repo,

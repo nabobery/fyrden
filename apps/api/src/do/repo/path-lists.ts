@@ -18,7 +18,7 @@ import {
   type TreeEntry,
 } from "@fyrden/git-core";
 import { ReadBudgetError } from "../../git/live-reader.js";
-import { type Browsed, fail, type RepoBrowse, TOO_EXPENSIVE } from "./browse.js";
+import { type Browsed, fail, type RepoBrowse, refNotFound, TOO_EXPENSIVE } from "./browse.js";
 import { sameCursor } from "./diff-cursors.js";
 import {
   type HeldReads,
@@ -124,15 +124,35 @@ class MalformedTree extends Error {
  * slash. A cursor's seek relies on both, and they are what makes a position
  * only ever move forward: over a tree without them (a push refuses one, but
  * nothing else promises it) a cursor can go round for ever with no path taken,
- * and no cap would end that.
+ * and no cap would end that. A file and a directory of one name are refused
+ * as a push refuses them, though git's order tells them apart: other names can
+ * sit between them ("a", "a.b", "a/"), and all of those begin with the file's.
  */
 function wellFormed(entries: readonly TreeEntry[]): boolean {
   let previous: TreeEntry | undefined;
+  const files: Uint8Array[] = [];
   for (const entry of entries) {
     if (entry.name.includes(0x2f)) return false;
     if (previous && compareTreeEntries(previous, entry) >= 0) return false;
     previous = entry;
+    if (!isTreeMode(entry.mode)) {
+      files.push(entry.name);
+      continue;
+    }
+    // A file this directory's name does not begin with cannot match a later directory either.
+    let file = files.at(-1);
+    while (file && !startsWith(entry.name, file)) {
+      files.pop();
+      file = files.at(-1);
+    }
+    if (file?.length === entry.name.length) return false;
   }
+  return true;
+}
+
+function startsWith(name: Uint8Array, prefix: Uint8Array): boolean {
+  if (prefix.length > name.length) return false;
+  for (let i = 0; i < prefix.length; i++) if (name[i] !== prefix[i]) return false;
   return true;
 }
 
@@ -151,6 +171,12 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  * at depth 63. This charges 1,312, 1,450 and 8,520 for them.
  */
 const pathMemoryBytes = (pathBytes: number, depth: number) => 2 * pathBytes + 1200 + 100 * depth;
+
+/**
+ * A response's JSON besides its paths: its ids, state and counts (about 300
+ * bytes) and a cursor at the longest path (4,096 bytes, base64 twice: about 7.4 KiB).
+ */
+const RESPONSE_FIELDS_BYTES = 8 * 1024;
 
 export type FinalReason =
   | "too_many_paths"
@@ -280,6 +306,9 @@ export class PathLists {
       throw error;
     }
     if (!at.ok) return at;
+    // A commit gone, and a branch or tag named like its id: `ref` means that, a cursor never does.
+    if (input.cursor && oidToHex(at.value.commit) !== input.cursor.c)
+      return refNotFound(input.cursor.c);
     const policy = this.deps.policy();
     const ctx: Context = {
       commit: oidToHex(at.value.commit),
@@ -305,8 +334,13 @@ export class PathLists {
         totalPaths: row.state === "complete" ? row.visited : null,
       });
     }
-    const appending = row?.state === "building" && n === row.visited ? row : undefined;
-    const starting = !row && input.cursor === undefined && browse.isDefaultTip(at.value.commit);
+    const atFrontier = row?.state === "building" && n === row.visited;
+    const fresh = !row && input.cursor === undefined;
+    const { commit } = at.value;
+    const isTip = () => browse.isDefaultTip(commit);
+    const tip = (atFrontier || fresh) && isTip();
+    const appending = atFrontier && tip ? row : undefined;
+    const starting = fresh && tip;
     const walk: Walk = appending
       ? {
           from: positionOf(parseRowCursor(appending.cursor)),
@@ -319,36 +353,44 @@ export class PathLists {
           bytes: input.cursor?.b ?? 0,
         };
     const keeping = appending !== undefined || starting;
-    const slice = await this.#slice(
-      browse,
-      at.value.tree,
-      ctx,
-      walk,
-      keeping ? null : input.perPage,
-    );
-    this.deps.hooks?.sliced?.(slice.trees);
-    if (slice.unreadable)
-      return this.#answer(ctx, { state: "unavailable", reason: "unreadable", visited: n });
-    const stuck =
-      slice.taken.length === 0 &&
-      !slice.done &&
-      slice.final === null &&
-      sameCursor(slice.next, walk.from ?? DIFF_START);
-    if (stuck) {
-      if (slice.busy) return this.#busy(ctx);
-      return this.#answer(ctx, {
-        state: "incomplete",
-        reason: "too_much_work",
-        visited: n,
-      });
+    // Held until the slice's paths are stored and cut into a page: giving them back admits
+    // whoever waits for memory at once, while these paths are still in use.
+    const holds: MemoryReservation[] = [];
+    try {
+      const slice = await this.#slice(
+        browse,
+        at.value.tree,
+        ctx,
+        walk,
+        keeping ? null : input.perPage,
+        holds,
+      );
+      this.deps.hooks?.sliced?.(slice.trees);
+      if (slice.unreadable)
+        return this.#answer(ctx, { state: "unavailable", reason: "unreadable", visited: n });
+      const stuck =
+        slice.taken.length === 0 &&
+        !slice.done &&
+        slice.final === null &&
+        sameCursor(slice.next, walk.from ?? DIFF_START);
+      if (stuck) {
+        if (slice.busy) return this.#busy(ctx);
+        return this.#answer(ctx, {
+          state: "incomplete",
+          reason: "too_much_work",
+          visited: n,
+        });
+      }
+      let kept = false;
+      if (keeping) {
+        const small =
+          starting && (slice.done || slice.final !== null) && slice.trees < policy.keepMinTrees;
+        if (!small) kept = await this.#keep(ctx, appending, walk, slice, isTip);
+      }
+      return this.#fromSlice(ctx, walk, slice, kept);
+    } finally {
+      for (const hold of holds) hold.release();
     }
-    let kept = false;
-    if (keeping) {
-      const small =
-        starting && (slice.done || slice.final !== null) && slice.trees < policy.keepMinTrees;
-      if (!small) kept = await this.#keep(ctx, appending, walk, slice);
-    }
-    return this.#fromSlice(ctx, walk, slice, kept);
   }
 
   /** A page out of one stored segment; it walks nothing, whatever the row's state. */
@@ -404,13 +446,17 @@ export class PathLists {
     }
   }
 
-  /** One slice of the walk: paths up to `wanted` valid ones, or a full slice when null. */
+  /**
+   * One slice of the walk: paths up to `wanted` valid ones, or a full slice when
+   * null. The memory for the paths goes in `holds`, for the caller to release.
+   */
   async #slice(
     browse: PathBrowse,
     tree: Oid,
     ctx: Context,
     walk: Walk,
     wanted: number | null,
+    holds: MemoryReservation[],
   ): Promise<Slice> {
     const { policy } = ctx;
     const stop = (fields: Partial<Slice>): Slice => ({
@@ -433,10 +479,10 @@ export class PathLists {
       reader = await browse.reader();
     } catch (error) {
       if (error instanceof MemoryWaitTimeoutError) return stop({ busy: true });
-      if (error instanceof ReadBudgetError) return stop({});
-      throw error;
+      if (error instanceof ReadBudgetError || error instanceof ReaderWorkSpent) return stop({});
+      this.#readFailed(error);
+      return stop({ unreadable: true });
     }
-    const holds: MemoryReservation[] = [];
     let heldBytes = 0;
     let neededBytes = 0;
     let sliceBytes = 0;
@@ -488,7 +534,15 @@ export class PathLists {
           error instanceof ReadsBudgetSpent
         )
           throw new ReadDeferred();
-        throw error;
+        if (
+          error instanceof ReadsTooLargeError ||
+          error instanceof UnreadableObjectError ||
+          error instanceof GitObjectError
+        )
+          throw error;
+        // The store failing: the contract's "can't be read now", not a failed request.
+        this.#readFailed(error);
+        throw new UnreadableObjectError("a tree could not be read");
       }
       trees++;
       if (!wellFormed(entries)) throw new MalformedTree();
@@ -501,9 +555,8 @@ export class PathLists {
       if (subtrees.length > 0) {
         try {
           await reader.prefetch(subtrees);
-        } catch (error) {
-          if (!(error instanceof ReadBudgetError || error instanceof MemoryWaitTimeoutError))
-            throw error;
+        } catch {
+          // Only a hint: a read that needs these objects says what is wrong.
         }
       }
       return entries;
@@ -537,8 +590,6 @@ export class PathLists {
       if (error instanceof UnreadableObjectError || error instanceof GitObjectError)
         return stop({ unreadable: true });
       throw error;
-    } finally {
-      for (const hold of holds) hold.release();
     }
   }
 
@@ -586,10 +637,13 @@ export class PathLists {
     appending: ListRow | undefined,
     walk: Walk,
     slice: Slice,
+    isTip: () => boolean,
   ): Promise<boolean> {
     const { storage } = this.deps.git.context;
     try {
       await this.deps.hooks?.beforeKeep?.();
+      // A push may have landed during the walk: lists are kept for the tip only.
+      if (!isTip()) return false;
       const visited = walk.visited + slice.taken.length;
       const bytes = walk.bytes + slice.taken.reduce((total, t) => total + t.bytes.length + 1, 0);
       const slices = (appending?.slices ?? 0) + 1;
@@ -685,6 +739,11 @@ export class PathLists {
     }
   }
 
+  /** Logged, as the answer it becomes (`unreadable`) doesn't say why. */
+  #readFailed(error: unknown): void {
+    this.deps.log().warn("reading a path list's tree failed", { error });
+  }
+
   #dropFound(row: ListRow): void {
     const { storage } = this.deps.git.context;
     try {
@@ -763,13 +822,13 @@ function limitsKey(policy: PathsPolicy): string {
   ].join(":");
 }
 
-/** Up to `perPage` valid paths, `maxJson` bytes of JSON at most, one path at least. */
+/** Up to `perPage` valid paths, a response of `maxJson` bytes of JSON at most, one path at least. */
 function cutPage(taken: readonly Taken[], perPage: number, maxJson: number) {
   const paths: string[] = [];
   let consumed = 0;
   let unlisted = 0;
   let charged = 0;
-  let json = 2;
+  let json = RESPONSE_FIELDS_BYTES;
   for (const path of taken) {
     if (path.text === undefined) unlisted++;
     else {

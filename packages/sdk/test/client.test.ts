@@ -308,6 +308,20 @@ describe("FyrdenClient", () => {
     expect(refused).toBeTypeOf("function");
   });
 
+  it("refuses an operation with no items before it sends anything, for a caller without types", async () => {
+    const { fetchFn, sent } = fake([]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test", fetch: fetchFn });
+    const unpaged = client.paginate(
+      "repos.paths.list" as never,
+      {
+        owner: "me",
+        repo: "r",
+      } as never,
+    );
+    await expect(unpaged.next()).rejects.toThrow(/repos\.paths\.list.*call/);
+    expect(sent).toHaveLength(0);
+  });
+
   it("types the items of a union of paginated operations", async () => {
     const { fetchFn } = fake([{ body: { branches: [{ name: "main" }], next_cursor: null } }]);
     const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });

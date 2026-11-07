@@ -169,7 +169,8 @@ export function fail(
 }
 
 const EMPTY = fail(409, "repo_empty", "The repository is empty.");
-const refNotFound = (ref: string) => fail(404, "ref_not_found", `No commit ${ref} was found.`);
+export const refNotFound = (ref: string) =>
+  fail(404, "ref_not_found", `No commit ${ref} was found.`);
 
 /**
  * One browse request. It opens at most one object reader, on first need,

@@ -318,7 +318,7 @@ const MAX_CURSOR_PATH_BYTES = 4096;
 const HEX_COMMIT = /^[0-9a-f]{40}$/;
 const CURSOR_KEYS = ["b", "c", "n", "w"];
 
-function encodePathCursor(cursor: object | null): string | null {
+export function encodePathCursor(cursor: object | null): string | null {
   return cursor && encodeBytesCursor(new TextEncoder().encode(JSON.stringify(cursor)));
 }
 

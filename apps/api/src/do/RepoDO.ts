@@ -2887,14 +2887,17 @@ export class RepoDO extends MigratingDO {
     return this.#browse(
       "browsePaths",
       (b) =>
-        guarded(() =>
-          new PathLists({
-            git: this.git,
-            epochGen: () => this.events.epochGen(),
-            policy: () => this.pathsPolicy,
-            log: () => this.#log(),
-          }).page(b, input),
-        ),
+        // Past `#measured`'s epoch check: a stored list outlives the start of a deletion.
+        this.#refusesReads()
+          ? fail(404, "repo_not_found", REPO_DELETED)
+          : guarded(() =>
+              new PathLists({
+                git: this.git,
+                epochGen: () => this.events.epochGen(),
+                policy: () => this.pathsPolicy,
+                log: () => this.#log(),
+              }).page(b, input),
+            ),
       { walkReads, maxReads, maxBuiltBytes },
     );
   }

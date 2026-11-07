@@ -5,7 +5,7 @@
 // SQLite over hand-built trees; the REST cases run a pushed repository and
 // compare with `git ls-tree -r`.
 
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { MemoryWaitTimeoutError } from "@fyrden/adapters-cloudflare/git";
 import {
   compareTreeEntries,
@@ -17,6 +17,7 @@ import {
   ReaderWorkSpent,
   type TreeEntry,
 } from "@fyrden/git-core";
+import { uniqueId } from "@fyrden/testing";
 import fc from "fast-check";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -30,9 +31,10 @@ import {
   type PathsPage,
   type PathsPolicy,
 } from "../src/do/repo/path-lists.js";
+import { encodePathCursor } from "../src/repos/browse.js";
 import { ORIGIN } from "./helpers/git-http.js";
 import { commit, concat, object, packOf } from "./helpers/pack-build.js";
-import { scopedToken } from "./helpers/principals.js";
+import { principalWithToken, scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush, pushTarget } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo, newRepo } from "./helpers/repo-git.js";
@@ -383,17 +385,36 @@ describe("a walk resumed from its cursor", () => {
       expect(trees.headers).toBe(before);
     });
 
-    it("takes a file and a directory of one name, which git's order tells apart", async () => {
+    it("ends at a file and a directory of one name, side by side or apart, as a push refuses them", async () => {
+      for (const between of [[], ["a.b"], ["a-", "a.b"]]) {
+        const trees = new Trees();
+        const inner = trees.add([entry("x")]);
+        const root = trees.add([
+          entry("a"),
+          ...between.map(entry),
+          { name: enc.encode("a"), mode: TREE, oid: inner },
+          entry("b"),
+        ]);
+        const bench = await Bench.open();
+        const got = await bench.all(browseOf(trees, root), 10);
+        expect(got.paths, between.join()).toEqual([]);
+        expect(got.last).toMatchObject({ reason: "malformed_tree", next: null });
+      }
+    });
+
+    it("takes a directory whose name only begins with a file's", async () => {
       const trees = new Trees();
       const inner = trees.add([entry("x")]);
-      const root = trees.add([
-        entry("a"),
-        { name: enc.encode("a"), mode: TREE, oid: inner },
-        entry("b"),
-      ]);
+      const dir = (name: string) => ({ name: enc.encode(name), mode: TREE, oid: inner });
+      const root = trees.add([entry("a"), dir("a.b"), entry("a0"), dir("ab"), dir("b")]);
       const bench = await Bench.open();
-      for (const perPage of [1, 10])
-        expect((await bench.all(browseOf(trees, root), perPage)).paths).toEqual(["a", "a/x", "b"]);
+      expect((await bench.all(browseOf(trees, root), 10)).paths).toEqual([
+        "a",
+        "a.b/x",
+        "a0",
+        "ab/x",
+        "b/x",
+      ]);
     });
   });
 });
@@ -460,6 +481,54 @@ describe("stored lists", () => {
     };
     await bench.all(browseOf(trees, root), 1000);
     expect(written).toBe(6);
+  });
+
+  it("grow only while their commit is the tip: a cursor at a former tip's frontier walks and writes nothing", async () => {
+    const trees = new Trees();
+    const root = trees.of(numbered(30));
+    const bench = await Bench.open({ sliceEntries: 10 });
+    const at = { tip: true };
+    const browse = browseOf(trees, root, at);
+    const first = await bench.page(browse);
+    const kept = await bench.rows();
+    expect(kept.lists).toMatchObject([{ state: "building", visited: 10 }]);
+    at.tip = false;
+    const second = await bench.page(browse, { cursor: first.next as PathCursor });
+    expect(second.paths).toEqual(numbered(30).slice(10, 20));
+    expect(await bench.rows()).toEqual(kept);
+    const rest = await bench.all(browse, 1000);
+    expect(rest.paths).toEqual(numbered(30));
+    expect((await bench.rows()).lists).toMatchObject([{ state: "building", visited: 10 }]);
+  });
+
+  it("write nothing when the tip moves while the slice is walked", async () => {
+    const trees = new Trees();
+    const root = trees.of(numbered(30));
+    const bench = await Bench.open({ sliceEntries: 10 });
+    const at = { tip: true };
+    const browse = browseOf(trees, root, at);
+    bench.hooks = {
+      beforeKeep: () => {
+        at.tip = false;
+      },
+    };
+    const page = await bench.page(browse);
+    expect(page.paths).toEqual(numbered(30).slice(0, 10));
+    expect((await bench.rows()).lists).toEqual([]);
+    expect(bench.logged).toEqual([]);
+
+    // And the same for a build already under way.
+    bench.hooks = {};
+    at.tip = true;
+    const first = await bench.page(browse);
+    const kept = await bench.rows();
+    bench.hooks = {
+      beforeKeep: () => {
+        at.tip = false;
+      },
+    };
+    await bench.page(browse, { cursor: first.next as PathCursor });
+    expect(await bench.rows()).toEqual(kept);
   });
 
   it("answer `more_pages` from an earlier segment of a complete and of a capped list", async () => {
@@ -739,6 +808,36 @@ describe("caps and limits", () => {
     }
   });
 
+  it("bound the whole response's JSON, its cursor and fields too", async () => {
+    const names = Array.from(
+      { length: 40 },
+      (_, i) => `${"a".repeat(4000)}${String(i).padStart(3, "0")}`,
+    );
+    const trees = new Trees();
+    const root = trees.of(names);
+    const bench = await Bench.open({ maxPageJsonBytes: 64 * 1024, keepMinTrees: 0 });
+    // Twice: once walked, then from the stored list.
+    for (const round of ["walked", "stored"]) {
+      const got = await bench.all(browseOf(trees, root), 10_000);
+      expect(got.paths).toEqual(names);
+      for (const page of got.pages) {
+        const response = JSON.stringify({
+          commit: page.commit,
+          tree: page.tree,
+          state: page.state,
+          reason: page.reason,
+          paths: page.paths,
+          visited: page.visited,
+          total_paths: page.totalPaths,
+          unlisted_names: page.unlistedNames,
+          next_cursor: encodePathCursor(page.next),
+          retry_after_ms: page.retryAfterMs,
+        });
+        expect(response.length, round).toBeLessThanOrEqual(64 * 1024);
+      }
+    }
+  });
+
   it("bound a page's JSON, whatever its names escape to, holding one path at least", async () => {
     const control = (i: number) =>
       Uint8Array.from({ length: 200 }, (_, k) => (k < 5 ? 0x61 + ((i >> (k * 4)) & 15) : 1));
@@ -946,6 +1045,81 @@ describe("memory and unreadable objects", () => {
     expect(held).toBe(0);
   });
 
+  it("holds a slice's memory until its paths are stored and its page is cut", async () => {
+    const trees = new Trees();
+    const root = trees.of(numbered(3000));
+    const bench = await Bench.open({ keepMinTrees: 0 });
+    let held = 0;
+    let heldAtKeep = 0;
+    bench.memory = {
+      reserve: async (bytes) => ({ bytes, release() {} }),
+      tryReserve(bytes) {
+        held += bytes;
+        return {
+          bytes,
+          release() {
+            held -= bytes;
+          },
+        };
+      },
+    };
+    bench.hooks = {
+      beforeKeep: () => {
+        heldAtKeep = held;
+      },
+    };
+    await bench.page(browseOf(trees, root), { perPage: 10_000 });
+    // 3,000 paths at 2 x 6 + 1200 + 100 bytes each: just under 4 MiB, in blocks of 1 MiB.
+    expect(heldAtKeep).toBeGreaterThanOrEqual(3 * 1024 * 1024);
+    expect(held).toBe(0);
+  });
+
+  it("a failing store answers `unreadable`, logged, and nothing is stored as final", async () => {
+    const trees = new Trees();
+    const root = trees.of(["a/x", "b/x"]);
+    const bench = await Bench.open({ keepMinTrees: 0 });
+    trees.failing.set(oidToHex(root), new Error("R2: we encountered an internal error"));
+    const page = await bench.page(browseOf(trees, root));
+    expect(page).toMatchObject({
+      state: "unavailable",
+      reason: "unreadable",
+      paths: [],
+      next: null,
+    });
+    expect((await bench.rows()).lists).toEqual([]);
+    expect(bench.logged).toContain("reading a path list's tree failed");
+    trees.failing.clear();
+    expect((await bench.all(browseOf(trees, root), 10)).paths).toEqual(["a/x", "b/x"]);
+  });
+
+  it("a store that fails opening the reader answers `unreadable` too", async () => {
+    const trees = new Trees();
+    const root = trees.of(["a/x"]);
+    const bench = await Bench.open();
+    const browse = Object.assign(browseOf(trees, root), {
+      reader: async () => {
+        throw new Error("R2: the index is unavailable");
+      },
+    });
+    expect(await bench.page(browse)).toMatchObject({ state: "unavailable", reason: "unreadable" });
+    expect(bench.logged).toContain("reading a path list's tree failed");
+  });
+
+  it("a failing read-ahead costs nothing: it is only a hint", async () => {
+    const trees = new Trees();
+    const root = trees.of(["a/x", "b/x"]);
+    const bench = await Bench.open();
+    const browse = Object.assign(browseOf(trees, root), {
+      reader: async () => ({
+        ...trees.reader(),
+        prefetch: async () => {
+          throw new Error("R2: we encountered an internal error");
+        },
+      }),
+    });
+    expect((await bench.all(browse, 10)).paths).toEqual(["a/x", "b/x"]);
+  });
+
   it("a tree that cannot be read answers `unreadable`, and nothing is stored as final", async () => {
     const trees = new Trees();
     const root = trees.of(["a/x", "b/x"]);
@@ -1114,6 +1288,62 @@ describe("repos.paths.list", () => {
     expect(await get(`?cursor=${cursor}`)).toMatchObject({
       status: 404,
       body: { code: "ref_not_found" },
+    });
+  });
+
+  it("answers 404 for a cursor's commit it lacks, even with a branch of that name", async () => {
+    const named = "ab".repeat(20);
+    const other = await pushTarget();
+    const otherPat = await scopedToken(other.owner.principalId, [], "pat");
+    const branch = fx.refs.find((r) => r.name.startsWith("refs/heads/")) as { oid: string };
+    const reply = await postPush(
+      other,
+      pushBody(
+        [
+          ...fx.refs.map((r) => ({ old: ZERO, new: r.oid, ref: r.name })),
+          { old: ZERO, new: branch.oid, ref: `refs/heads/${named}` },
+        ],
+        { pack: fx.packHex },
+      ),
+    );
+    expect(reply.report.filter((line) => line.startsWith("ng"))).toEqual([]);
+    const otherBase = `/repos/${other.owner.principalId.toLowerCase().replace("_", "-")}/${other.repo.name}`;
+    const ask = async (query: string) => {
+      const res = await exports.default.fetch(`${ORIGIN}/api${otherBase}/paths${query}`, {
+        headers: { Authorization: `Bearer ${otherPat}` },
+      });
+      return { status: res.status, body: await res.json<Record<string, unknown>>() };
+    };
+    // By name it is that branch, as elsewhere; a cursor names a commit and nothing else.
+    expect(await ask(`?ref=${named}`)).toMatchObject({ status: 200, body: { commit: branch.oid } });
+    const cursor = cursorText({ c: named, n: 0, b: 0, w: null });
+    expect(await ask(`?cursor=${cursor}`)).toMatchObject({
+      status: 404,
+      body: { code: "ref_not_found" },
+    });
+  });
+
+  it("refuses a repository being deleted, past a directory entry still cached", async () => {
+    // Created through the API: only that gives the object the metadata a deletion marks.
+    const user = await principalWithToken("user", "git");
+    const res = await exports.default.fetch(`${ORIGIN}/api/user/repos`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ name: uniqueId("doomed"), private: true }),
+    });
+    expect(res.status).toBe(201);
+    const stub = env.REPO.getByName((await res.json<{ id: string }>()).id);
+    expect(await stub.browsePaths({ perPage: 10 })).toMatchObject({ code: "repo_empty" });
+    await stub.prepareDeletion(null, 0);
+    expect(await inRepo(stub, (r) => r.events.isDeleted())).toBe(true);
+    expect(await stub.browsePaths({ perPage: 10 })).toMatchObject({
+      ok: false,
+      status: 404,
+      code: "repo_not_found",
     });
   });
 
