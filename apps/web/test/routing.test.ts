@@ -28,6 +28,7 @@ describe("the web Worker's routing", () => {
       "/alice/repo/tree/main/src",
       "/alice/repo/blob/main/info/refs",
       "/alice/repo/commits",
+      "/alice/repo/preview/main/info/refs/",
       "/apis",
       "/authors/x",
       // Handles that start like an API path: their pages are the web's.

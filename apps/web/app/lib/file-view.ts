@@ -304,7 +304,7 @@ export function gotoTarget(page: URL, total: number | null): string {
 }
 
 /** The commit a contents answer's `download_url` is at (always a commit: `rawUrl` in the API). */
-function commitOf(downloadUrl: string): string | null {
+export function commitOf(downloadUrl: string): string | null {
   try {
     return new URL(downloadUrl).searchParams.get("ref");
   } catch {

@@ -166,7 +166,7 @@ beforeAll(async () => {
   await put("big.ts", code(4_500));
   await put("notes.data", "first note\nsecond note\nthird note\n");
   await put("many.data", code(2_500));
-});
+}, 240_000);
 
 afterAll(async () => {
   await stack?.stop();
