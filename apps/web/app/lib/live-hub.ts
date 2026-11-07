@@ -22,7 +22,7 @@ export const LIVE_HUB = {
   lingerMs: 60_000,
   /** How long a hidden tab keeps its socket. */
   hiddenMs: 5 * 60_000,
-  /** How long after failing for good it is tried again (when shown or a page listens). */
+  /** After failing for good it is tried again between half this and all of it (when shown or a page listens). */
   failedPauseMs: 10 * 60_000,
   /** How long a tab remembers that the deployment sends no live hints. */
   offForMs: 60 * 60_000,
@@ -80,7 +80,7 @@ export class LiveHub {
   #running = false;
   /** Stopped for good (off is kept apart, by its time). */
   #halted = false;
-  #failedAt: number | null = null;
+  #failedUntil: number | null = null;
   /** When this tab was told live hints are off (beside the tab's storage, which may fail). */
   #offAt = 0;
   /** Refused for today: nothing starts until the "resume" timer clears it. */
@@ -172,10 +172,10 @@ export class LiveHub {
       !this.#halted &&
       this.#pause === null &&
       (off === 0 || now - off >= LIVE_HUB.offForMs) &&
-      (this.#failedAt === null || now - this.#failedAt >= LIVE_HUB.failedPauseMs);
+      (this.#failedUntil === null || now >= this.#failedUntil);
     if (wanted && !this.#running) {
       this.#running = true;
-      this.#failedAt = null;
+      this.#failedUntil = null;
       this.#client.start();
     } else if (!wanted && this.#running) this.#stopClient();
   }
@@ -192,9 +192,10 @@ export class LiveHub {
       this.#offAt = now;
       this.#deps.markOff(now);
     } else if (why === "failing") {
-      this.#failedAt = now;
+      const pause = Math.round(LIVE_HUB.failedPauseMs * (0.5 + this.#deps.random() / 2));
+      this.#failedUntil = now + pause;
       // Tried again after the pause, whether or not anything happens in the tab.
-      this.#set("failed", LIVE_HUB.failedPauseMs, () => this.#update());
+      this.#set("failed", pause, () => this.#update());
     } else this.#halted = true;
     // Failing, it is tried again: a refusal for now still holds.
     if (why !== "failing") this.#temporary = false;
@@ -211,7 +212,7 @@ export class LiveHub {
   #pauseUntil(pause: LiveBudgetPause): void {
     this.#pause = pause;
     this.#temporary = false;
-    this.#failedAt = null;
+    this.#failedUntil = null;
     this.#clear("failed");
     const late = Math.round(LIVE_HUB.resumeSpreadMs * (0.5 + this.#deps.random() / 2));
     this.#set("resume", Math.max(0, pause.retryAt - this.#deps.now()) + late, () => {

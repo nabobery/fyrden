@@ -1,4 +1,6 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { feedEpochSource } from "../do/user/feed.js";
+import { LIVE_POLICY } from "../do/user/live.js";
 import { DISCRETIONARY_RESOURCES, type ResourceVector } from "../effects/discretionary.js";
 import { clock } from "../services.js";
 import {
@@ -8,9 +10,13 @@ import {
   type LiveEnvelope,
   type LiveGrantPlan,
   type LiveGrantRequest,
+  type LiveLedgerView,
   type LiveRecipientType,
+  type LiveRefusalReason,
   type LiveUnit,
+  liveLedgerViewColumns,
   livePlanError,
+  parseLiveLedgerView,
   reserveLive,
   validateLiveCoverage,
 } from "./budget.js";
@@ -20,6 +26,7 @@ import {
   admitLiveOwners,
   LIVE_OWNER_LIMITS,
   type LiveOwnerLimits,
+  type LiveOwnerRefusal,
   markLiveOwnerDispatched,
   observeLiveOwner,
   releaseLiveOwner,
@@ -48,11 +55,11 @@ const DAY = 86_400_000;
 
 /**
  * The manifest live work is priced by: a funding of another revision is
- * refused. Raised whenever its prices change (2: marks, tickets and the pump
- * measured again, prunes bounded), so a funding in flight across a deploy
+ * refused. Raised whenever its prices change (3: an owner's table lost two indexes,
+ * and an owner's release shortens its receipt's life), so a funding in flight across a deploy
  * never pays old prices for new work.
  */
-export const LIVE_MANIFEST_REVISION = 2;
+export const LIVE_MANIFEST_REVISION = 3;
 
 export type FundedResult<T> =
   | {
@@ -61,8 +68,13 @@ export type FundedResult<T> =
       /** An owned run's owner observed, settled and released (false: left for recovery). */
       readonly accounted?: boolean;
     }
-  | { readonly status: "refused"; readonly reason: "daily"; readonly retryAt: number }
-  | { readonly status: "refused"; readonly reason: "temporary" };
+  | {
+      readonly status: "refused";
+      readonly reason: "daily";
+      readonly retryAt: number;
+      readonly gate: LiveRefusalReason;
+    }
+  | { readonly status: "refused"; readonly reason: "temporary"; readonly gate: LiveRefusalReason };
 
 /** What a recipient is handed with funded work. */
 export interface LiveFunding {
@@ -313,12 +325,13 @@ export function planFor(
 export async function fund(
   db: D1Database,
   request: LiveGrantRequest,
+  metrics?: Metrics,
 ): Promise<FundedResult<LiveEnvelope>> {
-  const result = await reserveLive(db, request);
+  const result = await reserveLive(db, request, metrics);
   if (result.status === "granted") return { status: "funded", value: result.grant };
   if (result.reason === "daily" && result.retryAt !== undefined)
-    return { status: "refused", reason: "daily", retryAt: result.retryAt };
-  return { status: "refused", reason: "temporary" };
+    return { status: "refused", reason: "daily", retryAt: result.retryAt, gate: result.gate };
+  return { status: "refused", reason: "temporary", gate: result.gate };
 }
 
 /**
@@ -333,17 +346,8 @@ export interface LedgerClock {
   readonly slack: number;
 }
 
-/**
- * What a plan for `recipient` needs of the ledger now: its incarnation, the
- * feed's epoch, D1's time (the ledger's clock, which a plan's validity is
- * judged by: it starts there, never ahead of it) with when it was read, and
- * the tickets issued to `recipient` today (D1's day) with the next day's
- * start.
- */
-export async function liveTarget(
-  db: D1Database,
-  recipient: string,
-): Promise<{
+/** What a plan for a recipient needs of the ledger now (see `liveTarget`). */
+export interface LiveTarget {
   readonly incarnation: string;
   readonly epoch: number;
   readonly ledger: LedgerClock;
@@ -354,10 +358,71 @@ export async function liveTarget(
    * owner never released (a turn that ran released it), valid five minutes on.
    */
   readonly turnHeld: boolean;
-  /** Whether the feed holds a block of controls (of marks) still valid half an hour on. */
+  /** Whether the feed holds a block of controls still valid past its next renewal; of marks, half an hour on. */
   readonly controlsHeld: boolean;
   readonly marksHeld: boolean;
-}> {
+}
+
+/** A target with what an opening's pre-check compares. */
+export interface LiveOpeningTarget extends LiveTarget {
+  readonly admissionsToday: number;
+  readonly view: LiveLedgerView;
+}
+
+/**
+ * What a plan for `recipient` needs of the ledger now: its incarnation, the
+ * feed's epoch, D1's time (the ledger's clock, which a plan's validity is
+ * judged by: it starts there, never ahead of it) with when it was read, and
+ * the tickets issued to `recipient` today (D1's day) with the next day's
+ * start.
+ */
+export async function liveTarget(db: D1Database, recipient: string): Promise<LiveTarget> {
+  return (await readTarget(db, recipient, "", [])).target;
+}
+
+/**
+ * `liveTarget`, with what an opening's pre-check compares (`liveOpeningFits`)
+ * and its principal's admissions on this Worker's day (as `admit` counts them).
+ */
+export async function liveOpeningTarget(
+  db: D1Database,
+  recipient: string,
+): Promise<LiveOpeningTarget> {
+  const { target, row } = await readTarget(
+    db,
+    recipient,
+    `, ${liveLedgerViewColumns("?2")},
+    (SELECT json_object('total', count(*), 'ordinary', coalesce(sum(class = 'ordinary'), 0),
+        'feed', coalesce(sum(class = 'ordinary' AND object_type = 'UserDO' AND object_id = ?2), 0))
+      FROM live_duration_owners) AS view_owners,
+    coalesce((SELECT n FROM live_admissions WHERE principal_id = ?2 AND day = ?3), 0) AS admissions`,
+    [Math.floor(clock() / DAY)],
+  );
+  const owners = JSON.parse(row.view_owners as string) as {
+    total: number;
+    ordinary: number;
+    feed: number;
+  };
+  return {
+    ...target,
+    admissionsToday: row.admissions as number,
+    view: parseLiveLedgerView(
+      row as unknown as Parameters<typeof parseLiveLedgerView>[0],
+      Math.min(
+        LIVE_OWNER_LIMITS.deploymentTotal - owners.total,
+        LIVE_OWNER_LIMITS.deploymentOrdinary - owners.ordinary,
+        LIVE_OWNER_LIMITS.perObjectOrdinary - owners.feed,
+      ),
+    ),
+  };
+}
+
+async function readTarget(
+  db: D1Database,
+  recipient: string,
+  columns: string,
+  extra: readonly number[],
+): Promise<{ target: LiveTarget; row: Record<string, unknown> }> {
   const day = `CAST(${LIVE_NOW} / ${DAY} AS INTEGER)`;
   const sent = clock();
   const row = await db
@@ -376,41 +441,52 @@ export async function liveTarget(
              AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
              AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
            AS turn_held,
-         ${["control", "mark"]
+         ${(
+           [
+             // Controls must still be valid at the socket's first renewal, or it can't pay for it.
+             ["control", LIVE_POLICY.renewMs + 300_000],
+             ["mark", 1_800_000],
+           ] as const
+         )
            .map(
-             (kind) => `EXISTS (SELECT 1 FROM live_budget_receipts
+             ([kind, horizon]) => `EXISTS (SELECT 1 FROM live_budget_receipts
                INDEXED BY live_budget_receipts_recipient
                WHERE recipient = ?2 AND kind = '${kind}' AND settled_at IS NULL
-                 AND valid_until > ${LIVE_NOW} + 1800000
+                 AND valid_until > ${LIVE_NOW} + ${horizon}
                  AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
                  AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
                AS ${kind}s_held`,
            )
-           .join(",\n")}`,
+           .join(",\n")}${columns}`,
     )
-    .bind(feedEpochSource(recipient), recipient)
-    .first<{
-      incarnation: string;
-      epoch: number;
-      now: number;
-      tickets: number;
-      tomorrow: number;
-      turn_held: number;
-      controls_held: number;
-      marks_held: number;
-    }>();
+    .bind(feedEpochSource(recipient), recipient, ...extra)
+    .first<
+      {
+        incarnation: string;
+        epoch: number;
+        now: number;
+        tickets: number;
+        tomorrow: number;
+        turn_held: number;
+        controls_held: number;
+        marks_held: number;
+      } & Record<string, unknown>
+    >();
   if (!row?.incarnation) throw new Error("the live ledger has no incarnation");
   const at = clock();
   return {
-    incarnation: row.incarnation,
-    epoch: row.epoch,
-    // Its second's remainder and the time the answer took: what the ledger's time may be past.
-    ledger: { now: row.now, at, slack: 1_000 + Math.max(0, at - sent) },
-    ticketsToday: row.tickets,
-    tomorrow: row.tomorrow,
-    turnHeld: row.turn_held === 1,
-    controlsHeld: row.controls_held === 1,
-    marksHeld: row.marks_held === 1,
+    row,
+    target: {
+      incarnation: row.incarnation,
+      epoch: row.epoch,
+      // Its second's remainder and the time the answer took: what the ledger's time may be past.
+      ledger: { now: row.now, at, slack: 1_000 + Math.max(0, at - sent) },
+      ticketsToday: row.tickets,
+      tomorrow: row.tomorrow,
+      turnHeld: row.turn_held === 1,
+      controlsHeld: row.controls_held === 1,
+      marksHeld: row.marks_held === 1,
+    },
   };
 }
 
@@ -425,7 +501,7 @@ export async function ownedCall<T>(
   call: (funding: LiveFunding, signal: AbortSignal) => Promise<T>,
   options: OwnedRunOptions = {},
 ): Promise<FundedResult<T>> {
-  const granted = await fund(db, request);
+  const granted = await fund(db, request, options.metrics);
   if (granted.status !== "funded") return granted;
   return ownedRun(db, granted.value, role, call, options);
 }
@@ -442,7 +518,27 @@ export interface OwnedRunOptions {
    * its caller holds for it is held until then.
    */
   readonly physical?: (ended: Promise<void>) => void;
+  /** Where a refusal is counted. */
+  readonly metrics?: Metrics;
 }
+
+/** Why an owner's dispatch was not recorded, as a refusal names it. */
+const DISPATCH_REFUSAL = {
+  blocked: "owner:blocked",
+  already: "conflict",
+  missing: "owner:unfunded",
+  invalid: "validity",
+} as const satisfies Record<string, LiveRefusalReason>;
+
+/** Why an owner was not admitted, as a refusal names it. */
+const OWNER_REFUSAL: Record<LiveOwnerRefusal, LiveRefusalReason> = {
+  capacity: "owner:capacity",
+  blocked: "owner:blocked",
+  unfunded: "owner:unfunded",
+  duplicate: "conflict",
+  invalid: "validity",
+  temporary: "unknown",
+};
 
 /**
  * Runs `call` as owned live work paid for by `envelope`: its owner admitted
@@ -463,6 +559,10 @@ export async function ownedRun<T>(
   options: OwnedRunOptions = {},
 ): Promise<FundedResult<T>> {
   const { plan } = envelope;
+  const refused = (gate: LiveRefusalReason): FundedResult<T> => {
+    options.metrics?.count("live.grant_refusal", { unit: plan.kind, gate });
+    return { status: "refused", reason: "temporary", gate };
+  };
   // Its owner admitted and its dispatch recorded before the call: nothing runs otherwise.
   let ownerId: string;
   let begun: number;
@@ -479,28 +579,27 @@ export async function ownedRun<T>(
       },
       options.limits ?? LIVE_OWNER_LIMITS,
     );
-    if (admitted.status !== "admitted") return { status: "refused", reason: "temporary" };
+    if (admitted.status !== "admitted") return refused(OWNER_REFUSAL[admitted.reason]);
     ownerId = admitted.owners[0]?.ownerId as string;
     // Its run on the ledger's clock: D1's time when sampled, moved on by what this Worker
     // measured since (to its dispatch, then to its end).
     begun = clock();
     startedAt = options.ledger ? options.ledger.now + (begun - options.ledger.at) : begun;
-    if (
-      (await markLiveOwnerDispatched(db, ownerId, {
-        instance: crypto.randomUUID(),
-        startedAt,
-      })) !== "dispatched"
-    )
-      return { status: "refused", reason: "temporary" };
+    const dispatch = await markLiveOwnerDispatched(db, ownerId, {
+      instance: crypto.randomUUID(),
+      startedAt,
+    });
+    if (dispatch !== "dispatched") return refused(DISPATCH_REFUSAL[dispatch]);
   } catch {
     // Nothing called: an owner admitted but never recorded dispatched is released once its window
     // passed; one whose dispatch was recorded, its answer lost, is recovered as uncertain.
-    return { status: "refused", reason: "temporary" };
+    return refused("unknown");
   }
   // Waited for no longer than its pending bound: past it the call is given up on (its owner left
   // dispatched, for recovery), and told, so it stops rather than apply late.
   const deadline = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let gaveUp = false;
   let value: T;
   try {
     const called = call(
@@ -523,6 +622,7 @@ export async function ownedRun<T>(
       called,
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          gaveUp = true;
           deadline.abort();
           reject(new Error("live work outlasted its pending bound"));
         }, options.pendingMs ?? LIVE_PENDING_MS);
@@ -530,7 +630,7 @@ export async function ownedRun<T>(
     ]);
   } catch {
     deadline.abort();
-    return { status: "refused", reason: "temporary" };
+    return refused(gaveUp ? "given_up" : "unknown");
   } finally {
     clearTimeout(timer);
   }
@@ -551,7 +651,9 @@ export async function ownedRun<T>(
         break;
       if (settled.status !== "settled") break;
     }
-    accounted = (await releaseLiveOwner(db, ownerId)) === "released";
+    accounted =
+      (await releaseLiveOwner(db, ownerId, ["pump", "renewal"].includes(envelope.plan.kind))) ===
+      "released";
   } catch {}
   return { status: "funded", value, accounted };
 }

@@ -243,6 +243,43 @@ describe("the live hints client", () => {
     },
   );
 
+  it("spreads a stable socket's lost connection over 1 to 10 seconds", async () => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    h.last().events.open();
+    h.clock.advance(LIVE_CLIENT.stableMs);
+    h.last().events.close(1006);
+    // The random half fixed at 0.5.
+    expect(h.clock.pending().at(-1)).toBe(5_500);
+    expect(h.stops).toEqual([]);
+  });
+
+  it("pauses until the time a paused frame says, as a day's refusal does", async () => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    h.last().events.open();
+    const until = h.clock.now() + 5 * 60_000;
+    h.last().events.message(JSON.stringify({ t: "paused", until, reason: "escrow_full" }));
+    expect(h.pauses).toEqual([{ kind: "budget", retryAt: until }]);
+    expect(h.stops).toEqual([]);
+    expect(h.clock.pending()).toEqual([]);
+  });
+
+  it.each([
+    ["no time", { t: "paused" }],
+    ["a time past", { t: "paused", until: 1 }],
+    ["a time too far", { t: "paused", until: Number.MAX_SAFE_INTEGER }],
+  ])("ignores a paused frame with %s", async (_name, frame) => {
+    const h = harness();
+    h.client.start();
+    await h.flush();
+    h.last().events.open();
+    h.last().events.message(JSON.stringify(frame));
+    expect(h.pauses).toEqual([]);
+  });
+
   it("retries a socket refused before it opened slowly, and gives up after two", async () => {
     const h = harness();
     h.client.start();
@@ -275,7 +312,8 @@ describe("the live hints client", () => {
     h.last().events.open();
     h.clock.advance(LIVE_CLIENT.stableMs);
     h.last().events.close(1006);
-    expect(h.clock.pending()).toEqual([750]);
+    // Failures forgotten; a stable socket's own spread (the random half fixed at 0.5).
+    expect(h.clock.pending()).toEqual([5_500]);
   });
 
   it("counts a socket that cannot be made as a failure", async () => {

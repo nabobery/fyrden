@@ -1,4 +1,10 @@
-import { LIVE_DAILY, LIVE_NOW, LIVE_PROTECTED, type LiveRecipientType } from "./budget.js";
+import {
+  LIVE_DAILY,
+  LIVE_NOW,
+  LIVE_PROTECTED,
+  LIVE_RECEIPT_MARGIN_MS,
+  type LiveRecipientType,
+} from "./budget.js";
 
 /*
  * Who keeps an object busy, and for how long (migration 0035). A funded
@@ -611,20 +617,38 @@ export async function settleLiveOwnerPage(
 export async function releaseLiveOwner(
   db: D1Database,
   ownerId: string,
+  /** Whether its grant is a turn's, when the caller knows: it saves a statement in an alarm. */
+  turn?: boolean,
 ): Promise<"released" | "held" | "missing"> {
   const releasable = `owner_id = ?1 AND (status = 'accounted'
       OR (status = 'reserved' AND dispatch_until <= ${N}))`;
-  const [, removed, row] = await db.batch<{ status?: string }>([
+  const released = (dates: string, kinds: string) =>
     db
       .prepare(
-        `UPDATE live_budget_receipts SET released_owners = json_insert(released_owners, '$[#]', ?1)
+        `UPDATE live_budget_receipts SET released_owners = json_insert(released_owners, '$[#]', ?1)${dates}
          WHERE operation_id = (SELECT operation_id FROM live_duration_owners WHERE ${releasable})
+           AND kind ${kinds} ('pump', 'renewal')
            AND NOT EXISTS (SELECT 1 FROM json_each(released_owners) WHERE value = ?1)`,
       )
-      .bind(ownerId),
+      .bind(ownerId);
+  const soonest = `min(%, max(valid_until + ${LIVE_RECEIPT_MARGIN_MS}, ${N}))`;
+  // A turn's receipt leaves with the later turns that retire it, its dates untouched: writing them
+  // would rewrite their index rows for nothing, on every turn.
+  const ofTurn = () => released("", "IN");
+  // Its work accounted for, the receipt need not last out an uncertain end. (One owner a grant,
+  // ever: this runs once.)
+  const ofOther = () =>
+    released(
+      `, expires_at = ${soonest.replace("%", "expires_at")}, settle_until = ${soonest.replace("%", "settle_until")}`,
+      "NOT IN",
+    );
+  const receipts = turn === undefined ? [ofTurn(), ofOther()] : [turn ? ofTurn() : ofOther()];
+  const answers = await db.batch<{ status?: string }>([
+    ...receipts,
     db.prepare(`DELETE FROM live_duration_owners WHERE ${releasable}`).bind(ownerId),
     db.prepare("SELECT status FROM live_duration_owners WHERE owner_id = ?").bind(ownerId),
   ]);
+  const [removed, row] = answers.slice(-2);
   if ((removed?.meta.changes ?? 0) > 0) return "released";
   return row?.results[0] ? "held" : "missing";
 }

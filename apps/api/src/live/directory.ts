@@ -234,14 +234,19 @@ export function reaping(
            WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
       )
       .bind(Math.floor(now / DAY) - 1, page.counts),
-    db
-      .prepare(
-        `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
-           SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
-           WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
-      )
-      .bind(now, page.transports),
+    reapingTransports(db, now, page.transports),
   ];
+}
+
+/** A page of ticket transports past their expiry removed. */
+export function reapingTransports(db: D1Database, now: number, rows: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
+         SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
+         WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
+    )
+    .bind(now, rows);
 }
 
 /**

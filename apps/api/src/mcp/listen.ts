@@ -77,7 +77,10 @@ export interface ListenSocket {
   send(message: string): void;
   close(code?: number, reason?: string): void;
   addEventListener(type: "message", handler: (event: { data: unknown }) => void): void;
-  addEventListener(type: "close", handler: (event: { code: number }) => void): void;
+  addEventListener(
+    type: "close",
+    handler: (event: { code: number; reason?: string }) => void,
+  ): void;
   addEventListener(type: "error", handler: () => void): void;
 }
 
@@ -93,10 +96,12 @@ interface Refusal {
   readonly detail: string;
   readonly retryAfter: number;
   readonly retryAt?: number;
+  /** Which check refused it, as the close reason named it. */
+  readonly reason?: string;
 }
 
-/** The refusal a socket closed with `code` at `now` tells, if it was one. */
-function refusalOf(code: number, now: number): Refusal | null {
+/** The refusal a socket closed with `code` and `closeReason` at `now` tells, if it was one. */
+function refusalOf(code: number, closeReason: string, now: number): Refusal | null {
   if (code === SPENT) {
     // The next UTC day (by this clock: the close says no time).
     const retryAt = (Math.floor(now / DAY) + 1) * DAY;
@@ -108,13 +113,16 @@ function refusalOf(code: number, now: number): Refusal | null {
       retryAt,
     };
   }
-  if (code === TEMPORARY)
+  if (code === TEMPORARY) {
+    const reason = /^try again soon: (.+)$/.exec(closeReason)?.[1];
     return {
       status: 503,
       code: "live_temporary",
       detail: "Live hints cannot be funded right now. Listen again shortly.",
       retryAfter: 60,
+      ...(reason !== undefined && { reason }),
     };
+  }
   return null;
 }
 
@@ -202,7 +210,7 @@ export class ListenStream {
       this.#feed.socket.addEventListener("message", (event) => this.#frame(event.data));
       this.#feed.socket.addEventListener("close", (event) => {
         if (this.#ending) return;
-        this.#refusal = refusalOf(event.code, this.#clock.now());
+        this.#refusal = refusalOf(event.code, event.reason ?? "", this.#clock.now());
         this.#end(false);
       });
       this.#feed.socket.addEventListener("error", () => this.#end(false));
@@ -326,6 +334,7 @@ export class ListenStream {
             requestId: this.#requestId,
             retryAfter: refusal.retryAfter,
             ...(refusal.retryAt !== undefined && { retryAt: refusal.retryAt }),
+            ...(refusal.reason !== undefined && { reason: refusal.reason }),
           }),
           _meta: {
             [SUBSCRIPTION_ID_META_KEY]: this.#id,
@@ -338,13 +347,22 @@ export class ListenStream {
 
   #frame(data: unknown): void {
     if (this.#ending || typeof data !== "string") return;
-    let frame: { t?: unknown; n?: unknown; until?: unknown };
+    let frame: { t?: unknown; n?: unknown; until?: unknown; reason?: unknown };
     try {
       frame = JSON.parse(data) as typeof frame;
     } catch {
       return;
     }
-    if (frame.t === "changed" && typeof frame.n === "number" && frame.n > this.#heard) {
+    if (frame.t === "paused" && typeof frame.until === "number") {
+      this.#refusal = {
+        status: 503,
+        code: "live_temporary",
+        detail: "Live hints are paused. Listen again later.",
+        retryAfter: Math.max(1, Math.ceil((frame.until - this.#clock.now()) / 1000)),
+        ...(typeof frame.reason === "string" && { reason: frame.reason }),
+      };
+      this.#end(true);
+    } else if (frame.t === "changed" && typeof frame.n === "number" && frame.n > this.#heard) {
       this.#heard = frame.n;
       this.#poke();
     } else if (frame.t === "renewed" && typeof frame.until === "number") {
@@ -383,6 +401,14 @@ export class ListenStream {
     }
     this.#acknowledge();
     const due = now >= this.#deadline - LISTEN_POLICY.renewBeforeMs;
+    // A renewal it would outlive by next to nothing is a turn spent for nothing: listen again.
+    if (
+      due &&
+      this.#openedAt + LISTEN_POLICY.lifeMs <= this.#deadline + LISTEN_POLICY.renewBeforeMs
+    ) {
+      this.#end(true);
+      return;
+    }
     const waiting =
       this.#renewSentAt !== null && now - this.#renewSentAt < LISTEN_POLICY.renewRetryMs;
     if (due && !waiting && this.#control(0, 0)) {

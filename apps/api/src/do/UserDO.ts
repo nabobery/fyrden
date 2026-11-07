@@ -24,10 +24,11 @@ import {
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
 import { AuthorizationInvalidated, LIVE_AUTHORIZATION_RESULT_MS } from "../live/authorization.js";
-import type { LiveEnvelope } from "../live/budget.js";
+import type { LiveEnvelope, LiveRefusalReason } from "../live/budget.js";
 import {
   isLiveVector,
   livePlanError,
+  liveTryAgain,
   makeLiveGrant,
   reserveLive,
   validateLiveCoverage,
@@ -126,7 +127,12 @@ export type LiveBudgetV1 =
       /** The feed's next turn, when it held none (prepared, not dispatched). */
       readonly turn?: unknown;
     }
-  | { readonly refusal: 4412 | 4413; readonly transport: unknown };
+  | {
+      readonly refusal: 4412 | 4413;
+      readonly transport: unknown;
+      /** Which check refused it, told a client in a 4412's close reason. */
+      readonly reason?: LiveRefusalReason;
+    };
 
 /** What one control message, one mark and one socket's end are spent at. */
 const unitPrice = (unit: LiveManifestUnit) => (LIVE_PRICES[unit] as LiveManifestEntry).resources;
@@ -181,6 +187,8 @@ const LIVE_CONFIRM_MS = 60_000;
 
 /** How long sockets whose run could not be done (an answer missing) wait to try again. */
 const LIVE_RETRY_MS = 60_000;
+/** How long a feed's sockets are told to wait after its successor's grant was refused for now. */
+const LIVE_PAUSED_MS = 5 * 60_000;
 
 /** A socket's id, from its attachment. */
 /** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
@@ -861,6 +869,13 @@ export class UserDO extends MigratingDO {
       (signals.length > 0 ? budget.turnStamp(now) : null);
     if (stamp && poolLow(budget, "mark", day, now))
       budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
+    // Nothing paid for it, and every block expired: one change is written regardless, until it is
+    // delivered, so the first change after a quiet spell isn't lost and goes by its own checks.
+    const first = signals[0];
+    if (first && !marked && stamp && live.hasRoomForUnpaid()) {
+      live.mark([first], stamp);
+      return true;
+    }
     return marked;
   }
 
@@ -1017,7 +1032,12 @@ export class UserDO extends MigratingDO {
         return new Response(null, { status: 400 });
       const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
       server.accept();
-      server.close(code, code === 4413 ? "live hints spent today's allowance" : "try again soon");
+      server.close(
+        code,
+        code === 4413
+          ? "live hints spent today's allowance"
+          : liveTryAgain(budget.reason ?? "unknown"),
+      );
       return new Response(null, { status: 101, webSocket: client });
     }
     const admitted = budget.admitted;
@@ -1237,7 +1257,7 @@ export class UserDO extends MigratingDO {
     });
     if (refill) await this.#scheduleLive();
     // Nothing left to pay for it: closed to come back once there is (a new admission brings it).
-    if (!counted) return this.#closeSocket(id, 4412, "try again soon");
+    if (!counted) return this.#closeSocket(id, 4412, liveTryAgain("no_controls"));
     if (
       typeof message !== "string" ||
       size > LIVE_POLICY.controlBytes ||
@@ -1786,9 +1806,11 @@ export class UserDO extends MigratingDO {
             await feedHooks.afterTurnWork?.(this, this.ctx);
             // Its work done: what it used, its end (the successor's grant among it) still to come.
             feedHooks.turnDone?.(meter.used(), paid);
-            return current() && this.#live().sockets().length > 0
-              ? await this.#grantTurn(current).catch(() => null)
-              : null;
+            if (this.#live().sockets().length === 0) return null;
+            return await this.#grantTurn(current).catch(() => {
+              createMetrics(this.env.METRICS).count("live.turn_no_successor", { gate: "unknown" });
+              return null;
+            });
           } finally {
             if (this.#meter === meter) this.#meter = null;
             meter.stop();
@@ -1800,6 +1822,7 @@ export class UserDO extends MigratingDO {
           physical: (ended) => {
             physical = ended;
           },
+          metrics: createMetrics(this.env.METRICS),
         },
       );
       const now = Date.now();
@@ -2023,7 +2046,11 @@ export class UserDO extends MigratingDO {
         budget.dispatchPending(kind, item.identity, owner, this.#instance),
     );
     if (!dispatched) return;
-    const granted = await reserveLive(this.env.DIRECTORY, request).catch(() => null);
+    const granted = await reserveLive(
+      this.env.DIRECTORY,
+      request,
+      createMetrics(this.env.METRICS),
+    ).catch(() => null);
     this.ctx.storage.transactionSync(() => {
       const now = Date.now();
       // A request no longer grantable as a new grant (its first day passed): it goes.
@@ -2077,6 +2104,10 @@ export class UserDO extends MigratingDO {
    * the pump after it).
    */
   async #grantTurn(current: () => boolean): Promise<LiveEnvelope | null> {
+    if (!current()) {
+      createMetrics(this.env.METRICS).count("live.turn_no_successor", { gate: "given_up" });
+      return null;
+    }
     const feed = this.ctx.id.name;
     if (!feed) return null;
     const budget = new LiveBudget(this.ctx.storage.sql);
@@ -2100,11 +2131,22 @@ export class UserDO extends MigratingDO {
         budget.ledgerEarliest(Date.now()),
       ),
     );
-    if (!current()) return null;
-    const granted = await reserveLive(this.env.DIRECTORY, request);
+    const metrics = createMetrics(this.env.METRICS);
+    if (!current()) {
+      metrics.count("live.turn_no_successor", { gate: "given_up" });
+      return null;
+    }
+    const granted = await reserveLive(this.env.DIRECTORY, request, metrics);
     feedHooks.afterSuccessorGrant?.(this.ctx);
+    if (granted.status === "refused") {
+      metrics.count("live.turn_no_successor", { gate: granted.gate });
+      this.#tellPaused(granted);
+      return null;
+    }
     // Answered once the turn's result no longer applies: named nowhere (its charge stands).
-    return granted.status === "granted" && current() ? granted.grant : null;
+    if (current()) return granted.grant;
+    metrics.count("live.turn_no_successor", { gate: "given_up" });
+    return null;
   }
 
   /**
@@ -2129,7 +2171,28 @@ export class UserDO extends MigratingDO {
       ),
     );
     if (!current()) return false;
-    return (await reserveLive(this.env.DIRECTORY, request)).status === "granted";
+    return (
+      (await reserveLive(this.env.DIRECTORY, request, createMetrics(this.env.METRICS))).status ===
+      "granted"
+    );
+  }
+
+  /**
+   * Tells the feed's open sockets it has no turn to send them hints until a later
+   * time, so they reopen then rather than sit silent until their next renewal.
+   * Unnumbered and unstored: it costs no row, and one lost leaves that renewal's close.
+   */
+  #tellPaused(refused: { readonly gate: string; readonly retryAt?: number }): void {
+    const until = refused.retryAt ?? Date.now() + LIVE_PAUSED_MS;
+    const frame = JSON.stringify({ t: "paused", until, reason: refused.gate });
+    // The object's own list of sockets: no row is read for this.
+    for (const ws of this.ctx.getWebSockets())
+      if (ws.readyState === WebSocket.OPEN && socketIdOf(ws))
+        try {
+          ws.send(frame);
+        } catch {
+          // Closing since it was looked at: the others still hear of it.
+        }
   }
 
   /** Sockets whose run could not be done (an answer missing): tried again a minute on. */
