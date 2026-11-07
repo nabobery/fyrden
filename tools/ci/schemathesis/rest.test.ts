@@ -6,13 +6,13 @@
 // fails the run; inputs the API rejects (4xx) are answers the document
 // describes, so they pass. The rate limits are raised for the run, or most
 // requests would be refused (429) before reaching an operation.
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { startWranglerDev, type WranglerDev } from "../e2e/wrangler-dev.ts";
 
 /** Schemathesis, pinned: a new version is adopted deliberately. */
 const SCHEMATHESIS = "schemathesis@4.28.0";
@@ -56,22 +56,6 @@ const DISPOSABLE = [
   { path: "/agents/{agent}", method: "DELETE", parameters: { agent: "doomedbot" } },
 ];
 
-/** A port nothing listens on now: the system's pick, released for wrangler. */
-function freePort(): Promise<number> {
-  return new Promise((done, fail) => {
-    const server = createServer();
-    server.once("error", fail);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      server.close(() =>
-        typeof address === "object" && address !== null
-          ? done(address.port)
-          : fail(new Error("no port")),
-      );
-    });
-  });
-}
-
 interface Run {
   code: number | null;
   output: string;
@@ -107,9 +91,7 @@ describe("the REST API under Schemathesis", () => {
   let base = "";
   const bootstrapSecret = `schemathesis-${crypto.randomUUID()}`;
   let scratch = "";
-  let dev: ChildProcess | undefined;
-  let closed: Promise<void> = Promise.resolve();
-  let output = "";
+  let dev: WranglerDev | undefined;
   let token = "";
 
   async function call(method: string, path: string, body?: unknown): Promise<void> {
@@ -127,8 +109,6 @@ describe("the REST API under Schemathesis", () => {
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), "fyrden-schemathesis-"));
-    port = await freePort();
-    base = `http://127.0.0.1:${port}`;
     const original = await readFile(apiConfig, "utf8");
     const raised = original.replaceAll(/"limit": \d+/g, '"limit": 1000000');
     expect(raised.match(/"limit": 1000000/g)?.length).toBe(original.match(/"limit"/g)?.length);
@@ -153,11 +133,8 @@ describe("the REST API under Schemathesis", () => {
       );
       expect(migrated.code, migrated.output).toBe(0);
     }
-    dev = spawn(
-      process.execPath,
-      [
-        wranglerBin,
-        "dev",
+    dev = await startWranglerDev({
+      args: [
         "-c",
         fuzzConfig,
         "--persist-to",
@@ -168,39 +145,12 @@ describe("the REST API under Schemathesis", () => {
         // without them.
         "--var",
         "FYRDEN_LIVE:on",
-        "--ip",
-        "127.0.0.1",
-        "--port",
-        String(port),
-        // Its own inspector port: concurrent servers each probing up from
-        // 9229 can pick the same one, and the later fails to bind.
-        "--inspector-port",
-        String(await freePort()),
       ],
-      {
-        cwd: join(root, "apps/api"),
-        env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" },
-      },
-    );
-    const child = dev;
-    closed = new Promise((done) => child.once("close", () => done()));
-    await new Promise<void>((ready, fail) => {
-      const timer = setTimeout(
-        () => fail(new Error(`wrangler dev did not start:\n${output}`)),
-        60_000,
-      );
-      const onData = (d: Buffer) => {
-        output += d;
-        // Ready on the port asked for, not one wrangler fell back to.
-        if (output.includes(`Ready on ${base}`)) {
-          clearTimeout(timer);
-          ready();
-        }
-      };
-      child.stdout?.on("data", onData);
-      child.stderr?.on("data", onData);
-      child.on("exit", (code) => fail(new Error(`wrangler dev exited (${code}):\n${output}`)));
+      cwd: join(root, "apps/api"),
+      onOutput: () => {},
     });
+    port = dev.port;
+    base = `http://127.0.0.1:${port}`;
     const boot = await fetch(`${base}/v0/admin/bootstrap`, {
       method: "POST",
       headers: { "X-Fyrden-Bootstrap-Secret": bootstrapSecret, "Content-Type": "application/json" },
@@ -218,22 +168,17 @@ describe("the REST API under Schemathesis", () => {
     for (const handle of [SEED.agent, "doomedbot"]) await call("POST", "/agents", { handle });
   }, 180_000);
 
+  // Long enough for stop: SIGTERM, 10 s, SIGKILL, then waiting for it to go.
   afterAll(async () => {
-    if (dev && dev.exitCode === null && dev.signalCode === null) {
-      dev.kill("SIGTERM");
+    try {
       // Its state is removed next: make sure it is gone first.
-      const stopped = await Promise.race([
-        closed.then(() => true),
-        new Promise<boolean>((give) => setTimeout(() => give(false), 10_000)),
-      ]);
-      if (!stopped) {
-        dev.kill("SIGKILL");
-        await closed;
-      }
+      await dev?.stop();
+      if (scratch) await rm(scratch, { recursive: true, force: true });
+    } finally {
+      // In the checkout, and nothing running needs it.
+      await rm(fuzzConfig, { force: true });
     }
-    if (scratch) await rm(scratch, { recursive: true, force: true });
-    await rm(fuzzConfig, { force: true });
-  });
+  }, 60_000);
 
   it("answers every generated request without a server error, as documented", async () => {
     // The token goes in the config file (in the scratch directory, removed
