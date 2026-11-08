@@ -13,9 +13,10 @@ import {
   d1RowsRun,
   measureInvocation,
 } from "@fyrden/adapters-cloudflare/obs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   expireLiveReceipts,
+  LIVE_RECEIPTS_OVERDUE,
   type LiveDayCharge,
   type LiveEnvelope,
   makeLiveGrant,
@@ -43,7 +44,16 @@ import {
   type LiveRecoveryRequest,
   recoverLiveTargets,
 } from "../src/live/recovery.js";
-import { clockedD1, DAY, isolated, plan, testDay, vector } from "./helpers/live-budget.js";
+import {
+  clockedD1,
+  DAY,
+  expiredReceipts,
+  isolated,
+  pinLedgerClock,
+  plan,
+  testDay,
+  vector,
+} from "./helpers/live-budget.js";
 
 const MINUTE = 60_000;
 const HOLD = 30_000;
@@ -339,7 +349,16 @@ describe("a maintenance run's pages, full", () => {
 
   it("a revocation page, at its most, costs no more than it was measured at", () =>
     isolated(async () => {
-      const now = Date.now();
+      // Half a minute to midnight: its grant (ten minutes) reaches the next day.
+      const now = Math.floor(Date.now() / DAY) * DAY + DAY - 30_000;
+      vi.useFakeTimers({ toFake: ["Date"], now });
+      const unpin = await pinLedgerClock(now);
+      onTestFinished(() => {
+        unpin();
+        vi.useRealTimers();
+      });
+      // As many expired receipts as grants allow: its grant's checks read every one.
+      await expiredReceipts(now, LIVE_RECEIPTS_OVERDUE.page - 1);
       // Revocations to expand past a page, each resting on a socket in a feed of its own (each a
       // scan row and a target: a page's most).
       const fill: D1PreparedStatement[] = [];

@@ -16,11 +16,12 @@ import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
 import type { FeedEntry } from "@fyrden/domain";
 import { hashToken, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { feedHooks, type UserDO } from "../src/do/UserDO.js";
+import { feedEpochSource } from "../src/do/user/feed.js";
 import { threadId } from "../src/do/user/inbox.js";
 import { LIVE_POLICY, LIVE_TICKET_PRUNE, Live } from "../src/do/user/live.js";
 import { LiveBudget } from "../src/do/user/live-budget.js";
@@ -30,10 +31,14 @@ import {
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
+  LIVE_RECEIPTS_OVERDUE,
+  LIVE_TURN_RECEIPT_LOOK,
+  LIVE_TURN_RECEIPT_PAGE,
   type LiveEnvelope,
   makeLiveGrant,
   reserveLive,
 } from "../src/live/budget.js";
+import { liveCredential } from "../src/live/credential.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { planFor } from "../src/live/funding.js";
 import {
@@ -44,15 +49,19 @@ import {
   type LiveManifestEntry,
   liveBlockUnit,
 } from "../src/live/manifest.js";
+import { openOwnedLiveSocket } from "../src/live/routes.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
+import { countD1Rows, DAY, expiredReceipts, pinLedgerClock, ZERO } from "./helpers/live-budget.js";
 import { handled, runTurns, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 /** A while into a socket's renewal period's second half, when a renewal is taken. */
 const RENEW_LATE = Math.ceil(LIVE_POLICY.renewMs * 0.6);
 
@@ -1901,31 +1910,23 @@ describe("live work's rows in a feed's object", () => {
   type Rows = { read: number; written: number; d1Read: number; d1Written: number };
   /**
    * Counts the rows the feed's object reads and writes while `fn` runs, and
-   * the D1 rows its invocations (the object's, the Worker's) recorded as read
-   * and written (their `d1.invocation_rows` points).
+   * the D1 rows every statement run meanwhile read and wrote, as D1's results
+   * report them (the Worker's as well as the object's: an invocation's own
+   * points miss a request served outside one).
    */
   async function rows(who: Who, fn: () => Promise<unknown>): Promise<Rows> {
     const sql = await runInDurableObject(feedOf(who), (_: UserDO, state) => state.storage.sql);
-    const dataset = env.METRICS as unknown as { writeDataPoint: (point: unknown) => void };
-    const write = dataset.writeDataPoint;
-    const d1 = { d1Read: 0, d1Written: 0 };
-    dataset.writeDataPoint = (point: unknown) => {
-      const p = point as { indexes?: string[]; blobs?: string[]; doubles?: number[] };
-      if (p.indexes?.[0] === "d1.invocation_rows") {
-        if (p.blobs?.[2] === "read") d1.d1Read += p.doubles?.[0] ?? 0;
-        if (p.blobs?.[2] === "written") d1.d1Written += p.doubles?.[0] ?? 0;
-      }
-      write.call(dataset, point);
-    };
     const count = countingExec(sql);
+    const d1 = countD1Rows();
     let counted: { read: number; written: number } | undefined;
+    let d1Counted: { d1Read: number; d1Written: number } | undefined;
     try {
       await fn();
     } finally {
+      d1Counted = d1.stop();
       counted = count.stop();
-      dataset.writeDataPoint = write;
     }
-    return { ...counted, ...d1 };
+    return { ...counted, ...d1Counted };
   }
   /** What `a` used past `b` (the same work without live's part), counter by counter. */
   const past = (a: Rows, b: Rows): Rows => ({
@@ -1987,21 +1988,47 @@ describe("live work's rows in a feed's object", () => {
         JSON.stringify(canonicalVector(left as never)),
       );
     });
-  /** Each unit's rows within the most its manifest entry observed. */
+  /** `who`'s ticket issued, then its upgrade: each one's rows, and the socket. */
+  async function opening(who: Who, vars: Record<string, string> = LIVE) {
+    let issued: { ticket: string } | undefined;
+    const ticket = await rows(who, async () => {
+      issued = (await (await ticketFor(who.token, vars)).json()) as { ticket: string };
+    });
+    let upgraded: Response | undefined;
+    const upgrade = await rows(who, async () => {
+      upgraded = await call(
+        new Request(
+          `${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued?.ticket ?? "")}`,
+          { headers: { Upgrade: "websocket", Authorization: `Bearer ${who.token}` } },
+        ),
+        vars,
+      );
+    });
+    expect(upgraded?.status).toBe(101);
+    upgraded?.webSocket?.accept();
+    return { ticket, upgrade, ws: upgraded?.webSocket };
+  }
+
+  /** Each unit's rows within the most its manifest entry observed (all compared at once). */
   const withinObserved = (units: Record<string, Rows>) => {
-    for (const [unit, r] of Object.entries(units)) {
-      const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
-      const observed = Object.values(entry.observed);
-      const most = (k: "do_rows_read" | "do_rows_written" | "d1_rows_read" | "d1_rows_written") =>
-        Math.max(...observed.map((o) => o[k]));
-      expect({ unit, ...r }).toEqual({
-        unit,
-        read: Math.min(r.read, most("do_rows_read")),
-        written: Math.min(r.written, most("do_rows_written")),
-        d1Read: Math.min(r.d1Read, most("d1_rows_read")),
-        d1Written: Math.min(r.d1Written, most("d1_rows_written")),
-      });
-    }
+    const capped = Object.fromEntries(
+      Object.entries(units).map(([unit, r]) => {
+        const entry = LIVE_PRICES[unit as keyof typeof LIVE_PRICES] as LiveManifestEntry;
+        const observed = Object.values(entry.observed);
+        const most = (k: "do_rows_read" | "do_rows_written" | "d1_rows_read" | "d1_rows_written") =>
+          Math.max(...observed.map((o) => o[k]));
+        return [
+          unit,
+          {
+            read: Math.min(r.read, most("do_rows_read")),
+            written: Math.min(r.written, most("do_rows_written")),
+            d1Read: Math.min(r.d1Read, most("d1_rows_read")),
+            d1Written: Math.min(r.d1Written, most("d1_rows_written")),
+          },
+        ];
+      }),
+    );
+    expect(units).toEqual(capped);
   };
   const note = (unit: string, r: Rows) => {
     const was = measured[unit] ?? { read: 0, written: 0, d1Read: 0, d1Written: 0 };
@@ -2013,7 +2040,86 @@ describe("live work's rows in a feed's object", () => {
     };
   };
 
-  it("meters a turn's steps: each within its measured most, a turn within its grant", async () => {
+  /**
+   * As many of `who`'s turns done as a turn's grant looks at and removes (of each kind, the
+   * newest a page past what it looks at), each over two days: what a grant's removal of done
+   * turns reads at most.
+   */
+  let doneSeq = Number.MAX_SAFE_INTEGER - 100;
+  async function doneTurnReceipts(who: Who, at: number): Promise<void> {
+    const { incarnation } = (await env.DIRECTORY.prepare(
+      "SELECT incarnation FROM live_budget_state WHERE id = 1",
+    ).first<{ incarnation: string }>()) as { incarnation: string };
+    const day = Math.floor(at / DAY);
+    const plan = JSON.stringify({ charges: [{ day: day - 1 }, { day }] });
+    const zero = JSON.stringify(canonicalVector(ZERO));
+    const each = LIVE_TURN_RECEIPT_LOOK + LIVE_TURN_RECEIPT_PAGE;
+    await env.DIRECTORY.batch(
+      ["pump", "renewal"].flatMap((kind, k) =>
+        Array.from({ length: each }, (_, i) => {
+          const validUntil = at - (k * each + i + 1) * MINUTE;
+          return env.DIRECTORY.prepare(
+            `INSERT INTO live_budget_receipts (seq, operation_id, mint, incarnation, recipient_type,
+               recipient, kind, class, epoch, produces_local, valid_from, valid_until, granted_at,
+               plan, directory_cleanup_debt, settle_until, expires_at, released_owners)
+             VALUES (?, ?, ?, ?, 'UserDO', ?, ?, 'ordinary', 0, 1, ?, ?, ?, ?, ?, ?, ?, '["own_done"]')`,
+          ).bind(
+            doneSeq--,
+            uniqueId("done"),
+            uniqueId("mint"),
+            incarnation,
+            who.principalId,
+            kind,
+            validUntil - 30 * MINUTE,
+            validUntil,
+            validUntil - 30 * MINUTE,
+            plan,
+            zero,
+            validUntil,
+            validUntil + 2 * DAY,
+          );
+        }),
+      ),
+    );
+  }
+
+  /** A user whose feed has an epoch of its own: each check of it in a grant reads a row. */
+  async function userWithEpoch(): Promise<Who> {
+    const who = await user();
+    await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)")
+      .bind(feedEpochSource(who.principalId))
+      .run();
+    return who;
+  }
+
+  /**
+   * The ledger's clock held at `at`, D1's and this isolate's alike, its receipts this test's
+   * own (another test's may be overdue at `at`), and as many expired receipts as grants still
+   * allow (one fewer than a page, none of them for two hours): each grant's overdue check reads
+   * every one of them.
+   */
+  async function atLedger(at: number): Promise<void> {
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    const unpin = await pinLedgerClock(at);
+    const forgetReceipts = () => env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    onTestFinished(async () => {
+      try {
+        await forgetReceipts();
+      } finally {
+        unpin();
+      }
+    });
+    await forgetReceipts();
+    await expiredReceipts(at, LIVE_RECEIPTS_OVERDUE.page - 1);
+  }
+
+  /**
+   * Each step of a feed's turn within its measured most, and each turn within its grant, with the
+   * ledger's clock held at `hour` of today (UTC).
+   */
+  async function meterTurnSteps(hour: number): Promise<void> {
+    const at = Math.floor(Date.now() / DAY) * DAY + hour;
+    await atLedger(at);
     const steps: Partial<Record<keyof typeof LIVE_TURN_STEPS, Rows>> = {};
     // Only once a scenario's sockets are all open (a turn running while they are being opened
     // counts their admissions' work, done meanwhile, as its own: conservative, but not a step's).
@@ -2093,8 +2199,9 @@ describe("live work's rows in a feed's object", () => {
     };
     try {
       // A turn with nothing to do: its own end.
-      const idle = await user();
+      const idle = await userWithEpoch();
       const idleSocket = await open(idle.token, ROOMY);
+      await doneTurnReceipts(idle, at);
       measuring = true;
       await turn(idle);
       noteEnd();
@@ -2135,7 +2242,7 @@ describe("live work's rows in a feed's object", () => {
       measuring = false;
       // A feed with its most sockets (four credentials' five): its housekeeping at its most; and two
       // of them renewing in a turn of renewals only, both answered (it has room for them).
-      const crowd = await user();
+      const crowd = await userWithEpoch();
       const crowdSockets: Awaited<ReturnType<typeof open>>[] = [];
       const crowdTokens = [
         crowd.token,
@@ -2145,6 +2252,7 @@ describe("live work's rows in a feed's object", () => {
         for (let i = 0; i < LIVE_POLICY.perCredential; i++)
           crowdSockets.push(await open(token, ROOMY));
       expect(await openSockets(crowd)).toBe(LIVE_POLICY.perFeed);
+      await doneTurnReceipts(crowd, at);
       measuring = true;
       await turn(crowd);
       noteEnd();
@@ -2177,7 +2285,7 @@ describe("live work's rows in a feed's object", () => {
         { unsubscribed: false, credentials: 1 },
         { unsubscribed: true, credentials: 1 },
       ]) {
-        const heavy = await user();
+        const heavy = await userWithEpoch();
         const repos: { id: string; conversation: string }[] = [];
         for (let i = 0; i < LIVE_POLICY.dirtyPage + 2; i++) repos.push(await repoWithIssue(heavy));
         const sockets: Awaited<ReturnType<typeof open>>[] = [];
@@ -2190,6 +2298,7 @@ describe("live work's rows in a feed's object", () => {
         for (const token of tokens)
           for (let i = 0; i < LIVE_POLICY.perCredential; i++)
             sockets.push(await open(token, ROOMY));
+        await doneTurnReceipts(heavy, at);
         measuring = true;
         const unconfirmed = Array.from(
           { length: LIVE_POLICY.perFeed - credentials * LIVE_POLICY.perCredential },
@@ -2291,17 +2400,23 @@ describe("live work's rows in a feed's object", () => {
       read: Math.min(closed.read, most("do_rows_read")),
       written: Math.min(closed.written, most("do_rows_written")),
     });
-    // Each step within its most.
-    for (const [step, r] of Object.entries(steps)) {
-      const most = LIVE_TURN_STEPS[step as keyof typeof LIVE_TURN_STEPS];
-      expect({ step, ...r }).toEqual({
-        step,
-        read: Math.min(r.read, most.do_rows_read),
-        written: Math.min(r.written, most.do_rows_written),
-        d1Read: Math.min(r.d1Read, most.d1_rows_read),
-        d1Written: Math.min(r.d1Written, most.d1_rows_written),
-      });
-    }
+    // All compared at once, so a run shows every step past its most.
+    expect(steps).toEqual(
+      Object.fromEntries(
+        Object.entries(steps).map(([step, r]) => {
+          const most = LIVE_TURN_STEPS[step as keyof typeof LIVE_TURN_STEPS];
+          return [
+            step,
+            {
+              read: Math.min(r.read, most.do_rows_read),
+              written: Math.min(r.written, most.do_rows_written),
+              d1Read: Math.min(r.d1Read, most.d1_rows_read),
+              d1Written: Math.min(r.d1Written, most.d1_rows_written),
+            },
+          ];
+        }),
+      ),
+    );
     // Each alarm that ran one turn, measured whole, within what that turn's grant paid.
     expect(wholes.length).toBeGreaterThan(0);
     for (const { whole, paid } of wholes)
@@ -2328,7 +2443,108 @@ describe("live work's rows in a feed's object", () => {
         d1_rows_written: Math.min(whole.d1_rows_written, paid.d1_rows_written),
       });
     }
-  }, 90_000);
+  }
+
+  // A refill's six-hour block reaches past midnight from 18:00 UTC, a turn's grant (half an hour)
+  // from 23:30, an account's confirmation (a minute) from 23:59: a second day's rows each.
+  for (const [when, hour] of [
+    ["before a refill's block reaches midnight", 17 * HOUR + 30 * MINUTE],
+    ["with a refill's block past midnight", 18 * HOUR + 30 * MINUTE],
+    ["with every grant of a turn past midnight", 23 * HOUR + 59 * MINUTE + 30_000],
+  ] as const)
+    it(
+      `meters a turn's steps: each within its measured most, a turn within its grant, ${when}`,
+      () => meterTurnSteps(hour),
+      90_000,
+    );
+
+  it("is within its ticket's, upgrade's (a browser's or an MCP listen's) and confirmation's D1 past midnight", async () => {
+    // Half a minute to midnight: every grant of an opening (a ticket's, a minute) and of a
+    // confirmation (a minute) reaches the next day; the ledger with an epoch, both days' rows,
+    // as many expired receipts as grants allow, and the feed's done turns to remove.
+    const at = Math.floor(Date.now() / DAY) * DAY + DAY - 30_000;
+    await atLedger(at);
+    // Both days' rows there already (another feed's socket, its end provided for over two days).
+    const other = await user();
+    const warm = await open(other.token);
+    // A repository of its own too: its socket's dependencies indexed with it.
+    const owner = await userWithEpoch();
+    await repoWithIssue(owner);
+    await doneTurnReceipts(owner, at);
+    // The feed's first opening, and one after everything it granted is gone (its turn and
+    // blocks granted again, the feed's object already there).
+    const first = await opening(owner);
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_turn");
+      state.storage.sql.exec("UPDATE live_budget_balances SET budget_valid_until = 0");
+    });
+    const again = await opening(owner);
+    // An MCP listen's opening, with no ticket (its transport granted as it opens), as the first
+    // of another such feed.
+    const listener = await userWithEpoch();
+    await repoWithIssue(listener);
+    await doneTurnReceipts(listener, at);
+    const credential = (await liveCredential(
+      env.DIRECTORY,
+      (await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+        .bind(await hashToken(listener.token))
+        .first<{ id: string }>())?.id as string,
+      Date.now(),
+    )) as NonNullable<Awaited<ReturnType<typeof liveCredential>>>;
+    let listened: Awaited<ReturnType<typeof openOwnedLiveSocket>> | undefined;
+    const listen = await rows(listener, async () => {
+      listened = await openOwnedLiveSocket(
+        { ...env, ...LIVE } as Env,
+        credential,
+        `listen:${uniqueId("lsk")}`,
+        undefined,
+      );
+    });
+    expect(listened?.ok).toBe(true);
+    const listenSocket = listened?.ok ? listened.response.webSocket : null;
+    listenSocket?.accept();
+    // Its turn granted again by it.
+    expect(
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec("SELECT 1 FROM live_turn").toArray(),
+      ),
+    ).toHaveLength(1);
+    const most = (a: Rows, b: Rows): Rows => ({
+      read: 0,
+      written: 0,
+      d1Read: Math.max(a.d1Read, b.d1Read),
+      d1Written: Math.max(a.d1Written, b.d1Written),
+    });
+    // A confirmation's grant alone, of an account's object.
+    const confirmation = await rows(owner, async () => {
+      const request = await makeLiveGrant(
+        planFor(
+          LIVE_PRICES.org_confirmation as LiveManifestEntry,
+          {
+            incarnation: (
+              await env.DIRECTORY.prepare(
+                "SELECT incarnation FROM live_budget_state WHERE id = 1",
+              ).first<{ incarnation: string }>()
+            )?.incarnation as string,
+            epoch: 0,
+            recipientType: "OrgDO",
+            recipient: uniqueId("org"),
+            class: "ordinary",
+            kind: "org_confirmation",
+            producesLocal: false,
+          },
+          at,
+        ),
+      );
+      expect((await reserveLive(env.DIRECTORY, request)).status).toBe("granted");
+    });
+    withinObserved({
+      ticket: most(first.ticket, again.ticket),
+      upgrade_transport: most(most(first.upgrade, again.upgrade), listen),
+      org_confirmation: { ...confirmation, read: 0, written: 0 },
+    });
+    for (const ws of [warm.ws, first.ws, again.ws, listenSocket]) ws?.close(1000, "done");
+  });
 
   it("is within each unit's observed rows", async () => {
     const owner = await user();
@@ -2342,14 +2558,18 @@ describe("live work's rows in a feed's object", () => {
         issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
       }),
     );
-    // Its upgrade: the redemption and the admission with its provisions, blocks and turn.
+    // Its upgrade: the redemption and the admission with its provisions, blocks and turn (the
+    // object's rows the admission's; its D1 the transport's to pay for, the whole attempt's,
+    // measured apart from its ticket's on an opening of its own).
+    const measuredOpening = await opening(owner);
+    note("ticket", { ...measuredOpening.ticket, read: 0, written: 0 });
+    note("upgrade_transport", { ...measuredOpening.upgrade, read: 0, written: 0 });
+    measuredOpening.ws?.close(1000, "done");
     let socket: Awaited<ReturnType<typeof open>> | undefined;
-    note(
-      "admission",
-      await rows(owner, async () => {
-        socket = await open(owner.token);
-      }),
-    );
+    const opened = await rows(owner, async () => {
+      socket = await open(owner.token);
+    });
+    note("admission", { ...opened, d1Read: 0, d1Written: 0 });
     // A control.
     note("control", await rows(owner, () => say(owner, socket, { t: "ack", n: 0 })));
     // A mark: a change applied with and without live sockets, its difference the mark's.
@@ -2546,13 +2766,10 @@ describe("live work's rows in a feed's object", () => {
     )
       .bind(uniqueId("lsk"), uniqueId("t"), Date.now() + 60_000)
       .run();
-    note(
-      "upgrade_transport",
-      await rows(refusedOwner, async () => {
-        const refused = await open(refusedOwner.token, { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" });
-        await refused.closed;
-      }),
-    );
+    // Measured apart from its ticket's issuance, as an upgrade's own.
+    const refused = await opening(refusedOwner, { ...LIVE, FYRDEN_LIVE_SOCKETS: "1" });
+    note("ticket", { ...refused.ticket, read: 0, written: 0 });
+    note("upgrade_transport", { ...refused.upgrade, read: 0, written: 0 });
     const bare = await user();
     const bareRepo = await repoWithIssue(bare);
     const unmarked = await rows(bare, () => feedOf(bare).applyFeed([change(bare, bareRepo, 1)]));

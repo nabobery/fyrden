@@ -3,8 +3,10 @@
 // declared test prices, and the ledger singleton kept as it was.
 
 import { env } from "cloudflare:workers";
+import { uniqueId } from "@fyrden/testing";
 import type { ResourceVector } from "../../src/effects/discretionary.js";
 import {
+  canonicalVector,
   LIVE_NOW,
   type LiveDayCharge,
   type LiveGrantPlan,
@@ -12,6 +14,7 @@ import {
 } from "../../src/live/budget.js";
 
 export const DAY = 86_400_000;
+const MINUTE = 60_000;
 
 /** `db` with D1's clock at `clock.now` (milliseconds) in every ledger statement. */
 export function clockedD1(db: D1Database | D1DatabaseSession, clock: { now: number }): D1Database {
@@ -28,6 +31,99 @@ export function clockedD1(db: D1Database | D1DatabaseSession, clock: { now: numb
   }) as D1Database;
 }
 
+/**
+ * D1's clock in every ledger statement of every binding in this isolate, a Durable Object's among
+ * them (which `clockedD1` can't reach), held at `now` until the returned function is called.
+ */
+export async function pinLedgerClock(now: number): Promise<() => void> {
+  const rewrite = (query: string) => query.split(LIVE_NOW).join(`(${now})`);
+  type Preparing = { prepare(query: string): D1PreparedStatement };
+  const session = env.DIRECTORY.withSession("first-primary");
+  const prototypes = [env.DIRECTORY, session].map((d) => Object.getPrototypeOf(d) as Preparing);
+  const originals = prototypes.map((proto) => proto.prepare);
+  prototypes.forEach((proto, i) => {
+    const original = originals[i] as Preparing["prepare"];
+    proto.prepare = function (this: Preparing, query: string) {
+      return original.call(this, rewrite(query));
+    };
+  });
+  return () => {
+    prototypes.forEach((proto, i) => {
+      proto.prepare = originals[i] as Preparing["prepare"];
+    });
+  };
+}
+
+/**
+ * Counts the D1 rows every statement in this isolate reads and writes (as D1's result metadata
+ * says) until `stop`: a Worker's and a Durable Object's alike, whichever binding or session runs
+ * them. A statement's `first` is read through `all`, as an invocation counts it.
+ */
+export function countD1Rows(): { stop(): { d1Read: number; d1Written: number } } {
+  const tally = { d1Read: 0, d1Written: 0 };
+  type Meta = { rows_read?: number; rows_written?: number } | undefined;
+  const add = (meta: Meta) => {
+    tally.d1Read += meta?.rows_read ?? 0;
+    tally.d1Written += meta?.rows_written ?? 0;
+  };
+  type Fn = (this: unknown, ...args: unknown[]) => Promise<unknown>;
+  const restore: (() => void)[] = [];
+  const patch = (proto: Record<string, Fn>, name: string, make: (original: Fn) => Fn) => {
+    const original = proto[name] as Fn;
+    proto[name] = make(original);
+    restore.push(() => {
+      proto[name] = original;
+    });
+  };
+  const db = env.DIRECTORY;
+  // A binding's batch runs through its session's: counted there only, once.
+  patch(
+    Object.getPrototypeOf(db.withSession("first-primary")) as Record<string, Fn>,
+    "batch",
+    (original) =>
+      async function (this: unknown, ...args: unknown[]) {
+        const results = (await original.apply(this, args)) as { meta?: Meta }[];
+        for (const result of results) add(result?.meta);
+        return results;
+      },
+  );
+  const statement = Object.getPrototypeOf(db.prepare("SELECT 1")) as Record<string, Fn>;
+  const all = statement.all as Fn;
+  for (const name of ["all", "run"])
+    patch(
+      statement,
+      name,
+      (original) =>
+        async function (this: unknown, ...args: unknown[]) {
+          const result = (await original.apply(this, args)) as { meta?: Meta };
+          add(result?.meta);
+          return result;
+        },
+    );
+  patch(
+    statement,
+    "first",
+    () =>
+      async function (this: unknown, ...args: unknown[]) {
+        const result = (await all.call(this)) as {
+          meta?: Meta;
+          results?: Record<string, unknown>[];
+        };
+        add(result?.meta);
+        const row = result?.results?.[0];
+        if (row === undefined) return null;
+        const column = args[0] as string | undefined;
+        return column === undefined ? row : (row[column] ?? null);
+      },
+  );
+  return {
+    stop() {
+      for (const undo of restore.reverse()) undo();
+      return tally;
+    },
+  };
+}
+
 export const ZERO: ResourceVector = {
   do_requests: 0,
   do_rows_read: 0,
@@ -39,6 +135,38 @@ export const ZERO: ResourceVector = {
 };
 
 export const vector = (parts: Partial<ResourceVector>): ResourceVector => ({ ...ZERO, ...parts });
+
+/** `n` receipts expired half an hour before `at`: within the overdue check's grace. */
+export async function expiredReceipts(at: number, n: number): Promise<void> {
+  const { incarnation } = (await env.DIRECTORY.prepare(
+    "SELECT incarnation FROM live_budget_state WHERE id = 1",
+  ).first<{ incarnation: string }>()) as { incarnation: string };
+  const expiresAt = at - 30 * MINUTE;
+  const validUntil = expiresAt - 2 * DAY;
+  const zero = JSON.stringify(canonicalVector(ZERO));
+  await env.DIRECTORY.batch(
+    Array.from({ length: n }, (_, i) =>
+      env.DIRECTORY.prepare(
+        `INSERT INTO live_budget_receipts (seq, operation_id, mint, incarnation, recipient_type,
+           recipient, kind, class, epoch, produces_local, valid_from, valid_until, granted_at,
+           plan, directory_cleanup_debt, settle_until, expires_at)
+         VALUES (?, ?, ?, ?, 'UserDO', ?, 'ticket', 'ordinary', 0, 0, ?, ?, ?, '{}', ?, ?, ?)`,
+      ).bind(
+        Number.MAX_SAFE_INTEGER - i,
+        uniqueId("expired"),
+        uniqueId("mint"),
+        incarnation,
+        uniqueId("feed"),
+        validUntil - MINUTE,
+        validUntil,
+        validUntil - MINUTE,
+        zero,
+        validUntil,
+        expiresAt,
+      ),
+    ),
+  );
+}
 
 /** The ledger's incarnation now. */
 export async function incarnation(): Promise<string> {
