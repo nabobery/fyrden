@@ -2486,9 +2486,11 @@ describe("live work's rows in a feed's object", () => {
     await doneTurnReceipts(listener, at);
     const credential = (await liveCredential(
       env.DIRECTORY,
-      (await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
-        .bind(await hashToken(listener.token))
-        .first<{ id: string }>())?.id as string,
+      (
+        await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+          .bind(await hashToken(listener.token))
+          .first<{ id: string }>()
+      )?.id as string,
       Date.now(),
     )) as NonNullable<Awaited<ReturnType<typeof liveCredential>>>;
     let listened: Awaited<ReturnType<typeof openOwnedLiveSocket>> | undefined;
