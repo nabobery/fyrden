@@ -24,7 +24,8 @@ the current pinned git. Pull requests also run mutation testing
 (incremental) for the `git-core` scopes they change. The nightly workflow runs
 every interoperability case on every pinned git, long fuzzing budgets, the
 shuffle guard with ten seeds per package (ten parallel jobs of one randomly
-seeded pass each), and a full mutation run of every scope.
+seeded pass each), a full mutation run of every scope, and whole blames of
+frozen public files against the pinned git.
 
 `git-core` and `domain` run under plain Node on purpose: it proves they do not
 depend on the Workers runtime.
@@ -167,6 +168,58 @@ re-records them. The other rows were measured with the 60 s timeout.
 2026-10-11) grew past what one CI job can run (3,409 mutants, about six hours)
 and was split: the push object checks became `push-fsck`, which runs only
 their own tests.
+
+## Blame's limits and how they were measured
+
+The benches below measure locally, on an Apple arm64 Mac in workerd 1.20261101.1, and
+the limits are Proposed. Deployed figures are named as deployed where they appear.
+Benches run only under `FYRDEN_BENCH=1`, on the pinned Node.
+
+| Bench | Command | Shows |
+|---|---|---|
+| CPU per primitive | `node tools/bench/blame/run.ts --only=cpu` | ns per counted unit, in one idle workerd isolate |
+| Delta-base cache retention | `node tools/bench/blame/run.ts --only=retention` | What the 8 MiB charge holds in workerd: 8.01 MiB at most |
+| Churn | `node tools/bench/blame/run.ts --only=memory` | The high-water with no forced collection |
+| Allocation boundaries | `vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
+| Charge against bytes built | `vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
+
+Retention with heap counted depends on the runtime: Node 24 held up to 10.66 MiB
+where Node 26 held 7.54 and workerd 8.01. So the Node bench holds only buffers to
+the charge, and **workerd's figure is the evidence** for the 512 bytes an entry. It
+isn't in CI: nothing fails if it moves, so rerun it when the reader, its cache or
+workerd's version changes.
+
+```sh
+FYRDEN_BENCH=1 node tools/bench/blame/run.ts --only=retention
+```
+
+| Object | 1 B | 64 B | 1 KiB | 4 KiB | 16 KiB | 64 KiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Retained, MiB: JS heap and backing stores, after forced collection, against 8 MiB charged | 3.72 | 4.28 | 6.74 | 7.73 | 7.97 | 8.01 |
+
+Measured on 2026-11-07 in local workerd 1.20261101.1, through the inspector, against a
+new reader after a warming pass, with the recent-locations map included.
+
+The limits: `BLAME_DECODING_WORK`, 512 Mi units with weights delta-program 30 and
+tree-scan 3, and engine work of 8,000,000 a slice. Worst primitives, locally: inflate
+1.6 ns a unit, a dense delta program 17.9 a byte, a tree scan 3.8, alignment 137. A slice
+doing the worst of everything is 3.9 s by that arithmetic. Deployed, in one colo, the
+final engine read 2.3 to 3.6 times local per case, which puts the same slice at about
+12.1 s against the 30 s limit. Not deployed: a whole slice through the real reader with
+R2 under it. Memory isn't settled: garbage isn't bounded by the charges, and deployed
+instances reset intermittently after dense delta work, with the cause unverified. The
+design's §6 has the runs.
+
+Alignment's rules come from black-box probing, so generated pairs check them too. `blame.git-oracle.test.ts`
+runs each generator at `FYRDEN_BLAME_SEARCH` pairs, 5,000 by default, against the
+pinned git. Whatever the engine settles has to be git's answer. Pairs a larger search
+found wrong stay in the test, shrunk.
+
+The nightly `blame-fixtures` job compares whole blames of `lib/application.js`,
+`lib/router/index.js`, `merge-ort.c` and `read-cache.c` at frozen commits with git
+2.53.0: no differences, and at least 95% of each file's lines resolved. A failure names
+only commit ids and line numbers. git's own blame and diff sources are never fixtures,
+and a test keeps them out.
 
 ## Writing git-core tests
 

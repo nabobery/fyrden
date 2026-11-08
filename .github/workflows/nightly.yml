@@ -150,6 +150,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+  # Whole blames of real files at frozen commits against the pinned git. No
+  # third party's text is committed: the clones are cached, and a failure names
+  # only commit ids and line numbers. The log reports each file's unresolved
+  # lines by reason, the rates a synthetic fixture can't show. Nothing here is
+  # piped, so a failed clone or a missing clone fails the job.
+  blame-fixtures:
+    name: Blame of frozen public files
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/pinned-git
+        with:
+          version: "2.53.0"
+      - name: Cached clones
+        id: clones
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-blame-fixtures
+          key: blame-fixtures-v1
+      - name: Clone the fixtures
+        if: steps.clones.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/.cache/fyrden-blame-fixtures"
+          git clone --quiet --bare https://github.com/expressjs/express "$HOME/.cache/fyrden-blame-fixtures/express.git"
+          git clone --quiet --bare https://github.com/git/git "$HOME/.cache/fyrden-blame-fixtures/git.git"
+      - name: Compare
+        run: |
+          FYRDEN_BLAME_FIXTURES="$HOME/.cache/fyrden-blame-fixtures" \
+            pnpm --filter @fyrden/git-core exec vitest run test/blame/blame.fixtures.test.ts
+
   # Full Stryker run per scope. Each writes the incremental file pull
   # requests start from (saved to the cache), and fails below its baseline.
   mutation:
@@ -169,6 +208,7 @@ jobs:
             pack-write,
             graph,
             reader,
+            blame,
             receive-pack,
             push-fsck,
             upload-pack,

@@ -1,4 +1,41 @@
 export {
+  type AlignLimits,
+  type Alignment,
+  alignFiles,
+  type LineRange,
+  MAX_ALIGN_WORK,
+  MAX_SEARCH_ROUNDS,
+} from "./blame/align.js";
+export {
+  type BlameCommitInfo,
+  type BlameState,
+  BlameStateError,
+  BlameStateTooLarge,
+  decodeBlameState,
+  encodeBlameState,
+  liveStateBytes,
+  MAX_BLAME_LINES,
+  MAX_STATE_BYTES,
+  UNRESOLVED_REASONS,
+  type UnresolvedReason,
+} from "./blame/state.js";
+export {
+  advanceBlame,
+  BLAME_DECODING_WORK,
+  BLAME_ENGINE_VERSION,
+  type BlameAdvance,
+  BlameObjectUnreadable,
+  type BlameRange,
+  BlameReadsSpent,
+  type BlameSliceLimits,
+  type BlameSource,
+  type BlameStartFailure,
+  blameRanges,
+  DEFAULT_BLAME_SLICE,
+  MAX_BLAME_FILE_BYTES,
+  startBlame,
+} from "./blame/walk.js";
+export {
   DEFAULT_FETCH_CLIENT_LIMITS,
   FetchClientError,
   type FetchClientErrorCode,
@@ -358,6 +395,7 @@ export { type LogPage, type LogPageOptions, logPage, type PathEntryLookup } from
 export {
   type CachedObject,
   DELTA_BASE_ENTRY_OVERHEAD,
+  DELTA_BASE_STRICT_ENTRY_OVERHEAD,
   DeltaBaseCache,
 } from "./reader/delta-base-cache.js";
 export { MissingObjectError } from "./reader/errors.js";
@@ -371,8 +409,20 @@ export {
   type StoredObject,
   type WalkedObject,
 } from "./reader/object-reader.js";
+export {
+  createPrepaidMemory,
+  type PrepaidMemory,
+  PrepaidMemoryExceeded,
+} from "./reader/prepaid-memory.js";
 export { createReadStats, type ReadStats } from "./reader/stats.js";
 export type { PackIdxSource, RepoView, ViewPack } from "./reader/view.js";
+export {
+  createReaderWorkMeter,
+  READER_LOOKUP_WORK,
+  type ReaderWork,
+  type ReaderWorkKind,
+  type ReaderWorkMeter,
+} from "./reader/work.js";
 export {
   bytesBody,
   COMMAND_READ_BYTES,

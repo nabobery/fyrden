@@ -362,6 +362,7 @@ jobs:
             pack-write,
             graph,
             reader,
+            blame,
             receive-pack,
             push-fsck,
             upload-pack,

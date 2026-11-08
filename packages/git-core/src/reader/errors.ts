@@ -13,3 +13,14 @@ export class MissingObjectError extends Error {
     this.oids = oids;
   }
 }
+
+/** A reader built more bytes than its `maxBuiltBytes` allow, or its work port refused a charge. */
+export class ReaderWorkSpent extends Error {
+  override name = "ReaderWorkSpent";
+  constructor(
+    readonly limit: number,
+    message = `building the objects read took more than ${limit} bytes`,
+  ) {
+    super(message);
+  }
+}

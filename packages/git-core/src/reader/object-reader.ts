@@ -11,12 +11,20 @@ import type { MemoryBudget, MemoryReservation } from "../ports/memory-budget.js"
 import type { PackStore } from "../ports/pack-store.js";
 import type { Zlib } from "../ports/zlib.js";
 import { BlockReader, type PackBytesSource } from "./block-reader.js";
-import { type CachedObject, DeltaBaseCache } from "./delta-base-cache.js";
+import {
+  type CachedObject,
+  DELTA_BASE_ENTRY_OVERHEAD,
+  DELTA_BASE_STRICT_ENTRY_OVERHEAD,
+  DeltaBaseCache,
+} from "./delta-base-cache.js";
 import { type EntryHead, readEntry, readEntryHead, readEntryHeader } from "./entry-reader.js";
-import { MissingObjectError } from "./errors.js";
+import { MissingObjectError, ReaderWorkSpent } from "./errors.js";
 import { SequentialPackReader } from "./range-planner.js";
 import { createReadStats, type ReadStats } from "./stats.js";
 import { checkView, type RepoView, type ViewPack } from "./view.js";
+import { READER_LOOKUP_WORK, type ReaderWork } from "./work.js";
+
+export { ReaderWorkSpent };
 
 /**
  * Most bytes of entry reads kept while a delta chain is followed (so each
@@ -50,14 +58,6 @@ export interface ReaderLimits {
   readonly maxBuiltBytes: number;
 }
 
-/** A reader built more bytes than its `maxBuiltBytes` allow. */
-export class ReaderWorkSpent extends Error {
-  override name = "ReaderWorkSpent";
-  constructor(readonly maxBuiltBytes: number) {
-    super(`building the objects read took more than ${maxBuiltBytes} bytes`);
-  }
-}
-
 export const DEFAULT_READER_LIMITS: ReaderLimits = {
   maxObjectBytes: DEFAULT_PACK_LIMITS.maxObjectBytes,
   maxDeltaDepth: DEFAULT_PACK_LIMITS.maxDeltaDepth,
@@ -78,6 +78,14 @@ export interface ObjectReaderOptions {
   /** Read counts for this request's metrics; the reader adds to it. */
   readonly stats?: ReadStats;
   readonly limits?: Partial<ReaderLimits>;
+  /**
+   * The delta-base cache's charge covers what it holds: each cached object
+   * has a buffer of exactly its length, copied when zlib handed back a view of
+   * a larger one, and an entry costs its length plus 512 bytes. Off by default.
+   */
+  readonly strictDeltaCache?: boolean;
+  /** Charged before each decoding primitive, which doesn't run if this throws. Off by default. */
+  readonly work?: ReaderWork;
 }
 
 export interface StoredObject {
@@ -129,6 +137,8 @@ export class ObjectReader {
   readonly #blocks: BlockReader;
   readonly #cache: DeltaBaseCache;
   readonly #reservation: MemoryReservation;
+  readonly #strictCache: boolean;
+  readonly #work: ReaderWork | undefined;
   /** Where `prefetch` found objects, by hex oid (undefined: in no pack of the view). */
   readonly #located = new Map<string, Location | undefined>();
   /** Where other lookups found objects, by hex oid, oldest first; at most `RECENT_LOCATIONS`. */
@@ -150,13 +160,19 @@ export class ObjectReader {
     this.#limits = limits;
     this.stats = stats;
     this.#reservation = reservation;
+    this.#strictCache = options.strictDeltaCache ?? false;
+    this.#work = options.work;
     this.#blocks = new BlockReader(
       options.view.scope,
       options.packStore,
       options.blockCache,
       stats,
+      options.work,
     );
-    this.#cache = new DeltaBaseCache(limits.deltaBaseCacheBytes);
+    this.#cache = new DeltaBaseCache(
+      limits.deltaBaseCacheBytes,
+      this.#strictCache ? DELTA_BASE_STRICT_ENTRY_OVERHEAD : DELTA_BASE_ENTRY_OVERHEAD,
+    );
   }
 
   /**
@@ -224,6 +240,7 @@ export class ObjectReader {
   /** The object, or undefined when no pack of the view holds it. Throws PackError for a bad pack. */
   async readObject(oid: Uint8Array): Promise<StoredObject | undefined> {
     this.#checkOpen();
+    this.#work?.charge("lookup", READER_LOOKUP_WORK);
     const at = await this.#locate(oid);
     if (at === undefined) return undefined;
     const object = await this.#resolve(at, this.#blocks.read);
@@ -239,6 +256,7 @@ export class ObjectReader {
    */
   async readHeader(oid: Uint8Array): Promise<ObjectHeaderInfo | undefined> {
     this.#checkOpen();
+    this.#work?.charge("lookup", READER_LOOKUP_WORK);
     const at = await this.#locate(oid);
     if (at === undefined) return undefined;
     const cached = this.#cache.peek(at.pack, at.offset);
@@ -253,7 +271,15 @@ export class ObjectReader {
         : undefined;
     let size: number;
     try {
-      const delta = await readEntry(this.#blocks.read, this.#zlib, this.#pack(at), at.offset, max);
+      const delta = await readEntry(
+        this.#blocks.read,
+        this.#zlib,
+        this.#pack(at),
+        at.offset,
+        max,
+        undefined,
+        this.#work,
+      );
       this.#spend(delta.data.length);
       size = readDeltaHeader(delta.data, max).resultSize;
     } finally {
@@ -370,9 +396,17 @@ export class ObjectReader {
       );
       const { header } = head;
       if (isObjectType(header.kind)) {
-        const entry = await readEntry(read, this.#zlib, pack, current.offset, maxObjectBytes, head);
+        const entry = await readEntry(
+          read,
+          this.#zlib,
+          pack,
+          current.offset,
+          maxObjectBytes,
+          head,
+          this.#work,
+        );
         this.#spend(entry.data.length);
-        base = { type: header.kind, data: entry.data };
+        base = { type: header.kind, data: this.#cacheable(entry.data) };
         this.#cache.put(current.pack, current.offset, base);
         break;
       }
@@ -398,6 +432,7 @@ export class ObjectReader {
           link.at.offset,
           maxObjectBytes,
           link.head,
+          this.#work,
         );
         this.#spend(delta.length);
         base = { type: base.type, data: this.#apply(base.data, delta, link.at.offset) };
@@ -418,8 +453,20 @@ export class ObjectReader {
       throw new ReaderWorkSpent(this.#limits.maxBuiltBytes);
   }
 
+  /** What a strict cache may keep: never a view that holds a larger buffer alive. */
+  #cacheable(data: Uint8Array): Uint8Array {
+    if (!this.#strictCache || data.buffer.byteLength === data.length) return data;
+    this.#work?.charge("exact-copy", data.length);
+    return copyBytes(data);
+  }
+
   #apply(base: Uint8Array, delta: Uint8Array, offset: number): Uint8Array {
     try {
+      if (this.#work) {
+        const { resultSize } = readDeltaHeader(delta, this.#limits.maxObjectBytes);
+        this.#work.charge("delta-program", delta.length);
+        this.#work.charge("delta-result", resultSize);
+      }
       return applyDelta(base, delta, this.#limits.maxObjectBytes);
     } catch (error) {
       if (error instanceof PackError && error.offset === undefined) {
@@ -488,7 +535,9 @@ export class ObjectReader {
 
   /** Bytes the caller may keep and change: a copy when the cache holds the same buffer. */
   #owned(at: Location, object: CachedObject): Uint8Array {
-    return this.#cache.peek(at.pack, at.offset) === object ? copyBytes(object.data) : object.data;
+    if (this.#cache.peek(at.pack, at.offset) !== object) return object.data;
+    this.#work?.charge("returned-copy", object.data.length);
+    return copyBytes(object.data);
   }
 
   #checkOpen(): void {

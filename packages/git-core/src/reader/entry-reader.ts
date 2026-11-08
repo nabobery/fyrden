@@ -10,6 +10,7 @@ import { inflateEntry, maxCompressedBytes, NeedMoreInput } from "../pack/inflate
 import type { Zlib } from "../ports/zlib.js";
 import type { PackBytesSource } from "./block-reader.js";
 import type { ViewPack } from "./view.js";
+import type { ReaderWork } from "./work.js";
 
 /** The longest entry header: 10 size bytes and a 20-byte REF_DELTA base. */
 const MAX_HEADER_BYTES = 30;
@@ -106,6 +107,7 @@ export async function readEntry(
   offset: number,
   maxObjectBytes: number,
   head?: EntryHead,
+  work?: ReaderWork,
 ): Promise<RawEntry> {
   const end = entriesEnd(pack);
   let { header, bytes } = head ?? (await readEntryHeader(source, pack, offset, maxObjectBytes));
@@ -118,6 +120,7 @@ export async function readEntry(
     const available = Math.min(offset + bytes.length, bound);
     try {
       const body = bytes.subarray(header.length, available - offset);
+      work?.charge("inflate", body.length + header.size);
       return { header, data: inflateEntry(zlib, body, header.size, offset).data };
     } catch (error) {
       if (!(error instanceof NeedMoreInput)) throw error;
