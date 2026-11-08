@@ -26,6 +26,8 @@ export interface BlameFixtures {
   /** Sizes of commit objects by name, for the 64 KiB boundary. */
   readonly sizes: Readonly<Record<string, number>>;
   readonly blames: Readonly<Record<string, readonly GitBlameLine[]>>;
+  /** Each recorded path's blob at the tip, in hex. */
+  readonly blobs: Readonly<Record<string, string>>;
 }
 
 declare module "vitest" {

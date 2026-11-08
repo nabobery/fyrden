@@ -155,6 +155,7 @@ CREATE TABLE audit_segments (
 CREATE TABLE blame_runs (
         run_id TEXT PRIMARY KEY,
         commit_oid BLOB NOT NULL,
+        blob_oid BLOB CHECK (blob_oid IS NULL OR length(blob_oid) = 20),
         path TEXT NOT NULL,
         engine_version INTEGER NOT NULL,
         epoch_gen INTEGER NOT NULL,

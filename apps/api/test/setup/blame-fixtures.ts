@@ -282,6 +282,9 @@ export default function setup(project: TestProject): () => void {
       Number(out(["cat-file", "-s", commits[name] as string])),
     ]),
   );
+  const blobs = Object.fromEntries(
+    BLAME_PATHS.map((path) => [path, out(["rev-parse", `${commits.tip}:${path}`])]),
+  );
   const blames = Object.fromEntries(
     BLAME_PATHS.map((path) => [
       path,
@@ -292,7 +295,14 @@ export default function setup(project: TestProject): () => void {
   );
   const pack = toHex(git(["pack-objects", "--stdout", "--revs", "-q"], `${commits.tip}\n`));
 
-  const fixtures: BlameFixtures = { pack, tip: commits.tip as string, commits, sizes, blames };
+  const fixtures: BlameFixtures = {
+    pack,
+    tip: commits.tip as string,
+    commits,
+    sizes,
+    blames,
+    blobs,
+  };
   project.provide("blameFixtures", fixtures);
   return () => rmSync(root, { recursive: true, force: true });
 }

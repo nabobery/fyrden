@@ -119,6 +119,7 @@ import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
+import { type BlameRequest, RepoBlame } from "./repo/blame.js";
 import {
   type Browsed,
   type BrowsePolicy,
@@ -467,6 +468,7 @@ export class RepoDO extends MigratingDO {
 
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
+  readonly blameRuns: RepoBlame;
 
   /** Reactions to issues, pull requests and their comments. */
   readonly reactions: RepoReactions;
@@ -585,6 +587,12 @@ export class RepoDO extends MigratingDO {
       resolve: async (owner, name) =>
         (await resolveRepo(this.env, owner, name, { metrics: this.git.context.metrics }))?.id ??
         null,
+    });
+    this.blameRuns = new RepoBlame({
+      git: this.git,
+      memoryBlocks: this.#memoryBlocks(),
+      repoId: () => this.#repoId(),
+      epochGen: () => this.events.epochGen(),
     });
     this.releases = new RepoReleases({
       git: this.git,
@@ -2281,6 +2289,13 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A page of the repository's releases (see `RepoReleases.list`); null when gone. */
+  /** One request's blame of a file: a page of a run, or a refusal; null when gone. */
+  blame(input: BlameRequest) {
+    return this.#measured("blame", () =>
+      this.#refusesReads() ? null : this.blameRuns.answer(input),
+    );
+  }
+
   listReleases(query: Parameters<RepoReleases["list"]>[0]) {
     return this.#measured("listReleases", () =>
       this.#refusesReads() ? null : this.releases.list(query),

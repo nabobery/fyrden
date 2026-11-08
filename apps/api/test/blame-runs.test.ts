@@ -26,6 +26,7 @@ function withRuns<R>(use: (runs: BlameRuns) => R): Promise<R> {
 }
 
 const published = {
+  blobOid: commit(77),
   checkpointKey: "k1",
   checkpointBytes: 100,
   state: "running" as const,

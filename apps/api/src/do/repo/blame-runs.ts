@@ -24,6 +24,8 @@ export interface RunKey {
 
 export interface RunRow extends RunKey {
   readonly runId: string;
+  /** The blamed file's blob, once its text has been read. */
+  readonly blobOid: Oid | null;
   readonly generation: number;
   readonly checkpointKey: string | null;
   readonly checkpointBytes: number;
@@ -39,6 +41,7 @@ export interface RunRow extends RunKey {
 
 /** What a published slice moves the row to. */
 export interface Published {
+  readonly blobOid: Oid | null;
   readonly generation: number;
   readonly checkpointKey: string | null;
   readonly checkpointBytes: number;
@@ -64,6 +67,7 @@ export function runExpiry(at: { state: RunState; now: number; transient: boolean
 type Raw = {
   run_id: string;
   commit_oid: ArrayBuffer;
+  blob_oid: ArrayBuffer | null;
   path: string;
   engine_version: number;
   epoch_gen: number;
@@ -83,6 +87,7 @@ type Raw = {
 const toRow = (raw: Raw): RunRow => ({
   runId: raw.run_id,
   commit: new Uint8Array(raw.commit_oid) as Oid,
+  blobOid: raw.blob_oid === null ? null : (new Uint8Array(raw.blob_oid) as Oid),
   path: raw.path,
   engineVersion: raw.engine_version,
   epochGen: raw.epoch_gen,
@@ -182,10 +187,11 @@ export class BlameRuns {
     next: Published,
   ): boolean {
     const cursor = this.storage.sql.exec(
-      `UPDATE blame_runs SET generation = ?, checkpoint_key = ?, checkpoint_bytes = ?, state = ?,
+      `UPDATE blame_runs SET blob_oid = ?, generation = ?, checkpoint_key = ?, checkpoint_bytes = ?, state = ?,
          lines = ?, settled_ranges = ?, unresolved_lines = ?, touched_at = ?, expires_at = ?,
          attempts = 0, attempt_generation = NULL
        WHERE run_id = ? AND generation = ? AND epoch_gen = ?`,
+      next.blobOid,
       next.generation,
       next.checkpointKey,
       next.checkpointBytes,
