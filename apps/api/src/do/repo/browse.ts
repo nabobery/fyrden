@@ -625,12 +625,12 @@ const MAX_DATE_SECONDS = 8_640_000_000_000;
  * re-encodes the whole commit, people included), else, or when the
  * encoding is unknown, as UTF-8.
  */
-function decoderFor(commit: Commit): Decoder {
+export function decoderFor(commit: Commit): Decoder {
   const header = commit.headers.find((h) => h.key === "encoding");
   return header ? decoderForLabel(utf8.decode(header.value)) : utf8;
 }
 
-type Decoder = { decode(bytes: Uint8Array): string };
+export type Decoder = { decode(bytes: Uint8Array): string };
 
 /**
  * The decoder for a commit's `encoding` label, UTF-8 for one the runtime
@@ -664,7 +664,7 @@ export function decoderForLabel(label: string): Decoder {
   };
 }
 
-function person(ident: Ident, text: Decoder): PersonView {
+export function person(ident: Ident, text: Decoder): PersonView {
   const seconds = Math.abs(ident.timestamp) <= MAX_DATE_SECONDS ? ident.timestamp : 0;
   return {
     name: text.decode(ident.name),
