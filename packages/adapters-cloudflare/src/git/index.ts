@@ -13,6 +13,8 @@ export {
 } from "./jobs.js";
 export {
   assertNetworkId,
+  blameCheckpointKey,
+  blameCheckpointPrefix,
   fetchObjectKey,
   fetchObjectPrefix,
   isFetchCacheKey,
@@ -22,6 +24,7 @@ export {
   newUlid,
   packObjectKey,
   packPrefix,
+  parseBlameCheckpointKey,
   scratchPrefix,
 } from "./keys.js";
 export { type LeaseGrant, type LeaseKind, PackLeases } from "./leases.js";

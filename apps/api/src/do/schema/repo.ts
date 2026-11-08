@@ -1545,4 +1545,37 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX releases_order ON releases (draft, published_at, id);
     `,
   },
+  {
+    version: 49,
+    // Blame runs: one row a run, shared by everyone blaming one file at one
+    // commit, pointing at its latest checkpoint in R2. The attempt mark
+    // (attempt_generation, attempts) is written before a slice works and
+    // cleared when it ends, so a slice that dies leaves it behind. A run is
+    // 'initializing' until its starting text is read, and 'lost' once its
+    // slices kept dying: kept until it expires, so it isn't started again.
+    name: "blame_runs",
+    sql: `
+      CREATE TABLE blame_runs (
+        run_id TEXT PRIMARY KEY,
+        commit_oid BLOB NOT NULL,
+        path TEXT NOT NULL,
+        engine_version INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        checkpoint_key TEXT,
+        checkpoint_bytes INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('initializing', 'running', 'done', 'lost')),
+        lines INTEGER NOT NULL,
+        settled_ranges INTEGER NOT NULL,
+        unresolved_lines INTEGER NOT NULL,
+        attempt_generation INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        touched_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        UNIQUE (commit_oid, path, engine_version, epoch_gen)
+      ) STRICT;
+      CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
+      CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
+    `,
+  },
 ];
