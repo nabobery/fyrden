@@ -173,8 +173,8 @@ jobs:
   e2e:
     name: Both Workers together locally (end to end)
     runs-on: ubuntu-latest
-    # About 6 minutes; room for the browser's install to recover (up to 14).
-    timeout-minutes: 25
+    # About 6 minutes, plus Firefox and WebKit; room for the installs to recover (up to 20).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -184,21 +184,23 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-      - name: Chromium's system libraries
-        timeout-minutes: 6
+          # Names the browsers: a hit on an entry without one of them would never gain it.
+          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: The browsers' system libraries
+        timeout-minutes: 10
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
             | sudo tee /etc/apt/apt.conf.d/80-ci-network > /dev/null
-          pnpm --filter @fyrden/ci-tools exec playwright install-deps chromium-headless-shell
-      - name: Playwright's Chromium
-        timeout-minutes: 8
+          pnpm --filter @fyrden/ci-tools exec playwright install-deps chromium-headless-shell firefox webkit
+      - name: Playwright's browsers
+        # Three attempts of up to 190 s, and the pauses between them.
+        timeout-minutes: 10
         run: |
           for attempt in 1 2 3; do
-            if timeout --kill-after=10 120 pnpm --filter @fyrden/ci-tools exec playwright install --only-shell chromium; then
+            if timeout --kill-after=10 180 pnpm --filter @fyrden/ci-tools exec playwright install --only-shell chromium firefox webkit; then
               exit 0
             fi
-            echo "::warning::Playwright's Chromium: attempt $attempt failed or stalled"
+            echo "::warning::Playwright's browsers: attempt $attempt failed or stalled"
             sleep 5
           done
           exit 1

@@ -494,6 +494,18 @@ an answer. The SDK's `paginate` does not offer this operation, since it yields
 items alone and would hide `state`, `reason` and `retry_after_ms`: loop over
 `call`. Every value is Proposed.
 
+The web's "Go to file" loads these pages into the browser on opening and searches
+them by case-insensitive substring. It shows the first 100 matches and says how
+many there are; drawing 100 rows costs about a tenth of a search over 200,000
+paths at 4x CPU throttling, and 1,000 about as much as the search (measured in
+Chromium). It waits `retry_after_ms` on `busy`, up to three times, then offers
+Retry. It stops asking when its dialog closes, and goes on when it opens again.
+Opened on another page, it reads the list again, since the branch may have moved.
+A list takes at most 64 requests before it says it isn't whole yet and waits for
+Continue loading, since a tree of endless empty directories reaches no cap. Long
+lists can need it too: names of control characters at both caps take about 97
+pages. Results aren't links, and the dialog has no URL.
+
 | What | Value |
 |---|---|
 | Page size | 1 to 10,000 paths, default 1,000. A page also ends at a slice's end or at 1 MiB of JSON, escapes counted, so it may be shorter or empty; it holds one path at least |

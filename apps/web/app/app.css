@@ -423,6 +423,66 @@ code.branch {
 main.wide {
   max-width: 90rem;
 }
+dialog.file-finder {
+  width: min(48rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  /* Not centred: the input would move as results come and go. */
+  margin-top: 1rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+}
+dialog.file-finder::backdrop {
+  background: rgb(0 0 0 / 50%);
+}
+.file-finder-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+.file-finder-head h2 {
+  margin: 0;
+}
+.file-finder label {
+  display: block;
+  margin-top: 0.5rem;
+}
+.file-finder input[role="combobox"] {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.file-finder-count,
+.file-finder-notice {
+  margin: 0.5rem 0 0;
+}
+/* Takes no room, but stays a live region: one that appears along with its text may go unheard. */
+.file-finder-notice:empty {
+  margin: 0;
+}
+.file-finder [role="listbox"] {
+  margin: 0.5rem 0 0;
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.file-finder [role="option"] {
+  padding: 0.25rem 0.5rem;
+  border-left: 3px solid transparent;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.file-finder [role="option"]:hover {
+  background: var(--panel);
+}
+/* The bar tells it apart where a fill alone can't: forced colours, and a weak display. */
+.file-finder [role="option"][aria-selected="true"] {
+  background: var(--diff-selected);
+  border-left-color: var(--accent);
+}
 .file-name {
   font-size: 1rem;
   margin: 0;

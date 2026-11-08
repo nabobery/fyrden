@@ -1,4 +1,5 @@
 import { data, Link } from "react-router";
+import { FileFinder } from "../components/file-finder.js";
 import { Listing } from "../components/listing.js";
 import { Markdown } from "../components/markdown.js";
 import { RepoHeader } from "../components/repo-header.js";
@@ -69,6 +70,9 @@ export default function RepoHome({ loaderData }: Route.ComponentProps) {
         <Link className="button" to={`${base}/edit/${ref}/?new=1`}>
           Add a file
         </Link>
+        {entries !== null && (
+          <FileFinder owner={repo.owner} repo={repo.name} gitRef={repo.default_branch} />
+        )}
       </div>
       {entries === null ? (
         <section className="panel">
