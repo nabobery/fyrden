@@ -158,7 +158,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "max_storage_bytes": {
-                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "description": "Bytes its repositories' pushes (pack and commands, as received) and release assets may store.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -170,13 +170,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "reserved_bytes": {
-                      "description": "Bytes reserved by pushes being received.",
+                      "description": "Bytes reserved by pushes and release asset uploads being received.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
                     "storage_bytes": {
-                      "description": "Bytes stored by committed pushes.",
+                      "description": "Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -6468,7 +6468,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "max_storage_bytes": {
-                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "description": "Bytes its repositories' pushes (pack and commands, as received) and release assets may store.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -6480,13 +6480,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "reserved_bytes": {
-                      "description": "Bytes reserved by pushes being received.",
+                      "description": "Bytes reserved by pushes and release asset uploads being received.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
                     "storage_bytes": {
-                      "description": "Bytes stored by committed pushes.",
+                      "description": "Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -33987,6 +33987,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "additionalProperties": false,
                               "properties": {
                                 "content_type": {
+                                  "description": "As declared; a download is always \`application/octet-stream\`.",
                                   "type": "string",
                                 },
                                 "created_at": {
@@ -33995,6 +33996,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                                   "type": "integer",
                                 },
                                 "download_url": {
+                                  "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                                   "type": "string",
                                 },
                                 "id": {
@@ -34292,6 +34294,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "additionalProperties": false,
                         "properties": {
                           "content_type": {
+                            "description": "As declared; a download is always \`application/octet-stream\`.",
                             "type": "string",
                           },
                           "created_at": {
@@ -34300,6 +34303,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "download_url": {
+                            "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                             "type": "string",
                           },
                           "id": {
@@ -34514,6 +34518,664 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/releases/assets/uploads/{upload_id}": {
+      "delete": {
+        "description": "Ends an upload and frees what it holds. Takes the \`contents:write\` permission.",
+        "operationId": "releases.assets.uploads.abort",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "description": "The upload session's id.",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "asset": {
+                      "additionalProperties": false,
+                      "description": "The asset it made, once completed.",
+                      "properties": {
+                        "content_type": {
+                          "description": "As declared; a download is always \`application/octet-stream\`.",
+                          "type": "string",
+                        },
+                        "created_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "download_url": {
+                          "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
+                          "type": "string",
+                        },
+                        "id": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "updated_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "uploader": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "content_type",
+                        "size",
+                        "uploader",
+                        "created_at",
+                        "updated_at",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    "content_type": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "description": "The upload session's id.",
+                      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part's length but the last's.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_url": {
+                      "description": "\`PUT <parts_url>/<n>\` with part n's bytes and its exact \`Content-Length\` answers \`{part_number, etag}\`; keep each etag for completing.",
+                      "type": "string",
+                    },
+                    "release_id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "size": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "\`completing\`: another request holds the completion, or it is still being decided; complete it again.",
+                      "enum": [
+                        "receiving",
+                        "completing",
+                        "completed",
+                        "aborted",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "release_id",
+                    "name",
+                    "content_type",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "state",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Abort a release asset upload",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/releases/assets/uploads/{upload_id}/complete": {
+      "post": {
+        "description": "Assembles the parts in order and makes the asset, once the account's quota has room for it. Only the token that started the upload may complete it (409 \`wrong_token\`). The first completion's list is the one used; a retry's is ignored. \`state: completing\` means another request holds it or it is still being decided: complete it again. Takes the \`contents:write\` permission.",
+        "operationId": "releases.assets.uploads.complete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "upload_id",
+            "required": true,
+            "schema": {
+              "description": "The upload session's id.",
+              "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "parts": {
+                    "items": {
+                      "properties": {
+                        "etag": {
+                          "maxLength": 1024,
+                          "minLength": 1,
+                          "type": "string",
+                        },
+                        "part_number": {
+                          "maximum": 9007199254740991,
+                          "minimum": 1,
+                          "type": "integer",
+                        },
+                      },
+                      "required": [
+                        "part_number",
+                        "etag",
+                      ],
+                      "type": "object",
+                    },
+                    "maxItems": 2000,
+                    "minItems": 1,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "parts",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "asset": {
+                      "additionalProperties": false,
+                      "description": "The asset it made, once completed.",
+                      "properties": {
+                        "content_type": {
+                          "description": "As declared; a download is always \`application/octet-stream\`.",
+                          "type": "string",
+                        },
+                        "created_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "download_url": {
+                          "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
+                          "type": "string",
+                        },
+                        "id": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "updated_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "uploader": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "content_type",
+                        "size",
+                        "uploader",
+                        "created_at",
+                        "updated_at",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    "content_type": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "description": "The upload session's id.",
+                      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part's length but the last's.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_url": {
+                      "description": "\`PUT <parts_url>/<n>\` with part n's bytes and its exact \`Content-Length\` answers \`{part_number, etag}\`; keep each etag for completing.",
+                      "type": "string",
+                    },
+                    "release_id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "size": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "\`completing\`: another request holds the completion, or it is still being decided; complete it again.",
+                      "enum": [
+                        "receiving",
+                        "completing",
+                        "completed",
+                        "aborted",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "release_id",
+                    "name",
+                    "content_type",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "state",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Complete a release asset upload",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/releases/assets/{asset_id}": {
+      "delete": {
+        "description": "Deletes an asset. Its object is kept for 30 days, on the account's storage quota, unless purged sooner. Answers what was deleted (GitHub answers 204). Takes the \`contents:write\` permission.",
+        "operationId": "releases.assets.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "description": "The asset's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "deleted",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "state",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a release asset",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One asset of a release. Takes the \`contents:read\` permission; a draft shows only with \`contents:write\`.",
+        "operationId": "releases.assets.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "description": "The asset's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "content_type": {
+                      "description": "As declared; a download is always \`application/octet-stream\`.",
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "download_url": {
+                      "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
+                      "type": "string",
+                    },
+                    "id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "size": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "updated_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "uploader": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "name",
+                    "content_type",
+                    "size",
+                    "uploader",
+                    "created_at",
+                    "updated_at",
+                    "download_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a release asset",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/releases/latest": {
       "get": {
         "description": "The newest published release by publication that isn't a prerelease. Takes the \`contents:read\` permission.",
@@ -34554,6 +35216,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "additionalProperties": false,
                         "properties": {
                           "content_type": {
+                            "description": "As declared; a download is always \`application/octet-stream\`.",
                             "type": "string",
                           },
                           "created_at": {
@@ -34562,6 +35225,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "download_url": {
+                            "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                             "type": "string",
                           },
                           "id": {
@@ -34775,6 +35439,186 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/releases/retained": {
+      "get": {
+        "description": "Objects of replaced or deleted assets, kept for 30 days on the account's storage quota (longer after a restore, which can bring them back): how many, their bytes, and when the next one goes. Takes the \`contents:read\` permission.",
+        "operationId": "releases.retained.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bytes": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "next_purge_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "objects": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "objects",
+                    "bytes",
+                    "next_purge_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get retained release assets",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/releases/retained/purge": {
+      "post": {
+        "description": "Removes every object retained before now, past the restore fence: a restore can't bring them back afterwards, and one to a state naming such an asset finds it missing. Started, not finished: the bytes leave the quota as the objects go; \`releases.retained.get\` shows them fall. Takes the \`administration:write\` permission; users only.",
+        "operationId": "releases.retained.purge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bytes": {
+                      "description": "Their bytes.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "objects": {
+                      "description": "Objects it covers.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "const": "purging",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "state",
+                    "objects",
+                    "bytes",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Purge retained release assets",
+        "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/releases/tags/{tag}": {
       "get": {
         "description": "The release of a tag name, draft or published. Takes the \`contents:read\` permission; a draft shows only with \`contents:write\`.",
@@ -34826,6 +35670,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "additionalProperties": false,
                         "properties": {
                           "content_type": {
+                            "description": "As declared; a download is always \`application/octet-stream\`.",
                             "type": "string",
                           },
                           "created_at": {
@@ -34834,6 +35679,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "download_url": {
+                            "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                             "type": "string",
                           },
                           "id": {
@@ -35187,6 +36033,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "additionalProperties": false,
                         "properties": {
                           "content_type": {
+                            "description": "As declared; a download is always \`application/octet-stream\`.",
                             "type": "string",
                           },
                           "created_at": {
@@ -35195,6 +36042,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "download_url": {
+                            "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                             "type": "string",
                           },
                           "id": {
@@ -35512,6 +36360,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "additionalProperties": false,
                         "properties": {
                           "content_type": {
+                            "description": "As declared; a download is always \`application/octet-stream\`.",
                             "type": "string",
                           },
                           "created_at": {
@@ -35520,6 +36369,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "type": "integer",
                           },
                           "download_url": {
+                            "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
                             "type": "string",
                           },
                           "id": {
@@ -35726,6 +36576,244 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Update a release",
+        "x-fyrden-permission": "contents:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/releases/{release_id}/assets/uploads": {
+      "post": {
+        "description": "Starts an upload of an asset of exactly \`size\` bytes, holding that much of the account's storage until it ends. Send the parts to \`parts_url\`, then complete it with their etags. A name taken is 422 \`asset_name_taken\` unless \`replace\` is set; the replaced object is kept for 30 days, on the quota. Takes the \`contents:write\` permission.",
+        "operationId": "releases.assets.uploads.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "description": "The release's id.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "content_type": {
+                    "description": "Metadata only.",
+                    "maxLength": 255,
+                    "type": "string",
+                  },
+                  "name": {
+                    "description": "The file's name: no slash, backslash or control character.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "replace": {
+                    "default": false,
+                    "type": "boolean",
+                  },
+                  "size": {
+                    "description": "Its exact length in bytes.",
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [
+                  "name",
+                  "size",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "asset": {
+                      "additionalProperties": false,
+                      "description": "The asset it made, once completed.",
+                      "properties": {
+                        "content_type": {
+                          "description": "As declared; a download is always \`application/octet-stream\`.",
+                          "type": "string",
+                        },
+                        "created_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "download_url": {
+                          "description": "Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository.",
+                          "type": "string",
+                        },
+                        "id": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "name": {
+                          "type": "string",
+                        },
+                        "size": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "updated_at": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        "uploader": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "id",
+                          ],
+                          "type": "object",
+                        },
+                      },
+                      "required": [
+                        "id",
+                        "name",
+                        "content_type",
+                        "size",
+                        "uploader",
+                        "created_at",
+                        "updated_at",
+                        "download_url",
+                      ],
+                      "type": "object",
+                    },
+                    "content_type": {
+                      "type": "string",
+                    },
+                    "expires_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "id": {
+                      "description": "The upload session's id.",
+                      "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "part_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "part_size": {
+                      "description": "Every part's length but the last's.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "parts_url": {
+                      "description": "\`PUT <parts_url>/<n>\` with part n's bytes and its exact \`Content-Length\` answers \`{part_number, etag}\`; keep each etag for completing.",
+                      "type": "string",
+                    },
+                    "release_id": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "size": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "\`completing\`: another request holds the completion, or it is still being decided; complete it again.",
+                      "enum": [
+                        "receiving",
+                        "completing",
+                        "completed",
+                        "aborted",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "release_id",
+                    "name",
+                    "content_type",
+                    "size",
+                    "part_size",
+                    "part_count",
+                    "state",
+                    "parts_url",
+                    "expires_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Start uploading a release asset",
         "x-fyrden-permission": "contents:write",
         "x-fyrden-principals": [
           "user",
@@ -40747,7 +41835,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "max_storage_bytes": {
-                      "description": "Bytes its repositories' pushes may store (pack and commands, as received).",
+                      "description": "Bytes its repositories' pushes (pack and commands, as received) and release assets may store.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
@@ -40759,13 +41847,13 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "type": "integer",
                     },
                     "reserved_bytes": {
-                      "description": "Bytes reserved by pushes being received.",
+                      "description": "Bytes reserved by pushes and release asset uploads being received.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
                     "storage_bytes": {
-                      "description": "Bytes stored by committed pushes.",
+                      "description": "Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",

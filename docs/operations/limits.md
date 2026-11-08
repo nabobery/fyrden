@@ -448,7 +448,7 @@ deletion that finishes in the background:
 | A clone or fork in progress | The erase waits for its read lease: 10 minutes, renewed while it reads |
 | A push admitted before the deletion | The erase waits up to 15 minutes for it to store its body; a body stored later is deleted by the push itself |
 | Forks | Keep the packs they borrowed; the network deletes a pack once no member claims it |
-| Webhook deliveries, their attempts and bodies, the bodies' payload records, queued effects, search projections, and the directory's copies of its watchers and thread preferences | Deleted before the repository's storage, up to 7 pages a call (500 effects, 200 deliveries or payload records, 500 rows of each search projection table, 500 watch and 500 thread preferences, or 1,000 bodies a page); none are made once the deletion's tombstone is in the read model. A webhook effect of the repository that was claimed (its deliveries being made, or made) holds the cleanups until 15 minutes after it ended, a queue consumer invocation's wall-time limit ([platform limit](https://developers.cloudflare.com/queues/platform/limits/)), so no invocation that claimed it is still storing a body when the bodies are deleted; its pending webhook effects are ended first, 500 a page (`effects.invalidated`), and one claimed at the time is waited for until it ends. A repository whose webhooks made no deliveries in the 15 minutes before its deletion does not wait (all Proposed) |
+| Webhook deliveries, their attempts and bodies, the bodies' payload records, queued effects, search projections, the directory's copies of its watchers and thread preferences, and its release assets | Deleted before the repository's storage, up to 8 pages a call (500 effects, 200 deliveries or payload records, 500 rows of each search projection table, 500 watch and 500 thread preferences, 1,000 bodies or 1,000 release asset objects a page); none are made once the deletion's tombstone is in the read model. Release asset uploads still open are aborted first (100 a call), and the objects wait until no completion sent to R2 can still land (2 minutes from the last one sent, and from the last restore); A webhook effect of the repository that was claimed (its deliveries being made, or made) holds the cleanups until 15 minutes after it ended, a queue consumer invocation's wall-time limit ([platform limit](https://developers.cloudflare.com/queues/platform/limits/)), so no invocation that claimed it is still storing a body when the bodies are deleted; its pending webhook effects are ended first, 500 a page (`effects.invalidated`), and one claimed at the time is waited for until it ends. A repository whose webhooks made no deliveries in the 15 minutes before its deletion does not wait (all Proposed) |
 | Incomplete multipart uploads of interrupted maintenance | Left to R2, which aborts them after 7 days |
 
 A deletion that keeps failing shows `attempts` and `last_error` in the
@@ -601,7 +601,7 @@ them and their use.
 | What | Value |
 |---|---|
 | Active repositories | 1,000 by default (`QUOTA_MAX_REPOS`). Create, organization create, fork and generate past it answer 403 `quota_exceeded`; the check holds against concurrent creates. Repositories being deleted do not count |
-| Storage | 1 GiB by default (`QUOTA_MAX_STORAGE_BYTES`): the bytes the account's repositories' pushes stored, as received (pack and commands). Forks count nothing until pushed to; repacking does not change it; a deleted repository's bytes are free once its deletion finishes |
+| Storage | 1 GiB by default (`QUOTA_MAX_STORAGE_BYTES`): the bytes the account's repositories' pushes stored, as received (pack and commands), and their release assets, replaced or deleted ones still kept included (see Releases). Forks count nothing until pushed to; repacking does not change it; a deleted repository's bytes are free once its deletion finishes |
 | Before a push is stored | Its `Content-Length` is reserved, or, without one, as much as is free (up to the body limit); a push larger than the reservation is refused with a message git shows. A chunked upload reserves its declared size |
 | At the commit | The push's stored bytes are held for it; one that does not fit (the limit was lowered, or a write the repository makes itself: file writes, imports, generation) is refused, every ref `ng`, nothing changed. Once committed, the bytes become the repository's usage |
 | A push that commits nothing | What it reserved or held is free again |
@@ -928,7 +928,26 @@ A release is a row in the repository object (`/repos/{owner}/{repo}/releases`, M
 
 **Free-tier costs (estimates; the Free run measures them):** a publish costs one Durable Object request and about 6 rows written per event, plus class B reads to peel an annotated tag that isn't cached. Listing reads one ref row per release shown, never the whole ref table. A collection reads at most 1,000 more rows.
 
-Differences from GitHub: no `target_commitish` (a release doesn't create a tag); no `make_latest`; a published release can't go back to draft; deleting answers what was deleted rather than 204; no `download_count`.
+### Release assets
+
+An asset is uploaded through a session of its own (`POST …/releases/{release_id}/assets/uploads`, MCP `create_release_asset_upload`): its parts go straight to R2 with `PUT <parts_url>/<n>` and the token that began it, each answering an etag the client keeps, and `…/complete` takes the list. Bytes never pass through MCP; an agent sends the parts over HTTP with its token. Uploading, completing, aborting and deleting take `contents:write`; reading takes `contents:read`, a draft's assets only with `contents:write`. Downloads go through the API (`GET /api/repos/{owner}/{repo}/releases/download/{tag}/{name}`), signed in like every request.
+
+| What | Value |
+|---|---|
+| Assets | At most 100 a release (Proposed), listed only with their release. Names: 1 to 255 UTF-8 bytes in NFC, no slash, backslash or control character, not `.` or `..`; two names that differ only in case are the same name. The declared content type is metadata only |
+| Size | Exact: each part's length is checked as it arrives, and the assembled size at completion. At most 2 GiB (`RELEASE_ASSET_MAX_BYTES`, never more than 2,000 parts), so on a default account (1 GiB) the quota stops an upload first |
+| Sessions | 20 open a repository, each 24 hours (Proposed). Only the principal that began one may use it, and only the token that began it may complete it (409 `wrong_token`). Parts are 16 MiB but the last (`GIT_UPLOAD_PART_BYTES`); sending a part again replaces it. A reload loses the etags, so the upload starts again |
+| Quota | Beginning reserves the whole size, held until the session ends or commits (its expiry plus an hour). Completing states the repository's total to the account and commits only if it fits: 403 `quota_exceeded` otherwise, and the object goes. `state: completing` means another request holds the completion or it is still being decided: complete it again. While the account can't be asked: 503 `quota_unavailable`, nothing decided |
+| Replacing and deleting | The old object is kept for 30 days and still counted, so replacing a 1 GiB asset needs 1 GiB free and holds 2 GiB for 30 days. Deleting a release keeps all its assets' objects the same way. After a restore, objects stay at least 30 days past it |
+| Early purge | A repository admin (`administration:write`, users only, no MCP tool) can purge what is retained (`POST …/releases/retained/purge`, 202). A restore can't bring those objects back: one to a state naming such an asset finds it missing (404 `asset_missing`), still counted until it's deleted and purged again. A download under way may fail when its object goes. `GET …/releases/retained` shows the count, the bytes and when the next one goes |
+| Downloads | Always `application/octet-stream`, as an attachment, `Cache-Control: private, no-store`, with `nosniff`, a sandbox CSP and `X-Frame-Options: DENY`. Single `bytes=` ranges (several in one request: the whole file), `If-Range` by ETag only (a date sends the whole file), `If-Match`, `If-None-Match` and the date conditions, all answered from the repository's rows, so a 304, 412, 416 or `HEAD` reads nothing from R2. Every request is authorized, each range of a resumed download too; a stream already started isn't cut off when access is lost. A draft's download URL follows its tag, so changing the tag breaks a link to it |
+| Transfers | A transfer is refused at once when the new account can't hold the repository's pushes and assets together. While it moves, parts and completions answer 409; an upload already completing commits after it lands, paid by the new account |
+
+**Kept on purpose (accepted limits):** a restored retained row whose object has gone counts on quota until its restore fence passes, up to 30 days; an object uploaded after the state a restore went back to, and named by no restored row, stays in R2, uncounted, until the repository is deleted; a crash while a session begins leaves an empty multipart upload, with no object and no row, until R2 aborts it after 7 days; a completion whose object R2 assembles more than 2 minutes after it was sent could leave an object uncounted.
+
+**Free-tier costs (estimates; the Free run measures them):** a 100 MiB upload is 7 part requests and about 4 more, 12 Durable Object rows written and 9 class A operations; a download costs one class B read; a purge of 50 objects one bulk delete and about 100 rows written.
+
+Differences from GitHub: no `target_commitish` (a release doesn't create a tag); no `make_latest`; a published release can't go back to draft; deleting answers what was deleted rather than 204; no `download_count`; no single-request upload to `uploads.github.com`; no asset rename or label (a rename is a delete and a new upload, and the old object counts for 30 days or until purged); no checksum field (exact size is what the API promises).
 
 ## Webhooks
 
@@ -1162,7 +1181,8 @@ and the default applies.
 | `GIT_IMPORT_IDLE_MS` | 60,000 | 1,000 | Longest an import's source may send nothing while the pack streams |
 | `GIT_IMPORT_MIN_BYTES_PER_SECOND` | 16,384 (16 KiB/s) | 0 | Least an import's pack must bring per second, over every minute after its first two; 0 for no floor |
 | `QUOTA_MAX_REPOS` | 1,000 | 0 | Active repositories an account may have, unless an administrator set its own |
-| `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes may store, unless an administrator set its own |
+| `QUOTA_MAX_STORAGE_BYTES` | 1,073,741,824 (1 GiB) | 0 | Bytes an account's pushes and release assets may store, unless an administrator set its own |
+| `RELEASE_ASSET_MAX_BYTES` | 2,147,483,648 (2 GiB) | 1 | Largest release asset; never more than 2,000 parts at `GIT_UPLOAD_PART_BYTES` (32 GiB at 16 MiB) |
 | `QUOTA_AGENT_MAX_REPOS` | 100 | 0 | Active repositories one agent may have created acting for users |
 | `AGENT_REPO_TTL_DAYS` | 7 | 1 | Days until a repository an agent creates expires, unless it gives an expiry |
 

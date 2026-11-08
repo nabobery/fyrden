@@ -749,4 +749,34 @@ describe("release asset storage", () => {
     const a = await account();
     expect(await a.stub.repoForTransfer(a.repoId)).toMatchObject({ assetBytes: 0, usageBytes: 0 });
   });
+
+  it("holds an arrival's release assets with its pushes, and keeps its total for adoption", async () => {
+    const a = await account();
+    const transferId = uniqueId("trf");
+    const arrive = (assets: number) =>
+      a.stub.reserveArrival({
+        transferId,
+        accountId: uniqueId("acct"),
+        repoId: a.repoId,
+        usageBytes: 10,
+        assets: { bytes: assets, epochGen: 2, seq: 7 },
+        collaborators: [],
+      });
+    // Its pushes fit; with its assets it doesn't.
+    expect(await arrive(LIMIT - 9)).toBe("quota_exceeded");
+    expect(await arrive(LIMIT - 10)).toBe("ok");
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(LIMIT);
+    // Its total is kept as the frozen repository stated it, for adoption to take.
+    const stored = await runInDurableObject(
+      a.stub,
+      (_: unknown, s) =>
+        s.storage.sql
+          .exec<{ assets: string }>(
+            "SELECT assets FROM transfer_arrivals WHERE transfer_id = ?",
+            transferId,
+          )
+          .one().assets,
+    );
+    expect(JSON.parse(stored)).toEqual({ bytes: LIMIT - 10, epochGen: 2, seq: 7 });
+  });
 });

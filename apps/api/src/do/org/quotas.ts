@@ -315,6 +315,27 @@ export class AccountQuotas {
     });
   }
 
+  /**
+   * An arriving repository's asset total, as its arrival stored it: taken
+   * unless a newer tuple is here already, so a late, older total changes
+   * nothing. In the transaction that ends the arrival's hold.
+   */
+  adoptAssets(
+    repoId: string,
+    total: { readonly bytes: number; readonly epochGen: number; readonly seq: number },
+  ): void {
+    this.storage.sql.exec(
+      `INSERT INTO quota_assets (repo_id, bytes, epoch_gen, seq) VALUES (?, ?, ?, ?)
+       ON CONFLICT (repo_id) DO UPDATE SET bytes = excluded.bytes,
+         epoch_gen = excluded.epoch_gen, seq = excluded.seq
+       WHERE (excluded.epoch_gen, excluded.seq) > (quota_assets.epoch_gen, quota_assets.seq)`,
+      repoId,
+      total.bytes,
+      total.epochGen,
+      total.seq,
+    );
+  }
+
   /** The bytes repository `repoId` last stated its release assets hold. */
   assetBytes(repoId: string): number {
     return (
