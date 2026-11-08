@@ -114,7 +114,12 @@ describe("reader: deep delta chain memory", () => {
     // The tip is about 1.1 MiB; building it takes eight such objects and their programs.
     const tight = await open(4 * 1024 * 1024);
     try {
-      await expect(tight.readObject(tip)).rejects.toThrow(ReaderWorkSpent);
+      await expect(tight.readObject(tip)).rejects.toThrow(
+        new ReaderWorkSpent(
+          4 * 1024 * 1024,
+          "building the objects read took more than 4194304 bytes",
+        ),
+      );
     } finally {
       tight.release();
     }

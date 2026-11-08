@@ -21,6 +21,7 @@ export const UNRESOLVED_REASONS = [
   "history_missing",
   "history_limit",
   "state_limit",
+  "commit_info_too_large",
 ] as const;
 export type UnresolvedReason = (typeof UNRESOLVED_REASONS)[number];
 
@@ -103,6 +104,15 @@ export const factTextOf = (fact: BlameCommitInfo) =>
   encoder.encode(fact.name).length +
   encoder.encode(fact.email).length +
   encoder.encode(fact.date).length;
+
+/** The longest field of a commit's facts a checkpoint holds: its length takes two bytes. */
+export const MAX_FACT_FIELD_BYTES = 0xffff;
+
+/** Whether every field of a commit's facts fits a checkpoint. */
+export const factFitsCheckpoint = (fact: BlameCommitInfo) =>
+  [fact.summary, fact.name, fact.email, fact.date].every(
+    (text) => encoder.encode(text).length <= MAX_FACT_FIELD_BYTES,
+  );
 
 /** What a path is charged for. It doesn't change during a walk. */
 export function pathLiveBytes(path: readonly Uint8Array[]): number {

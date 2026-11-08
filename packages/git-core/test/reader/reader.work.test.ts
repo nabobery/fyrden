@@ -226,6 +226,31 @@ describe("reader: work port", () => {
     reader.release();
   });
 
+  it("charges a run that starts past the first block by the blocks it touches", async () => {
+    const before = randomBytes(100 * KiB);
+    const data = randomBytes(KiB, 6);
+    const { view, store } = await open([
+      { kind: "blob", data: before },
+      { kind: "blob", data },
+    ]);
+    const events: Event[] = [];
+    const reader = await ObjectReader.open({
+      view,
+      packStore: loggedStore(events, store),
+      zlib: logged(events).zlib,
+      memory: createMemoryBudget(64 * MiB),
+      work: logged(events).work,
+    });
+    await reader.readObject(toOid(gitOid("blob", data)));
+    const blocks = events.flatMap((e) =>
+      "charge" in e && e.charge === "block-run" ? [e.units] : [],
+    );
+    // The second entry lies wholly in the second block: one block a read.
+    expect(blocks.length).toBeGreaterThan(0);
+    expect(blocks.every((units) => units === BLOCK)).toBe(true);
+    reader.release();
+  });
+
   it("charges a header read: the flat lookup, then the program's inflate for a delta", async () => {
     const { view, store } = await open(chain);
     const events: Event[] = [];
@@ -381,9 +406,39 @@ describe("createReaderWorkMeter", () => {
   });
 
   it("refuses a bad limit, weight or charge", () => {
-    expect(() => createReaderWorkMeter({ limit: 0 })).toThrow(RangeError);
-    expect(() => createReaderWorkMeter({ limit: 1, weights: { inflate: -1 } })).toThrow(RangeError);
+    expect(() => createReaderWorkMeter({ limit: 0 })).toThrow(
+      new RangeError("a work limit must be at least 1, not 0"),
+    );
+    expect(() => createReaderWorkMeter({ limit: 1, weights: { inflate: -1 } })).toThrow(
+      new RangeError("bad weight -1 for inflate"),
+    );
     const meter = createReaderWorkMeter({ limit: 1 });
-    expect(() => meter.charge("inflate", -1)).toThrow(RangeError);
+    expect(() => meter.charge("inflate", -1)).toThrow(/bad work charge -1 for inflate/);
+  });
+
+  it("takes a charge of nothing, as an empty object's scan is", () => {
+    const meter = createReaderWorkMeter({ limit: 1 });
+    meter.charge("tree-scan", 0);
+    expect(meter.spent()).toBe(0);
+  });
+
+  it("takes a weight of nothing, which makes that kind free", () => {
+    const meter = createReaderWorkMeter({ limit: 1, weights: { inflate: 0 } });
+    meter.charge("inflate", 1000);
+    expect(meter.spent()).toBe(0);
+  });
+
+  it("names the limit it stopped at", () => {
+    const meter = createReaderWorkMeter({ limit: 5 });
+    const error = (() => {
+      try {
+        meter.charge("inflate", 6);
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(error).toBeInstanceOf(ReaderWorkSpent);
+    expect(error).toMatchObject({ name: "ReaderWorkSpent", limit: 5 });
+    expect((error as Error).message).toBe("decoding took more than 5 units of work");
   });
 });

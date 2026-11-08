@@ -1,0 +1,1001 @@
+[
+  {
+    "id": "WALK-117",
+    "tip": "c7",
+    "history": {
+      "c0": {
+        "file": "u117_0\nu117_1\nu117_2\nu117_3\nb\na\nb\nb\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "u117_0\nu117_1\nu117_2\nu117_3\nb\na\na\nb\n"
+      },
+      "c2": {
+        "parents": ["c1"],
+        "file": "u117_0\nu117_1\nu117_2\nu117_3\nb\na\nu117_4\na\nb\nu117_0\n"
+      },
+      "c3": {
+        "parents": ["c2"],
+        "file": "u117_0\nu117_1\nu117_3\nb\nb\na\nu117_4\na\nb\nu117_0\nb\n"
+      },
+      "c4": {
+        "parents": ["c3"],
+        "file": "u117_0\nu117_1\nu117_3\nb\nb\na\nu117_4\na\nb\nu117_0\nb\n"
+      },
+      "c5": {
+        "parents": ["c4", "c1", "c0"],
+        "file": "a\nu117_0\nu117_1\nu117_3\nb\nb\na\nu117_4\na\nu117_0\nb\n"
+      },
+      "c6": {
+        "parents": ["c5", "c3"],
+        "file": "a\nu117_0\nu117_1\nu117_3\nb\nb\na\nu117_4\na\nu117_0\nb\n"
+      },
+      "c7": {
+        "parents": ["c6", "c4"],
+        "file": "a\nu117_0\nu117_1\nu117_0\nu117_1\nu117_3\nb\nb\nb\na\nu117_4\na\nb\nu117_3\nb\nb\na\nu117_4\na\nu117_0\nb\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "9+1:c7@9 1+1:c5@1 8+1:c3@5 16+1:c3@5 21+1:c3@11 11+1:c2@7 18+1:c2@7 20+1:c2@10 12+1:c1@7 19+1:c1@7 2+2:c0@1 4+2:c0@1 6+2:c0@4 10+1:c0@6 13+1:c0@8 14+2:c0@4 17+1:c0@6",
+          "page": "1+1:c5@1 8+1:c3@5 | 16+1:c3@5",
+          "state": "0ae420ef2f79aaced03895e627e5f5ef21e4118e87253faa2cc7c7a84a93f54b",
+          "steps": 8,
+          "stateLimit": false,
+          "stops": "8/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "9+1:c7@9 1+1:c5@1 8+1:c3@5 16+1:c3@5 21+1:c3@11 11+1:c2@7 18+1:c2@7 20+1:c2@10 12+1:c1@7 19+1:c1@7 2+2:c0@1 4+2:c0@1 6+2:c0@4 10+1:c0@6 13+1:c0@8 14+2:c0@4 17+1:c0@6",
+          "page": "1+1:c5@1 8+1:c3@5 | 16+1:c3@5",
+          "state": "0ae420ef2f79aaced03895e627e5f5ef21e4118e87253faa2cc7c7a84a93f54b",
+          "steps": 8,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/slice,1/slice,1/slice,1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 59
+        },
+        "expected": {
+          "ranges": "1+21:state_limit",
+          "page": " | ",
+          "state": "1c2faae3dd3ff9b98ebe981c8c6f882493d9eb184d05e6f406fc4fa4a4049ae4",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 1624
+        },
+        "expected": {
+          "ranges": "1+21:state_limit",
+          "page": " | ",
+          "state": "1c2faae3dd3ff9b98ebe981c8c6f882493d9eb184d05e6f406fc4fa4a4049ae4",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 3
+        },
+        "expected": {
+          "ranges": "9+1:c7@9 1+1:c5@1 2+7:history_limit 10+12:history_limit",
+          "page": "1+1:c5@1 2+7:history_limit | 10+12:history_limit",
+          "state": "5084a8411308b88b2feea5a1af2b42b2196dea5631eb832de02563496d58a041",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 4
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 260
+        },
+        "expected": {
+          "ranges": "9+1:c7@9 1+1:c5@1 8+1:c3@5 16+1:c3@5 21+1:c3@11 11+1:c2@7 18+1:c2@7 20+1:c2@10 12+1:c1@7 19+1:c1@7 2+2:c0@1 4+2:c0@1 6+2:c0@4 10+1:c0@6 13+1:c0@8 14+2:c0@4 17+1:c0@6",
+          "page": "1+1:c5@1 8+1:c3@5 | 16+1:c3@5",
+          "state": "0ae420ef2f79aaced03895e627e5f5ef21e4118e87253faa2cc7c7a84a93f54b",
+          "steps": 8,
+          "stateLimit": false,
+          "stops": "1/slice,2/slice,5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 41
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-99",
+    "tip": "c5",
+    "history": {
+      "c0": {
+        "file": "a\nb\nb\na\na\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "a\nb\nb\nu99_0\na\n"
+      },
+      "c2": {
+        "parents": ["c1"],
+        "file": "u99_1\na\nb\nb\nu99_0\na\n"
+      },
+      "c3": {
+        "parents": ["c2"],
+        "file": "u99_1\na\nb\nb\nu99_0\na\n"
+      },
+      "c4": {
+        "parents": ["c2"],
+        "file": "u99_1\na\nb\nb\nu99_0\na\n"
+      },
+      "c5": {
+        "parents": ["c4"],
+        "file": "a\na\nu99_2\nb\na\nb\nu99_0\na\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 7+1:c1@4 1+1:c0@1 4+1:c0@2 6+1:c0@3 8+1:c0@5",
+          "page": "5+1:c5@5 7+1:c1@4 | 1+1:c0@1",
+          "state": "cabc46017f6e2a855d184e7c44c3bdd505fc1d6b2c013bad3ba6afcfac84fd43",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 7+1:c1@4 1+1:c0@1 4+1:c0@2 6+1:c0@3 8+1:c0@5",
+          "page": "5+1:c5@5 7+1:c1@4 | 1+1:c0@1",
+          "state": "cabc46017f6e2a855d184e7c44c3bdd505fc1d6b2c013bad3ba6afcfac84fd43",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 56
+        },
+        "expected": {
+          "ranges": "1+8:state_limit",
+          "page": " | ",
+          "state": "7516f6d70e411393515b21d364f80c7ff8dbc07e2a639d113b13386f387b5930",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 1655
+        },
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 1+1:state_limit 4+1:state_limit 6+3:state_limit",
+          "page": "5+1:c5@5 1+1:state_limit | 4+1:state_limit",
+          "state": "cbc1f1e627662955cf8d4ddf3f7e732f7ad049274d9a525a8afa1e3e8c9217c4",
+          "steps": 4,
+          "stateLimit": true,
+          "stops": "4/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 5
+        },
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 7+1:c1@4 1+1:c0@1 4+1:c0@2 6+1:c0@3 8+1:c0@5",
+          "page": "5+1:c5@5 7+1:c1@4 | 1+1:c0@1",
+          "state": "cabc46017f6e2a855d184e7c44c3bdd505fc1d6b2c013bad3ba6afcfac84fd43",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 2
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 226
+        },
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 7+1:c1@4 1+1:c0@1 4+1:c0@2 6+1:c0@3 8+1:c0@5",
+          "page": "5+1:c5@5 7+1:c1@4 | 1+1:c0@1",
+          "state": "cabc46017f6e2a855d184e7c44c3bdd505fc1d6b2c013bad3ba6afcfac84fd43",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 38
+        },
+        "expected": {
+          "ranges": "2+2:c5@2 5+1:c5@5 7+1:c1@4 1+1:c0@1 4+1:c0@2 6+1:c0@3 8+1:c0@5",
+          "page": "5+1:c5@5 7+1:c1@4 | 1+1:c0@1",
+          "state": "cabc46017f6e2a855d184e7c44c3bdd505fc1d6b2c013bad3ba6afcfac84fd43",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-143",
+    "tip": "c2",
+    "history": {
+      "c0": {
+        "file": "b\na\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "a\nb\na\n"
+      },
+      "c2": {
+        "parents": ["c1", "c0"],
+        "file": "a\na\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "1+1:c1@1 2+1:c0@2",
+          "page": "2+1:c0@2 | ",
+          "state": "c7b6a0772f08669d38f3b2ca88f60d42b0f215d7618716e0e2eb30da76c129ec",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "1+1:c1@1 2+1:c0@2",
+          "page": "2+1:c0@2 | ",
+          "state": "c7b6a0772f08669d38f3b2ca88f60d42b0f215d7618716e0e2eb30da76c129ec",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 64
+        },
+        "expected": {
+          "ranges": "1+2:state_limit",
+          "page": " | ",
+          "state": "d6a5a4e53903eb58d034beb119fc065ddbad1265a795a339384fb7ff7a4a2dd9",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 1479
+        },
+        "expected": {
+          "ranges": "1+2:state_limit",
+          "page": " | ",
+          "state": "1554c892339fc8d496a9a31a8002818d53ca093e03c2fcf03c60f70a8d55beb8",
+          "steps": 2,
+          "stateLimit": true,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 2
+        },
+        "expected": {
+          "ranges": "1+1:c1@1 2+1:history_limit",
+          "page": "2+1:history_limit | ",
+          "state": "f514de24568f9bc126f1c7bead7f9d17f1f7518b7a9cbcf1b4ccd66748b55ea6",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 2
+        },
+        "expected": {
+          "ranges": "1+2:parent_too_large",
+          "page": " | ",
+          "state": "24776d24b47f379e8434e2cf1f8054f0041a3c80031938ab3fb3e909058cf8c5",
+          "steps": 1,
+          "stateLimit": false,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 203
+        },
+        "expected": {
+          "ranges": "1+1:c1@1 2+1:c0@2",
+          "page": "2+1:c0@2 | ",
+          "state": "c7b6a0772f08669d38f3b2ca88f60d42b0f215d7618716e0e2eb30da76c129ec",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 9
+        },
+        "expected": {
+          "ranges": "1+1:c1@1 2+1:c0@2",
+          "page": "2+1:c0@2 | ",
+          "state": "c7b6a0772f08669d38f3b2ca88f60d42b0f215d7618716e0e2eb30da76c129ec",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-1",
+    "tip": "c1",
+    "history": {
+      "c0": {
+        "file": ""
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": ""
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 40
+        },
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 300
+        },
+        "expected": {
+          "failure": "state_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 4
+        },
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 5
+        },
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 14
+        },
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 19
+        },
+        "expected": {
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-105",
+    "tip": "c6",
+    "history": {
+      "c0": {
+        "file": "u105_0\nu105_1\na\nu105_2\nb\na\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "b\nu105_0\nu105_1\na\nu105_2\nb\na\n"
+      },
+      "c2": {
+        "parents": ["c0"],
+        "file": "a\nu105_0\nu105_1\na\nu105_2\nb\n"
+      },
+      "c3": {
+        "parents": ["c2", "c0"],
+        "file": "a\nu105_0\na\nu105_2\nu105_1\nb\n"
+      },
+      "c4": {
+        "parents": ["c0"],
+        "file": "u105_0\nu105_1\na\nu105_2\nb\na\n"
+      },
+      "c5": {
+        "parents": ["c0", "c3", "c1"],
+        "file": "u105_0\nu105_1\nu105_0\na\nu105_2\nb\n"
+      },
+      "c6": {
+        "parents": ["c5"],
+        "file": "u105_0\nu105_1\nu105_0\na\nb\nu105_3\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "6+1:c6@6 1+2:c0@1 3+1:c0@1 4+1:c0@3 5+1:c0@5",
+          "page": "1+2:c0@1 3+1:c0@1 | 4+1:c0@3",
+          "state": "5455e381edf0c20952423e075d65cde9f27e2c5c9f96e7e75f6979684c039f74",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "6+1:c6@6 1+2:c0@1 3+1:c0@1 4+1:c0@3 5+1:c0@5",
+          "page": "1+2:c0@1 3+1:c0@1 | 4+1:c0@3",
+          "state": "5455e381edf0c20952423e075d65cde9f27e2c5c9f96e7e75f6979684c039f74",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 58
+        },
+        "expected": {
+          "ranges": "1+6:state_limit",
+          "page": " | ",
+          "state": "2ff579c3ee140995dd88eeaa9c54dd1a41df6c1e1fca6db1273e21d31a976c91",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 1229
+        },
+        "expected": {
+          "ranges": "1+6:state_limit",
+          "page": " | ",
+          "state": "2ff579c3ee140995dd88eeaa9c54dd1a41df6c1e1fca6db1273e21d31a976c91",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 2
+        },
+        "expected": {
+          "ranges": "6+1:c6@6 1+5:history_limit",
+          "page": "1+5:history_limit | ",
+          "state": "914e016b9283ae7d240ec7e58d8455bf086f975949d0abdea7b8e9a7ab8a7f0f",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 5
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 277
+        },
+        "expected": {
+          "ranges": "6+1:c6@6 1+2:c0@1 3+1:c0@1 4+1:c0@3 5+1:c0@5",
+          "page": "1+2:c0@1 3+1:c0@1 | 4+1:c0@3",
+          "state": "5455e381edf0c20952423e075d65cde9f27e2c5c9f96e7e75f6979684c039f74",
+          "steps": 5,
+          "stateLimit": false,
+          "stops": "5/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 29
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-34",
+    "tip": "c5",
+    "history": {
+      "c0": {
+        "file": "a\nu34_0\nu34_1\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "u34_3\nu34_4\n"
+      },
+      "c2": {
+        "parents": ["c1"],
+        "file": "u34_3\nu34_5\n"
+      },
+      "c3": {
+        "parents": ["c2"],
+        "file": "b\na\nu34_5\n"
+      },
+      "c4": {
+        "parents": ["c2"],
+        "file": "u34_3\nu34_5\n"
+      },
+      "c5": {
+        "parents": ["c2"],
+        "file": "u34_3\nu34_5\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 45
+        },
+        "expected": {
+          "ranges": "1+2:state_limit",
+          "page": " | ",
+          "state": "8f94a4fe84f0eda3c0852601d087c71cdc9fd1179544328646bb2a2c4c59ff21",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 1510
+        },
+        "expected": {
+          "ranges": "1+2:state_limit",
+          "page": " | ",
+          "state": "d3061b117b3dbe35cae88ffe7a3c01d1a1cbcbe9f483dc122a8f1f6bae6651b6",
+          "steps": 2,
+          "stateLimit": true,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 3
+        },
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 3
+        },
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 96
+        },
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 26
+        },
+        "expected": {
+          "ranges": "2+1:c2@2 1+1:c1@1",
+          "page": "1+1:c1@1 | ",
+          "state": "5974e915562f43c1e572714947c454b769152c5dda48db8b229761222e011e2a",
+          "steps": 3,
+          "stateLimit": false,
+          "stops": "3/done"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-157",
+    "tip": "c4",
+    "history": {
+      "c0": {
+        "file": "b\nb\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "b\nu157_0\nb\n"
+      },
+      "c2": {
+        "parents": ["c1", "c0"],
+        "file": "b\nb\nu157_1\n"
+      },
+      "c3": {
+        "parents": ["c2"],
+        "file": "b\nu157_1\n"
+      },
+      "c4": {
+        "parents": ["c3"],
+        "file": "b\na\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "2+1:c4@2 1+1:slide_unsettled",
+          "page": "1+1:slide_unsettled | ",
+          "state": "e90527013bdccd094f125384c5d5771b74a0619a478189ec7310c3ce42dc7609",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "2+1:c4@2 1+1:slide_unsettled",
+          "page": "1+1:slide_unsettled | ",
+          "state": "e90527013bdccd094f125384c5d5771b74a0619a478189ec7310c3ce42dc7609",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 67
+        },
+        "expected": {
+          "ranges": "1+2:state_limit",
+          "page": " | ",
+          "state": "916a6c66018fd9297e4c4a9f6ac008580b2f187124d5f939766b006a4b9fa8b2",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 191
+        },
+        "expected": {
+          "failure": "state_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 3
+        },
+        "expected": {
+          "ranges": "2+1:c4@2 1+1:slide_unsettled",
+          "page": "1+1:slide_unsettled | ",
+          "state": "e90527013bdccd094f125384c5d5771b74a0619a478189ec7310c3ce42dc7609",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 5
+        },
+        "expected": {
+          "ranges": "2+1:c4@2 1+1:slide_unsettled",
+          "page": "1+1:slide_unsettled | ",
+          "state": "e90527013bdccd094f125384c5d5771b74a0619a478189ec7310c3ce42dc7609",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "2/done"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 10
+        },
+        "expected": {
+          "ranges": "2+1:c4@2 1+1:slide_unsettled",
+          "page": "1+1:slide_unsettled | ",
+          "state": "e90527013bdccd094f125384c5d5771b74a0619a478189ec7310c3ce42dc7609",
+          "steps": 2,
+          "stateLimit": false,
+          "stops": "1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 7
+        },
+        "expected": {
+          "ranges": "1+2:parent_too_large",
+          "page": " | ",
+          "state": "632aa97d25b2700af6996ce9d8294d812b41ad458b2144c195f6059109dc2e2c",
+          "steps": 1,
+          "stateLimit": false,
+          "stops": "1/done"
+        }
+      }
+    ]
+  },
+  {
+    "id": "WALK-18",
+    "tip": "c3",
+    "history": {
+      "c0": {
+        "file": "u18_0\nu18_1\nu18_2\na\n"
+      },
+      "c1": {
+        "parents": ["c0"],
+        "file": "u18_0\nu18_2\nu18_3\n"
+      },
+      "c2": {
+        "parents": ["c1"],
+        "file": "u18_4\nu18_2\nu18_3\nb\nu18_0\n"
+      },
+      "c3": {
+        "parents": ["c2"],
+        "file": "u18_4\nu18_2\nu18_3\nb\n"
+      }
+    },
+    "runs": [
+      {
+        "limits": {},
+        "expected": {
+          "ranges": "1+1:c2@1 4+1:c2@4 3+1:c1@3 2+1:c0@3",
+          "page": "4+1:c2@4 3+1:c1@3 | 2+1:c0@3",
+          "state": "25c40d4edd39afc7805bb86d57f40eaa371e23b68d7dc2a53655f5b4e8353970",
+          "steps": 4,
+          "stateLimit": false,
+          "stops": "4/done"
+        }
+      },
+      {
+        "limits": {
+          "maxSteps": 1
+        },
+        "roundTrip": true,
+        "expected": {
+          "ranges": "1+1:c2@1 4+1:c2@4 3+1:c1@3 2+1:c0@3",
+          "page": "4+1:c2@4 3+1:c1@3 | 2+1:c0@3",
+          "state": "25c40d4edd39afc7805bb86d57f40eaa371e23b68d7dc2a53655f5b4e8353970",
+          "steps": 4,
+          "stateLimit": false,
+          "stops": "1/slice,1/slice,1/slice,1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxEncodedBytes": 43
+        },
+        "expected": {
+          "ranges": "1+4:state_limit",
+          "page": " | ",
+          "state": "efe1e804b7bdbe088b05364a6541e068b6a9cac14f931ce4e4c185848e9c88fb",
+          "steps": 1,
+          "stateLimit": true,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxLiveStateBytes": 2046
+        },
+        "expected": {
+          "ranges": "1+1:c2@1 4+1:c2@4 2+2:state_limit",
+          "page": "4+1:c2@4 2+2:state_limit | ",
+          "state": "1a7b5f5b491ed758b7c0b5c9724b7b695fe86e40ba76fb41c05ed5878be53b05",
+          "steps": 3,
+          "stateLimit": true,
+          "stops": "3/done"
+        }
+      },
+      {
+        "limits": {
+          "maxBlameSteps": 1
+        },
+        "expected": {
+          "ranges": "1+4:history_limit",
+          "page": " | ",
+          "state": "fd248a5407d1fe61d470cb2851ce30daa893bfa344b0c5391765479d9f3bdbd0",
+          "steps": 1,
+          "stateLimit": false,
+          "stops": "1/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileLines": 2
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      },
+      {
+        "limits": {
+          "maxWork": 196
+        },
+        "expected": {
+          "ranges": "1+1:c2@1 4+1:c2@4 3+1:c1@3 2+1:c0@3",
+          "page": "4+1:c2@4 3+1:c1@3 | 2+1:c0@3",
+          "state": "25c40d4edd39afc7805bb86d57f40eaa371e23b68d7dc2a53655f5b4e8353970",
+          "steps": 4,
+          "stateLimit": false,
+          "stops": "4/done"
+        }
+      },
+      {
+        "limits": {
+          "maxFileBytes": 7
+        },
+        "expected": {
+          "failure": "file_too_large"
+        }
+      }
+    ]
+  }
+]

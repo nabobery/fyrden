@@ -6,6 +6,7 @@ import {
   type BlameCommitInfo,
   type BlameState,
   encodedBytesOf,
+  factFitsCheckpoint,
   factTextOf,
   liveBytesOf,
   MAX_BLAME_LINES,
@@ -311,8 +312,15 @@ async function runStep(
     }
   }
   if (left.length > 0) {
+    const fact = await source.commitInfo(entry.oid);
+    // Refused whole rather than cut: git shows the whole field, and a cut one would disagree.
+    if (!factFitsCheckpoint(fact)) {
+      for (let k = 0; k < left.length; k += 2)
+        refuse(staged, "commit_info_too_large", left[k + 1] as number);
+      return staged;
+    }
     for (const value of left) staged.own.push(value);
-    staged.fact = await source.commitInfo(entry.oid);
+    staged.fact = fact;
   }
   return staged;
 }

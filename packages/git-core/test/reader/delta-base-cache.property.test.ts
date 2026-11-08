@@ -86,4 +86,10 @@ describe("delta-base cache", () => {
     expect(() => new DeltaBaseCache(0)).toThrow(RangeError);
     expect(() => new DeltaBaseCache(1.5)).toThrow(RangeError);
   });
+
+  it("rejects a bad entry overhead", () => {
+    expect(() => new DeltaBaseCache(1, -1)).toThrow("bad delta-base cache entry overhead -1");
+    expect(() => new DeltaBaseCache(1, 1.5)).toThrow("bad delta-base cache entry overhead 1.5");
+    expect(new DeltaBaseCache(1, 0).capacity).toBe(1);
+  });
 });

@@ -53,6 +53,10 @@ describe("createPrepaidMemory", () => {
     const memory = createPrepaidMemory(100);
     const error = await reservePackMemory(memory, 101, "a delta program").catch((e) => e);
     expect(error).toBeInstanceOf(PrepaidMemoryExceeded);
+    expect(error).toMatchObject({
+      name: "PrepaidMemoryExceeded",
+      message: "a reservation of 101 bytes passes the 100 bytes paid for",
+    });
     expect(error).not.toBeInstanceOf(RangeError);
     expect(error).not.toBeInstanceOf(PackError);
   });
@@ -61,7 +65,13 @@ describe("createPrepaidMemory", () => {
     const memory = createPrepaidMemory(100);
     await expect(memory.reserve(0)).rejects.toBeInstanceOf(RangeError);
     await expect(memory.reserve(1.5)).rejects.toBeInstanceOf(RangeError);
-    expect(() => memory.tryReserve(-1)).toThrow(RangeError);
+    expect(() => memory.tryReserve(-1)).toThrow(/bad reservation of -1 bytes/);
+  });
+
+  it("refuses a limit that isn't a positive whole number", () => {
+    for (const limit of [0, -1, 1.5, Number.NaN]) {
+      expect(() => createPrepaidMemory(limit)).toThrow(`bad prepaid memory limit ${limit}`);
+    }
   });
 
   it("refuses at once on an aborted signal", async () => {
