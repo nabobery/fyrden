@@ -24,10 +24,11 @@ import {
 } from "../email/notifications.js";
 import { FreshAccess } from "../feed/access.js";
 import { AuthorizationInvalidated, LIVE_AUTHORIZATION_RESULT_MS } from "../live/authorization.js";
-import type { LiveEnvelope } from "../live/budget.js";
+import type { LiveEnvelope, LiveRefusalReason } from "../live/budget.js";
 import {
   isLiveVector,
   livePlanError,
+  liveTryAgain,
   makeLiveGrant,
   reserveLive,
   validateLiveCoverage,
@@ -126,7 +127,12 @@ export type LiveBudgetV1 =
       /** The feed's next turn, when it held none (prepared, not dispatched). */
       readonly turn?: unknown;
     }
-  | { readonly refusal: 4412 | 4413; readonly transport: unknown };
+  | {
+      readonly refusal: 4412 | 4413;
+      readonly transport: unknown;
+      /** Which check refused it, told a client in a 4412's close reason. */
+      readonly reason?: LiveRefusalReason;
+    };
 
 /** What one control message, one mark and one socket's end are spent at. */
 const unitPrice = (unit: LiveManifestUnit) => (LIVE_PRICES[unit] as LiveManifestEntry).resources;
@@ -181,6 +187,8 @@ const LIVE_CONFIRM_MS = 60_000;
 
 /** How long sockets whose run could not be done (an answer missing) wait to try again. */
 const LIVE_RETRY_MS = 60_000;
+/** How long a feed's sockets are told to wait after its successor's grant was refused for now. */
+const LIVE_PAUSED_MS = 5 * 60_000;
 
 /** A socket's id, from its attachment. */
 /** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
@@ -226,6 +234,15 @@ function poolLow(budget: LiveBudget, kind: "control" | "mark", day: number, at: 
 function socketIdOf(ws: WebSocket): string | undefined {
   const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
   return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
+}
+
+/** Storage's key for the last turn counted as leaving a feed's sockets with none to run. */
+const COUNTED_TURN = "live.counted_turn";
+
+/** The turn a socket was last told the feed is paused for, from its attachment (no row read). */
+function pausedFor(ws: WebSocket): string | undefined {
+  const attached = ws.deserializeAttachment() as { paused?: unknown } | null;
+  return typeof attached?.paused === "string" ? attached.paused : undefined;
 }
 
 /**
@@ -282,6 +299,16 @@ export const PREFERENCE_GATE = `SELECT repo_id, NULL AS conversation FROM watch_
     AND t.state = 'unsubscribed'`;
 
 /** Hooks into the feed's directory read. For tests. */
+/**
+ * Why a feed's sockets are told it is paused: the check that left it with no
+ * turn (counted), and for a refused successor what they are told (its gate,
+ * until when); anything else tells them the turn was given up on.
+ */
+type Untold = {
+  readonly gate: string;
+  readonly refused?: { readonly gate: string; readonly retryAt?: number };
+};
+
 export const feedHooks: {
   beforeEpochRead?: () => Promise<void>;
   beforePreferenceRead?: () => Promise<void>;
@@ -748,7 +775,16 @@ export class UserDO extends MigratingDO {
     }
     // By the schedule as the steps left it (calls made meanwhile left their rows).
     await this.#arm();
+    // A turn this run left for later may have lapsed meanwhile, its alarm gone with it: reconciled
+    // as any attempt's end is (nothing told while it can still run), not by whether an alarm is
+    // left, since one for the feed's other work (its cursors, a day off) would leave them untold.
+    const deferred = this.#deferredTurn;
+    this.#deferredTurn = null;
+    if (deferred !== null) this.#reconcileTurn(deferred, { gate: "given_up" });
   }
+
+  /** The turn this alarm run left for later (not due yet, or no room in the run), if any. */
+  #deferredTurn: string | null = null;
 
   /**
    * Sends the notification emails due (see `sendCandidate`), a few a run,
@@ -861,6 +897,13 @@ export class UserDO extends MigratingDO {
       (signals.length > 0 ? budget.turnStamp(now) : null);
     if (stamp && poolLow(budget, "mark", day, now))
       budget.queueOnce("mark_refill", crypto.randomUUID(), now, stamp, now);
+    // Nothing paid for it, and every block expired: one change is written regardless, until it is
+    // delivered, so the first change after a quiet spell isn't lost and goes by its own checks.
+    const first = signals[0];
+    if (first && !marked && stamp && live.hasRoomForUnpaid()) {
+      live.mark([first], stamp);
+      return true;
+    }
     return marked;
   }
 
@@ -1017,7 +1060,12 @@ export class UserDO extends MigratingDO {
         return new Response(null, { status: 400 });
       const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
       server.accept();
-      server.close(code, code === 4413 ? "live hints spent today's allowance" : "try again soon");
+      server.close(
+        code,
+        code === 4413
+          ? "live hints spent today's allowance"
+          : liveTryAgain(budget.reason ?? "unknown"),
+      );
       return new Response(null, { status: 101, webSocket: client });
     }
     const admitted = budget.admitted;
@@ -1237,7 +1285,7 @@ export class UserDO extends MigratingDO {
     });
     if (refill) await this.#scheduleLive();
     // Nothing left to pay for it: closed to come back once there is (a new admission brings it).
-    if (!counted) return this.#closeSocket(id, 4412, "try again soon");
+    if (!counted) return this.#closeSocket(id, 4412, liveTryAgain("no_controls"));
     if (
       typeof message !== "string" ||
       size > LIVE_POLICY.controlBytes ||
@@ -1718,25 +1766,49 @@ export class UserDO extends MigratingDO {
     // One turn's work at a time here, until it has physically ended (whatever became of its row).
     if (this.#turnRunning) return false;
     const budget = new LiveBudget(this.ctx.storage.sql);
-    await this.#adoptTurn(alarm);
-    const local = Date.now();
-    const ready = budget.runnableTurn(local);
-    if (!ready || ready.intendedAt > local) return false;
-    // Its own coverage needs no check here: it was checked when prepared. Its kind's components (a
-    // pump's, or a turn of renewals only).
-    const kind = budget.turn()?.envelope.plan.kind === "renewal" ? "renewal" : "pump";
-    const units = (LIVE_PRICES[kind] as LiveManifestEntry).components.filter(
-      (u) => u !== "coverage",
-    );
-    const reservation = alarm.reserve(...units);
-    if (!reservation) return false;
+    let reservation: { physicalComplete(): void } | null = null;
     let physical: Promise<void> = Promise.resolve();
     let physicalDone = () => {};
+    // The turn this run finds, and what its sockets would be told if it leaves the feed with none
+    // to run: whatever this run ends in (adopted, lapsed before its claim, run, or failed), it is
+    // reconciled with the feed's turn as it then stands. Not when it is still due later or waits
+    // for room in a run (it can still run), or installed its successor.
+    const found = budget.turn();
+    let attempted = found?.operationId ?? null;
+    let untold: Untold = { gate: "given_up" };
+    let settled = false;
     try {
+      await this.#adoptTurn(alarm, found);
+      const local = Date.now();
+      // The turn adoption left (an admission may have replaced it), whether or not it can run:
+      // that one is reconciled.
+      const seen = budget.turnReadiness(local);
+      if (seen) attempted = seen.operationId;
+      const ready = seen?.ready;
+      if (!ready) return false;
+      settled = ready.intendedAt > local;
+      if (settled) {
+        this.#deferredTurn = attempted;
+        return false;
+      }
+      // Its own coverage needs no check here: it was checked when prepared. Its kind's components (a
+      // pump's, or a turn of renewals only).
+      const kind = budget.turn()?.envelope.plan.kind === "renewal" ? "renewal" : "pump";
+      const units = (LIVE_PRICES[kind] as LiveManifestEntry).components.filter(
+        (u) => u !== "coverage",
+      );
+      reservation = alarm.reserve(...units);
+      settled = !reservation;
+      if (!reservation) {
+        this.#deferredTurn = attempted;
+        return false;
+      }
       const envelope = this.ctx.storage.transactionSync(() =>
         budget.claimTurn(budget.ledgerNow(local), this.#instance),
       );
       if (!envelope) return false;
+      // Another turn may have been installed while this run adopted: the one claimed is its own.
+      attempted = envelope.operationId;
       // Busy from its claim: nothing adopts or replaces it while it may still run here.
       let ended!: () => void;
       this.#turnRunning = new Promise<void>((resolve) => {
@@ -1786,9 +1858,8 @@ export class UserDO extends MigratingDO {
             await feedHooks.afterTurnWork?.(this, this.ctx);
             // Its work done: what it used, its end (the successor's grant among it) still to come.
             feedHooks.turnDone?.(meter.used(), paid);
-            return current() && this.#live().sockets().length > 0
-              ? await this.#grantTurn(current).catch(() => null)
-              : null;
+            if (this.#live().sockets().length === 0) return null;
+            return await this.#grantTurn(current).catch((): Untold => ({ gate: "unknown" }));
           } finally {
             if (this.#meter === meter) this.#meter = null;
             meter.stop();
@@ -1800,22 +1871,26 @@ export class UserDO extends MigratingDO {
           physical: (ended) => {
             physical = ended;
           },
+          metrics: createMetrics(this.env.METRICS),
         },
       );
+      if (run.status === "refused") untold = { gate: run.gate };
+      else if (run.value && "gate" in run.value) untold = run.value;
       const now = Date.now();
       this.ctx.storage.transactionSync(() => {
         if (run.status === "funded" && dispatched) {
-          const successor = run.value;
+          const successor = run.value && "plan" in run.value ? run.value : null;
           const lapse = successor
             ? successor.plan.validUntil - (budget.ledgerNow(now) - now) - 60_000
             : now;
           const next = this.#moreLive(now) ? now : this.#liveDueAt(now);
-          budget.finishTurn(envelope.operationId, budget.ledgerNow(now), {
-            ownerAccounted: run.accounted === true,
-            ...(successor && {
-              successor: { envelope: successor, intendedAt: Math.min(next ?? lapse, lapse) },
-            }),
-          });
+          settled =
+            budget.finishTurn(envelope.operationId, budget.ledgerNow(now), {
+              ownerAccounted: run.accounted === true,
+              ...(successor && {
+                successor: { envelope: successor, intendedAt: Math.min(next ?? lapse, lapse) },
+              }),
+            }) === "succeeded";
         } else if (!dispatched)
           // Its owner not admitted, or recovery took it before it was dispatched: nothing of it
           // ran, so it waits to run again (when it is still there).
@@ -1823,11 +1898,45 @@ export class UserDO extends MigratingDO {
         // Dispatched and given up on: its owner's work may still run, so it stays for recovery.
       });
       return true;
+    } catch (error) {
+      untold = { gate: "unknown" };
+      throw error;
     } finally {
+      const held = reservation;
       void physical.finally(() => {
-        reservation.physicalComplete();
+        held?.physicalComplete();
         physicalDone();
       });
+      if (attempted && !settled) this.#reconcileTurn(attempted, untold);
+    }
+  }
+
+  /**
+   * After an attempt at turn `operationId` that installed no successor: when
+   * the feed has open sockets and no turn that can still run, and is not
+   * another turn's, they are told it is paused and it is counted, once. No
+   * alarm would reach them before their renewals otherwise. Keyed on the
+   * feed's turn as it stands, not on how the attempt ended. One row read,
+   * only then; never throws (the attempt's own error stands).
+   */
+  #reconcileTurn(operationId: string, untold: Untold): void {
+    try {
+      if (this.#tellableSockets().length === 0) return;
+      const turn = new LiveBudget(this.ctx.storage.sql).turnAfter(Date.now());
+      if (turn && (turn.operationId !== operationId || turn.runs)) return;
+      // Each socket told of a turn once (a later alarm finding the same turn tells it nothing
+      // more; one opened since is told too: what each was told is kept with it, across
+      // hibernation), and the turn counted once: the last one counted kept apart, one value, read
+      // and written only here.
+      const fresh = this.#tellableSockets().filter((ws) => pausedFor(ws) !== operationId);
+      if (fresh.length === 0) return;
+      if (this.ctx.storage.kv.get<string>(COUNTED_TURN) !== operationId) {
+        createMetrics(this.env.METRICS).count("live.turn_no_successor", { gate: untold.gate });
+        this.ctx.storage.kv.put(COUNTED_TURN, operationId);
+      }
+      this.#tellPaused(untold.refused ?? { gate: "given_up" }, fresh, operationId);
+    } catch {
+      // Their renewal's close still reaches them.
     }
   }
 
@@ -1850,9 +1959,11 @@ export class UserDO extends MigratingDO {
    * a refill it dispatched is queued again with its request. In
    * an alarm, nothing is done when the run cannot afford it.
    */
-  async #adoptTurn(alarm: AlarmBudget | null): Promise<void> {
+  async #adoptTurn(
+    alarm: AlarmBudget | null,
+    turn = new LiveBudget(this.ctx.storage.sql).turn(),
+  ): Promise<void> {
     const budget = new LiveBudget(this.ctx.storage.sql);
-    const turn = budget.turn();
     if (!turn || turn.phase === "prepared" || this.#turnRunning) return;
     const reservation = alarm ? alarm.reserve("quarantine") : { physicalComplete: () => {} };
     if (!reservation) return;
@@ -2023,7 +2134,11 @@ export class UserDO extends MigratingDO {
         budget.dispatchPending(kind, item.identity, owner, this.#instance),
     );
     if (!dispatched) return;
-    const granted = await reserveLive(this.env.DIRECTORY, request).catch(() => null);
+    const granted = await reserveLive(
+      this.env.DIRECTORY,
+      request,
+      createMetrics(this.env.METRICS),
+    ).catch(() => null);
     this.ctx.storage.transactionSync(() => {
       const now = Date.now();
       // A request no longer grantable as a new grant (its first day passed): it goes.
@@ -2074,11 +2189,15 @@ export class UserDO extends MigratingDO {
    * refused, or stopped): a pump when it has live work beyond renewals (a
    * change to deliver, a refill, a page to prune), else a turn of renewals
    * only, priced for nothing more (its meter leaves anything marked since to
-   * the pump after it).
+   * the pump after it). Else why not, for its sockets if the feed is left with
+   * no turn: refused (by which check, until when), or `given_up` when its
+   * result is out of date, which says nothing of what they face now. Its
+   * turn's end tells and counts that (`#reconcileTurn`).
    */
-  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | null> {
+  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | Untold> {
+    if (!current()) return { gate: "given_up" };
     const feed = this.ctx.id.name;
-    if (!feed) return null;
+    if (!feed) return { gate: "unknown" };
     const budget = new LiveBudget(this.ctx.storage.sql);
     const fence = budget.fence();
     const refill = (["control_refill", "mark_refill"] as const).some(
@@ -2100,11 +2219,15 @@ export class UserDO extends MigratingDO {
         budget.ledgerEarliest(Date.now()),
       ),
     );
-    if (!current()) return null;
-    const granted = await reserveLive(this.env.DIRECTORY, request);
+    const metrics = createMetrics(this.env.METRICS);
+    if (!current()) return { gate: "given_up" };
+    const granted = await reserveLive(this.env.DIRECTORY, request, metrics);
     feedHooks.afterSuccessorGrant?.(this.ctx);
-    // Answered once the turn's result no longer applies: named nowhere (its charge stands).
-    return granted.status === "granted" && current() ? granted.grant : null;
+    // Answered once the turn's result no longer applies: named nowhere (a grant's charge stands),
+    // and a refusal says nothing of the sockets of whatever turn replaced it.
+    if (!current()) return { gate: "given_up" };
+    if (granted.status === "refused") return { gate: granted.gate, refused: granted };
+    return granted.grant;
   }
 
   /**
@@ -2129,7 +2252,39 @@ export class UserDO extends MigratingDO {
       ),
     );
     if (!current()) return false;
-    return (await reserveLive(this.env.DIRECTORY, request)).status === "granted";
+    return (
+      (await reserveLive(this.env.DIRECTORY, request, createMetrics(this.env.METRICS))).status ===
+      "granted"
+    );
+  }
+
+  /**
+   * Tells the feed's open sockets it has no turn to send them hints until a later
+   * time, so they reopen then rather than sit silent until their next renewal.
+   * Unnumbered and unstored: it costs no row, and one lost leaves that renewal's close.
+   */
+  #tellPaused(
+    refused: { readonly gate: string; readonly retryAt?: number },
+    sockets: readonly WebSocket[],
+    operationId: string,
+  ): void {
+    const until = refused.retryAt ?? Date.now() + LIVE_PAUSED_MS;
+    const frame = JSON.stringify({ t: "paused", until, reason: refused.gate });
+    for (const ws of sockets)
+      try {
+        ws.send(frame);
+        // Which turn it was told of, kept with it across hibernation (no row written).
+        ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), paused: operationId });
+      } catch {
+        // Closing since it was looked at: the others still hear of it.
+      }
+  }
+
+  /** The open sockets, from the object's own list: no row is read for this. */
+  #tellableSockets(): WebSocket[] {
+    return this.ctx
+      .getWebSockets()
+      .filter((ws) => ws.readyState === WebSocket.OPEN && socketIdOf(ws));
   }
 
   /** Sockets whose run could not be done (an answer missing): tried again a minute on. */

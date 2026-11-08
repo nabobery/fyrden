@@ -34,6 +34,7 @@ export const LIVE_MANIFEST_UNITS = [
   "mark_block",
   "refill",
   "maintenance",
+  "maintenance_light",
   "reap",
   "revocation_page",
   "recovery",
@@ -47,7 +48,7 @@ export const LIVE_SYNCHRONOUS_MS = 1_000;
 const DAY = 86_400_000;
 
 /** How long a pool's block may be spent from (Proposed). */
-export const LIVE_BLOCK_MS = 6 * 60 * 60_000;
+export const LIVE_BLOCK_MS = 12 * 60 * 60_000;
 
 /**
  * The inline components a unit an alarm runs must reserve with it: an
@@ -282,10 +283,11 @@ function estimated(
 export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> = {
   // Its D1 measured locally at its worst, every statement's as D1 reports it: its two grants (its
   // own and its transport's, a minute and two) past a midnight, each reading both days' rows, the
-  // feed's epoch and as many expired receipts as grants allow (302 read, 42 written; Free's
-  // 2026-11-01 measurement was 191 and 35, at noon).
+  // feed's epoch and as many expired receipts as grants allow, after its check of the socket it
+  // would open (315 read, by a feed's later opening; written 42, measured before owners' runs
+  // stopped writing two indexes, 38 since). Free's 2026-11-01 measurement was 191 and 35, at noon.
   ticket: estimated(
-    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 302, d1_rows_written: 42 },
+    { do_rows_read: 48, do_rows_written: 12, d1_rows_read: 315, d1_rows_written: 42 },
     {
       validity: { maxMs: 60_000, days: 2 },
       duration: "owner",
@@ -301,11 +303,12 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
   // Its D1 measured locally, every statement's as D1 reports it, from both of its callers: a
   // feed's first opening half a minute before midnight, its admission's, terminal's, blocks' and
   // turn's grants each reading both days' rows, the feed's epoch and as many expired receipts as
-  // grants allow, its turn's grant removing a full page of done turns: a browser's upgrade (732
-  // read, 83 written) and, the most, an MCP listen's opening, which also grants its transport (838
-  // and 90). Free's 2026-11-01 measurement was 422 and 67.
+  // grants allow, its turn's grant removing a full page of done turns: a browser's upgrade (724
+  // read, 80 written) and, the most, an MCP listen's opening, which also grants its transport (860
+  // read; written 90, measured before owners' runs stopped writing two indexes, 87 since). Free's
+  // 2026-11-01 measurement was 422 and 67.
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 838, d1_rows_written: 90 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 860, d1_rows_written: 90 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",
@@ -377,6 +380,7 @@ export function liveKindOf(unit: LiveManifestUnit): LiveUnit;
 export function liveKindOf(unit: LiveManifestUnit): LiveUnit {
   if (unit === "control_block") return "control";
   if (unit === "mark_block") return "mark";
+  if (unit === "maintenance_light") return "maintenance";
   return unit as LiveUnit;
 }
 
@@ -430,7 +434,7 @@ export const LIVE_TURN_RENEWALS = 2;
  * credential, repositories, preferences and account checked); `prune`: one
  * page pruned. A refill's D1 is measured by the live suite with the ledger's
  * clock pinned at both sides of when its block first reaches past midnight
- * (18:00 UTC, six hours before), for a feed with an epoch and as many
+ * (12:00 UTC, a block's length before), for a feed with an epoch and as many
  * expired receipts as grants allow (15, each read by a grant's overdue
  * check): 65 rows read in one day, 92 over two. Its pool's expired balances
  * removed on both days were measured apart (an isolated probe at 23:50 UTC:
@@ -551,7 +555,8 @@ const PUMP_MEASURED = {
 };
 
 const TURN_ENTRY = {
-  validity: { maxMs: 30 * 60_000, days: 2 },
+  // A feed always on runs a turn before this lapses: past the renewal period, so it adds none.
+  validity: { maxMs: 125 * 60_000, days: 2 },
   duration: "owner",
   pendingMs: 30_000,
   maxQuantity: 1,
@@ -635,10 +640,12 @@ LIVE_PRICES.org_confirmation = estimated(
  * served (5, 2), 2 recovery targets adopted (10, 4) and 2 coordinated with
  * their durations settled (93, 10; their pages funded on their own), each
  * kind reaped a page, leases lapsed both ways (190, 46), and 2 owners
- * settled two whole pages of days each and released (96, 32): 4,035 read,
- * rounded up. Revocations are a page of their own (`revocation_page`).
+ * settled two whole pages of days each and released (96, 32): 4,035 read
+ * then; 4,189 since its reaping looks for told revocations through a window
+ * sought three ways (`reapingWindowMoved`), rounded up. Revocations are a
+ * page of their own (`revocation_page`).
  */
-export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_100, d1_rows_written: 184 };
+export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_200, d1_rows_written: 180 };
 
 LIVE_PRICES.maintenance = estimated(
   LIVE_MAINTENANCE_MEASURED,
@@ -656,12 +663,37 @@ LIVE_PRICES.maintenance = estimated(
   MEASURED_LOCALLY,
 );
 /**
+ * A run with only expired receipts and transports due, at its worst (Proposed;
+ * measured locally by its fixture): its own grant over a midnight, owner and
+ * checks, 16 receipts holding escrow on days still kept, and 16 transports (1,342 read and 58
+ * written, rounded up).
+ */
+export const LIVE_MAINTENANCE_LIGHT_MEASURED = { d1_rows_read: 1_400, d1_rows_written: 60 };
+
+LIVE_PRICES.maintenance_light = estimated(
+  LIVE_MAINTENANCE_LIGHT_MEASURED,
+  {
+    validity: { maxMs: 10 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 60_000,
+    maxQuantity: 1,
+    requests: 1,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
+  },
+  MEASURED_LOCALLY,
+);
+/**
  * A revocation page at its most (Proposed; measured locally): the run's own
  * grant, owner and checks, 8 revocations expanded a socket each (8
  * dependency rows, each socket's feed a target) and one feed told, its 20
- * sockets' leases and dependency rows released (D1: 510 rows read and 168
- * written, the maintenance fixture, its grant past a midnight reading as many
- * expired receipts as grants allow); the feed's object closing and forgetting its 20
+ * sockets' leases and dependency rows released (D1: 603 rows read, the
+ * maintenance fixture: its grant past a midnight reading 12 expired receipts,
+ * as many as can wait with nothing routine due, and 15 transports expired
+ * within their grace, its owner's admission every other owner place held,
+ * and 128 old revocations still being told passed over by a window of them; 168 written, measured before owners' runs stopped
+ * writing two indexes, 164 since); the feed's object closing and forgetting its 20
  * sockets with their ends' provisions (160 rows read and 103 written with
  * two dependencies a socket, the live suite's; a socket rests on five at
  * most, an agent's derived credential, each one more a row read and
@@ -673,7 +705,7 @@ LIVE_PRICES.maintenance = estimated(
 export const LIVE_REVOCATION_PAGE_MEASURED = {
   do_rows_read: 220,
   do_rows_written: 163,
-  d1_rows_read: 510,
+  d1_rows_read: 603,
   d1_rows_written: 168,
 };
 

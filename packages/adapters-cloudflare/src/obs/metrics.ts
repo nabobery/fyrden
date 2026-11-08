@@ -108,6 +108,14 @@ export const METRICS = {
   // ignored), and suppression rechecks (`status` = found | absent | invalid | failed).
   "email.event": ["type"],
   "email.suppression_check": ["status"],
+  // One grant or owned run refused (`unit` = the ledger's kind, `gate` = which check refused).
+  "live.grant_refusal": ["unit", "gate"],
+  // A feed's turn left with no successor while it had sockets: no hints until one next renews.
+  "live.turn_no_successor": ["gate"],
+  // One live opening refused, whichever step refused it (`unit` = ticket | listen | upgrade), and
+  // the D1 rows its whole Worker invocation had read by then.
+  "live.refusal": ["unit", "gate"],
+  "live.refused_rows": ["unit"],
   "d1.invocation_statements": ["where", "op"],
   // D1's rows one platform invocation read and wrote in all (kind = read | written), as D1
   // reports each result's, one point each an invocation: what live work's prices are measured by.

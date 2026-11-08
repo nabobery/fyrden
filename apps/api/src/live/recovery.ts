@@ -68,18 +68,26 @@ export interface LiveRecoveryTarget {
  * and retires the target with its debt. How many moved.
  */
 export async function adoptLiveRecoveryTargets(db: D1Database, limit: number): Promise<number> {
-  const result = await db
-    .prepare(
-      `UPDATE live_recovery_targets
-       SET incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1),
-         through_seq = 1, next_attempt_at = 0, attempts = 0
-       WHERE feed IN (SELECT feed FROM live_recovery_targets
-         WHERE incarnation <> (SELECT incarnation FROM live_budget_state WHERE id = 1)
-         ORDER BY feed LIMIT ?)`,
-    )
-    .bind(limit)
-    .run();
-  return result.meta.changes;
+  const [moved] = await db.batch([
+    db
+      .prepare(
+        `UPDATE live_recovery_targets
+         SET incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1),
+           through_seq = 1, next_attempt_at = 0, attempts = 0
+         WHERE feed IN (SELECT feed FROM live_recovery_targets
+           WHERE incarnation <> (SELECT incarnation FROM live_budget_state WHERE id = 1)
+           ORDER BY feed LIMIT ?)`,
+      )
+      .bind(limit),
+    // None left of another: maintenance's check need no longer call for a run for them.
+    db.prepare(
+      `UPDATE live_budget_state SET targets_incarnation = incarnation
+       WHERE id = 1 AND targets_incarnation <> incarnation
+         AND NOT EXISTS (SELECT 1 FROM live_recovery_targets
+           WHERE incarnation <> live_budget_state.incarnation)`,
+    ),
+  ]);
+  return moved?.meta.changes ?? 0;
 }
 
 /** The feeds whose recovery is due, earliest first (identities only: captured once funded). */

@@ -24,7 +24,12 @@ import { NO_STORE } from "../http/cache.js";
 import { problem } from "../http/problem.js";
 import { liveCredential } from "../live/credential.js";
 import { liveAllowance } from "../live/directory.js";
-import { openOwnedLiveSocket } from "../live/routes.js";
+import {
+  type LiveRefusal,
+  noteLiveRefusal,
+  openOwnedLiveSocket,
+  rememberedRefusal,
+} from "../live/routes.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
 import { executeOperation, type OpContext, rateLimitKey } from "../ops/execute.js";
 import { API_VERSION, opContext, operationHandler } from "../rest/mount.js";
@@ -345,6 +350,7 @@ function listenRefusal(
   detail: string,
   retryAfter?: number,
   retryAt?: number,
+  reason?: string,
 ): Response {
   return Response.json({
     jsonrpc: "2.0",
@@ -359,6 +365,7 @@ function listenRefusal(
         requestId: ctx.requestId,
         ...(retryAfter !== undefined && { retryAfter }),
         ...(retryAt !== undefined && { retryAt }),
+        ...(reason !== undefined && { reason }),
       }),
     },
   });
@@ -410,9 +417,16 @@ async function serveListen(
   const own = feedResourceUri(ctx.auth.principalId);
   if (!listen.uris.includes(own) || liveAllowance(c.env) === null)
     return eventStream(new ListenStream({ id: listen.id, serverInfo: SERVER_INFO }).readable);
-  // Limited by token (or its source), as a write is, before any primary lookup.
-  if (!(await c.env.RATE_LIMIT_WRITE.limit({ key: rateLimitKey(ctx.auth) })).success)
-    return listenRefusal(ctx, listen.id, 429, "rate_limited", "Too many requests for this token.");
+  // Limited by token (or its source), before any primary lookup.
+  if (!(await c.env.RATE_LIMIT_LIVE.limit({ key: rateLimitKey(ctx.auth) })).success)
+    return listenRefusal(
+      ctx,
+      listen.id,
+      429,
+      "rate_limited",
+      "Too many requests for this token.",
+      60,
+    );
   if (ctx.auth.grantId !== null)
     return listenRefusal(
       ctx,
@@ -421,6 +435,21 @@ async function serveListen(
       "delegated_listing",
       "Listen with the user's own credentials.",
     );
+  const refuse = (refused: LiveRefusal) => {
+    if (refused.gate) noteLiveRefusal(ctx.metrics, ctx.log, "listen", refused.gate);
+    return listenRefusal(
+      ctx,
+      listen.id,
+      refused.status,
+      refused.code,
+      refused.message,
+      refused.headers["Retry-After"] ? Number(refused.headers["Retry-After"]) : undefined,
+      refused.retryAt,
+      refused.gate,
+    );
+  };
+  const remembered = rememberedRefusal();
+  if (remembered) return refuse(remembered);
   const now = clock();
   const credential = await liveCredential(c.env.DIRECTORY, ctx.auth.id, now);
   if (!credential)
@@ -444,16 +473,7 @@ async function serveListen(
     socket.close(1000, "done");
     return new Response(null, { status: 499 });
   }
-  if (!opened.ok)
-    return listenRefusal(
-      ctx,
-      listen.id,
-      opened.status,
-      opened.code,
-      opened.message,
-      opened.headers["Retry-After"] ? Number(opened.headers["Retry-After"]) : undefined,
-      opened.retryAt,
-    );
+  if (!opened.ok) return refuse(opened);
   if (!socket) throw new Error("an opened live socket without its WebSocket");
   socket.accept();
   const stream = new ListenStream({

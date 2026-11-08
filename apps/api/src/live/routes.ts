@@ -1,4 +1,4 @@
-import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { d1RowsRun, type Logger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { Input, issueLiveTicket, Output } from "@fyrden/api-contract";
 import { hashToken } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
@@ -14,19 +14,29 @@ import { randomSecret } from "../oauth/params.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock, newId } from "../services.js";
-import { LIVE_NOW, type LiveEnvelope, makeLiveGrant } from "./budget.js";
+import {
+  LIVE_NOW,
+  type LiveEnvelope,
+  type LiveRefusalReason,
+  liveOpeningFits,
+  liveTryAgain,
+  makeLiveGrant,
+} from "./budget.js";
 import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, LIVE_ADMISSION, liveAllowance, release } from "./directory.js";
 import {
   type FundedResult,
   fund,
   LIVE_MANIFEST_REVISION,
+  type LiveOpeningTarget,
+  liveOpeningTarget,
   liveTarget,
   ownedCall,
   ownedRun,
   planFor,
 } from "./funding.js";
 import { LIVE_BLOCK_UNITS, LIVE_PRICES, type LiveManifestEntry, liveKindOf } from "./manifest.js";
+import { liveRefusalMemo } from "./refusal-memo.js";
 import { claimTransport, type LiveTransport } from "./transports.js";
 
 /*
@@ -49,7 +59,11 @@ export const LIVE_TICKETS_A_DAY = 60;
 const DAY = 86_400_000;
 
 /** A funding refusal, as the ticket operation answers it. */
-function refusal(result: { readonly reason: "daily" | "temporary"; readonly retryAt?: number }) {
+function refusal(result: {
+  readonly reason: "daily" | "temporary";
+  readonly retryAt?: number;
+  readonly gate?: LiveRefusalReason;
+}) {
   if (result.reason === "daily" && result.retryAt !== undefined)
     return new OperationError(
       429,
@@ -59,6 +73,7 @@ function refusal(result: { readonly reason: "daily" | "temporary"; readonly retr
       undefined,
       Math.max(1, Math.ceil((result.retryAt - clock()) / 1000)),
       result.retryAt,
+      result.gate,
     );
   return new OperationError(
     503,
@@ -67,41 +82,81 @@ function refusal(result: { readonly reason: "daily" | "temporary"; readonly retr
     undefined,
     undefined,
     60,
+    undefined,
+    result.gate ?? "unknown",
   );
 }
 
-/** What a live plan for `recipient` is made from: the ledger's state and clock now. */
-type Target = Awaited<ReturnType<typeof liveTarget>>;
+/**
+ * One live opening refused, once its work is over: counted with every D1 row its
+ * invocation read so far, apart from each grant's own refusal (`live.grant_refusal`). A keyed
+ * ticket's idempotency answer is written after this, its rows not among them.
+ */
+export function noteLiveRefusal(
+  metrics: Metrics | undefined,
+  log: Logger | undefined,
+  path: "ticket" | "listen" | "upgrade",
+  reason: LiveRefusalReason,
+): void {
+  metrics?.count("live.refusal", { unit: path, gate: reason });
+  metrics?.count("live.refused_rows", { unit: path }, d1RowsRun().read);
+  log?.info("live refused", { path, reason });
+}
 
-/** The grant request of `kind` for `target`'s feed, starting at the ledger's time. */
-function grantFor(
-  target: Target,
+type Unit =
+  | "ticket"
+  | "upgrade_transport"
+  | "admission"
+  | "terminal"
+  | "control_block"
+  | "mark_block"
+  | "pump";
+
+/** The plan of `unit` for `target`'s feed, starting at the ledger's time. */
+const planOf = (target: LiveOpeningTarget, recipient: string, unit: Unit) =>
+  planFor(
+    LIVE_PRICES[unit] as LiveManifestEntry,
+    {
+      incarnation: target.incarnation,
+      epoch: target.epoch,
+      recipientType: "UserDO",
+      recipient,
+      class: "ordinary",
+      kind: liveKindOf(unit),
+      producesLocal: unit !== "upgrade_transport",
+    },
+    target.ledger.now,
+  );
+
+const grantFor = (target: LiveOpeningTarget, recipient: string, unit: Unit) =>
+  makeLiveGrant(planOf(target, recipient, unit));
+
+/**
+ * Why `units` cannot all fit, seen before any is charged (null when they can),
+ * remembered when the transport alone cannot, which closes every opening.
+ */
+function openingRefusal(
+  target: LiveOpeningTarget,
   recipient: string,
-  unit:
-    | "ticket"
-    | "upgrade_transport"
-    | "admission"
-    | "terminal"
-    | "control_block"
-    | "mark_block"
-    | "pump",
+  units: readonly Unit[],
+  ownerPlaces: number,
 ) {
-  return makeLiveGrant(
-    planFor(
-      LIVE_PRICES[unit] as LiveManifestEntry,
-      {
-        incarnation: target.incarnation,
-        epoch: target.epoch,
-        recipientType: "UserDO",
-        recipient,
-        class: "ordinary",
-        kind: liveKindOf(unit),
-        producesLocal: unit !== "upgrade_transport",
-      },
-      target.ledger.now,
-    ),
-  );
+  const plans = units.map((unit) => planOf(target, recipient, unit));
+  const fit = liveOpeningFits(target.view, plans, ownerPlaces);
+  if (fit.fits) return null;
+  const alone = liveOpeningFits(target.view, [planOf(target, recipient, "upgrade_transport")]);
+  if (!alone.fits) liveRefusalMemo.note(alone, clock());
+  return fit;
 }
+
+/** The units an opening of `target`'s feed needs: its blocks and turn only when it holds none. */
+const socketUnits = (target: LiveOpeningTarget): Unit[] => [
+  "admission",
+  "terminal",
+  ...(target.controlsHeld ? [] : (["control_block"] as const)),
+  ...(target.marksHeld ? [] : (["mark_block"] as const)),
+  ...(target.turnHeld ? [] : (["pump"] as const)),
+];
 
 /** How long `kind`'s owned call is waited for at most. */
 const pendingOf = (kind: "ticket" | "upgrade_transport") =>
@@ -164,6 +219,11 @@ export async function issueLiveTicketOperation(
       "delegated_listing",
       "Open live hints with the user's own credentials.",
     );
+  const remembered = liveRefusalMemo.closed(clock());
+  if (remembered) {
+    noteLiveRefusal(ctx.metrics, ctx.log, "ticket", remembered.gate);
+    throw refusal(remembered);
+  }
   const db = ctx.env.DIRECTORY;
   const credential = await liveCredential(db, ctx.auth.id, clock());
   if (!credential)
@@ -172,9 +232,12 @@ export async function issueLiveTicketOperation(
   try {
     return await issueTicket(ctx, credential, feed);
   } catch (error) {
-    if (error instanceof OperationError) throw error;
-    ctx.log.error("live ticket issuance failed", { error });
-    throw refusal({ reason: "temporary" });
+    const refused = error instanceof OperationError ? error : null;
+    if (!refused) ctx.log.error("live ticket issuance failed", { error });
+    const answer = refused ?? refusal({ reason: "temporary", gate: "unknown" });
+    if (answer.reason !== undefined)
+      noteLiveRefusal(ctx.metrics, ctx.log, "ticket", answer.reason as LiveRefusalReason);
+    throw answer;
   }
 }
 
@@ -188,14 +251,29 @@ async function issueTicket(
   const hash = await ticketHash(ticket);
   ctx.metrics.count("d1.query", { db: "directory", op: "live_target" });
   // Plans start at the ledger's time (D1's), never ahead of it.
-  const target = await liveTarget(db, feed);
+  const target = await liveOpeningTarget(db, feed);
   // Past the day's tickets: refused before a transport is paid for (the count below decides).
   if (target.ticketsToday >= LIVE_TICKETS_A_DAY)
-    throw refusal({ reason: "daily", retryAt: target.tomorrow });
+    throw refusal({ reason: "daily", retryAt: target.tomorrow, gate: "tickets" });
+  // A ticket that could only be refused at its redemption is not paid for. Told as a spent day,
+  // which is what a browser waits for.
+  if (target.admissionsToday >= LIVE_ADMISSION.perDay)
+    throw refusal({ reason: "daily", retryAt: nextDay(clock()), gate: "admissions" });
+  // Its socket's too: a ticket its redemption could only be refused for is not paid for.
+  const unfit = openingRefusal(
+    target,
+    feed,
+    ["upgrade_transport", "ticket", ...socketUnits(target)],
+    1,
+  );
+  if (unfit) throw refusal(unfit);
   // The redemption's funding, made with the ticket: a ticket that cannot be redeemed is not issued.
   ctx.metrics.count("d1.query", { db: "directory", op: "live_grant" });
-  const transport = await fund(db, await grantFor(target, feed, "upgrade_transport"));
-  if (transport.status !== "funded") throw refusal(transport);
+  const transport = await fund(db, await grantFor(target, feed, "upgrade_transport"), ctx.metrics);
+  if (transport.status !== "funded") {
+    liveRefusalMemo.note(transport, clock());
+    throw refusal(transport);
+  }
   // The ticket lives by the clock its redemption is judged by (this Worker's, its object's).
   const expiresAt = clock() + LIVE_POLICY.ticketMs;
   ctx.metrics.count("d1.query", { db: "directory", op: "live_ticket_count" });
@@ -207,7 +285,7 @@ async function issueTicket(
     operationId: transport.value.operationId,
     envelope: transport.value,
   });
-  if (full !== null) throw refusal({ reason: "daily", retryAt: full });
+  if (full !== null) throw refusal({ reason: "daily", retryAt: full, gate: "tickets" });
   ctx.metrics.count("do.request", { class: "UserDO", method: "liveTicketV1" });
   const stored = await ownedCall(
     db,
@@ -220,14 +298,18 @@ async function issueTicket(
         expiresAt,
         transport: { operationId: transport.value.operationId },
       }),
-    { ledger: target.ledger, pendingMs: pendingOf("ticket") },
+    { ledger: target.ledger, pendingMs: pendingOf("ticket"), metrics: ctx.metrics },
   );
   if (stored.status !== "funded") throw refusal(stored);
   if (stored.value.status === "retired")
     throw new OperationError(401, "invalid_token", "The account is being deleted.");
   // Stored with the life it has left: a ticket with under a second of it is not handed out.
   const left = Math.floor((expiresAt - clock()) / 1000);
-  if (stored.value.status !== "stored" || left < 1) throw refusal({ reason: "temporary" });
+  if (stored.value.status !== "stored" || left < 1)
+    throw refusal({
+      reason: "temporary",
+      gate: stored.value.status === "stored" ? "given_up" : "validity",
+    });
   return {
     ticket,
     expires_in: left,
@@ -255,6 +337,8 @@ export interface LiveRefusal {
    */
   readonly budget?: "daily" | "temporary";
   readonly retryAt?: number;
+  /** Which check refused it. */
+  readonly gate?: LiveRefusalReason;
 }
 
 type Opened = { readonly ok: true; readonly response: Response } | LiveRefusal;
@@ -265,17 +349,57 @@ const refused = (
   message: string,
   budget: LiveRefusal["budget"],
   headers: Record<string, string> = {},
-): LiveRefusal => ({ ok: false, status, code, message, headers, ...(budget ? { budget } : {}) });
+  gate?: LiveRefusalReason,
+): LiveRefusal => ({
+  ok: false,
+  status,
+  code,
+  message,
+  headers,
+  ...(budget ? { budget } : {}),
+  ...(gate ? { gate } : {}),
+});
 
 /** Refused for now: a retry soon may succeed. */
-const temporary = (message = "Live hints cannot be funded right now.") =>
-  refused(503, "live_temporary", message, "temporary", { "Retry-After": "60" });
+const temporary = (gate: LiveRefusalReason, message = "Live hints cannot be funded right now.") =>
+  refused(503, "live_temporary", message, "temporary", { "Retry-After": "60" }, gate);
+
+const nextDay = (now: number) => (Math.floor(now / DAY) + 1) * DAY;
+
+const pastAdmissions = (now: number) =>
+  daily("too_many_sockets", "Too many live sockets opened today.", nextDay(now), "admissions");
+
+/** The pre-check's refusal, as an opening answers it. */
+const unfitAnswer = (fit: {
+  reason: "daily" | "temporary";
+  gate: LiveRefusalReason;
+  retryAt?: number;
+}) =>
+  fit.reason === "daily" && fit.retryAt !== undefined
+    ? daily("live_budget", "Live hints have spent today's allowance.", fit.retryAt, fit.gate)
+    : temporary(fit.gate);
+
+/** The refusal this isolate remembers for any new opening (see `liveRefusalMemo`), if any. */
+export function rememberedRefusal(): LiveRefusal | null {
+  const closure = liveRefusalMemo.closed(clock());
+  return closure && unfitAnswer(closure);
+}
 
 /** Refused until `retryAt` (the next UTC day). */
-const daily = (code: "live_budget" | "too_many_sockets", message: string, retryAt: number) => ({
-  ...refused(429, code, message, "daily", {
-    "Retry-After": String(Math.max(1, Math.ceil((retryAt - clock()) / 1000))),
-  }),
+const daily = (
+  code: "live_budget" | "too_many_sockets",
+  message: string,
+  retryAt: number,
+  gate?: LiveRefusalReason,
+) => ({
+  ...refused(
+    429,
+    code,
+    message,
+    "daily",
+    { "Retry-After": String(Math.max(1, Math.ceil((retryAt - clock()) / 1000))) },
+    gate,
+  ),
   retryAt,
 });
 
@@ -304,19 +428,17 @@ export async function openLiveSocket(
   // end on each day it may live on, and the feed's first blocks of controls and marks, granted
   // together, with the feed's first turn when it holds none (one refused refuses the socket; the
   // others' charges stand).
-  const target = await liveTarget(env.DIRECTORY, credential.principalId);
+  const target = await liveOpeningTarget(env.DIRECTORY, credential.principalId);
+  // Refused here, nothing is charged beyond the transport that already paid.
+  if (target.admissionsToday >= LIVE_ADMISSION.perDay) return pastAdmissions(clock());
   // Its feed's blocks and turn only when it holds none still valid (refills top its pools up).
-  const units: ("admission" | "terminal" | "control_block" | "mark_block" | "pump")[] = [
-    "admission",
-    "terminal",
-    ...(target.controlsHeld ? [] : (["control_block"] as const)),
-    ...(target.marksHeld ? [] : (["mark_block"] as const)),
-    ...(target.turnHeld ? [] : (["pump"] as const)),
-  ];
+  const units = socketUnits(target);
+  const unfit = openingRefusal(target, credential.principalId, units, 0);
+  if (unfit) return unfitAnswer(unfit);
   metrics?.count("d1.query", { db: "directory", op: "live_grant" }, units.length + 1);
   const grants = await Promise.all(
     units.map(async (unit) =>
-      fund(env.DIRECTORY, await grantFor(target, credential.principalId, unit)),
+      fund(env.DIRECTORY, await grantFor(target, credential.principalId, unit), metrics),
     ),
   );
   const granted = (unit: (typeof units)[number]) => grants[units.indexOf(unit)];
@@ -332,11 +454,17 @@ export async function openLiveSocket(
     grants.some((g) => g.status !== "funded")
   ) {
     const spent = grants.find((g) => g.status === "refused" && g.reason === "daily");
-    return spent?.status === "refused" && spent.reason === "daily"
-      ? daily("live_budget", "Live hints have spent today's allowance.", spent.retryAt)
-      : temporary();
+    if (spent?.status === "refused" && spent.reason === "daily")
+      return daily(
+        "live_budget",
+        "Live hints have spent today's allowance.",
+        spent.retryAt,
+        spent.gate,
+      );
+    const first = grants.find((g) => g.status === "refused");
+    return temporary(first?.status === "refused" ? first.gate : "unknown");
   }
-  if (signal.aborted) return temporary();
+  if (signal.aborted) return temporary("given_up");
   const now = clock();
   const socketId = newId("lsk");
   // Never past what its end is provided for: its terminal grant's validity (the ledger's time,
@@ -357,20 +485,15 @@ export async function openLiveSocket(
     now,
     admission.value.operationId,
   );
-  if (refusal === "daily")
-    return daily(
-      "too_many_sockets",
-      "Too many live sockets opened today.",
-      (Math.floor(now / DAY) + 1) * DAY,
-    );
+  if (refusal === "daily") return pastAdmissions(now);
   if (refusal === "allowance")
-    return temporary("The deployment has no room for another live socket.");
-  if (refusal === "funding") return temporary();
+    return temporary("allowance", "The deployment has no room for another live socket.");
+  if (refusal === "funding") return temporary("validity");
   // The lease is this function's until the object takes the socket: released if what follows
   // fails, or once it is given up on.
   if (signal.aborted) {
     await release(env.DIRECTORY, [socketId]);
-    return temporary();
+    return temporary("given_up");
   }
   // Checked again now that its dependencies are indexed: a revocation swept before they were
   // would have found no socket, so authority changed since the first check refuses it.
@@ -385,7 +508,7 @@ export async function openLiveSocket(
   if (!holds || signal.aborted) {
     await release(env.DIRECTORY, [socketId]);
     return holds
-      ? temporary()
+      ? temporary("given_up")
       : refused(401, "invalid_token", "The credential no longer holds.", undefined);
   }
   const admitted: LiveAdmitted = {
@@ -426,8 +549,8 @@ export async function openLiveSocket(
     // releasing its lease as for any close).
     if (signal.aborted) {
       response.webSocket.accept();
-      response.webSocket.close(4412, "try again soon");
-      return temporary();
+      response.webSocket.close(4412, liveTryAgain("given_up"));
+      return temporary("given_up");
     }
     // The feed holds no turn to run (its first was never delivered, say): one granted and handed
     // over now, after the socket (whose opening does not wait on it). Refused or lost, the socket
@@ -435,23 +558,32 @@ export async function openLiveSocket(
     const delivered =
       response.headers.get(LIVE_TURN_WANTED) && turn === undefined
         ? await deliverTurn(env, target, credential.principalId, metrics).catch(
-            (): FundedResult<never> => ({ status: "refused", reason: "temporary" }),
+            (): FundedResult<never> => ({
+              status: "refused",
+              reason: "temporary",
+              gate: "unknown",
+            }),
           )
         : null;
     if (delivered?.status === "refused") {
       response.webSocket.accept();
       if (delivered.reason === "daily") {
         response.webSocket.close(4413, "today's allowance is spent");
-        return daily("live_budget", "Live hints have spent today's allowance.", delivered.retryAt);
+        return daily(
+          "live_budget",
+          "Live hints have spent today's allowance.",
+          delivered.retryAt,
+          delivered.gate,
+        );
       }
-      response.webSocket.close(4412, "try again soon");
-      return temporary();
+      response.webSocket.close(4412, liveTryAgain(delivered.gate));
+      return temporary(delivered.gate);
     }
     // Given up on while it was handed over: nobody takes the socket, so it is closed at once.
     if (signal.aborted) {
       response.webSocket.accept();
-      response.webSocket.close(4412, "try again soon");
-      return temporary();
+      response.webSocket.close(4412, liveTryAgain("given_up"));
+      return temporary("given_up");
     }
     return {
       ok: true,
@@ -467,6 +599,7 @@ export async function openLiveSocket(
       "This credential or feed holds its most live sockets.",
       "temporary",
       { "Retry-After": "60" },
+      "feed_cap",
     );
   if (response.status === 410)
     return refused(401, "invalid_token", "The credential no longer holds.", undefined);
@@ -476,6 +609,8 @@ export async function openLiveSocket(
       "live_conflict",
       "The live socket could not be confirmed; try again.",
       "temporary",
+      {},
+      "conflict",
     ),
   };
 }
@@ -483,12 +618,12 @@ export async function openLiveSocket(
 /** Grants the feed a turn and hands it to its object to prepare; its grant's refusal, if any. */
 async function deliverTurn(
   env: Env,
-  target: Target,
+  target: LiveOpeningTarget,
   feed: string,
   metrics: Metrics | undefined,
 ): Promise<FundedResult<void>> {
   metrics?.count("d1.query", { db: "directory", op: "live_grant" });
-  const turn = await fund(env.DIRECTORY, await grantFor(target, feed, "pump"));
+  const turn = await fund(env.DIRECTORY, await grantFor(target, feed, "pump"), metrics);
   if (turn.status !== "funded") return turn;
   metrics?.count("do.request", { class: "UserDO", method: "liveTurnV1" });
   await env.USER.getByName(feed).liveTurnV1({
@@ -514,18 +649,32 @@ export async function openOwnedLiveSocket(
   metrics: Metrics | undefined,
 ): Promise<Opened> {
   metrics?.count("d1.query", { db: "directory", op: "live_grant" }, 2);
-  const target = await liveTarget(env.DIRECTORY, credential.principalId);
-  const opened = await ownedCall(
+  const feed = credential.principalId;
+  const target = await liveOpeningTarget(env.DIRECTORY, feed);
+  if (target.admissionsToday >= LIVE_ADMISSION.perDay) return pastAdmissions(clock());
+  const unfit = openingRefusal(target, feed, ["upgrade_transport", ...socketUnits(target)], 1);
+  if (unfit) return unfitAnswer(unfit);
+  const transport = await fund(
     env.DIRECTORY,
-    await grantFor(target, credential.principalId, "upgrade_transport"),
+    await grantFor(target, feed, "upgrade_transport"),
+    metrics,
+  );
+  if (transport.status !== "funded") {
+    liveRefusalMemo.note(transport, clock());
+    return unfitAnswer(transport);
+  }
+  const opened = await ownedRun(
+    env.DIRECTORY,
+    transport.value,
     "upgrade",
     (_funding, signal) => openLiveSocket(env, credential, ticketId, metrics, signal),
-    { ledger: target.ledger, pendingMs: pendingOf("upgrade_transport") },
+    {
+      ledger: target.ledger,
+      pendingMs: pendingOf("upgrade_transport"),
+      ...(metrics && { metrics }),
+    },
   );
-  if (opened.status === "funded") return opened.value;
-  return opened.reason === "daily" && opened.retryAt !== undefined
-    ? daily("live_budget", "Live hints have spent today's allowance.", opened.retryAt)
-    : temporary();
+  return opened.status === "funded" ? opened.value : unfitAnswer(opened);
 }
 
 /** The credential a live upgrade presents: the session of its cookie, or its bearer token. */
@@ -579,10 +728,13 @@ export function mountLive(app: Hono<AppEnv>): void {
       .catch(() => undefined);
     const feed = c.env.USER.getByName(credential.principalId);
     // Refused for its funding or capacity, its credential holding: upgraded to be closed with why
-    // (4413 today's allowance or the principal's day spent, 4412 try again soon), paid for by the
-    // transport.
-    const refuse = (code: 4412 | 4413, funding: unknown) => {
-      const refusal: LiveBudgetV1 = { refusal: code, transport: funding };
+    // (4413 today's allowance or the principal's day spent, 4412 try again soon, naming why), paid
+    // for by the transport.
+    // What refused it, counted once the attempt's accounting is over.
+    const seen: { reason?: LiveRefusalReason } = {};
+    const refuse = (code: 4412 | 4413, funding: unknown, reason: LiveRefusalReason) => {
+      seen.reason = reason;
+      const refusal: LiveBudgetV1 = { refusal: code, transport: funding, reason };
       metrics?.count("do.request", { class: "UserDO", method: "fetch" });
       return feed.fetch(
         new Request("https://user.internal/live", {
@@ -598,32 +750,46 @@ export function mountLive(app: Hono<AppEnv>): void {
         metrics?.count("do.request", { class: "UserDO", method: "liveRedeemV1" });
         const redeemed = await feed.liveRedeemV1(funding, hash, credential.id);
         // Its funding refused by the feed (fenced since it was granted): for now, not the ticket.
-        if (redeemed === "refused") return refuse(4412, funding);
+        if (redeemed === "refused") return refuse(4412, funding, "epoch");
         if (redeemed !== "redeemed" || signal.aborted) return notTheirs();
         const opened = await openLiveSocket(c.env, credential, hash, metrics, signal).catch(
           (error: unknown) => {
             c.get("log")?.error("live socket opening failed", { error });
-            return temporary();
+            return temporary("unknown");
           },
         );
         if (opened.ok) return opened.response;
-        if (!opened.budget || signal.aborted)
+        if (!opened.budget || signal.aborted) {
+          if (opened.gate) seen.reason = opened.gate;
           return c.text(opened.message, opened.status, opened.headers);
-        return refuse(opened.budget === "daily" ? 4413 : 4412, funding);
+        }
+        return refuse(opened.budget === "daily" ? 4413 : 4412, funding, opened.gate ?? "unknown");
       },
-      { ...(ledger ? { ledger } : {}), pendingMs: pendingOf("upgrade_transport") },
+      {
+        ...(ledger ? { ledger } : {}),
+        pendingMs: pendingOf("upgrade_transport"),
+        ...(metrics && { metrics }),
+      },
     );
-    if (attempt.status === "funded") return attempt.value;
+    if (attempt.status === "funded") {
+      if (seen.reason) noteLiveRefusal(metrics, c.get("log"), "upgrade", seen.reason);
+      return attempt.value;
+    }
+    noteLiveRefusal(metrics, c.get("log"), "upgrade", attempt.gate);
     // Its owner not admitted (owner capacity), or its run failed: refused for now, paid for by the
     // transport with no owner named. Only an unreachable feed answers over HTTP.
     try {
-      return await refuse(4412, {
-        protocol: 1,
-        revision: LIVE_MANIFEST_REVISION,
-        envelope: transport.envelope,
-        quantity: 1,
-        ownerId: null,
-      });
+      return await refuse(
+        4412,
+        {
+          protocol: 1,
+          revision: LIVE_MANIFEST_REVISION,
+          envelope: transport.envelope,
+          quantity: 1,
+          ownerId: null,
+        },
+        attempt.gate,
+      );
     } catch {
       return c.text("Live hints cannot be funded right now.", 503, { "Retry-After": "60" });
     }

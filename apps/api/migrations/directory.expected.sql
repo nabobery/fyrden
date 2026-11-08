@@ -228,7 +228,7 @@ CREATE TABLE live_budget_days (
   CHECK (duration_breach IN (0, 1))) STRICT;
 
 -- table live_budget_receipts
-CREATE TABLE live_budget_receipts (
+CREATE TABLE "live_budget_receipts" (
   seq INTEGER PRIMARY KEY CHECK (seq BETWEEN 1 AND 9007199254740991),
   operation_id TEXT NOT NULL UNIQUE,
   mint TEXT NOT NULL,
@@ -267,16 +267,17 @@ CREATE TABLE live_budget_receipts (
     )),
   settle_until INTEGER NOT NULL CHECK (settle_until >= valid_until),
   expires_at INTEGER NOT NULL CHECK (
-    expires_at >= valid_until + 172800000 AND expires_at >= settle_until
+    expires_at >= valid_until + 3600000 AND expires_at >= settle_until
   ),
   settled_at INTEGER,
   completion TEXT CHECK (
     completion IS NULL OR (json_valid(completion) AND json_type(completion) = 'object')
   ),
-  settlement_mint TEXT, released_owners TEXT NOT NULL DEFAULT '[]' CHECK (
-  json_valid(released_owners) AND json_type(released_owners) = 'array'
-    AND json_array_length(released_owners) <= 1
-),
+  settlement_mint TEXT,
+  released_owners TEXT NOT NULL DEFAULT '[]' CHECK (
+    json_valid(released_owners) AND json_type(released_owners) = 'array'
+      AND json_array_length(released_owners) <= 1
+  ),
   CHECK (
     (settled_at IS NULL AND completion IS NULL AND settlement_mint IS NULL)
     OR (settled_at IS NOT NULL AND completion IS NOT NULL AND settlement_mint IS NOT NULL)
@@ -302,7 +303,12 @@ CREATE TABLE live_budget_state (
   CHECK (duration_debt_ms BETWEEN 0 AND 9007199254740991), debt_service_day INTEGER NOT NULL DEFAULT 0
   CHECK (debt_service_day >= 0), owner_mint TEXT, duration_reserve_ms INTEGER NOT NULL DEFAULT 0
   CHECK (duration_reserve_ms BETWEEN 0 AND 9007199254740991), ordinary_duration_blocked INTEGER NOT NULL DEFAULT 0
-  CHECK (ordinary_duration_blocked IN (0, 1))) STRICT;
+  CHECK (ordinary_duration_blocked IN (0, 1)), targets_incarnation TEXT NOT NULL DEFAULT ''
+  CHECK (length(targets_incarnation) IN (0, 32)), revocations_reap_at INTEGER NOT NULL DEFAULT 0
+  CHECK (revocations_reap_at >= 0), revocations_reap_seq INTEGER NOT NULL DEFAULT 0
+  CHECK (revocations_reap_seq >= 0), revocations_reap_end_at INTEGER NOT NULL DEFAULT 0
+  CHECK (revocations_reap_end_at >= 0), revocations_reap_end_seq INTEGER NOT NULL DEFAULT 0
+  CHECK (revocations_reap_end_seq >= 0)) STRICT;
 
 -- table live_duration_owners
 CREATE TABLE live_duration_owners (
@@ -843,12 +849,6 @@ CREATE INDEX live_budget_receipts_recipient
 CREATE INDEX live_budget_receipts_turn ON live_budget_receipts (recipient, valid_until)
   WHERE kind = 'pump' AND settled_at IS NULL;
 
--- index live_duration_owners_class
-CREATE INDEX live_duration_owners_class ON live_duration_owners (class, status);
-
--- index live_duration_owners_object
-CREATE INDEX live_duration_owners_object ON live_duration_owners (object_type, object_id, class);
-
 -- index live_duration_owners_operation
 CREATE UNIQUE INDEX live_duration_owners_operation ON live_duration_owners (operation_id);
 
@@ -960,6 +960,9 @@ CREATE INDEX revocations_at ON revocations (at);
 
 -- index revocations_open
 CREATE INDEX revocations_open ON revocations (seq) WHERE expanded = 0;
+
+-- index revocations_reap
+CREATE INDEX revocations_reap ON revocations (at, seq);
 
 -- index sessions_expiry
 CREATE INDEX sessions_expiry ON sessions (expires_at);
