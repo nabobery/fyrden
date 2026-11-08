@@ -1,6 +1,11 @@
 import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
-import { type BlockCache, ObjectReader } from "@fyrden/git-core";
+import {
+  type BlockCache,
+  type MemoryBudget,
+  ObjectReader,
+  type ReaderWork,
+} from "@fyrden/git-core";
 import { openRequestBlockCache } from "./cache/pack-blocks.js";
 import { liveView } from "./pack-view.js";
 
@@ -35,6 +40,17 @@ export async function openLiveReader(
     readonly maxBuiltBytes?: number;
     /** A push's own packs, not live yet, read too (its commit point). */
     readonly extraPacks?: readonly string[];
+    /**
+     * The largest object the reader may build, entry or delta result; past it a
+     * read throws `PackError` `object-too-large`. The reader's default otherwise.
+     */
+    readonly maxObjectBytes?: number;
+    /** The delta-base cache keeps exact-sized buffers and charges what they hold. Off by default. */
+    readonly strictDeltaCache?: boolean;
+    /** Where the reader reserves its memory, in place of the repository's budget. */
+    readonly memory?: MemoryBudget;
+    /** Charged before each decoding primitive; a throw stops the read. Off by default. */
+    readonly work?: ReaderWork;
   },
 ): Promise<ObjectReader | undefined> {
   const { git } = deps;
@@ -66,12 +82,15 @@ export async function openLiveReader(
       },
     },
     zlib: createWorkersZlib(),
-    memory: git.memory,
+    memory: limits.memory ?? git.memory,
     blockCache: blocks.cache,
     limits: {
       deltaBaseCacheBytes: limits.deltaBaseCacheBytes,
       ...(limits.maxBuiltBytes !== undefined && { maxBuiltBytes: limits.maxBuiltBytes }),
+      ...(limits.maxObjectBytes !== undefined && { maxObjectBytes: limits.maxObjectBytes }),
     },
+    ...(limits.strictDeltaCache !== undefined && { strictDeltaCache: limits.strictDeltaCache }),
+    ...(limits.work !== undefined && { work: limits.work }),
   });
 }
 
