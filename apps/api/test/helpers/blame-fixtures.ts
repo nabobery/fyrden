@@ -6,8 +6,10 @@ export interface GitBlameLine {
   readonly summary: string;
   readonly name: string;
   readonly email: string;
-  /** The author time, seconds since the epoch. */
-  readonly time: number;
+  /** The author time, seconds since the epoch, as git prints it. */
+  readonly time: string;
+  /** The author's offset, as git prints it. */
+  readonly tz: string;
 }
 
 /**
@@ -31,4 +33,12 @@ declare module "vitest" {
 }
 
 /** The paths the fixtures record blames for. */
-export const BLAME_PATHS = ["f.txt", "link", "dir/inner.txt", "o16.txt", "big.txt"] as const;
+export const BLAME_PATHS = [
+  "f.txt",
+  "link",
+  "dir/inner.txt",
+  "o16.txt",
+  "big.txt",
+  "legacydir/link",
+  "facts.txt",
+] as const;

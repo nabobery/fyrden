@@ -85,7 +85,7 @@ const fromGit = (path: string): Line[] =>
     summary: g.summary,
     name: g.name,
     email: g.email,
-    date: new Date(g.time * 1000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+    date: `${g.time} ${g.tz}`,
   }));
 
 describe("blame through the repository's source, against git", () => {
@@ -94,8 +94,17 @@ describe("blame through the repository's source, against git", () => {
   });
 
   it("agrees with git on every line where nothing is refused", async () => {
+    // Git credits the conversion of a legacy-mode symlink to a file, and keeps facts as written.
+    expect(fromGit("legacydir/link").map((l) => "commit" in l && l.commit)).toEqual([
+      fx.commits.legacyFile,
+    ]);
+    expect(fromGit("facts.txt")).toMatchObject([
+      { summary: "first" },
+      { summary: "\uFEFFword", name: "\uFEFFBo Test" },
+      { date: "8640000000001 -0730" },
+    ]);
     const stub = await pushed();
-    for (const path of ["f.txt", "link", "dir/inner.txt"]) {
+    for (const path of ["f.txt", "link", "dir/inner.txt", "legacydir/link", "facts.txt"]) {
       const got = await blame(stub, path);
       expect({ path, got }).toEqual({ path, got: { lines: fromGit(path) } });
     }

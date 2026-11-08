@@ -70,11 +70,11 @@ function tree(reader: FakeReader, entries: { mode: number; name: string; oid: Oi
 /** A commit object whose bytes are exactly the header lines below and `message`. */
 function commitBytes(
   message: Uint8Array | string,
-  { headers = "", author = "Ada Lovelace" } = {},
+  { headers = "", author = "Ada Lovelace", when = "1700000000 +0100" } = {},
 ): Uint8Array {
   const head = latin1(
     `tree ${"1".repeat(40)}\n` +
-      `author ${author} <ada@example.com> 1700000000 +0100\n` +
+      `author ${author} <ada@example.com> ${when}\n` +
       "committer Ada Lovelace <ada@example.com> 1700000000 +0100\n" +
       headers +
       "\n",
@@ -123,6 +123,33 @@ describe("repoBlameSource.fileAt", () => {
     return { reader, file, root, source: repoBlameSource(reader, noGraph) };
   };
   const at = (path: string) => path.split("/").map(name);
+
+  /** A tree in raw bytes, for modes `encodeTree` won't write; entries in name order. */
+  const rawTree = (reader: FakeReader, entries: [mode: string, name: string, oid: Oid][]) =>
+    reader.add(
+      "tree",
+      Uint8Array.from(
+        entries.flatMap(([mode, entryName, oid]) => [...latin1(`${mode} ${entryName}\0`), ...oid]),
+      ),
+    );
+
+  it("tells kinds apart by the mode's type bits, as push validation does", async () => {
+    const reader = new FakeReader();
+    const file = reader.add("blob", text("a\n"));
+    const sub = tree(reader, [{ mode: 0o100644, name: "in.txt", oid: file }]);
+    const root = rawTree(reader, [
+      ["40755", "dir", sub],
+      ["100664", "group", file],
+      ["120755", "legacy", file],
+      ["160755", "module", unknown],
+    ]);
+    const source = repoBlameSource(reader, noGraph);
+    expect(await source.fileAt(root, at("legacy"))).toEqual({ oid: file, kind: "symlink" });
+    expect(await source.fileAt(root, at("group"))).toEqual({ oid: file, kind: "file" });
+    expect(await source.fileAt(root, at("dir/in.txt"))).toEqual({ oid: file, kind: "file" });
+    expect(await source.fileAt(root, at("module"))).toBeNull();
+    expect(await source.fileAt(root, at("dir"))).toBeNull();
+  });
 
   it("finds a file or a symlink, through directories", async () => {
     const { source, root, file } = setup();
@@ -186,13 +213,26 @@ describe("repoBlameSource.commitInfo", () => {
     expect(over.reader.bodies).toEqual([]);
   });
 
-  it("gives the author and the author date, in UTC", async () => {
+  it("gives the author, and the author date as git prints it: seconds and offset", async () => {
     expect((await info(commitBytes("s\n"))).fact).toEqual({
       summary: "s",
       name: "Ada Lovelace",
       email: "ada@example.com",
-      date: "2023-11-14T22:13:20Z",
+      date: "1700000000 +0100",
     });
+  });
+
+  it("keeps a date no JavaScript date can hold, exactly, rather than invent one", async () => {
+    for (const when of ["8640000000001 -0730", "9007199254740993 +0000", "0 -1200"])
+      expect([when, (await info(commitBytes("s\n", { when }))).fact]).toMatchObject([
+        when,
+        { date: when },
+      ]);
+  });
+
+  it("keeps a leading byte order mark in a name and a summary, as git shows them", async () => {
+    const fact = await info(commitBytes("\uFEFFword\n", { author: "\u00EF\u00BB\u00BFBo" }));
+    expect(fact.fact).toMatchObject({ summary: "\uFEFFword", name: "\uFEFFBo" });
   });
 
   it("takes as summary the first line that isn't blank, as git does", async () => {
@@ -204,6 +244,8 @@ describe("repoBlameSource.commitInfo", () => {
       ["word   \n", "word   "],
       ["\v\nnext\n", "\v"],
       ["no line feed", "no line feed"],
+      ["first\0hidden\n", "first"],
+      ["\n  \nnext\0hidden\n", "next"],
     ];
     for (const [message, summary] of cases)
       expect([message, (await info(commitBytes(message))).fact]).toMatchObject([
@@ -213,7 +255,7 @@ describe("repoBlameSource.commitInfo", () => {
   });
 
   it("names the commit in parentheses when there is no summary, as git does", async () => {
-    for (const message of ["", "\n", "\n\n \t\n", "   "]) {
+    for (const message of ["", "\n", "\n\n \t\n", "   ", "\0real\n", "\n  \0x\nreal\n"]) {
       const { fact, oid } = await info(commitBytes(message));
       expect([message, fact]).toMatchObject([message, { summary: `(${oidToHex(oid)})` }]);
     }

@@ -66,25 +66,37 @@ export default function setup(project: TestProject): () => void {
     {
       author = Buffer.from("Fyrden Test"),
       headers = "",
-    }: { author?: Buffer; headers?: string } = {},
+      when,
+      literally = false,
+    }: CommitOptions = {},
   ) => {
     clock += 60;
     const bytes = Buffer.concat([
       Buffer.from(`tree ${treeOid}\n${parents.map((p) => `parent ${p}\n`).join("")}author `),
       author,
       Buffer.from(
-        ` <test@fyrden.invalid> ${clock} +0000\n` +
+        ` <test@fyrden.invalid> ${when ?? `${clock} +0000`}\n` +
           `committer Fyrden Test <test@fyrden.invalid> ${clock} +0000\n${headers}\n`,
       ),
       message,
     ]);
-    return { bytes, oid: () => out(["hash-object", "-t", "commit", "-w", "--stdin"], bytes) };
+    // `--literally` for a message git's own checks only warn about (a NUL), as a push accepts it.
+    const args = [
+      "hash-object",
+      "-t",
+      "commit",
+      "-w",
+      ...(literally ? ["--literally"] : []),
+      "--stdin",
+    ];
+    return { bytes, oid: () => out(args, bytes) };
   };
+  type CommitOptions = { author?: Buffer; headers?: string; when?: string; literally?: boolean };
   const commit = (
     treeOid: string,
     parents: readonly string[],
     message: string | Buffer,
-    options: { author?: Buffer; headers?: string } = {},
+    options: CommitOptions = {},
   ) =>
     raw(treeOid, parents, Buffer.isBuffer(message) ? message : Buffer.from(message), options).oid();
   /** A commit object of exactly `size` bytes, padded in its message's body. */
@@ -186,7 +198,44 @@ export default function setup(project: TestProject): () => void {
     "five main",
     "six latin",
   );
-  commits.tip = commit(withF(tipF, [...octo, big("a\nb\n")]), [commits.over], "Tip\n");
+  // A symlink of the legacy mode 120755, then the same bytes as a regular file: git
+  // credits the conversion, since a symlink and a file are different kinds.
+  const later = (...entries: Entry[]) => withF(mainF, [...octo, big("a\nb\n"), ...entries]);
+  const target = blob("f.txt");
+  const legacyLink = out(
+    ["hash-object", "-t", "tree", "-w", "--literally", "--stdin"],
+    Buffer.concat([Buffer.from("120755 link\0"), Buffer.from(target, "hex")]),
+  );
+  const legacyFile = tree([["100644", target, "link"]]);
+  commits.legacyLink = commit(later(["040000", legacyLink, "legacydir"]), [commits.over], "Link\n");
+  commits.legacyFile = commit(
+    later(["040000", legacyFile, "legacydir"]),
+    [commits.legacyLink],
+    "Link to file\n",
+  );
+  // Facts git keeps as they are: a summary ending at a NUL, a leading BOM in a name and a
+  // summary, and an author time past what a JavaScript date holds, with its offset.
+  const facts = (...words: string[]) =>
+    later(["040000", legacyFile, "legacydir"], ["100644", blob(lines(...words)), "facts.txt"]);
+  commits.nul = commit(facts("nul"), [commits.legacyFile], Buffer.from("first\0hidden\n"), {
+    literally: true,
+  });
+  commits.bom = commit(facts("nul", "bom"), [commits.nul], "﻿word\n", {
+    author: Buffer.from("﻿Bo Test"),
+  });
+  commits.far = commit(facts("nul", "bom", "far"), [commits.bom], "Far future\n", {
+    when: "8640000000001 -0730",
+  });
+  commits.tip = commit(
+    withF(tipF, [
+      ...octo,
+      big("a\nb\n"),
+      ["040000", legacyFile, "legacydir"],
+      ["100644", blob(lines("nul", "bom", "far")), "facts.txt"],
+    ]),
+    [commits.far],
+    "Tip\n",
+  );
 
   const sizes = Object.fromEntries(
     ["fits", "over"].map((name) => [
@@ -222,7 +271,9 @@ function porcelain(output: string): GitBlameLine[] {
     } else if (line.startsWith("author-mail ")) {
       current.email = line.slice("author-mail ".length).replace(/^<|>$/g, "");
     } else if (line.startsWith("author-time ")) {
-      current.time = Number(line.slice("author-time ".length));
+      current.time = line.slice("author-time ".length);
+    } else if (line.startsWith("author-tz ")) {
+      current.tz = line.slice("author-tz ".length);
     } else if (line.startsWith("author ")) {
       current.name = line.slice("author ".length);
     } else if (line.startsWith("summary ")) {
