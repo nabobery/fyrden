@@ -19,6 +19,7 @@ import {
   BLAME_ENGINE_VERSION,
   type BlameRange,
   BlameReadsSpent,
+  type BlameSliceLimits,
   type BlameSource,
   type BlameState,
   BlameStateError,
@@ -54,8 +55,12 @@ import { repoBlameSource } from "./blame-source.js";
 import { type BlameToken, decodeBlameToken, encodeBlameToken, pathDigest } from "./blame-token.js";
 
 const MiB = 1024 * 1024;
-/** The request's one memory share (design §6); Proposed. */
-const SHARE_BYTES = 48 * MiB;
+/**
+ * The request's one memory share (design §6); Proposed. Over half the
+ * object's operation pool, so one blame request runs per object at a time:
+ * a second waits for the share, then answers 503 blame_busy.
+ */
+export const BLAME_SHARE_BYTES = 48 * MiB;
 const SHARE_WAIT_MS = 2_000;
 /** The view and the live state together; each pack in the view counts 1 KiB. */
 const ROOM_BYTES = 8 * MiB;
@@ -128,6 +133,8 @@ export interface RepoBlameDeps {
   readonly repoId: () => string;
   readonly epochGen: () => number;
   readonly now?: () => number;
+  /** Slice limits over the defaults; tests walk a run in small slices with it. */
+  readonly slice?: Partial<Omit<BlameSliceLimits, "stepIsFresh">>;
 }
 
 const fail = (
@@ -169,6 +176,17 @@ function segments(path: string): Uint8Array[] | undefined {
 
 export class RepoBlame {
   readonly #runs: BlameRuns;
+  /**
+   * Runs with a slice in progress, entered before its first write: the run
+   * cap and cleanup leave these rows alone, and cleanup doesn't end while
+   * one is here.
+   */
+  readonly #active = new Set<string>();
+
+  /** Runs with a slice in progress now. */
+  activeRuns(): ReadonlySet<string> {
+    return this.#active;
+  }
   readonly #now: () => number;
 
   constructor(private readonly deps: RepoBlameDeps) {
@@ -209,7 +227,7 @@ export class RepoBlame {
     const signal = AbortSignal.timeout(SHARE_WAIT_MS);
     let share: { release(): void };
     try {
-      share = await this.deps.git.memory.begin(SHARE_BYTES, signal);
+      share = await this.deps.git.memory.begin(BLAME_SHARE_BYTES, signal);
     } catch (error) {
       if (signal.aborted || error instanceof MemoryWaitTimeoutError)
         return busy("Blame is busy in this repository; ask again shortly.");
@@ -470,9 +488,14 @@ export class RepoBlame {
           return { ok: false, result: busy("Blame has no room for this file right now.") };
       }
     }
-    const created = this.#runs.create(key, this.#now(), new Set());
-    const published = await this.#publish(created.row, started, blob ?? null, identity);
-    return { ok: true, row: published, state: started };
+    const created = this.#runs.create(key, this.#now(), this.#active);
+    this.#active.add(created.row.runId);
+    try {
+      const published = await this.#publish(created.row, started, blob ?? null, identity);
+      return { ok: true, row: published, state: started };
+    } finally {
+      this.#active.delete(created.row.runId);
+    }
   }
 
   /** Writes `state` as the run's next checkpoint and moves its row; the row as it now is. */
@@ -522,7 +545,17 @@ export class RepoBlame {
     if (!moved) {
       // Another slice, a restore or cleanup moved the row first: this object is no one's.
       if (checkpointKey) await git.bucket.delete(checkpointKey);
-      return this.#runs.get(row.runId) ?? row;
+      const now = this.#runs.get(row.runId);
+      if (now) return now;
+      // The row is gone: deliver what this slice computed, as it would have stood. A
+      // continuation naming the gone run starts over.
+      return {
+        ...row,
+        blobOid: blob ?? row.blobOid,
+        generation,
+        state: runState,
+        lines: state.lines,
+      };
     }
     if (row.checkpointKey) await git.bucket.delete(row.checkpointKey).catch(() => {});
     return this.#runs.get(row.runId) as RunRow;
@@ -578,10 +611,26 @@ export class RepoBlame {
   ): Promise<{ row: RunRow; state: BlameState }> {
     const reader = await request.reader();
     if (!reader) return { row, state };
+    this.#active.add(row.runId);
+    try {
+      return await this.#walk(row, state, request, identity, reader);
+    } finally {
+      this.#active.delete(row.runId);
+    }
+  }
+
+  async #walk(
+    row: RunRow,
+    state: BlameState,
+    request: Request,
+    identity: (r: RunRow) => CheckpointIdentity,
+    reader: ObjectReader,
+  ): Promise<{ row: RunRow; state: BlameState }> {
     const source = repoBlameSource(reader, this.deps.git.commitGraph);
     const before = encodeBlameState(state);
     await advanceBlame(state, source, {
       ...DEFAULT_BLAME_SLICE,
+      ...this.deps.slice,
       maxLiveStateBytes: this.#room(),
       // A fresh step began with the whole allowance untouched: only such a step can be refused as too large.
       stepIsFresh: () =>

@@ -563,6 +563,17 @@ keeps it a week.
 | tar.gz | Several gzip members (any gzip reader reads them as one stream; a file of 1 MiB or more is one of its own); pax headers for long names; the commit id in a pax global header, as `git archive` writes |
 | Downloads | `ETag` per commit and format; a matching `If-None-Match` answers 304 without reading the archive (raw files likewise, by blob) |
 
+## Blame
+
+Blame isn't served yet; these are the limits its runs keep inside a repository's Durable Object.
+
+| Limit | Value | Kind |
+|---|---|---|
+| Blame requests running at once | 1 per repository object. A request takes a 48 MiB memory share (`BLAME_SHARE_BYTES`), over half of the object's 72 MiB operation pool (`DO_MEMORY.operationPoolBytes`). A second request, for the same file or another, waits up to 2 s for the share, then answers `503 blame_busy` with `retry_after`. Retrying is the client's job. A retry after the first request's slice has published resumes from its checkpoint, so no step is lost | Proposed |
+| Storage calls one blame request may make | 600, or what's left of the invocation's 800 after 4 are kept back for its checkpoint. Under 50, no walking starts | Proposed |
+| Runs kept per repository | 64; a new run removes the least recently touched, never one being written | Proposed |
+| How long a run is kept | Unfinished, or lost: 24 hours after it was last touched. Finished: 7 days after it was last read, or 1 hour when a line is refused for a reason caching can change (`work_limit`, `object_limit`) | Proposed |
+
 ## File writes
 
 `PUT`/`DELETE /repos/{owner}/{repo}/contents/{path}` and
