@@ -271,7 +271,7 @@ jobs:
   shuffle-run:
     name: Shuffle guard, seed ${{ matrix.run }}
     runs-on: ubuntu-latest
-    # 10 to 23 minutes on main, three runs of the API suite, and it grows with the suite.
+    # 10 to 24 minutes on main and pull requests for one run of the API suite, and it grows.
     timeout-minutes: 40
     strategy:
       fail-fast: false
