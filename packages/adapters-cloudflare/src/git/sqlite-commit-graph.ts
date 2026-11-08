@@ -13,6 +13,7 @@ import {
   bytesOf,
   chunks,
   countRowsWritten,
+  first,
   type GitStorageContext,
   placeholders,
   rows,
@@ -29,6 +30,15 @@ type RawCommit = {
 };
 
 const COLUMNS = "oid, tree, parents, commit_time, generation, level";
+
+/** One verified commit as blame reads it: its parents only within a limit. */
+export interface BoundedCommit {
+  readonly tree: Oid;
+  /** "too_many" past the limit, with none materialized. */
+  readonly parents: readonly Oid[] | "too_many";
+  readonly generation: number;
+  readonly level: number;
+}
 
 function toRow(raw: RawCommit): CommitGraphRow {
   const parents = bytesOf(raw.parents);
@@ -105,6 +115,41 @@ export class SqliteCommitGraph implements CommitGraph {
       const entry = found.get(oidToHex(oid));
       return entry && copyEntry(entry);
     });
+  }
+
+  /**
+   * One verified commit, with its parents when there are at most
+   * `maxParents`, else "too_many" in their place. The parents column leaves SQLite only
+   * within the limit, so a commit with thousands of parents costs a small
+   * row. Undefined for a commit that isn't verified.
+   */
+  readBounded(oid: Oid, maxParents: number): BoundedCommit | undefined {
+    const raw = first<{
+      tree: ArrayBuffer;
+      parents: ArrayBuffer | null;
+      generation: number;
+      level: number;
+    }>(
+      this.context.storage,
+      `SELECT tree, generation, level,
+              CASE WHEN length(parents) <= ? THEN parents END AS parents
+       FROM commits WHERE oid = ?`,
+      maxParents * OID_BYTES,
+      blob(oid),
+    );
+    if (!raw) return undefined;
+    let parents: Oid[] | "too_many" = "too_many";
+    if (raw.parents !== null) {
+      const bytes = bytesOf(raw.parents);
+      parents = [];
+      for (let at = 0; at < bytes.length; at += OID_BYTES) parents.push(oidFromBytes(bytes, at));
+    }
+    return {
+      tree: oidFromBytes(bytesOf(raw.tree)),
+      parents,
+      generation: raw.generation,
+      level: raw.level,
+    };
   }
 
   async insertPending(uploadId: string, commitRows: readonly CommitGraphRow[]): Promise<void> {
