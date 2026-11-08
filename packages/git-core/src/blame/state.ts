@@ -23,6 +23,7 @@ export const UNRESOLVED_REASONS = [
   "state_limit",
   "commit_info_too_large",
   "rename_possible",
+  "step_lost",
 ] as const;
 export type UnresolvedReason = (typeof UNRESOLVED_REASONS)[number];
 

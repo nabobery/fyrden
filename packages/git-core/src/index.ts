@@ -33,6 +33,7 @@ export {
   blameRanges,
   DEFAULT_BLAME_SLICE,
   MAX_BLAME_FILE_BYTES,
+  refuseHead,
   startBlame,
 } from "./blame/walk.js";
 export {
