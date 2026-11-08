@@ -223,6 +223,7 @@ const vector = (parts: Partial<ResourceVector>): ResourceVector => ({ ...ZERO, .
 
 /** Where an entry's observation was made: the feed's rows locally, D1's on Free. */
 const MEASURED = "objects' rows by the live suite's fixtures; D1's on Workers Free, 2026-11-01";
+const MEASURED_LOCALLY = "objects' and D1's rows by the live suite's fixtures, measured locally";
 
 /** An entry priced by the rule from `observed` (its fixtures' most), named by where it was measured. */
 function estimated(
@@ -295,6 +296,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       localCleanupDebt: vector({ do_rows_written: 2 }),
       dayCleanupDebt: ZERO,
     },
+    MEASURED_LOCALLY,
   ),
   // Its D1 measured locally, every statement's as D1 reports it, from both of its callers: a
   // feed's first opening half a minute before midnight, its admission's, terminal's, blocks' and
@@ -314,6 +316,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       localCleanupDebt: ZERO,
       dayCleanupDebt: ZERO,
     },
+    MEASURED_LOCALLY,
   ),
   admission: estimated(
     { do_rows_read: 105, do_rows_written: 44 },
@@ -637,17 +640,21 @@ LIVE_PRICES.org_confirmation = estimated(
  */
 export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_100, d1_rows_written: 184 };
 
-LIVE_PRICES.maintenance = estimated(LIVE_MAINTENANCE_MEASURED, {
-  validity: { maxMs: 10 * 60_000, days: 2 },
-  duration: "owner",
-  pendingMs: 60_000,
-  maxQuantity: 1,
-  // Its own, and its 2 recoveries' calls (each also its recovery's: counted twice).
-  requests: 3,
-  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
-  localCleanupDebt: ZERO,
-  dayCleanupDebt: ZERO,
-});
+LIVE_PRICES.maintenance = estimated(
+  LIVE_MAINTENANCE_MEASURED,
+  {
+    validity: { maxMs: 10 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 60_000,
+    maxQuantity: 1,
+    // Its own, and its 2 recoveries' calls (each also its recovery's: counted twice).
+    requests: 3,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
+  },
+  MEASURED_LOCALLY,
+);
 /**
  * A revocation page at its most (Proposed; measured locally): the run's own
  * grant, owner and checks, 8 revocations expanded a socket each (8
@@ -670,17 +677,21 @@ export const LIVE_REVOCATION_PAGE_MEASURED = {
   d1_rows_written: 168,
 };
 
-LIVE_PRICES.revocation_page = estimated(LIVE_REVOCATION_PAGE_MEASURED, {
-  validity: { maxMs: 10 * 60_000, days: 2 },
-  duration: "owner",
-  pendingMs: 60_000,
-  maxQuantity: 1,
-  // The feed told, and its sockets' closes (each a callback of the feed's object).
-  requests: 22,
-  directoryCleanupDebt: vector({ d1_rows_written: 1 }),
-  localCleanupDebt: ZERO,
-  dayCleanupDebt: ZERO,
-});
+LIVE_PRICES.revocation_page = estimated(
+  LIVE_REVOCATION_PAGE_MEASURED,
+  {
+    validity: { maxMs: 10 * 60_000, days: 2 },
+    duration: "owner",
+    pendingMs: 60_000,
+    maxQuantity: 1,
+    // The feed told, and its sockets' closes (each a callback of the feed's object).
+    requests: 22,
+    directoryCleanupDebt: vector({ d1_rows_written: 1 }),
+    localCleanupDebt: ZERO,
+    dayCleanupDebt: ZERO,
+  },
+  MEASURED_LOCALLY,
+);
 LIVE_PRICES.recovery = estimated(
   { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 10, d1_rows_written: 4 },
   {
