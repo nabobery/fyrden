@@ -552,3 +552,201 @@ describe("storage quota", () => {
     expect(await quota(owner)).toMatchObject({ storage_bytes: body.length, reserved_bytes: 0 });
   });
 });
+
+describe("release asset storage", () => {
+  const LIMIT = 100;
+
+  /** An account of its own, whose storage limit is `LIMIT`, and a repository of it. */
+  async function account() {
+    const stub = env.ORG.getByName(uniqueId("org"));
+    await runInDurableObject(stub, (_: unknown, state) => {
+      state.storage.sql.exec(
+        "INSERT INTO quota_limits (id, max_storage_bytes, updated_at) VALUES (1, ?, 0)",
+        LIMIT,
+      );
+    });
+    return { stub, repoId: uniqueId("repo") };
+  }
+  type Account = Awaited<ReturnType<typeof account>>;
+
+  /** A statement at `seq` of generation 1, unchecked, unless it says otherwise. */
+  const state = (
+    { stub, repoId }: Account,
+    bytes: number,
+    seq: number,
+    more: { epochGen?: number; mustFit?: boolean; dropReservation?: string; repoId?: string } = {},
+  ) =>
+    stub.setReleaseAssetStorage({
+      repoId,
+      bytes,
+      epochGen: 1,
+      seq,
+      mustFit: false,
+      ...more,
+    });
+
+  const hold = ({ stub, repoId }: Account, uploadId: string, bytes: number) =>
+    stub.reserveStorage({ uploadId, repoId, bytes, ttlMs: 60_000 });
+
+  const row = ({ stub, repoId }: Account) =>
+    runInDurableObject(stub, (_: unknown, s) =>
+      s.storage.sql
+        .exec("SELECT bytes, epoch_gen, seq FROM quota_assets WHERE repo_id = ?", repoId)
+        .toArray(),
+    );
+
+  it("counts a stated total as the account's usage, replacing the last one", async () => {
+    const a = await account();
+    expect(await state(a, 40, 1)).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(40);
+    expect(await state(a, 60, 2)).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(60);
+    // Lowered to nothing, its row stays: it refuses older totals still.
+    expect(await state(a, 0, 3)).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(0);
+    expect(await row(a)).toEqual([{ bytes: 0, epoch_gen: 1, seq: 3 }]);
+    expect(await state(a, 60, 2)).toBe("stale");
+  });
+
+  it("adds to what pushes use, and repositories' totals to each other's", async () => {
+    const a = await account();
+    await a.stub.confirmStorage({ uploadId: "push", repoId: a.repoId, bytes: 10 });
+    await state(a, 20, 1);
+    await state(a, 30, 1, { repoId: uniqueId("repo") });
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(60);
+  });
+
+  it("takes room from reservations and charges", async () => {
+    const a = await account();
+    await state(a, 90, 1);
+    expect(await hold(a, "fits", 10)).toEqual({ reserved: 10, freeBytes: 10 });
+    await a.stub.releaseStorage("fits");
+    expect(await hold(a, "over", 11)).toEqual({ reserved: 0, freeBytes: 10 });
+    const charge = (bytes: number) =>
+      a.stub.chargeStorage({ uploadId: "c", repoId: a.repoId, bytes, ttlMs: 60_000 });
+    expect(await charge(11)).toBe(false);
+    expect(await charge(10)).toBe(true);
+  });
+
+  it("refuses an older total: of its generation, or of an older one however high its number", async () => {
+    const a = await account();
+    await state(a, 40, 5, { epochGen: 2 });
+    expect(await state(a, 7, 4, { epochGen: 2 })).toBe("stale");
+    expect(await state(a, 7, 9, { epochGen: 1 })).toBe("stale");
+    expect(await row(a)).toEqual([{ bytes: 40, epoch_gen: 2, seq: 5 }]);
+    // A stale total drops no reservation.
+    await hold(a, "held", 3);
+    expect(await state(a, 7, 4, { epochGen: 2, dropReservation: "held" })).toBe("stale");
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(3);
+    // A newer generation's numbers start wherever they start.
+    expect(await state(a, 8, 1, { epochGen: 3 })).toBe("ok");
+    expect(await row(a)).toEqual([{ bytes: 8, epoch_gen: 3, seq: 1 }]);
+    // The same tuple again is the same total, and harmless.
+    expect(await state(a, 8, 1, { epochGen: 3 })).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(8);
+  });
+
+  it("answers stale before no_room", async () => {
+    const a = await account();
+    await state(a, 10, 5);
+    expect(await state(a, LIMIT + 1, 4, { mustFit: true })).toBe("stale");
+  });
+
+  it("fits a checked total to the last byte, counting everything else the account holds", async () => {
+    const a = await account();
+    await a.stub.confirmStorage({ uploadId: "push", repoId: a.repoId, bytes: 10 });
+    await state(a, 20, 1, { repoId: uniqueId("repo") });
+    await hold(a, "open", 30);
+    const room = LIMIT - 10 - 20 - 30;
+    expect(await state(a, room + 1, 1, { mustFit: true })).toBe("no_room");
+    expect(await row(a)).toEqual([]);
+    expect(await state(a, room, 1, { mustFit: true })).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(10 + 20 + room);
+  });
+
+  it("tests the total and not the growth: its own last total doesn't count, and no growth can fail", async () => {
+    const a = await account();
+    await state(a, 90, 1);
+    expect(await state(a, LIMIT, 2, { mustFit: true })).toBe("ok");
+    // The limit lowered under a total a job's statement carried: the same total no longer fits.
+    await runInDurableObject(a.stub, (_: unknown, s) => {
+      s.storage.sql.exec("UPDATE quota_limits SET max_storage_bytes = 50");
+    });
+    expect(await state(a, LIMIT, 3, { mustFit: true })).toBe("no_room");
+    expect(await row(a)).toEqual([{ bytes: LIMIT, epoch_gen: 1, seq: 2 }]);
+  });
+
+  it("writes an unchecked total over the limit, without letting a checked one pass on it", async () => {
+    const a = await account();
+    expect(await state(a, LIMIT + 50, 1)).toBe("ok");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(LIMIT + 50);
+    expect(await state(a, LIMIT + 50, 2, { mustFit: true })).toBe("no_room");
+  });
+
+  it("swaps a session's reservation for its total in one step, not counting it twice", async () => {
+    const a = await account();
+    await hold(a, "mine", LIMIT);
+    expect(await state(a, LIMIT, 1, { mustFit: true })).toBe("no_room");
+    // Refused, it holds what it held.
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(LIMIT);
+    expect(await state(a, LIMIT, 1, { mustFit: true, dropReservation: "mine" })).toBe("ok");
+    expect(await a.stub.quotaStatus()).toMatchObject({ usedBytes: LIMIT, reservedBytes: 0 });
+  });
+
+  it("keeps another session's reservation, and leaves out a lapsed one", async () => {
+    const a = await account();
+    await hold(a, "mine", 50);
+    await hold(a, "other", 50);
+    expect(await state(a, 51, 1, { mustFit: true, dropReservation: "mine" })).toBe("no_room");
+    expect(await state(a, 50, 1, { mustFit: true, dropReservation: "mine" })).toBe("ok");
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(50);
+    await runInDurableObject(a.stub, (_: unknown, s) => {
+      // Long past, though not at the epoch.
+      s.storage.sql.exec("UPDATE quota_holds SET expires_at = 1");
+    });
+    expect(await state(a, LIMIT, 2, { mustFit: true })).toBe("ok");
+  });
+
+  it("drops a named reservation with an unchecked total too", async () => {
+    const a = await account();
+    await hold(a, "mine", 5);
+    expect(await state(a, 0, 1, { dropReservation: "mine" })).toBe("ok");
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(0);
+  });
+
+  it("takes nothing for a deleted repository, its row and holds gone", async () => {
+    const a = await account();
+    await state(a, 40, 1);
+    await hold(a, "held", 5);
+    await a.stub.forgetRepo(a.repoId);
+    expect(await a.stub.quotaStatus()).toMatchObject({ usedBytes: 0, reservedBytes: 0 });
+    expect(await row(a)).toEqual([]);
+    expect(await state(a, 40, 2)).toBe("not_here");
+    expect(await row(a)).toEqual([]);
+  });
+
+  it("takes nothing for a repository that moved away, and hands over no assets", async () => {
+    const a = await account();
+    await a.stub.confirmStorage({ uploadId: "push", repoId: a.repoId, bytes: 10 });
+    await state(a, 40, 1);
+    expect(await a.stub.repoForTransfer(a.repoId)).toMatchObject({
+      usageBytes: 10,
+      assetBytes: 40,
+    });
+    const handedOver = await a.stub.releaseRepo(uniqueId("trf"), a.repoId);
+    // What a stored transfer step answers later must not carry a total that may lag.
+    expect(handedOver).toMatchObject({ usageBytes: 10 });
+    expect(handedOver).not.toHaveProperty("assetBytes");
+    expect((await a.stub.quotaStatus()).usedBytes).toBe(0);
+    expect(await row(a)).toEqual([]);
+    // Not a mustFit's room, nor a late total: nothing is checked or written.
+    expect(await state(a, 40, 2)).toBe("not_here");
+    expect(await state(a, LIMIT + 1, 2, { mustFit: true })).toBe("not_here");
+    expect(await row(a)).toEqual([]);
+  });
+
+  it("reads a repository with no assets as none", async () => {
+    const a = await account();
+    expect(await a.stub.repoForTransfer(a.repoId)).toMatchObject({ assetBytes: 0, usageBytes: 0 });
+  });
+});

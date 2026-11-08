@@ -782,6 +782,35 @@ describe("repository transfers in flight", () => {
     expect(status.body.reserved_bytes).toBe(0);
   });
 
+  it("refuse at once a repository whose assets don't fit there, and count them when they do", async () => {
+    const owner = await user();
+    const repo = await pushedRepo(owner, "/user/repos");
+    const pushed = await quota("/user/quota", owner.token);
+    const assets = 1000;
+    await env.ORG.getByName(owner.principalId).setReleaseAssetStorage({
+      repoId: repo.id,
+      bytes: assets,
+      epochGen: 1,
+      seq: 1,
+      mustFit: false,
+    });
+    expect(await quota("/user/quota", owner.token)).toBe(pushed + assets);
+    const org = await newOrg(owner);
+    const limit = (bytes: number) =>
+      api("PUT", `/admin/accounts/${org}/quota`, admin.token, { max_storage_bytes: bytes });
+    // Room for its pushes, and its assets but one byte.
+    expect((await limit(pushed + assets - 1)).status).toBe(200);
+    const refused = await transfer(owner, repo, { new_owner: org });
+    expect(refused.status).toBe(403);
+    expect(refused.body.code).toBe("quota_exceeded");
+    expect(await quota("/user/quota", owner.token)).toBe(pushed + assets);
+    // Exactly room: it moves, and the old account counts its assets no more.
+    expect((await limit(pushed + assets)).status).toBe(200);
+    expect((await transfer(owner, repo, { new_owner: org })).status).toBe(200);
+    expect(await quota("/user/quota", owner.token)).toBe(0);
+    expect(await quota(`/orgs/${org}/quota`, owner.token)).toBe(pushed);
+  });
+
   it("hold room in the new account for what the repository still owes the old one", async () => {
     const owner = await user();
     const repo = await pushedRepo(owner, "/user/repos");
