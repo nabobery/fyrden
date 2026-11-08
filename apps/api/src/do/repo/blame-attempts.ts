@@ -14,6 +14,7 @@ import {
   type BlameState,
   refuseHead,
 } from "@fyrden/git-core";
+import type { BlameRuns } from "./blame-runs.js";
 
 /**
  * Where a run's slice attempts are kept. A mark must outlive the slice that
@@ -26,6 +27,8 @@ export interface AttemptLedger {
    * again at 1.
    */
   begin(run: string, generation: number): Promise<number>;
+  /** The attempts recorded on `generation`, without recording one. */
+  peek(run: string, generation: number): number;
   /** Forgets the run's attempts: its slice ended, however it ended. */
   clear(run: string): void;
 }
@@ -41,8 +44,39 @@ export class MemoryAttemptLedger implements AttemptLedger {
     return attempts;
   }
 
+  peek(run: string, generation: number): number {
+    const mark = this.#marks.get(run);
+    return mark?.generation === generation ? mark.attempts : 0;
+  }
+
   clear(run: string): void {
     this.#marks.delete(run);
+  }
+}
+
+/**
+ * The ledger on the run's row: the mark is written, then `begin` waits for
+ * the storage to be durable (`ctx.storage.sync()`, which resolves once the
+ * pending writes complete), so a reset after it still finds the mark.
+ */
+export class RunRowAttemptLedger implements AttemptLedger {
+  constructor(
+    private readonly runs: Pick<BlameRuns, "beginAttempt" | "peekAttempt" | "clearAttempts">,
+    private readonly storage: Pick<DurableObjectStorage, "sync">,
+  ) {}
+
+  async begin(run: string, generation: number): Promise<number> {
+    const attempts = this.runs.beginAttempt(run, generation);
+    await this.storage.sync();
+    return attempts;
+  }
+
+  peek(run: string, generation: number): number {
+    return this.runs.peekAttempt(run, generation);
+  }
+
+  clear(run: string): void {
+    this.runs.clearAttempts(run);
   }
 }
 
