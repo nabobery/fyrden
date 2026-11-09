@@ -3474,9 +3474,11 @@ describe("live work's rows in a feed's object", () => {
    * allow (one fewer than a page, none of them for two hours): each grant's overdue check reads
    * every one of them.
    */
-  async function atLedger(at: number): Promise<void> {
+  /** Holds this object's clock and the ledger's at `at`; moves both on by `ms` when called. */
+  async function atLedger(at: number): Promise<(ms: number) => Promise<void>> {
     vi.useFakeTimers({ toFake: ["Date"], now: at });
-    const unpin = await pinLedgerClock(at);
+    let ledger = at;
+    let unpin = await pinLedgerClock(ledger);
     const forgetReceipts = () => env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
     onTestFinished(async () => {
       try {
@@ -3487,6 +3489,12 @@ describe("live work's rows in a feed's object", () => {
     });
     await forgetReceipts();
     await expiredReceipts(at, LIVE_RECEIPTS_OVERDUE.page - 1);
+    return async (ms) => {
+      unpin();
+      ledger += ms;
+      unpin = await pinLedgerClock(ledger);
+      vi.setSystemTime(Date.now() + ms);
+    };
   }
 
   /**
@@ -3495,7 +3503,7 @@ describe("live work's rows in a feed's object", () => {
    */
   async function meterTurnSteps(hour: number): Promise<void> {
     const at = Math.floor(Date.now() / DAY) * DAY + hour;
-    await atLedger(at);
+    const later = await atLedger(at);
     const steps: Partial<Record<keyof typeof LIVE_TURN_STEPS, Rows>> = {};
     // Only once a scenario's sockets are all open (a turn running while they are being opened
     // counts their admissions' work, done meanwhile, as its own: conservative, but not a step's).
@@ -3561,6 +3569,14 @@ describe("live work's rows in a feed's object", () => {
         wholes.push({ whole, paid: (done.at(-1) as { paid: TurnRows }).paid });
     };
     const wholes: { whole: Rows; paid: TurnRows }[] = [];
+    /**
+     * `who`'s turn with both clocks a second on, as they are between a feed's turns: its successor
+     * starts later than any turn the feed prepared, which its end records.
+     */
+    const turnLater = async (who: Who) => {
+      await later(1_000);
+      await turn(who);
+    };
     /** What a turn used outside its meter (its whole less what its meter counted): its end. */
     const noteEnd = () => {
       const whole = turns.at(-1) as Rows;
@@ -3579,7 +3595,7 @@ describe("live work's rows in a feed's object", () => {
       const idleSocket = await open(idle.token, ROOMY);
       await doneTurnReceipts(idle, at);
       measuring = true;
-      await turn(idle);
+      await turnLater(idle);
       noteEnd();
       // A renewal.
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -3630,7 +3646,7 @@ describe("live work's rows in a feed's object", () => {
       expect(await openSockets(crowd)).toBe(LIVE_POLICY.perFeed);
       await doneTurnReceipts(crowd, at);
       measuring = true;
-      await turn(crowd);
+      await turnLater(crowd);
       noteEnd();
       await advance(crowd, RENEW_LATE);
       const renewing = [crowdSockets[0], crowdSockets[1]];
