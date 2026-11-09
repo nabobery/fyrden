@@ -67,6 +67,21 @@ const purge = (token = r.owner.token) =>
   );
 
 describe("expiry", () => {
+  it("keeps a completed session for retries until it expires, then clears it", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const parts = [{ part_number: 1, etag: put.body.etag as string }];
+    expect((await complete(r, begun.body.id, parts)).body.state).toBe("completed");
+    // Nothing it sent can land any more, but it hasn't expired.
+    await sql("UPDATE release_asset_uploads SET settle_after = 1");
+    await assetSlice(r.stub);
+    expect((await sessions(r.stub)).map((s) => s.state)).toEqual(["completed"]);
+    expect((await complete(r, begun.body.id, parts)).body.state).toBe("completed");
+    await sql("UPDATE release_asset_uploads SET expires_at = 1");
+    await assetSlice(r.stub);
+    expect(await sessions(r.stub)).toEqual([]);
+  });
+
   it("ends a session before it touches R2, then clears it", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     await sql("UPDATE release_asset_uploads SET expires_at = 1");
@@ -107,7 +122,7 @@ describe("expiry", () => {
     expect(await storage()).toBe(before);
   });
 
-  it("keeps a completed session's row until a stale completion could no longer land", async () => {
+  it("keeps a completed session's row until a stale completion could no longer land and it expired", async () => {
     await upload(r, release, "a", bytesOf(10));
     const [row] = await sessions(r.stub);
     expect(row?.state).toBe("completed");
@@ -115,6 +130,9 @@ describe("expiry", () => {
     await assetSlice(r.stub);
     expect((await sessions(r.stub)).length).toBe(1);
     await sql("UPDATE release_asset_uploads SET settle_after = 1");
+    await assetSlice(r.stub);
+    expect((await sessions(r.stub)).length).toBe(1);
+    await sql("UPDATE release_asset_uploads SET expires_at = 1");
     await assetSlice(r.stub);
     expect(await sessions(r.stub)).toEqual([]);
     // Its key is its asset's, and stays.

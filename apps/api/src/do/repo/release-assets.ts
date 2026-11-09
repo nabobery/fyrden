@@ -1034,13 +1034,15 @@ export class RepoReleaseAssets {
   /**
    * Clears ended sessions once a completion they sent can no longer land:
    * an aborted one's key deleted once more (current generation only), then
-   * its row. A completed one's key is its asset's, and stays.
+   * its row. A completed one stays to answer retries until it expires; its
+   * key is its asset's, and stays.
    */
   async #clear(): Promise<void> {
     const now = this.#now();
     const rows = this.#exec<UploadRow>(
       `SELECT * FROM release_asset_uploads WHERE state IN ('completed', 'aborted')
-       AND (settle_after IS NULL OR settle_after <= ?) LIMIT ?`,
+       AND (settle_after IS NULL OR settle_after <= ?1)
+       AND (state = 'aborted' OR expires_at <= ?1) LIMIT ?2`,
       now,
       RELEASE_ASSET_POLICY.sessionBatch,
     );
@@ -1147,8 +1149,9 @@ export class RepoReleaseAssets {
       `SELECT
          (SELECT min(expires_at) FROM release_asset_uploads WHERE state IN ('receiving', 'completing'))
            AS expiry,
-         (SELECT min(coalesce(settle_after, 0)) FROM release_asset_uploads
-           WHERE state IN ('completed', 'aborted')) AS settle,
+         (SELECT min(CASE WHEN state = 'completed'
+             THEN max(coalesce(settle_after, 0), expires_at) ELSE coalesce(settle_after, 0) END)
+           FROM release_asset_uploads WHERE state IN ('completed', 'aborted')) AS settle,
          0 AS ended`,
     );
     const times: number[] = [];
