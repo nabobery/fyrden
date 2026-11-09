@@ -92,10 +92,13 @@ class Inspector {
   private constructor(socket: WebSocket) {
     this.socket = socket;
     socket.addEventListener("message", (event) => {
-      const { id, result } = JSON.parse(String(event.data)) as { id?: number; result?: HeapUsage };
-      if (id === undefined) return;
-      this.#waiting.get(id)?.(result as HeapUsage);
+      const { id, result } = JSON.parse(String(event.data)) as { id?: unknown; result?: HeapUsage };
+      // Only a reply to a question this asked: events carry no id, and nothing else is called.
+      if (typeof id !== "number") return;
+      const waiting = this.#waiting.get(id);
+      if (typeof waiting !== "function") return;
       this.#waiting.delete(id);
+      waiting(result as HeapUsage);
     });
   }
 

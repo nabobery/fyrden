@@ -663,9 +663,10 @@ const handler = {
       }
       return new Response("not found", { status: 404 });
     } catch (error) {
-      return new Response(error instanceof Error ? (error.stack ?? error.message) : String(error), {
-        status: 500,
-      });
+      // The stack stays in workerd's log; the response names the error and its message only.
+      console.error(error);
+      const said = error instanceof Error ? `${error.name}: ${error.message}` : "Error";
+      return new Response(said, { status: 500 });
     }
   },
 };
