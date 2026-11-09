@@ -574,7 +574,7 @@ export async function openLiveSocket(
             target,
             credential.principalId,
             metrics,
-            Number(wanted) || 0,
+            turnFloorOf(wanted),
           ).catch(
             (): FundedResult<never> => ({
               status: "refused",
@@ -631,6 +631,17 @@ export async function openLiveSocket(
       "conflict",
     ),
   };
+}
+
+/**
+ * The floor a feed's object asks its next turn to start at (`LIVE_TURN_WANTED`'s value): a whole
+ * count of ms, else none (0). Anything else (a fraction, a sign, an exponent, past a safe integer)
+ * is taken as none, so a malformed value never reaches a plan's days.
+ */
+export function turnFloorOf(wanted: string | null): number {
+  if (wanted === null || !/^[0-9]{1,16}$/.test(wanted)) return 0;
+  const floor = Number(wanted);
+  return Number.isSafeInteger(floor) ? floor : 0;
 }
 
 /**

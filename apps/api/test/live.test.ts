@@ -54,7 +54,7 @@ import {
   liveBlockUnit,
   liveKindOf,
 } from "../src/live/manifest.js";
-import { openOwnedLiveSocket, socketUnits } from "../src/live/routes.js";
+import { openOwnedLiveSocket, socketUnits, turnFloorOf } from "../src/live/routes.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
@@ -1486,6 +1486,14 @@ describe("a feed's turn", () => {
     onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
     expect(await turnOf(owner)).toHaveLength(1);
     expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
+  });
+
+  it("takes a turn's floor from its object only as a whole count of ms, anything else as none", () => {
+    expect(turnFloorOf("1794229190000")).toBe(1794229190000);
+    // An object of an earlier build: none.
+    expect(turnFloorOf("1")).toBe(1);
+    for (const value of [null, "", "0", "junk", "NaN", "-12", "1.5", "Infinity", "1e309", "1e300"])
+      expect([value, turnFloorOf(value)]).toEqual([value, 0]);
   });
 
   it("refuses an opening whose turn its object would not take, rather than open it with none", async () => {
