@@ -11,6 +11,8 @@ import {
   oidFromHex,
   oidToHex,
   PackError,
+  type ReaderWork,
+  type ReaderWorkKind,
   ReaderWorkSpent,
 } from "@fyrden/git-core";
 import { describe, expect, it } from "vitest";
@@ -60,6 +62,17 @@ const name = (s: string) => text(s);
 const unknown = oidFromHex("f".repeat(40));
 const noGraph = { readBounded: (): BoundedCommit | undefined => undefined };
 
+/** A request's work meter: records each charge, and refuses one once `left` is passed. */
+class Work implements ReaderWork {
+  readonly charges: [ReaderWorkKind, number][] = [];
+  constructor(private left = Number.POSITIVE_INFINITY) {}
+  charge(kind: ReaderWorkKind, units: number): void {
+    if (units > this.left) throw new ReaderWorkSpent(this.left);
+    this.left -= units;
+    this.charges.push([kind, units]);
+  }
+}
+
 function tree(reader: FakeReader, entries: { mode: number; name: string; oid: Oid }[]): Oid {
   return reader.add(
     "tree",
@@ -96,16 +109,22 @@ describe("repoBlameSource.commit", () => {
   it("reads the graph with blame's parent limit, and answers what it finds", async () => {
     const asked: number[] = [];
     const row: BoundedCommit = { tree: unknown, parents: "too_many", generation: 7, level: 3 };
-    const source = repoBlameSource(new FakeReader(), {
-      readBounded: (_oid, max) => {
-        asked.push(max);
-        return row;
+    const source = repoBlameSource(
+      new FakeReader(),
+      {
+        readBounded: (_oid, max) => {
+          asked.push(max);
+          return row;
+        },
       },
-    });
+      new Work(),
+    );
     expect(await source.commit(unknown)).toEqual(row);
     expect(asked).toEqual([BLAME_MAX_PARENTS]);
     expect(BLAME_MAX_PARENTS).toBe(16);
-    expect(await repoBlameSource(new FakeReader(), noGraph).commit(unknown)).toBeUndefined();
+    expect(
+      await repoBlameSource(new FakeReader(), noGraph, new Work()).commit(unknown),
+    ).toBeUndefined();
   });
 });
 
@@ -120,7 +139,7 @@ describe("repoBlameSource.fileAt", () => {
       { mode: 0o040000, name: "dir", oid: sub },
       { mode: 0o160000, name: "module", oid: unknown },
     ]);
-    return { reader, file, root, source: repoBlameSource(reader, noGraph) };
+    return { reader, file, root, source: repoBlameSource(reader, noGraph, new Work()) };
   };
   const at = (path: string) => path.split("/").map(name);
 
@@ -143,7 +162,7 @@ describe("repoBlameSource.fileAt", () => {
       ["120755", "legacy", file],
       ["160755", "module", unknown],
     ]);
-    const source = repoBlameSource(reader, noGraph);
+    const source = repoBlameSource(reader, noGraph, new Work());
     expect(await source.fileAt(root, at("legacy"))).toEqual({ oid: file, kind: "symlink" });
     expect(await source.fileAt(root, at("group"))).toEqual({ oid: file, kind: "file" });
     expect(await source.fileAt(root, at("dir/in.txt"))).toEqual({ oid: file, kind: "file" });
@@ -178,11 +197,84 @@ describe("repoBlameSource.fileAt", () => {
   });
 });
 
+describe("tree-scan, charged on the request's meter before a tree is scanned", () => {
+  it("fileAt charges each tree on the path, its whole size, in order", async () => {
+    const reader = new FakeReader();
+    const file = reader.add("blob", text("a\n"));
+    const sub = tree(reader, [{ mode: 0o100644, name: "f.txt", oid: file }]);
+    const root = tree(reader, [{ mode: 0o040000, name: "dir", oid: sub }]);
+    const work = new Work();
+    const source = repoBlameSource(reader, noGraph, work);
+    expect(await source.fileAt(root, [name("dir"), name("f.txt")])).toEqual({
+      oid: file,
+      kind: "file",
+    });
+    const size = async (oid: Oid) => (await reader.readHeader(oid))?.size;
+    expect(work.charges).toEqual([
+      ["tree-scan", await size(root)],
+      ["tree-scan", await size(sub)],
+    ]);
+  });
+
+  it("fileAt stops when the meter refuses a tree, before answering from it", async () => {
+    const reader = new FakeReader();
+    const file = reader.add("blob", text("a\n"));
+    const root = tree(reader, [{ mode: 0o100644, name: "f.txt", oid: file }]);
+    const size = (await reader.readHeader(root))?.size as number;
+    const source = repoBlameSource(reader, noGraph, new Work(size - 1));
+    await expect(source.fileAt(root, [name("f.txt")])).rejects.toBeInstanceOf(ReaderWorkSpent);
+    expect(
+      await repoBlameSource(reader, noGraph, new Work(size)).fileAt(root, [name("f.txt")]),
+    ).not.toBeNull();
+  });
+});
+
+describe("repoBlameSource.tree", () => {
+  const setup = () => {
+    const reader = new FakeReader();
+    const file = reader.add("blob", text("a\n"));
+    const root = tree(reader, [{ mode: 0o100644, name: "f.txt", oid: file }]);
+    return { reader, file, root };
+  };
+
+  it("answers too_large from the header alone, and reads a tree that fits", async () => {
+    const { reader, root } = setup();
+    const size = (await reader.readHeader(root))?.size as number;
+    const work = new Work();
+    const source = repoBlameSource(reader, noGraph, work);
+    reader.bodies.length = 0;
+    expect(await source.tree(root, size - 1)).toBe("too_large");
+    expect(reader.bodies).toEqual([]);
+    expect(work.charges).toEqual([]);
+    const body = await source.tree(root, size);
+    expect(body).toBeInstanceOf(Uint8Array);
+    expect((body as Uint8Array).length).toBe(size);
+  });
+
+  it("charges tree-scan for the body before handing it out, and refuses past the meter", async () => {
+    const { reader, root } = setup();
+    const size = (await reader.readHeader(root))?.size as number;
+    const work = new Work();
+    await repoBlameSource(reader, noGraph, work).tree(root, size);
+    expect(work.charges).toEqual([["tree-scan", size]]);
+    await expect(
+      repoBlameSource(reader, noGraph, new Work(size - 1)).tree(root, size),
+    ).rejects.toBeInstanceOf(ReaderWorkSpent);
+  });
+
+  it("refuses a missing object, or one that isn't a tree, as unreadable", async () => {
+    const { reader, file } = setup();
+    const source = repoBlameSource(reader, noGraph, new Work());
+    await expect(source.tree(unknown, 1 << 20)).rejects.toBeInstanceOf(BlameObjectUnreadable);
+    await expect(source.tree(file, 1 << 20)).rejects.toBeInstanceOf(BlameObjectUnreadable);
+  });
+});
+
 describe("repoBlameSource.blob", () => {
   it("answers too_large from the header alone, and reads a body that fits", async () => {
     const reader = new FakeReader();
     const oid = reader.add("blob", text("four"));
-    const source = repoBlameSource(reader, noGraph);
+    const source = repoBlameSource(reader, noGraph, new Work());
     expect(await source.blob(oid, 3)).toBe("too_large");
     expect(reader.bodies).toEqual([]);
     expect(await source.blob(oid, 4)).toEqual(text("four"));
@@ -191,7 +283,7 @@ describe("repoBlameSource.blob", () => {
   it("refuses a missing object, or one that isn't a blob, as unreadable", async () => {
     const reader = new FakeReader();
     const notBlob = tree(reader, []);
-    const source = repoBlameSource(reader, noGraph);
+    const source = repoBlameSource(reader, noGraph, new Work());
     await expect(source.blob(unknown, 10)).rejects.toBeInstanceOf(BlameObjectUnreadable);
     await expect(source.blob(notBlob, 10)).rejects.toBeInstanceOf(BlameObjectUnreadable);
   });
@@ -201,7 +293,11 @@ describe("repoBlameSource.commitInfo", () => {
   const info = async (bytes: Uint8Array) => {
     const reader = new FakeReader();
     const oid = reader.add("commit", bytes);
-    return { fact: await repoBlameSource(reader, noGraph).commitInfo(oid), oid, reader };
+    return {
+      fact: await repoBlameSource(reader, noGraph, new Work()).commitInfo(oid),
+      oid,
+      reader,
+    };
   };
 
   it("reads a commit of 64 KiB, and answers too_large one byte over, with no body read", async () => {
@@ -273,7 +369,7 @@ describe("repoBlameSource.commitInfo", () => {
     const reader = new FakeReader();
     const blob = reader.add("blob", text("x"));
     const corrupt = reader.add("commit", latin1("tree nope\n\n"));
-    const source = repoBlameSource(reader, noGraph);
+    const source = repoBlameSource(reader, noGraph, new Work());
     for (const oid of [unknown, blob, corrupt])
       await expect(source.commitInfo(oid)).rejects.toBeInstanceOf(BlameObjectUnreadable);
   });
@@ -284,6 +380,7 @@ describe("repoBlameSource's failures, as the walk sees them", () => {
     () => source.fileAt(oid, [name("f")]),
     () => source.blob(oid, 10),
     () => source.commitInfo(oid),
+    () => source.tree(oid, 10),
   ];
 
   it("turns a spent read budget into BlameReadsSpent, from every read", async () => {
@@ -292,7 +389,7 @@ describe("repoBlameSource's failures, as the walk sees them", () => {
     reader.fail = () => {
       throw new ReadBudgetError(5);
     };
-    for (const read of each(repoBlameSource(reader, noGraph), oid))
+    for (const read of each(repoBlameSource(reader, noGraph, new Work()), oid))
       await expect(read()).rejects.toBeInstanceOf(BlameReadsSpent);
   });
 
@@ -303,7 +400,7 @@ describe("repoBlameSource's failures, as the walk sees them", () => {
       reader.fail = () => {
         throw error;
       };
-      for (const read of each(repoBlameSource(reader, noGraph), oid))
+      for (const read of each(repoBlameSource(reader, noGraph, new Work()), oid))
         await expect(read()).rejects.toBe(error);
     }
   });

@@ -1,7 +1,9 @@
 // The repository's blame source: the only port the blame walk sees, over
 // one request's reader and the verified commit graph. It reads one object
 // at a time with `readHeader` and `readObject` and nothing else, so the
-// reader's limits and its work meter cover every read.
+// reader's limits and its work meter cover every read; and it charges that
+// meter for every tree it scans or hands out to be scanned, which the reader
+// can't see.
 import type { BoundedCommit } from "@fyrden/adapters-cloudflare/git";
 import {
   type BlameCommitInfo,
@@ -15,6 +17,7 @@ import {
   type Oid,
   oidToHex,
   parseCommit,
+  type ReaderWork,
   treeEntries,
 } from "@fyrden/git-core";
 import { ReadBudgetError } from "../../git/live-reader.js";
@@ -44,7 +47,16 @@ const BLANK = new Set([0x20, 0x09, 0x0d]);
 type Reads = Pick<ObjectReader, "readHeader" | "readObject">;
 type Graph = { readBounded(oid: Oid, maxParents: number): BoundedCommit | undefined };
 
-export function repoBlameSource(reader: Reads, graph: Graph): BlameSource {
+/** The walk's source, with the tree reads its rename checks make. */
+export type RepoBlameSource = BlameSource & {
+  tree(oid: Oid, maxBytes: number): Promise<Uint8Array | "too_large">;
+};
+
+/**
+ * `work` is the request's meter, the one its reader charges: a tree's scan is
+ * charged on it, by its size, before the tree is scanned.
+ */
+export function repoBlameSource(reader: Reads, graph: Graph, work: ReaderWork): RepoBlameSource {
   const size = async (oid: Oid, type: ObjectType): Promise<number> => {
     const found = await spent(() => reader.readHeader(oid));
     if (found?.type !== type) throw missing(oid, type);
@@ -68,6 +80,7 @@ export function repoBlameSource(reader: Reads, graph: Graph): BlameSource {
       let current = tree;
       for (let depth = 0; depth < path.length; depth++) {
         const bytes = await body(current, "tree");
+        work.charge("tree-scan", bytes.length);
         const entry = parsed(current, () => find(bytes, path[depth] as Uint8Array));
         if (!entry) return null;
         const type = entry.mode & TYPE_BITS;
@@ -81,6 +94,13 @@ export function repoBlameSource(reader: Reads, graph: Graph): BlameSource {
         current = entry.oid;
       }
       return null;
+    },
+
+    async tree(oid, maxBytes) {
+      if ((await size(oid, "tree")) > maxBytes) return "too_large";
+      const bytes = await body(oid, "tree");
+      work.charge("tree-scan", bytes.length);
+      return bytes;
     },
 
     async blob(oid, maxBytes) {

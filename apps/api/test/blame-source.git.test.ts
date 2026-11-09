@@ -4,7 +4,9 @@
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import {
   advanceBlame,
+  BLAME_DECODING_WORK,
   blameRanges,
+  createReaderWorkMeter,
   DEFAULT_BLAME_SLICE,
   oidFromHex,
   oidToHex,
@@ -44,7 +46,11 @@ function blame(stub: Awaited<ReturnType<typeof pushed>>, path: string) {
     );
     if (!reader) throw new Error("no packs");
     try {
-      const source = repoBlameSource(reader, repo.git.commitGraph);
+      const source = repoBlameSource(
+        reader,
+        repo.git.commitGraph,
+        createReaderWorkMeter(BLAME_DECODING_WORK),
+      );
       const segments = path.split("/").map((s) => new TextEncoder().encode(s));
       const state = await startBlame(source, oidFromHex(fx.tip), segments);
       if ("failure" in state) return { failure: state.failure };
