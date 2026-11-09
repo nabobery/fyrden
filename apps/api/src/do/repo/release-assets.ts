@@ -728,6 +728,8 @@ export class RepoReleaseAssets {
   #completing(uploadId: string): UploadAnswer {
     const row = this.#row(uploadId);
     if (!row) return NO_UPLOAD;
+    if (row.state === "aborted")
+      return fail(409, "upload_aborted", "The upload was ended. Start it again.");
     return {
       ok: true,
       view: { ...this.#view(row), state: row.state === "completed" ? "completed" : "completing" },

@@ -350,6 +350,26 @@ describe("completing", () => {
     expect([ended.status, ended.body.code]).toEqual([409, "upload_aborted"]);
   });
 
+  it("answers a session ended during its completion as aborted, not completing", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const principal = r.owner.principalId;
+    await inRepo(r.stub, (repo) => {
+      repo.assetHooks = {
+        step: async (step) => {
+          if (step === "stated") await repo.releaseAssets.abort(begun.body.id, principal);
+        },
+      };
+    });
+    const done = await complete(r, begun.body.id, [
+      { part_number: 1, etag: put.body.etag as string },
+    ]);
+    await inRepo(r.stub, (repo) => {
+      repo.assetHooks = {};
+    });
+    expect([done.status, done.body.code]).toEqual([409, "upload_aborted"]);
+  });
+
   it("counts another completing session's bytes once, not in its hold as well", async () => {
     const before = await quota();
     await setLimit(before.storage_bytes + 20);
