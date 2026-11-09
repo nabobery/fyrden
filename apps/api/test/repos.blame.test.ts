@@ -1,7 +1,7 @@
 // GET /repos/{owner}/{repo}/blame over HTTP: pages a continuation names, a
 // window, and each refusal as a problem document, the busy one with its wait.
 
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { UNRESOLVED_REASONS as CONTRACT_REASONS } from "@fyrden/api-contract";
 import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { UNRESOLVED_REASONS } from "@fyrden/git-core";
@@ -169,5 +169,77 @@ describe("GET /repos/{owner}/{repo}/blame", () => {
     }
     const after = await get(path, token, { path: "f.txt" });
     expect(after.status).toBe(200);
+  });
+});
+
+/** One MCP request as the owner; the response's text. */
+async function mcp(
+  token: string,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<string> {
+  const res = await exports.default.fetch("https://fyrden.test/mcp", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": "2026-07-28",
+      "Mcp-Method": method,
+      ...(typeof params.name === "string" && { "Mcp-Name": params.name }),
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params: {
+        ...params,
+        _meta: {
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+          "io.modelcontextprotocol/clientInfo": { name: "fyrden-test", version: "0.0.0" },
+          "io.modelcontextprotocol/clientCapabilities": {},
+        },
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+  return res.text();
+}
+
+describe("the get_blame MCP tool", () => {
+  it("is listed read-only, telling an agent to page to the end and how to wait", async () => {
+    const { token } = await pushedRepo();
+    const listed = JSON.parse(await mcp(token, "tools/list", {})) as {
+      result: {
+        tools: { name: string; description: string; annotations?: { readOnlyHint?: boolean } }[];
+      };
+    };
+    const tool = listed.result.tools.find((t) => t.name === "get_blame");
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+    for (const phrase of ["next_continuation", "unresolved", "retry_after"])
+      expect([phrase, tool?.description.includes(phrase)]).toEqual([phrase, true]);
+  });
+
+  it("answers a blame, and blame_busy with its wait while another blame holds the object", async () => {
+    const { token, path, stub } = await pushedRepo();
+    const [, owner, repo] = path.split("/").slice(1);
+    const call = () =>
+      mcp(token, "tools/call", { name: "get_blame", arguments: { owner, repo, path: "f.txt" } });
+    const answered = await call();
+    expect(answered).toContain(fx.tip);
+    expect(answered).toContain("ranges");
+    await inRepo(stub, async (r) => {
+      held = await r.git.memory.begin(BLAME_SHARE_BYTES);
+    });
+    try {
+      const busy = await call();
+      expect(busy).toContain("blame_busy");
+      expect(busy).toContain("retry_after");
+    } finally {
+      await inRepo(stub, () => {
+        held?.release();
+        held = undefined;
+      });
+    }
   });
 });

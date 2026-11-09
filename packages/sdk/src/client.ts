@@ -43,6 +43,8 @@ export class FyrdenError extends Error {
     readonly resync?: string,
     /** For `stale` (Fyrden's): the version it is at now. */
     readonly currentVersion?: number,
+    /** With a 429 or a 503: seconds to wait before asking again (`retry_after`, or the `Retry-After` header). */
+    readonly retryAfter?: number,
   ) {
     super(`${code}: ${detail}`);
   }
@@ -147,6 +149,7 @@ export class FyrdenClient {
         typeof problem.missing_permission === "string" ? problem.missing_permission : undefined,
         typeof problem.resync === "string" ? problem.resync : undefined,
         typeof problem.current_version === "number" ? problem.current_version : undefined,
+        retryAfterOf(problem, response),
       );
     }
     // An operation that answers nothing (204, 205) gives null, as its output type says.
@@ -199,6 +202,15 @@ export function refuseRedirect(response: Response): void {
       undefined,
       undefined,
     );
+}
+
+/** Seconds to wait from a problem's `retry_after`, else its `Retry-After` header in seconds. */
+function retryAfterOf(problem: Record<string, unknown>, response: Response): number | undefined {
+  if (typeof problem.retry_after === "number" && problem.retry_after >= 0)
+    return problem.retry_after;
+  const header = response.headers.get("Retry-After");
+  if (header === null || !/^\d+$/.test(header.trim())) return undefined;
+  return Number(header.trim());
 }
 
 /** `text` as a JSON object, or undefined when it is not one. */

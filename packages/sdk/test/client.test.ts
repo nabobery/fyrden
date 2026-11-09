@@ -4,7 +4,7 @@ import { FyrdenClient, FyrdenError } from "../src/index.js";
 
 type Sent = { url: string; method: string; headers: Record<string, string>; body?: string };
 
-function fake(responses: { status?: number; body: unknown }[]) {
+function fake(responses: { status?: number; body: unknown; headers?: Record<string, string> }[]) {
   const sent: Sent[] = [];
   const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     sent.push({
@@ -17,7 +17,10 @@ function fake(responses: { status?: number; body: unknown }[]) {
     // A 204 or 205 has no body.
     if (next.status === 204 || next.status === 205)
       return new Response(null, { status: next.status });
-    return new Response(JSON.stringify(next.body), { status: next.status ?? 200 });
+    return new Response(JSON.stringify(next.body), {
+      status: next.status ?? 200,
+      ...(next.headers && { headers: next.headers }),
+    });
   }) as unknown as typeof fetch;
   return { sent, fetchFn };
 }
@@ -160,6 +163,23 @@ describe("FyrdenClient", () => {
     expect(first).toMatchObject({ status: 409, code: "stale", currentVersion: 7 });
     const second = await client.call("issues.update", input).catch((e: unknown) => e);
     expect(second).toMatchObject({ code: "stale", currentVersion: undefined });
+  });
+
+  it("carries how long to wait before asking again, from the problem or its Retry-After", async () => {
+    const busy = { status: 503, code: "blame_busy", detail: "busy" };
+    const { fetchFn } = fake([
+      { status: 503, body: { ...busy, retry_after: 2 }, headers: { "Retry-After": "2" } },
+      { status: 503, body: busy, headers: { "Retry-After": "30" } },
+      { status: 404, body: { status: 404, code: "path_not_found", detail: "d" } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const input = { owner: "me", repo: "r", path: "f.txt" };
+    const seen = [];
+    for (let k = 0; k < 3; k++) {
+      const error = await client.call("repos.blame.get", input).catch((e: unknown) => e);
+      seen.push((error as FyrdenError).retryAfter);
+    }
+    expect(seen).toEqual([2, 30, undefined]);
   });
 
   it("iterates every item of a paginated operation, following next_cursor", async () => {
