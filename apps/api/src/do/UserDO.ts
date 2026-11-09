@@ -326,7 +326,7 @@ export const feedHooks: {
   /** Called once a socket's end ran within a turn (on its terminal provision): what it used (tests). */
   turnClose?: (used: TurnRows) => void;
   /** Called as an opening is acknowledged, just before its 101 (tests). */
-  acknowledged?: (state: DurableObjectState) => void;
+  acknowledged?: (state: DurableObjectState, running: boolean) => void;
   /** Called once a socket's message, or its close, has been handled, whatever came of it (tests). */
   afterSocketEvent?: (feed: string | undefined, event: "message" | "close") => void;
 } = {};
@@ -1172,21 +1172,37 @@ export class UserDO extends MigratingDO {
     // Acknowledged only with a turn running or runnable: the one the feed holds, the one this
     // opening supplied, else one granted here at today's prices (a supplied one priced by another
     // build, or none supplied as the ledger held one this object does not: lost, or priced lower
-    // before a deploy). With none, refused before it is acknowledged (its end forgotten; the
-    // feed's blocks, paid for, kept): a socket opened so would have nothing to renew it or send
-    // it hints.
-    if (!this.#holdsTurn()) {
-      const own = await this.#grantTurn(() => !this.#retired(), true).catch(
-        (): Untold => ({ gate: "unknown" }),
-      );
-      if ("plan" in own)
-        this.ctx.storage.transactionSync(() => {
-          const holding = new LiveBudget(this.ctx.storage.sql);
-          if (this.#current(own))
-            holding.prepareTurn(own, Date.now() + LIVE_CONFIRM_MS, holding.ledgerNow(Date.now()));
-        });
+    // before a deploy), once. With none, refused before it is acknowledged (its end forgotten;
+    // the feed's blocks, paid for, kept): a socket opened so would have nothing to renew it or
+    // send it hints. Each await from here can undo what was checked before it (a revocation, a
+    // restore, the turn held lapsing), so all of it is checked again after each, the last time
+    // with nothing awaited between it and the 101.
+    const admittedStill = () =>
+      !this.#retired() &&
+      this.#current(admission.envelope) &&
+      !live.anyRevoked(admitted.dependencies) &&
+      live.socket(admitted.socketId) !== undefined;
+    let ownGranted = false;
+    for (;;) {
+      if (!admittedStill()) return refuse(409);
+      if (!this.#holdsTurn()) {
+        if (ownGranted) return refuse(409);
+        ownGranted = true;
+        const own = await this.#grantTurn(() => !this.#retired(), true).catch(
+          (): Untold => ({ gate: "unknown" }),
+        );
+        if ("plan" in own)
+          this.ctx.storage.transactionSync(() => {
+            const holding = new LiveBudget(this.ctx.storage.sql);
+            if (this.#current(own))
+              holding.prepareTurn(own, Date.now() + LIVE_CONFIRM_MS, holding.ledgerNow(Date.now()));
+          });
+        continue;
+      }
+      this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
+      await this.#scheduleLive();
+      if (admittedStill() && this.#holdsTurn()) break;
     }
-    if (!this.#holdsTurn()) return refuse(409);
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server, [admitted.socketId]);
     // When its prepaid end passes, on this object's clock (read with no SQL by its callbacks).
@@ -1196,9 +1212,7 @@ export class UserDO extends MigratingDO {
       id: admitted.socketId,
       until: terminal.envelope.plan.validUntil - offset,
     });
-    this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
-    await this.#scheduleLive();
-    feedHooks.acknowledged?.(this.ctx);
+    feedHooks.acknowledged?.(this.ctx, this.#turnRunning !== null);
     return new Response(null, { status: 101, webSocket: client });
   }
 

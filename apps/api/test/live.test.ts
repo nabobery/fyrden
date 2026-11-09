@@ -29,6 +29,7 @@ import { LiveBudget } from "../src/do/user/live-budget.js";
 import type { TurnRows } from "../src/do/user/turn-meter.js";
 import {
   canonicalVector,
+  expireLiveReceipts,
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
@@ -105,6 +106,16 @@ async function call(request: Request, vars: Record<string, string> = LIVE): Prom
   const response = await createApp().fetch(request, { ...env, ...vars } as Env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+/** The live credential of `who`'s token, as an MCP listen presents it. */
+async function credentialOf(who: Who) {
+  const id = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+    .bind(await hashToken(who.token))
+    .first<string>("id");
+  const credential = await liveCredential(env.DIRECTORY, id as string, Date.now());
+  if (!credential) throw new Error("no credential");
+  return credential;
 }
 
 const ticketFor = async (token: string, vars: Record<string, string> = LIVE) =>
@@ -1587,6 +1598,103 @@ describe("a feed's turn", () => {
       opened: true,
       turns: 1,
     });
+  });
+
+  it("opens a feed only with a turn it can run, though the turn it held lapsed as the opening was scheduled", async () => {
+    const at = Math.floor(Date.now() / DAY) * DAY + 10 * HOUR;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    let unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    const owner = await user();
+    const first = await open(owner.token);
+    const closed = handled(owner, "close");
+    first.ws?.close(1000, "done");
+    await closed();
+    // Two seconds before the turn it holds lapses: held still, so the opening grants none.
+    const [state, held] = await runInDurableObject(
+      feedOf(owner),
+      (_: UserDO, s) => [s, new LiveBudget(s.storage.sql).turn()] as const,
+    );
+    if (!held) throw new Error("no turn");
+    const almost = held.envelope.plan.validUntil - 2_000;
+    unpin();
+    unpin = await pinLedgerClock(almost);
+    vi.setSystemTime(almost);
+    await expireLiveReceipts(env.DIRECTORY);
+    const credential = await credentialOf(owner);
+    // It lapses while the opened socket's alarm is set.
+    let lapsed = false;
+    feedHooks.beforeAlarmWrite = async () => {
+      if (
+        state.storage.sql.exec("SELECT 1 FROM live_local WHERE phase = 'open'").toArray().length
+      ) {
+        delete feedHooks.beforeAlarmWrite;
+        lapsed = true;
+        vi.setSystemTime(Date.now() + 3_000);
+      }
+    };
+    onTestFinished(() => {
+      delete feedHooks.beforeAlarmWrite;
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    if (opened.ok) {
+      opened.response.webSocket?.accept();
+      onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    }
+    const runnable = await runInDurableObject(feedOf(owner), (_: UserDO, s) =>
+      new LiveBudget(s.storage.sql).runnableTurn(Date.now()),
+    );
+    expect(lapsed).toBe(true);
+    expect({ opened: opened.ok, runnable: runnable !== null }).not.toEqual({
+      opened: true,
+      runnable: false,
+    });
+  });
+
+  it("refuses an opening whose credential was revoked while its object granted itself a turn", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    const credential = await credentialOf(owner);
+    // Its turn lost, the ledger still holding it: the object grants itself one.
+    const instance = await runInDurableObject(feedOf(owner), (feed: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_turn");
+      return feed;
+    });
+    // Revoked as the object's grant reaches the ledger (the opening's only turn grant).
+    type Preparing = { prepare(query: string): D1PreparedStatement };
+    const proto = Object.getPrototypeOf(env.DIRECTORY) as Preparing;
+    const prepare = proto.prepare;
+    let revoked: Promise<readonly string[]> | undefined;
+    proto.prepare = function (this: Preparing, query: string) {
+      if (query.startsWith("WITH retired AS MATERIALIZED")) {
+        proto.prepare = prepare;
+        revoked = instance.revoked(credential.dependencies);
+      }
+      return prepare.call(this, query);
+    };
+    onTestFinished(() => {
+      proto.prepare = prepare;
+      first.ws?.close(1000, "done");
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    await revoked;
+    if (opened.ok) {
+      opened.response.webSocket?.accept();
+      onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    }
+    expect(revoked).toBeDefined();
+    expect(opened.ok).toBe(false);
   });
 
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {

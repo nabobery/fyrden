@@ -95,10 +95,10 @@ export async function runTurns(who: Who): Promise<void> {
 export function everyOpeningHoldsATurn(): void {
   const turnless: string[] = [];
   beforeEach(() => {
-    feedHooks.acknowledged = (state) => {
-      const budget = new LiveBudget(state.storage.sql);
-      const turn = budget.turn();
-      if (budget.runnableTurn(Date.now()) === null && (turn === null || turn.phase === "prepared"))
+    // As the object judges it: a turn of its own running, or one prepared that can run (a row
+    // claimed or dispatched with nothing of it running is stranded, not running).
+    feedHooks.acknowledged = (state, running) => {
+      if (!running && new LiveBudget(state.storage.sql).runnableTurn(Date.now()) === null)
         turnless.push(state.id.name ?? "?");
     };
   });
