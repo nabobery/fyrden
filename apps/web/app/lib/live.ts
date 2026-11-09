@@ -18,7 +18,7 @@ export interface LiveStream {
   readonly kind: "issue" | "pull";
 }
 
-/** Live hints refused for today: asked for again from `retryAt` (Unix ms, the next UTC day). */
+/** Live hints refused until `retryAt` (Unix ms): the next UTC day, or a few minutes for a feed's. */
 export type LiveBudgetPause = {
   readonly kind: "budget";
   readonly retryAt: number;
@@ -85,7 +85,7 @@ export const LIVE_CLIENT = {
    */
   ackAfterMs: 60_000,
   /** The server's renewal period, and how long before its deadline to renew. */
-  renewMs: 30 * 60_000,
+  renewMs: 2 * 60 * 60_000,
   renewBeforeMs: 90_000,
   /** How long to wait for `renewed` before asking again. */
   renewRetryMs: 30_000,
@@ -106,6 +106,9 @@ export const LIVE_CLIENT = {
   backoffBaseMs: 1_000,
   backoffMaxMs: 60_000,
   maxFailures: 5,
+  /** A stable socket's connection lost: reconnected somewhere between these. */
+  stableRetryMinMs: 1_000,
+  stableRetryMaxMs: 10_000,
   /**
    * A socket refused once its ticket was issued (never opened): each such
    * attempt was admitted, one of the principal's 60 a day, and may be
@@ -133,7 +136,8 @@ type Timer = "ack" | "renew" | "reconnect" | "steady";
 
 type Frame =
   | { t: "changed"; n: number; streams?: LiveStream[]; refresh?: boolean }
-  | { t: "renewed"; until: number };
+  | { t: "renewed"; until: number }
+  | { t: "paused"; until: number };
 
 export class LiveClient {
   readonly #deps: LiveDeps;
@@ -274,7 +278,12 @@ export class LiveClient {
     this.#refused = 0;
     // Its deadline or life passed, or it fell behind: a new socket at once (it refreshes).
     if (code === EXPIRED || code === RESYNC) void this.#connect();
-    else this.#retryLater();
+    else {
+      // A lost connection is usually everyone's: spread further than a failure's first retry.
+      const { stableRetryMinMs: min, stableRetryMaxMs: max } = LIVE_CLIENT;
+      const delay = Math.round(min + (max - min) * this.#deps.random());
+      this.#set("reconnect", delay, () => void this.#connect());
+    }
   }
 
   #failed(): void {
@@ -325,6 +334,14 @@ export class LiveClient {
     try {
       frame = JSON.parse(data) as Frame;
     } catch {
+      return;
+    }
+    // The feed can send no hints until then: reopened by the hub, spread, as a day's pause is. A
+    // time already past (this clock ahead, the frame late) still means it heard nothing since.
+    if (frame.t === "paused") {
+      const now = this.#deps.now();
+      if (Number.isSafeInteger(frame.until) && frame.until <= now + LIVE_PAUSE_MAX_MS)
+        this.#pause(Math.max(frame.until, now));
       return;
     }
     if (frame.t === "renewed" && Number.isSafeInteger(frame.until)) {

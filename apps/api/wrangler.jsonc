@@ -171,6 +171,12 @@
       "name": "RATE_LIMIT_SEARCH",
       "namespace_id": "1008",
       "simple": { "limit": 10, "period": 60 }
+    },
+    // Live listens, per token (or its source): a refused one still costs rows.
+    {
+      "name": "RATE_LIMIT_LIVE",
+      "namespace_id": "1009",
+      "simple": { "limit": 6, "period": 60 }
     }
   ],
 

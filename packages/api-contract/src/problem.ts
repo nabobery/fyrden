@@ -31,6 +31,12 @@ export const Problem = z.object({
     .describe(
       "Fyrden: with a refusal that lasts until a known time (a daily allowance spent): when to try again, Unix time in milliseconds (the next UTC day's start).",
     ),
+  reason: z
+    .string()
+    .optional()
+    .describe(
+      "Fyrden: with a live hints refusal, which check refused it. Diagnostic only: names may change.",
+    ),
 });
 
 export type Problem = z.infer<typeof Problem>;
@@ -46,6 +52,7 @@ export interface ProblemInit {
   currentVersion?: number;
   retryAfter?: number;
   retryAt?: number;
+  reason?: string;
 }
 
 /**
@@ -64,5 +71,6 @@ export function makeProblem(init: ProblemInit): Problem {
     ...(init.currentVersion !== undefined && { current_version: init.currentVersion }),
     ...(init.retryAfter !== undefined && { retry_after: init.retryAfter }),
     ...(init.retryAt !== undefined && { retry_at: init.retryAt }),
+    ...(init.reason !== undefined && { reason: init.reason }),
   };
 }

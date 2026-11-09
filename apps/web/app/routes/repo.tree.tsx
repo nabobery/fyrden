@@ -1,4 +1,5 @@
 import { Link } from "react-router";
+import { FileFinder } from "../components/file-finder.js";
 import { Listing } from "../components/listing.js";
 import { apiGet } from "../lib/api.server.js";
 import { refAndPath } from "../lib/target.js";
@@ -42,14 +43,15 @@ export default function Tree({ loaderData }: Route.ComponentProps) {
           @ {ref} / {path}
         </span>
       </h1>
-      <p>
+      <div className="row">
         <Link
           className="button"
           to={`/${owner}/${repo}/edit/${encodeURIComponent(ref)}/${encodePath(path)}?new=1`}
         >
           Add a file here
         </Link>
-      </p>
+        <FileFinder owner={owner} repo={repo} gitRef={ref} />
+      </div>
       <Listing owner={owner} repo={repo} gitRef={ref} entries={entries} />
       {next && (
         <p>

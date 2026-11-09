@@ -126,14 +126,14 @@ describe("a feed's execution turn", () => {
         false,
         true,
         ["own_1"],
-        false,
-        false,
+        "kept",
+        "kept",
         ["own_1"],
-        true,
+        "succeeded",
         second.operationId,
         "prepared",
         second.operationId,
-        true,
+        "ended",
         null,
         true,
       ]);
@@ -155,7 +155,7 @@ describe("a feed's execution turn", () => {
           // Its claim once it expired: nothing.
           results.push(budget.claimTurn(after));
           results.push(budget.claimTurn(valid)?.operationId);
-          // Ended after it expired: its successor is not prepared.
+          // Ended after it expired: its successor is not prepared, and it says so.
           results.push(
             budget.finishTurn(short.operationId, after, {
               successor: { envelope: next, intendedAt: after },
@@ -168,7 +168,7 @@ describe("a feed's execution turn", () => {
           return results;
         });
       });
-      expect(out).toEqual([false, true, null, short.operationId, true, null, false]);
+      expect(out).toEqual([false, true, null, short.operationId, "ended", null, false]);
     }));
 
   it("names no successor once fenced since it was claimed", () =>
@@ -190,7 +190,7 @@ describe("a feed's execution turn", () => {
           budget.turn(),
         ];
       });
-      expect(out).toEqual([true, null]);
+      expect(out).toEqual(["ended", null]);
     }));
 
   it("is recovered as an installation is: a dispatched one only once its owner is quarantined", () =>

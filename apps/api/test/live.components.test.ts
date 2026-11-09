@@ -200,7 +200,7 @@ describe("an alarm's components", () => {
         await cost((day + 2) * DAY, (db) => settleLiveOwnerPage(db, ownerId))
       ).used;
       measured.releaseOwner = (
-        await cost((day + 2) * DAY, (db) => releaseLiveOwner(db, ownerId))
+        await cost((day + 2) * DAY, (db) => releaseLiveOwner(db, ownerId, false))
       ).used;
       measured.quarantine = (
         await cost((day + 2) * DAY, (db) => quarantineLiveOwners(db, ["own_x", "own_y"]))

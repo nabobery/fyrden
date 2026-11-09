@@ -73,14 +73,19 @@ function manualClock(start = 1_000_000) {
   };
 }
 
-function open(id: string | number = "s-1", signal?: AbortSignal, start?: number) {
+function open(
+  id: string | number = "s-1",
+  signal?: AbortSignal,
+  start?: number,
+  deadlineIn = LIVE_POLICY.renewMs,
+) {
   const socket = fakeSocket();
   const time = manualClock(start);
   const stream = new ListenStream({
     id,
     serverInfo: SERVER,
     requestId: "req_1",
-    feed: { uri: URI, socket: socket.socket, deadline: time.now() + LIVE_POLICY.renewMs },
+    feed: { uri: URI, socket: socket.socket, deadline: time.now() + deadlineIn },
     clock: time.clock,
     ...(signal && { signal }),
   });
@@ -164,33 +169,33 @@ describe("a listen stream's writer", () => {
     expect(await next).toMatchObject({ method: "notifications/resources/updated" });
   });
 
+  // A stream lives one renewal period: a deadline sooner (its credential's) shows more than one.
+  const SOONER = 20 * 60_000;
+
   it("renews before the deadline, again a minute later when unanswered, and from the answer's deadline", async () => {
-    const { socket, time, read } = open();
+    const { socket, time, read } = open("s-1", undefined, undefined, SOONER);
     await read();
     const start = time.now();
-    time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs - 60_000);
+    time.advance(SOONER - LISTEN_POLICY.renewBeforeMs - 60_000);
     time.tick();
     expect(socket.sent).toEqual([]);
     time.advance(60_000);
     time.tick();
     expect(socket.sent).toEqual([{ t: "renew" }]);
-    const asked = time.now();
     time.advance(30_000);
     time.tick();
     expect(socket.sent).toHaveLength(1);
     time.advance(LISTEN_POLICY.renewRetryMs);
     time.tick();
     expect(socket.sent).toEqual([{ t: "renew" }, { t: "renew" }]);
-    const until = time.now() + LIVE_POLICY.renewMs;
+    const until = time.now() + SOONER;
     socket.frame({ t: "renewed", until });
     // An answered renewal is a hint to read again (changes whose access the object could not
     // decide were passed over), which acknowledges nothing.
     expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
     time.tick();
     expect(socket.sent).toHaveLength(2);
-    // Its next deadline counted from when it was first asked, on the bridge's clock.
-    const next = asked + LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs;
-    time.advance(next - 1 - time.now());
+    time.advance(until - LISTEN_POLICY.renewBeforeMs - 1 - time.now());
     time.tick();
     expect(socket.sent).toHaveLength(2);
     time.advance(1);
@@ -199,29 +204,89 @@ describe("a listen stream's writer", () => {
     expect(time.now() - start).toBeLessThan(LISTEN_POLICY.lifeMs);
   });
 
-  it("renews on its own clock, however far the object's runs ahead, and never past the object's deadline", async () => {
+  it("counts its next deadline from when it asked, on its own clock, however far the object's runs ahead", async () => {
+    const { socket, time, read } = open(
+      "s-1",
+      undefined,
+      undefined,
+      LISTEN_POLICY.renewBeforeMs + 1_000,
+    );
+    await read();
+    time.advance(1_000);
+    time.tick();
+    expect(socket.sent).toHaveLength(1);
+    const asked = time.now();
+    time.advance(5_000);
+    // Answered late, with a deadline on a clock 4 minutes ahead.
+    socket.frame({ t: "renewed", until: time.now() + 4 * 60_000 + LIVE_POLICY.renewMs });
+    expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
+    const next = asked + LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs;
+    time.advance(next - 1 - time.now());
+    time.tick();
+    expect(socket.closed()).toBeNull();
+    time.advance(1);
+    time.tick();
+    // That deadline is as late as the stream's life: it ends rather than renew for nothing.
+    expect(socket.closed()).toBe(1000);
+    expect(socket.sent).toHaveLength(1);
+  });
+
+  it("ends rather than spend a renewal it would outlive by less than a minute and a half", async () => {
     const { socket, time, read } = open();
     await read();
-    const ahead = 4 * 60_000;
-    // Each renewal answered at once with a deadline on a clock 4 minutes ahead: the stream
-    // still renews before the socket's real deadline, renewal after renewal.
-    for (let i = 1; i <= 3; i++) {
-      time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs);
-      time.tick();
-      expect(socket.sent).toHaveLength(i);
-      socket.frame({ t: "renewed", until: time.now() + ahead + LIVE_POLICY.renewMs });
-      expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
-    }
-    // A deadline sooner than a renewal period (the credential expires): renewed before it.
     time.advance(LIVE_POLICY.renewMs - LISTEN_POLICY.renewBeforeMs);
     time.tick();
-    expect(socket.sent).toHaveLength(4);
+    expect(socket.sent).toEqual([]);
+    expect(socket.closed()).toBe(1000);
+    expect(await read()).toMatchObject({ result: {} });
+  });
+
+  it("renews before a deadline sooner than a renewal period: its credential's expiry", async () => {
+    const { socket, time, read } = open("s-1", undefined, undefined, SOONER);
+    await read();
+    time.advance(SOONER - LISTEN_POLICY.renewBeforeMs);
+    time.tick();
+    expect(socket.sent).toHaveLength(1);
     const expiry = time.now() + 10 * 60_000;
     socket.frame({ t: "renewed", until: expiry });
     expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
     time.advance(expiry - LISTEN_POLICY.renewBeforeMs - time.now());
     time.tick();
-    expect(socket.sent).toHaveLength(5);
+    expect(socket.sent).toHaveLength(2);
+  });
+
+  it("renews once when its credential's expiry holds the deadline, then waits for the socket to close", async () => {
+    const { socket, time, read } = open("s-1", undefined, undefined, SOONER);
+    await read();
+    time.advance(SOONER - LISTEN_POLICY.renewBeforeMs);
+    time.tick();
+    expect(socket.sent).toEqual([{ t: "renew" }]);
+    // The object answers with the deadline it already had: nothing later can be given.
+    socket.frame({ t: "renewed", until: time.now() + LISTEN_POLICY.renewBeforeMs });
+    expect(await read()).toMatchObject({ method: "notifications/resources/updated" });
+    for (let i = 0; i < 7; i++) {
+      time.advance(LISTEN_POLICY.keepaliveMs);
+      time.tick();
+    }
+    expect(socket.sent).toEqual([{ t: "renew" }]);
+    expect(socket.closed()).toBeNull();
+    // Past the deadline it ends and closes its socket, though nothing more told it to.
+    time.advance(LISTEN_POLICY.keepaliveMs);
+    time.tick();
+    expect(socket.closed()).not.toBeNull();
+    expect(time.stopped()).toBe(true);
+  });
+
+  it("ends at the deadline when its renewals go unanswered", async () => {
+    const { socket, time, read } = open("s-1", undefined, undefined, SOONER);
+    await read();
+    time.advance(SOONER - 1);
+    time.tick();
+    expect(socket.closed()).toBeNull();
+    time.advance(1);
+    time.tick();
+    expect(socket.closed()).not.toBeNull();
+    expect(time.stopped()).toBe(true);
   });
 
   it("keeps acknowledgements within a minute's controls, leaving room for renewals", async () => {
@@ -376,6 +441,19 @@ describe("a listen stream's writer", () => {
       socket.frame(changed(LISTEN_POLICY.ackEvery + 1));
       socket.close(1000);
       expect(socket.sent).toEqual([]);
+    });
+
+    it("ends when its feed's hints are paused, saying until when", async () => {
+      const { socket, time, read } = open();
+      await read();
+      const until = time.now() + 5 * 60_000;
+      socket.frame({ t: "paused", until, reason: "escrow_full" });
+      expect(await read()).toMatchObject({
+        error: {
+          data: { code: "live_temporary", retry_after: 300, reason: "escrow_full" },
+        },
+      });
+      expect(socket.closed()).toBe(1000);
     });
 
     it("ends with a refusal for now (4412)", async () => {

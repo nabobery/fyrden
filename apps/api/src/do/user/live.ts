@@ -20,9 +20,9 @@ export const LIVE_POLICY = {
   /**
    * How long a renewal keeps a socket (never past its absolute expiry); one is
    * taken in the second half only. Each renewal is a turn of the feed's, so
-   * this sets how many a socket costs a day (about 50 from a browser).
+   * this sets how many a socket costs a day (about 12 from a browser).
    */
-  renewMs: 30 * 60_000,
+  renewMs: 2 * 60 * 60_000,
   /** A socket's longest life (its credential's expiry if sooner). */
   lifeMs: 24 * 60 * 60_000,
   /** Frames sent and not acknowledged at most. */
@@ -422,6 +422,20 @@ export class Live {
    * that paid for the mark (a row marked again keeps the newer of its
    * stamps); whether any was marked.
    */
+  /** Whether an open socket is here and has heard of everything written (one row or two). */
+  hasRoomForUnpaid(): boolean {
+    return (
+      this.sql
+        .exec<{ room: number }>(
+          `SELECT (SELECT min(delivered_seq) FROM live_local WHERE phase = 'open') IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM live_dirty INDEXED BY live_dirty_seq
+               WHERE seq > (SELECT min(delivered_seq) FROM live_local WHERE phase = 'open'))
+             AS room`,
+        )
+        .one().room === 1
+    );
+  }
+
   mark(signals: readonly LiveSignal[], stamp: LiveStamp = UNSTAMPED): boolean {
     if (signals.length === 0) return false;
     const stamped = [stamp.epoch, stamp.incarnation, stamp.validUntil, stamp.seq] as const;

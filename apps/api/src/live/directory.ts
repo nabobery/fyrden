@@ -35,6 +35,109 @@ export const LIVE_ADMISSION = {
 
 const DAY = 24 * 60 * 60_000;
 
+/**
+ * Revocations past their keep that one check or one reaping looks at (Proposed): the oldest of
+ * reaping's cycle after where it has got to, whether or not each is told yet.
+ */
+export const LIVE_REAP_WINDOW = 8;
+
+const MAX_SEQ = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Up to `limit` revocations past their keep (`before`) with keys after (`lowAt`, `lowSeq`) and up
+ * to (`highAt`, `highSeq`), oldest first: three index seeks (the rest of the first time, the times
+ * between, the last time up to its sequence; each its own bounds in its key, so one that has none
+ * seeks nothing), since a sequence is the row's id and a row value seeks by the time alone.
+ */
+function revocationsBetween(
+  before: string,
+  b: { lowAt: string; lowSeq: string; highAt: string; highSeq: string },
+  limit: number,
+): string {
+  const rows = (where: string) => `SELECT * FROM (SELECT seq, at, expanded FROM revocations
+      INDEXED BY revocations_reap WHERE ${where} AND at < ${before} ORDER BY at, seq LIMIT ${limit})`;
+  return `SELECT * FROM (
+      ${rows(`at = ${b.lowAt} AND seq > ${b.lowSeq}
+        AND seq <= CASE WHEN ${b.lowAt} = ${b.highAt} THEN ${b.highSeq} ELSE ${MAX_SEQ} END`)}
+      UNION ALL ${rows(`at > ${b.lowAt} AND at < ${b.highAt}`)}
+      UNION ALL ${rows(`at = CASE WHEN ${b.highAt} > ${b.lowAt} THEN ${b.highAt} ELSE -1 END
+        AND seq <= ${b.highSeq}`)})
+    ORDER BY at, seq LIMIT ${limit}`;
+}
+
+/**
+ * Reaping's window as common table expressions, for revocations past their keep (`before`):
+ * `reap_bounds` (each an (at, seq) key: after where its cycle has got to and up to where that
+ * cycle ends, or, once nothing is left in that, a new cycle's, from the start to the newest past
+ * its keep now: `reap_newest`) and `reap_window`, the oldest `LIVE_REAP_WINDOW` within them, told
+ * or not.
+ */
+function reapWindowCtes(before: string): string {
+  const col = (cte: string, c: string) => `(SELECT ${c} FROM ${cte})`;
+  const state = {
+    lowAt: col("reap_state", "a"),
+    lowSeq: col("reap_state", "b"),
+    highAt: col("reap_state", "c"),
+    highSeq: col("reap_state", "d"),
+  };
+  const bounds = {
+    lowAt: col("reap_bounds", "a"),
+    lowSeq: col("reap_bounds", "b"),
+    highAt: col("reap_bounds", "c"),
+    highSeq: col("reap_bounds", "d"),
+  };
+  return `reap_state AS MATERIALIZED (SELECT revocations_reap_at AS a, revocations_reap_seq AS b,
+        revocations_reap_end_at AS c, revocations_reap_end_seq AS d
+      FROM live_budget_state WHERE id = 1),
+    reap_open AS MATERIALIZED (SELECT EXISTS (${revocationsBetween(before, state, 1)}) AS o),
+    reap_newest AS MATERIALIZED (SELECT coalesce(max(at), 0) AS at, coalesce(max(seq), 0) AS seq
+      FROM (SELECT at, seq FROM revocations INDEXED BY revocations_reap WHERE at < ${before}
+        ORDER BY at DESC, seq DESC LIMIT 1)),
+    reap_bounds AS MATERIALIZED (SELECT
+        CASE WHEN o THEN s.a ELSE 0 END AS a, CASE WHEN o THEN s.b ELSE 0 END AS b,
+        CASE WHEN o THEN s.c ELSE n.at END AS c, CASE WHEN o THEN s.d ELSE n.seq END AS d
+      FROM reap_state s, reap_open, reap_newest n),
+    reap_window AS MATERIALIZED (${revocationsBetween(before, bounds, LIVE_REAP_WINDOW)})`;
+}
+
+/** Those of reaping's window (see `reapWindowCtes`) that are told: expanded, with no target left. */
+export function reapableRevocations(before: string): string {
+  return `SELECT * FROM (WITH ${reapWindowCtes(before)}
+    SELECT w.seq FROM reap_window w
+    WHERE w.expanded = 1
+      AND NOT EXISTS (SELECT 1 FROM revocation_targets t WHERE t.seq = w.seq))`;
+}
+
+/**
+ * Moves reaping on once nothing in its window can be reaped: past the window, within its cycle's
+ * bounds; or, when the window ran short (the cycle's end reached), to a new cycle from the start,
+ * ending at the newest revocation past its keep now (later ones wait for the cycle after). One row
+ * written, only when it moves.
+ */
+export function reapingWindowMoved(db: D1Database, now: number): D1PreparedStatement {
+  const columns =
+    "revocations_reap_at, revocations_reap_seq, revocations_reap_end_at, revocations_reap_end_seq";
+  return db
+    .prepare(
+      `WITH ${reapWindowCtes("?1")},
+         reap_last AS MATERIALIZED (SELECT at, seq FROM reap_window ORDER BY at DESC, seq DESC
+           LIMIT 1),
+         reap_next AS MATERIALIZED (SELECT
+           CASE WHEN short THEN 0 ELSE (SELECT at FROM reap_last) END AS a,
+           CASE WHEN short THEN 0 ELSE (SELECT seq FROM reap_last) END AS b,
+           CASE WHEN short THEN n.at ELSE bd.c END AS c,
+           CASE WHEN short THEN n.seq ELSE bd.d END AS d
+           FROM (SELECT (SELECT count(*) FROM reap_window) < ${LIVE_REAP_WINDOW} AS short),
+             reap_newest n, reap_bounds bd)
+       UPDATE live_budget_state SET (${columns}) = (SELECT a, b, c, d FROM reap_next)
+       WHERE id = 1
+         AND NOT EXISTS (SELECT 1 FROM reap_window w WHERE w.expanded = 1
+           AND NOT EXISTS (SELECT 1 FROM revocation_targets t WHERE t.seq = w.seq))
+         AND (${columns}) <> (SELECT a, b, c, d FROM reap_next)`,
+    )
+    .bind(now - LIVE_ADMISSION.keepMs);
+}
+
 /** The deployment's live allowance (`FYRDEN_LIVE_SOCKETS`, default 50); null while live sockets are off. */
 export function liveAllowance(env: object): number | null {
   const vars = env as { FYRDEN_LIVE?: unknown; FYRDEN_LIVE_SOCKETS?: unknown };
@@ -213,12 +316,11 @@ export function reaping(
     db.prepare(`DELETE FROM live_sockets WHERE socket_id IN (${due})`).bind(now, rows),
     db
       .prepare(
-        `DELETE FROM revocations WHERE seq IN (SELECT seq FROM revocations INDEXED BY revocations_at
-           WHERE at < ?1 AND expanded = 1
-             AND NOT EXISTS (SELECT 1 FROM revocation_targets t WHERE t.seq = revocations.seq)
-           ORDER BY at LIMIT ?2)`,
+        `DELETE FROM revocations WHERE seq IN (SELECT seq FROM (${reapableRevocations("?1")})
+           LIMIT ?2)`,
       )
       .bind(now - LIVE_ADMISSION.keepMs, page.revocations),
+    reapingWindowMoved(db, now),
     db
       .prepare(
         `DELETE FROM live_admissions WHERE (principal_id, day) IN (
@@ -234,14 +336,19 @@ export function reaping(
            WHERE day < ?1 ORDER BY day, principal_id LIMIT ?2)`,
       )
       .bind(Math.floor(now / DAY) - 1, page.counts),
-    db
-      .prepare(
-        `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
-           SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
-           WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
-      )
-      .bind(now, page.transports),
+    reapingTransports(db, now, page.transports),
   ];
+}
+
+/** A page of ticket transports past their expiry removed. */
+export function reapingTransports(db: D1Database, now: number, rows: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `DELETE FROM live_ticket_transports WHERE ticket_hash IN (
+         SELECT ticket_hash FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
+         WHERE expires_at <= ?1 ORDER BY expires_at, ticket_hash LIMIT ?2)`,
+    )
+    .bind(now, rows);
 }
 
 /**
