@@ -63,6 +63,8 @@ const MiB = 1024 * 1024;
  * a second waits for the share, then answers 503 blame_busy.
  */
 export const BLAME_SHARE_BYTES = 48 * MiB;
+/** The one cleanup job of a repository's blame runs. */
+export const BLAME_PRUNE_JOB = "blame_prune";
 const SHARE_WAIT_MS = 2_000;
 /** The view and the live state together; each pack in the view counts 1 KiB. */
 const ROOM_BYTES = 8 * MiB;
@@ -209,6 +211,21 @@ export class RepoBlame {
   activeRuns(): ReadonlySet<string> {
     return this.#active;
   }
+
+  /**
+   * After a restore: every run goes. A restored database can't know about
+   * runs newer than its backup, so their objects have no rows; cleanup finds
+   * them under the prefix.
+   */
+  restored(): void {
+    this.deps.git.context.storage.sql.exec("DELETE FROM blame_runs");
+    this.#ensureCleanup();
+  }
+
+  /** Queues the cleanup job; a failed one is queued again. */
+  #ensureCleanup(): void {
+    this.deps.git.jobs.ensure("blame_prune", BLAME_PRUNE_JOB);
+  }
   readonly #now: () => number;
 
   constructor(private readonly deps: RepoBlameDeps) {
@@ -343,6 +360,7 @@ export class RepoBlame {
     });
 
     const offset = token?.offset ?? 0;
+    if (row && row.expiresAt <= this.#now()) this.#ensureCleanup();
     if (row?.state === "lost") return lost();
     let state: BlameState | undefined;
     let retry = false;
@@ -510,6 +528,7 @@ export class RepoBlame {
     const reader = await request.reader();
     if (!reader) return { ok: false, result: fail(409, "repo_empty", "The repository is empty.") };
     const run = existing ?? this.#runs.create(key, this.#now(), this.#active).row;
+    if (!existing) this.#ensureCleanup();
     this.#active.add(run.runId);
     const giveUp = (result: BlameResult) => {
       this.#runs.remove(run.runId);

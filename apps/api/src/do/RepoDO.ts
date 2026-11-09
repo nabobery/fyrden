@@ -120,6 +120,7 @@ import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
 import { type BlameRequest, RepoBlame } from "./repo/blame.js";
+import { blamePruneHandler } from "./repo/blame-prune.js";
 import {
   type Browsed,
   type BrowsePolicy,
@@ -560,6 +561,7 @@ export class RepoDO extends MigratingDO {
         // anyone sets one again.
         this.watching.restored(this.events.epochGen());
         this.threads.restored(this.events.epochGen());
+        this.blameRuns.restored();
         this.git.jobs.ensure(PREFERENCE_RECOVERY_JOB, PREFERENCE_RECOVERY_JOB);
         // An older generation's digest windows are never sealed or read: cleaned up.
         this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB);
@@ -3476,6 +3478,11 @@ export class RepoDO extends MigratingDO {
             : { done: true };
         },
       },
+      blame_prune: blamePruneHandler({
+        git: this.git,
+        active: () => this.blameRuns.activeRuns(),
+        repoId: () => this.#repoId(),
+      }),
       feed_pages_prune: {
         runSlice: async () => {
           const now = this.git.context.now();

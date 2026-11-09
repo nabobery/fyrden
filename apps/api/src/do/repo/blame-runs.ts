@@ -241,6 +241,27 @@ export class BlameRuns {
     return cursor.rowsWritten > 0;
   }
 
+  /** Every checkpoint a run names. */
+  checkpointKeys(): string[] {
+    return this.storage.sql
+      .exec<{ checkpoint_key: string }>(
+        "SELECT checkpoint_key FROM blame_runs WHERE checkpoint_key IS NOT NULL",
+      )
+      .toArray()
+      .map((r) => r.checkpoint_key);
+  }
+
+  /** The earliest expiry among runs not in `skip`, or undefined when there are none. */
+  nextExpiry(skip: ReadonlySet<string>): number | undefined {
+    for (const row of this.storage.sql
+      .exec<{ run_id: string; expires_at: number }>(
+        "SELECT run_id, expires_at FROM blame_runs ORDER BY expires_at, run_id",
+      )
+      .toArray())
+      if (!skip.has(row.run_id)) return row.expires_at;
+    return undefined;
+  }
+
   /** Runs expired by `now`, the earliest expiry first. */
   expired(now: number, limit: number): RunRow[] {
     return this.#rows(
