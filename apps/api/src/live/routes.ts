@@ -3,12 +3,7 @@ import type { Input, issueLiveTicket, Output } from "@fyrden/api-contract";
 import { hashToken } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
-import {
-  LIVE_BUDGET,
-  LIVE_TURN_WANTED,
-  type LiveAdmitted,
-  type LiveBudgetV1,
-} from "../do/UserDO.js";
+import { LIVE_BUDGET, type LiveAdmitted, type LiveBudgetV1 } from "../do/UserDO.js";
 import { LIVE_POLICY, ticketHash } from "../do/user/live.js";
 import { randomSecret } from "../oauth/params.js";
 import { SESSION_COOKIE, sessionUser } from "../oauth/session.js";
@@ -25,7 +20,6 @@ import {
 import { type LiveCredential, liveCredential } from "./credential.js";
 import { admit, LIVE_ADMISSION, liveAllowance, release } from "./directory.js";
 import {
-  type FundedResult,
   fund,
   LIVE_MANIFEST_REVISION,
   type LiveOpeningTarget,
@@ -161,8 +155,9 @@ export const socketUnits = (target: LiveOpeningTarget): Unit[] => [
 /**
  * The units an opening's pre-check counts for `target`'s feed: its grants, and its turn always.
  * The directory can hold a turn the feed's object has lost (its delivery never arrived, or it was
- * fenced), and the object then asks for one after the others are charged; counted here, that
- * request is never refused with the others' charges standing. An opening within one turn's price
+ * fenced, or priced lower before a deploy), and the object then grants itself one after the
+ * others are charged; counted here, that grant is never refused with the others' charges standing
+ * (but for a turn from a build priced lower at the same revision, which the object will not take). An opening within one turn's price
  * of the day's room is refused, though its feed may hold a turn that would have served it.
  */
 export const checkedUnits = (target: LiveOpeningTarget): Unit[] =>
@@ -563,46 +558,6 @@ export async function openLiveSocket(
       response.webSocket.close(4412, liveTryAgain("given_up"));
       return temporary("given_up");
     }
-    // The feed holds no turn to run (its first was never delivered, say): one granted and handed
-    // over now, after the socket (whose opening does not wait on it). Refused or lost, the socket
-    // would have nothing to renew it or send it hints: it is refused as its admission would be.
-    const wanted = response.headers.get(LIVE_TURN_WANTED);
-    const delivered =
-      wanted && turn === undefined
-        ? await deliverTurn(
-            env,
-            target,
-            credential.principalId,
-            metrics,
-            turnFloorOf(wanted),
-          ).catch(
-            (): FundedResult<never> => ({
-              status: "refused",
-              reason: "temporary",
-              gate: "unknown",
-            }),
-          )
-        : null;
-    if (delivered?.status === "refused") {
-      response.webSocket.accept();
-      if (delivered.reason === "daily") {
-        response.webSocket.close(4413, "today's allowance is spent");
-        return daily(
-          "live_budget",
-          "Live hints have spent today's allowance.",
-          delivered.retryAt,
-          delivered.gate,
-        );
-      }
-      response.webSocket.close(4412, liveTryAgain(delivered.gate));
-      return temporary(delivered.gate);
-    }
-    // Given up on while it was handed over: nobody takes the socket, so it is closed at once.
-    if (signal.aborted) {
-      response.webSocket.accept();
-      response.webSocket.close(4412, liveTryAgain("given_up"));
-      return temporary("given_up");
-    }
     return {
       ok: true,
       response: new Response(null, { status: 101, webSocket: response.webSocket }),
@@ -631,54 +586,6 @@ export async function openLiveSocket(
       "conflict",
     ),
   };
-}
-
-/**
- * The floor a feed's object asks its next turn to start at (`LIVE_TURN_WANTED`'s value): a whole
- * count of ms, else none (0). Anything else (a fraction, a sign, an exponent, past a safe integer)
- * is taken as none, so a malformed value never reaches a plan's days.
- */
-export function turnFloorOf(wanted: string | null): number {
-  if (wanted === null || !/^[0-9]{1,16}$/.test(wanted)) return 0;
-  const floor = Number(wanted);
-  return Number.isSafeInteger(floor) ? floor : 0;
-}
-
-/**
- * Grants the feed a turn and hands it to its object to prepare; its grant's refusal, if any. It
- * starts no earlier than `from`, the latest start of a turn the object prepared: this opening's
- * look at the ledger may be older than turns that ran since, and a turn starting before them would
- * end before them, so an opening's lookup of the newest few would pass over the one held.
- */
-async function deliverTurn(
-  env: Env,
-  target: LiveOpeningTarget,
-  feed: string,
-  metrics: Metrics | undefined,
-  from: number,
-): Promise<FundedResult<void>> {
-  metrics?.count("d1.query", { db: "directory", op: "live_grant" });
-  const turn = await fund(
-    env.DIRECTORY,
-    await makeLiveGrant(
-      planOf(
-        { ...target, ledger: { ...target.ledger, now: Math.max(target.ledger.now, from) } },
-        feed,
-        "pump",
-      ),
-    ),
-    metrics,
-  );
-  if (turn.status !== "funded") return turn;
-  metrics?.count("do.request", { class: "UserDO", method: "liveTurnV1" });
-  await env.USER.getByName(feed).liveTurnV1({
-    protocol: 1,
-    revision: LIVE_MANIFEST_REVISION,
-    envelope: turn.value,
-    quantity: 1,
-    ownerId: null,
-  });
-  return { status: "funded", value: undefined };
 }
 
 /**

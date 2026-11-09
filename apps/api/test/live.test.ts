@@ -54,14 +54,14 @@ import {
   liveBlockUnit,
   liveKindOf,
 } from "../src/live/manifest.js";
-import { openOwnedLiveSocket, socketUnits, turnFloorOf } from "../src/live/routes.js";
+import { openOwnedLiveSocket, socketUnits } from "../src/live/routes.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
 import { countD1Rows, DAY, expiredReceipts, pinLedgerClock, ZERO } from "./helpers/live-budget.js";
-import { handled, runTurns, say } from "./helpers/live-sockets.js";
+import { everyOpeningHoldsATurn, handled, runTurns, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -69,6 +69,8 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 /** A while into a socket's renewal period's second half, when a renewal is taken. */
 const RENEW_LATE = Math.ceil(LIVE_POLICY.renewMs * 0.6);
+
+everyOpeningHoldsATurn();
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -1478,7 +1480,7 @@ describe("a feed's turn", () => {
     await closed();
     await runTurnNow(owner);
     expect(await turnOf(owner)).toEqual([]);
-    // The look answered: the socket opens, and the feed asks for a turn, granted after it.
+    // The look answered: the feed's object, holding none it can run, grants itself a turn.
     answer.resolve();
     const opened = await opening;
     if (!opened.ok) throw new Error(JSON.stringify(opened));
@@ -1488,53 +1490,103 @@ describe("a feed's turn", () => {
     expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
   });
 
-  it("takes a turn's floor from its object only as a whole count of ms, anything else as none", () => {
-    expect(turnFloorOf("1794229190000")).toBe(1794229190000);
-    // An object of an earlier build: none.
-    expect(turnFloorOf("1")).toBe(1);
-    for (const value of [null, "", "0", "junk", "NaN", "-12", "1.5", "Infinity", "1e309", "1e300"])
-      expect([value, turnFloorOf(value)]).toEqual([value, 0]);
-  });
-
-  it("refuses an opening whose turn its object would not take, rather than open it with none", async () => {
+  it("opens a feed only with a turn it can run, though its Worker's turns are priced too low for it", async () => {
     const owner = await user();
     const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
       .bind(await hashToken(owner.token))
       .first<string>("id");
     const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
     if (!credential) throw new Error("no credential");
-    // A Worker of an earlier build: the feed's first turn granted at the pump's price then, which
-    // the object, built with a higher one, will not take. That Worker asks for no other turn once
-    // it supplied one.
     const pump = LIVE_PRICES.pump as LiveManifestEntry;
+    const higher = {
+      ...pump,
+      resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
+    };
+    // The object's price while it works, the Worker's once each call to it returns.
+    feedHooks.beforeEpochRead = async () => {
+      LIVE_PRICES.pump = higher;
+    };
+    const objects = new Proxy(env.USER, {
+      get(namespace, key) {
+        if (key !== "getByName") return Reflect.get(namespace, key, namespace);
+        return (name: string) =>
+          new Proxy(namespace.getByName(name), {
+            get(stub, method) {
+              const call = Reflect.get(stub, method, stub);
+              if (method !== "fetch" && method !== "liveTurnV1") return call;
+              return async (...args: unknown[]) => {
+                try {
+                  return await (call as (...a: unknown[]) => Promise<unknown>).apply(stub, args);
+                } finally {
+                  LIVE_PRICES.pump = pump;
+                }
+              };
+            },
+          });
+      },
+    });
     onTestFinished(() => {
       LIVE_PRICES.pump = pump;
       delete feedHooks.beforeEpochRead;
     });
-    feedHooks.beforeEpochRead = async () => {
-      delete feedHooks.beforeEpochRead;
-      LIVE_PRICES.pump = {
-        ...pump,
-        resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
-      };
+    const attempt = async () => {
+      const opened = await openOwnedLiveSocket(
+        { ...env, ...LIVE, USER: objects } as Env,
+        credential,
+        uniqueId("lt"),
+        undefined,
+      );
+      if (opened.ok) {
+        opened.response.webSocket?.accept();
+        onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+      }
+      return { opened: opened.ok, turns: (await turnOf(owner)).length };
     };
-    const opened = await openOwnedLiveSocket(
+    // Refused or opened, and its retry too: never opened with no turn.
+    const first = await attempt();
+    const retry = first.opened ? first : await attempt();
+    expect([first, retry].filter((a) => a.opened && a.turns === 0)).toEqual([]);
+    expect(retry).toEqual({ opened: true, turns: 1 });
+  });
+
+  it("opens a feed only with a turn it can run after adopting a turn whose end was lost", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const closed = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await closed();
+    // Its last turn's owner accounted, its end lost: the turn left dispatched, nothing held.
+    const finish = LiveBudget.prototype.finishTurn;
+    LiveBudget.prototype.finishTurn = () => {
+      LiveBudget.prototype.finishTurn = finish;
+      throw new Error("lost end");
+    };
+    try {
+      await runTurnNow(owner).catch(() => {});
+    } finally {
+      LiveBudget.prototype.finishTurn = finish;
+    }
+    expect(await turnOf(owner)).toMatchObject([{ phase: "dispatched" }]);
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(false);
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    const next = await openOwnedLiveSocket(
       { ...env, ...LIVE } as Env,
       credential,
       uniqueId("lt"),
       undefined,
     );
-    if (opened.ok) opened.response.webSocket?.accept();
-    onTestFinished(() => {
-      if (opened.ok) opened.response.webSocket?.close(1000, "done");
+    if (next.ok) {
+      next.response.webSocket?.accept();
+      onTestFinished(() => next.response.webSocket?.close(1000, "done"));
+    }
+    expect({ opened: next.ok, turns: (await turnOf(owner)).length }).toEqual({
+      opened: true,
+      turns: 1,
     });
-    expect(opened.ok).toBe(false);
-    expect(await turnOf(owner)).toEqual([]);
-    expect(
-      await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
-        .bind(owner.principalId)
-        .first(),
-    ).toEqual({ n: 0 });
   });
 
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {
@@ -3079,7 +3131,7 @@ describe("a feed's turn", () => {
     const owner = await user();
     const first = await open(owner.token);
     // Its turn lost while its grant is still unsettled in the ledger: the directory takes it as
-    // held, so the opening is granted none until its object asks for one, after the others.
+    // held, so the opening is granted none until its object grants itself one, after the others.
     await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.sql.exec("DELETE FROM live_turn"),
     );
@@ -3874,8 +3926,9 @@ describe("live work's rows in a feed's object", () => {
     await repoWithIssue(owner);
     await doneTurnReceipts(owner, at);
     await releasedTurns(owner, at + 27 * MINUTE);
-    // The feed's first opening, and one after everything it granted is gone (its turn and
-    // blocks granted again, the feed's object already there).
+    // The feed's first opening, and one after everything it granted is gone: its blocks granted
+    // again by the Worker, and its turn by its object (the ledger still holding the one it lost),
+    // the feed's object already there.
     const first = await opening(owner);
     await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
       state.storage.sql.exec("DELETE FROM live_turn");
@@ -3909,7 +3962,7 @@ describe("live work's rows in a feed's object", () => {
     expect(listened?.ok).toBe(true);
     const listenSocket = listened?.ok ? listened.response.webSocket : null;
     listenSocket?.accept();
-    // Its turn granted again by it.
+    // Its turn granted again, by its object.
     expect(
       await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
         state.storage.sql.exec("SELECT 1 FROM live_turn").toArray(),

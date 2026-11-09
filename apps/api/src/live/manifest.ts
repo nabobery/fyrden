@@ -306,8 +306,10 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
   // grants allow, its turn's grant removing a full page of done turns, and 100 of the feed's turns
   // that ran still valid (passed over by its lookup of a turn the feed holds): a browser's upgrade
   // (734 read, 80 written) and, the most, an MCP listen's opening, which also grants its transport
-  // (870 read; written 90, measured before owners' runs stopped writing two indexes, 87 since).
-  // Free's 2026-11-01 measurement was 422 and 67.
+  // (870 read; written 90, measured before owners' runs stopped writing two indexes, 87 to 88
+  // since). An opening whose turn the feed's object grants itself (the ledger holding one it
+  // lost), its blocks granted again, read 565 and wrote 59. Free's 2026-11-01 measurement was 422
+  // and 67.
   upgrade_transport: estimated(
     { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 870, d1_rows_written: 90 },
     {

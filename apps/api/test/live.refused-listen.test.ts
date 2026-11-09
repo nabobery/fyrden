@@ -15,6 +15,7 @@ import { LIVE_OWNER_LIMITS } from "../src/live/owners.js";
 import { liveRefusalMemo } from "../src/live/refusal-memo.js";
 import { user, type Who } from "./helpers/api.js";
 import { rowCountingD1 } from "./helpers/d1.js";
+import { everyOpeningHoldsATurn } from "./helpers/live-sockets.js";
 
 const ORIGIN = "https://fyrden.test";
 const DAY = 86_400_000;
@@ -36,6 +37,8 @@ const LIVE = {
   RATE_LIMIT_WRITE: unlimited,
   RATE_LIMIT_LIVE: unlimited,
 };
+
+everyOpeningHoldsATurn();
 
 afterEach(async () => {
   listenLimit = unlimited;

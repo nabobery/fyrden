@@ -111,12 +111,6 @@ import { TurnMeter, type TurnRows, times } from "./user/turn-meter.js";
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
 export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
 
-/**
- * On an admitted socket's 101: the feed holds no turn to run, so the Worker grants one (internal),
- * starting no earlier than the value (ledger ms; one from before it, "1", or none: no floor).
- */
-export const LIVE_TURN_WANTED = "X-Fyrden-Live-Turn-Wanted";
-
 /** What the Worker hands a live upgrade: an admitted socket with its funding, or a refusal with its transport's. */
 export type LiveBudgetV1 =
   | {
@@ -331,6 +325,8 @@ export const feedHooks: {
   turnDone?: (used: TurnRows, paid: TurnRows) => void;
   /** Called once a socket's end ran within a turn (on its terminal provision): what it used (tests). */
   turnClose?: (used: TurnRows) => void;
+  /** Called as an opening is acknowledged, just before its 101 (tests). */
+  acknowledged?: (state: DurableObjectState) => void;
   /** Called once a socket's message, or its close, has been handled, whatever came of it (tests). */
   afterSocketEvent?: (feed: string | undefined, event: "message" | "close") => void;
 } = {};
@@ -1112,9 +1108,11 @@ export class UserDO extends MigratingDO {
     const held = live.counts(admitted.credentialId);
     if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
       return refuse(429);
+    // A turn left stranded (claimed or dispatched with no work of it running) dealt with first, so
+    // the turn this opening supplies can take its place.
+    await this.#adoptTurn(null).catch(() => {});
     // Installed only while its grants are current here, stamped with its admission's, its end
     // provided for on each day it may live on, the feed's pools given their first blocks.
-    const supplied = budget.turn !== undefined;
     const installed = this.ctx.storage.transactionSync(() => {
       const grants = [admission, terminal, controls, marks].flatMap((f) => (f ? [f.envelope] : []));
       if (!grants.every((g) => this.#current(g))) return false;
@@ -1137,18 +1135,6 @@ export class UserDO extends MigratingDO {
       // admission never confirmed is forgotten by it).
       if (turn && this.#current(turn.envelope))
         budget.prepareTurn(turn.envelope, Date.now() + LIVE_CONFIRM_MS, now);
-      // One it was given but could not take (priced by an older build's manifest, say), with no
-      // other to run or adopt: not installed, since the Worker that gave it one asks for no other,
-      // and a socket opened so would have nothing to send it hints. Refused before it is
-      // acknowledged (its end forgotten; the feed's blocks, paid for, kept), granting nothing more.
-      const left = budget.turn();
-      if (
-        supplied &&
-        !this.#turnRunning &&
-        !budget.runnableTurn(Date.now()) &&
-        (left === null || left.phase === "prepared")
-      )
-        return false;
       live.addSocket(
         {
           id: admitted.socketId,
@@ -1183,6 +1169,24 @@ export class UserDO extends MigratingDO {
       !live.socket(admitted.socketId)
     )
       return refuse(409);
+    // Acknowledged only with a turn running or runnable: the one the feed holds, the one this
+    // opening supplied, else one granted here at today's prices (a supplied one priced by another
+    // build, or none supplied as the ledger held one this object does not: lost, or priced lower
+    // before a deploy). With none, refused before it is acknowledged (its end forgotten; the
+    // feed's blocks, paid for, kept): a socket opened so would have nothing to renew it or send
+    // it hints.
+    if (!this.#holdsTurn()) {
+      const own = await this.#grantTurn(() => !this.#retired(), true).catch(
+        (): Untold => ({ gate: "unknown" }),
+      );
+      if ("plan" in own)
+        this.ctx.storage.transactionSync(() => {
+          const holding = new LiveBudget(this.ctx.storage.sql);
+          if (this.#current(own))
+            holding.prepareTurn(own, Date.now() + LIVE_CONFIRM_MS, holding.ledgerNow(Date.now()));
+        });
+    }
+    if (!this.#holdsTurn()) return refuse(409);
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server, [admitted.socketId]);
     // When its prepaid end passes, on this object's clock (read with no SQL by its callbacks).
@@ -1194,20 +1198,16 @@ export class UserDO extends MigratingDO {
     });
     this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
     await this.#scheduleLive();
-    // No turn to run, and none running to name one (one left stranded dealt with first): the
-    // Worker grants one (see `liveTurnV1`), starting no earlier than the latest this feed
-    // prepared, which the header carries.
-    await this.#adoptTurn(null).catch(() => {});
-    const holding = new LiveBudget(this.ctx.storage.sql);
-    const wanted =
-      !this.#turnRunning &&
-      !holding.runnableTurn(Date.now()) &&
-      holding.turn()?.phase !== "dispatched";
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-      ...(wanted && { headers: { [LIVE_TURN_WANTED]: String(holding.turnFrom()) } }),
-    });
+    feedHooks.acknowledged?.(this.ctx);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /** Whether the feed has a turn running here, or one prepared that can run. */
+  #holdsTurn(): boolean {
+    return (
+      this.#turnRunning !== null ||
+      new LiveBudget(this.ctx.storage.sql).runnableTurn(Date.now()) !== null
+    );
   }
 
   /**
@@ -2202,10 +2202,11 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * The feed's successor turn, granted from the ledger now, never starting
-   * before any turn it prepared (`turnFrom`), the running one's among them, so
-   * a feed's turns are valid no earlier than those before (null when refused,
-   * or stopped): a pump when it has live work beyond renewals (a
+   * The feed's successor turn (or, for an `opening`, a pump for a feed with
+   * none to run), granted from the ledger now, never starting before any turn
+   * it prepared (`turnFrom`), the running one's among them, so a feed's turns
+   * are valid no earlier than those before (null when refused, or stopped): a
+   * pump when it has live work beyond renewals (a
    * change to deliver, a refill, a page to prune), else a turn of renewals
    * only, priced for nothing more (its meter leaves anything marked since to
    * the pump after it). Else why not, for its sockets if the feed is left with
@@ -2213,7 +2214,7 @@ export class UserDO extends MigratingDO {
    * result is out of date, which says nothing of what they face now. Its
    * turn's end tells and counts that (`#reconcileTurn`).
    */
-  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | Untold> {
+  async #grantTurn(current: () => boolean, opening = false): Promise<LiveEnvelope | Untold> {
     if (!current()) return { gate: "given_up" };
     const feed = this.ctx.id.name;
     if (!feed) return { gate: "unknown" };
@@ -2222,7 +2223,8 @@ export class UserDO extends MigratingDO {
     const refill = (["control_refill", "mark_refill"] as const).some(
       (kind) => budget.pending(kind)?.phase === "queued",
     );
-    const kind = refill || this.#live().hasPumpWork(Date.now()) ? "pump" : "renewal";
+    // An opening's is a pump: its admission is confirmed (or forgotten) by the turn.
+    const kind = opening || refill || this.#live().hasPumpWork(Date.now()) ? "pump" : "renewal";
     const request = await makeLiveGrant(
       planFor(
         LIVE_PRICES[kind] as LiveManifestEntry,
@@ -2245,7 +2247,7 @@ export class UserDO extends MigratingDO {
     const metrics = createMetrics(this.env.METRICS);
     if (!current()) return { gate: "given_up" };
     const granted = await reserveLive(this.env.DIRECTORY, request, metrics);
-    feedHooks.afterSuccessorGrant?.(this.ctx);
+    if (!opening) feedHooks.afterSuccessorGrant?.(this.ctx);
     // Answered once the turn's result no longer applies: named nowhere (a grant's charge stands),
     // and a refusal says nothing of the sockets of whatever turn replaced it.
     if (!current()) return { gate: "given_up" };

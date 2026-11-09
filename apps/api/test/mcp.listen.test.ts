@@ -21,8 +21,10 @@ import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { dpopKey } from "./helpers/dpop.js";
 import { entry } from "./helpers/feed.js";
-import { runTurns, until } from "./helpers/live-sockets.js";
+import { everyOpeningHoldsATurn, runTurns, until } from "./helpers/live-sockets.js";
 import { scopedToken } from "./helpers/principals.js";
+
+everyOpeningHoldsATurn();
 
 afterEach(() => {
   vi.useRealTimers();

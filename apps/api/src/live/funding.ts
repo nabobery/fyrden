@@ -364,8 +364,8 @@ export interface LiveTarget {
    * each), however many that ran are still valid: the turn a feed holds is
    * its newest granted, and none later is released while it is held: each
    * turn the feed's object is granted starts no earlier than the latest it
-   * prepared (kept while it holds none), whether a successor or one asked of
-   * an opening, and an opening's turn is prepared only when the feed holds
+   * prepared (kept while it holds none), whether a successor or one it grants
+   * itself as it opens a socket, and an opening's turn is prepared only when the feed holds
    * none that can run. One an opening granted with its socket, from a look
    * older than turns run since, can start before them: it is due a minute
    * on (later when its owner must be tried again), and the turn after it is
