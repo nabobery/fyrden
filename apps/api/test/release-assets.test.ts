@@ -779,6 +779,27 @@ describe("replacing and deleting", () => {
 });
 
 describe("aborting", () => {
+  it("counts the delete of the ended session's key", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    const principal = r.owner.principalId;
+    const ops = await inRepo(r.stub, async (repo) => {
+      const metrics = repo.git.context.metrics;
+      const count = metrics.count;
+      const seen: unknown[] = [];
+      metrics.count = (name, dimensions, value) => {
+        if (name === "r2.class_a") seen.push((dimensions as { op?: string } | undefined)?.op);
+        count.call(metrics, name, dimensions, value);
+      };
+      try {
+        await repo.releaseAssets.abort(begun.body.id, principal);
+      } finally {
+        metrics.count = count;
+      }
+      return seen;
+    });
+    expect(ops).toEqual(["abort_multipart", "delete_unfinished"]);
+  });
+
   it("ends the session and frees its hold", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     const ended = await abort(r, begun.body.id);

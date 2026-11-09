@@ -781,13 +781,15 @@ export class RepoReleaseAssets {
       if (r2Code(error) !== 10024)
         this.deps.log().warn("aborting a release asset upload failed", { error });
     }
-    if (row.epoch_gen === this.deps.events.epochGen())
+    if (row.epoch_gen === this.deps.events.epochGen()) {
+      this.#count("r2.class_a", "delete_unfinished");
       await this.deps
         .bucket()
         .delete(key)
         .catch((error: unknown) =>
           this.deps.log().warn("deleting an unfinished release asset failed", { error }),
         );
+    }
     await this.deps.releaseHold(assetHoldId(row.upload_id)).catch(() => undefined);
   }
 
