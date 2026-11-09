@@ -367,8 +367,9 @@ export interface LiveTarget {
    * prepared (kept while it holds none), whether a successor or one asked of
    * an opening, and an opening's turn is prepared only when the feed holds
    * none that can run. One an opening granted with its socket, from a look
-   * older than turns run since, can start before them: it is due within a
-   * minute, and the turn after it is floored again.
+   * older than turns run since, can start before them: it is due a minute
+   * on (later when its owner must be tried again), and the turn after it is
+   * floored again.
    */
   readonly turnHeld: boolean;
   /** Whether the feed holds a block of controls still valid past its next renewal; of marks, half an hour on. */
