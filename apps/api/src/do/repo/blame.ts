@@ -37,6 +37,7 @@ import {
   oidFromHex,
   oidToHex,
   PackError,
+  type ReaderWorkKind,
   ReaderWorkSpent,
   refuseHead,
   startBlame,
@@ -149,6 +150,11 @@ export interface RepoBlameDeps {
   readonly spentCalls?: () => number;
   /** Slice limits over the defaults; tests walk a run in small slices with it. */
   readonly slice?: Partial<Omit<BlameSliceLimits, "stepIsFresh">>;
+  /** A walking request's decoding work in place of `BLAME_DECODING_WORK`; tests run it out with it. */
+  readonly decodingWork?: {
+    readonly limit: number;
+    readonly weights?: Partial<Record<ReaderWorkKind, number>>;
+  };
 }
 
 const fail = (
@@ -308,7 +314,7 @@ export class RepoBlame {
     const counts = { reads: 0 };
     const work = createReaderWorkMeter(
       kind === "walk"
-        ? BLAME_DECODING_WORK
+        ? (this.deps.decodingWork ?? BLAME_DECODING_WORK)
         : { limit: RESOLVE_WORK, weights: BLAME_DECODING_WORK.weights },
     );
     let opened: Promise<ObjectReader | undefined> | undefined;
@@ -606,7 +612,7 @@ export class RepoBlame {
     };
     try {
       await this.#ledger.begin(run.runId, 0);
-      const base = repoBlameSource(reader, this.deps.git.commitGraph);
+      const base = repoBlameSource(reader, this.deps.git.commitGraph, request.work);
       let blob: Oid | undefined;
       // The starting file's blob is the first fileAt answer: startBlame looks it up first.
       const source: BlameSource = {
@@ -824,7 +830,7 @@ export class RepoBlame {
       steps = 1;
     } else {
       const before = encodeBlameState(state);
-      const source = repoBlameSource(reader, this.deps.git.commitGraph);
+      const source = repoBlameSource(reader, this.deps.git.commitGraph, request.work);
       steps = (await advanceBlame(state, source, plan.limits)).steps;
       // Nothing moved (the allowance ran out before a step): nothing to write.
       if (sameBytes(before, encodeBlameState(state)))
