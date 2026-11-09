@@ -74,9 +74,7 @@ describe("expiry", () => {
     expect(removed.status).toBe(200);
     await assetSlice(r.stub);
     expect((await sessions(r.stub)).filter((s) => s.state !== "aborted")).toEqual([]);
-    const quota = await json<{ reserved_bytes: number }>(
-      api("GET", "/user/quota", r.owner.token),
-    );
+    const quota = await json<{ reserved_bytes: number }>(api("GET", "/user/quota", r.owner.token));
     expect(quota.body.reserved_bytes).toBe(0);
     // Ended and cleared: a part finds no session.
     const late = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);

@@ -784,11 +784,11 @@ describe("aborting", () => {
     const principal = r.owner.principalId;
     const ops = await inRepo(r.stub, async (repo) => {
       const metrics = repo.git.context.metrics;
-      const count = metrics.count;
+      const count = metrics.count.bind(metrics);
       const seen: unknown[] = [];
       metrics.count = (name, dimensions, value) => {
         if (name === "r2.class_a") seen.push((dimensions as { op?: string } | undefined)?.op);
-        count.call(metrics, name, dimensions, value);
+        count(name, dimensions, value);
       };
       try {
         await repo.releaseAssets.abort(begun.body.id, principal);

@@ -574,7 +574,12 @@ describe("release asset storage", () => {
     { stub, repoId }: Account,
     bytes: number,
     seq: number,
-    more: { epochGen?: number; mustFit?: boolean; dropReservations?: readonly string[]; repoId?: string } = {},
+    more: {
+      epochGen?: number;
+      mustFit?: boolean;
+      dropReservations?: readonly string[];
+      repoId?: string;
+    } = {},
   ) =>
     stub.setReleaseAssetStorage({
       repoId,
