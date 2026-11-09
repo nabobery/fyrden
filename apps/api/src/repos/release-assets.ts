@@ -62,14 +62,16 @@ function unwrap(
   answer: UploadAnswer | AssetFailure | { ok: true } | { ok: false; code: string },
 ): void {
   if (answer.ok) return;
-  if (answer.code === "repo_not_found") throw failure(entry, answer.code);
+  // Access lost altogether answers as any change does: no such repository.
+  if (answer.code === "repo_not_found" || answer.code === "access_lost")
+    throw failure(entry, "repo_not_found");
   if (answer.code === "repo_transferring")
     throw new OperationError(
       409,
       "repo_transferring",
       "The repository is being transferred; its release assets change once it lands.",
     );
-  if (answer.code === "access_lost" || answer.code === "forbidden")
+  if (answer.code === "forbidden")
     throw new OperationError(403, "forbidden", "Changing release assets takes write access.");
   if (!("status" in answer)) throw sortingFailure(answer.code) ?? failure(entry, answer.code);
   throw new OperationError(answer.status, answer.code, answer.error);

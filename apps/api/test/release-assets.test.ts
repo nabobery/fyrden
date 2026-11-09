@@ -668,6 +668,33 @@ describe("completing", () => {
     expect((await complete(r, begun.body.id, parts, writer.token)).body.state).toBe("completed");
   });
 
+  it("answers a collaborator who lost access during assembly as any change does: no such repository", async () => {
+    const writer = await user();
+    await api("PUT", `${r.path}/collaborators/${writer.handle}`, r.owner.token, {
+      permission: "push",
+    });
+    const begun = await begin(r, release, { name: "a", size: 10 }, writer.token);
+    const put = await putPart(begun.body.parts_url, 1, bytesOf(10), writer.token);
+    // The ACL snapshot dropped while R2 assembles: no role is known for the collaborator now.
+    await inRepo(r.stub, (repo) => {
+      repo.assetHooks = {
+        step: (step) => {
+          if (step === "sent") repo.git.context.storage.sql.exec("DELETE FROM acl_snapshot");
+        },
+      };
+    });
+    const lost = await complete(
+      r,
+      begun.body.id,
+      [{ part_number: 1, etag: put.body.etag as string }],
+      writer.token,
+    );
+    await inRepo(r.stub, (repo) => {
+      repo.assetHooks = {};
+    });
+    expect(lost).toMatchObject({ status: 404, body: { code: "repo_not_found" } });
+  });
+
   it("ends the session when the token's check refuses it, and deletes the object R2 made", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);

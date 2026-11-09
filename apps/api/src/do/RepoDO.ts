@@ -370,7 +370,6 @@ function assetRefusal(code: string): AssetFailure {
   switch (code) {
     case "repo_transferring":
       return { ok: false, status: 409, code, error: REPO_TRANSFERRING };
-    case "access_lost":
     case "forbidden":
       return { ok: false, status: 403, code, error: "Changing release assets takes write access." };
     default:
