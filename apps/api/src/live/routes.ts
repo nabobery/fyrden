@@ -149,14 +149,24 @@ function openingRefusal(
   return fit;
 }
 
-/** The units an opening of `target`'s feed needs: its blocks and turn only when it holds none. */
-const socketUnits = (target: LiveOpeningTarget): Unit[] => [
+/** The units an opening of `target`'s feed is granted: its blocks and turn only when it holds none. */
+export const socketUnits = (target: LiveOpeningTarget): Unit[] => [
   "admission",
   "terminal",
   ...(target.controlsHeld ? [] : (["control_block"] as const)),
   ...(target.marksHeld ? [] : (["mark_block"] as const)),
   ...(target.turnHeld ? [] : (["pump"] as const)),
 ];
+
+/**
+ * The units an opening's pre-check counts for `target`'s feed: its grants, and its turn always.
+ * The directory can hold a turn the feed's object has lost (its delivery never arrived, or it was
+ * fenced), and the object then asks for one after the others are charged; counted here, that
+ * request is never refused with the others' charges standing. An opening within one turn's price
+ * of the day's room is refused, though its feed may hold a turn that would have served it.
+ */
+export const checkedUnits = (target: LiveOpeningTarget): Unit[] =>
+  socketUnits({ ...target, turnHeld: false });
 
 /** How long `kind`'s owned call is waited for at most. */
 const pendingOf = (kind: "ticket" | "upgrade_transport") =>
@@ -263,7 +273,7 @@ async function issueTicket(
   const unfit = openingRefusal(
     target,
     feed,
-    ["upgrade_transport", "ticket", ...socketUnits(target)],
+    ["upgrade_transport", "ticket", ...checkedUnits(target)],
     1,
   );
   if (unfit) throw refusal(unfit);
@@ -431,9 +441,10 @@ export async function openLiveSocket(
   const target = await liveOpeningTarget(env.DIRECTORY, credential.principalId);
   // Refused here, nothing is charged beyond the transport that already paid.
   if (target.admissionsToday >= LIVE_ADMISSION.perDay) return pastAdmissions(clock());
-  // Its feed's blocks and turn only when it holds none still valid (refills top its pools up).
+  // Its feed's blocks and turn only when it holds none still valid (refills top its pools up);
+  // the pre-check counts its turn always.
   const units = socketUnits(target);
-  const unfit = openingRefusal(target, credential.principalId, units, 0);
+  const unfit = openingRefusal(target, credential.principalId, checkedUnits(target), 0);
   if (unfit) return unfitAnswer(unfit);
   metrics?.count("d1.query", { db: "directory", op: "live_grant" }, units.length + 1);
   const grants = await Promise.all(
@@ -652,7 +663,7 @@ export async function openOwnedLiveSocket(
   const feed = credential.principalId;
   const target = await liveOpeningTarget(env.DIRECTORY, feed);
   if (target.admissionsToday >= LIVE_ADMISSION.perDay) return pastAdmissions(clock());
-  const unfit = openingRefusal(target, feed, ["upgrade_transport", ...socketUnits(target)], 1);
+  const unfit = openingRefusal(target, feed, ["upgrade_transport", ...checkedUnits(target)], 1);
   if (unfit) return unfitAnswer(unfit);
   const transport = await fund(
     env.DIRECTORY,

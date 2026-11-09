@@ -32,6 +32,7 @@ import {
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
+  LIVE_PROTECTED,
   LIVE_RECEIPTS_OVERDUE,
   LIVE_TURN_RECEIPT_LOOK,
   LIVE_TURN_RECEIPT_PAGE,
@@ -42,7 +43,7 @@ import {
 import { liveCredential } from "../src/live/credential.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { LIVE_PENDING_MS } from "../src/live/duration.js";
-import { planFor } from "../src/live/funding.js";
+import { liveOpeningTarget, planFor } from "../src/live/funding.js";
 import {
   LIVE_BLOCK_MS,
   LIVE_BLOCK_UNITS,
@@ -51,8 +52,9 @@ import {
   LIVE_TURN_STEPS,
   type LiveManifestEntry,
   liveBlockUnit,
+  liveKindOf,
 } from "../src/live/manifest.js";
-import { openOwnedLiveSocket } from "../src/live/routes.js";
+import { openOwnedLiveSocket, socketUnits } from "../src/live/routes.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
@@ -2919,6 +2921,93 @@ describe("a feed's turn", () => {
     expect(await closed).toBe(4412);
     expect(await turnOf(owner)).toEqual([]);
     first.ws?.close(1000, "done");
+  });
+
+  it("refuses an opening before any grant when the day has no room to replace the turn its object lost: closed 4413", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its turn lost while its grant is still unsettled in the ledger: the directory takes it as
+    // held, so the opening is granted none until its object asks for one, after the others.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    const target = await liveOpeningTarget(env.DIRECTORY, owner.principalId);
+    expect(target.turnHeld).toBe(true);
+    const today = target.view.today;
+    const need = socketUnits(target).reduce(
+      (n, unit) =>
+        n +
+        (planFor(
+          LIVE_PRICES[unit] as LiveManifestEntry,
+          {
+            incarnation: target.incarnation,
+            epoch: target.epoch,
+            recipientType: "UserDO",
+            recipient: owner.principalId,
+            class: "ordinary",
+            kind: liveKindOf(unit),
+            producesLocal: true,
+          },
+          target.ledger.now,
+        ).charges.find((c) => c.day === today)?.resources.d1_rows_written ?? 0),
+      0,
+    );
+    // Today's ordinary share left with room for the opening's grants, but not a turn as well.
+    await env.DIRECTORY.prepare(
+      "UPDATE live_budget_days SET d1_rows_written = ?1 + protected_d1_rows_written WHERE day = ?2",
+    )
+      .bind(LIVE_DAILY.d1_rows_written - LIVE_PROTECTED.d1_rows_written - need, today)
+      .run();
+    const charged = () =>
+      env.DIRECTORY.prepare(
+        `SELECT (SELECT count(*) FROM live_budget_receipts WHERE recipient = ?1) AS receipts,
+           (SELECT d1_rows_written FROM live_budget_days WHERE day = ?2) AS written`,
+      )
+        .bind(owner.principalId, today)
+        .first();
+    const before = await charged();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4413);
+    // Nothing granted: no admission, end or turn charged and left standing.
+    expect(await charged()).toEqual(before);
+    first.ws?.close(1000, "done");
+  });
+
+  it("opens a feed that holds its turn without granting another, though its pre-check counts one", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    const turns = () =>
+      env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE recipient = ? AND kind = 'pump'",
+      )
+        .bind(owner.principalId)
+        .first<{ n: number }>()
+        .then((r) => r?.n);
+    const before = await turns();
+    const second = await open(owner.token);
+    expect(second.response.status).toBe(101);
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_sockets WHERE feed = ? AND state = 'open'",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 2 });
+    expect(await turns()).toBe(before);
+    expect(await turnOf(owner)).toHaveLength(1);
+    first.ws?.close(1000, "done");
+    second.ws?.close(1000, "done");
   });
 
   it("leases a socket to its renewal deadline, each renewal extending the lease", async () => {

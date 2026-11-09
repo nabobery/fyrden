@@ -24,6 +24,7 @@ import { liveOpeningTarget, ownedCall, planFor } from "../src/live/funding.js";
 import { LIVE_PRICES, type LiveManifestEntry, liveKindOf } from "../src/live/manifest.js";
 import { LIVE_OWNER_LIMITS } from "../src/live/owners.js";
 import { liveRefusalMemo } from "../src/live/refusal-memo.js";
+import { checkedUnits, socketUnits } from "../src/live/routes.js";
 import {
   clockedD1,
   countD1Rows,
@@ -459,6 +460,32 @@ describe("the pre-check", () => {
         await copies(turn, 1, 1_000, { incarnation: "f".repeat(32) });
         await copies(turn, 1, 2_000, { epoch: 7 });
         expect(await held(db)).toBe(false);
+      }));
+
+    // The directory can hold a turn the feed's object has lost (its delivery never arrived, or it
+    // was fenced): the opening is then granted a replacement after its other units.
+    it("still counts it before an opening's grants, so a replacement for a lost one is never refused after them", () =>
+      isolated(async () => {
+        const { db } = at(day);
+        await grantTurn(db);
+        const target = await liveOpeningTarget(db, RECIPIENT);
+        expect(target.turnHeld).toBe(true);
+        const { plans: granted } = await plansFor(db, socketUnits(target));
+        // The ordinary share left with room for the opening's grants, but not a turn as well.
+        await setDay(
+          day,
+          "d1_rows_written",
+          LIVE_DAILY.d1_rows_written -
+            LIVE_PROTECTED.d1_rows_written -
+            needOf(granted).charge("d1_rows_written"),
+        );
+        const { target: now, plans: checked } = await plansFor(db, checkedUnits(target));
+        const fit = liveOpeningFits(now.view, checked);
+        const { plans: replaced } = await plansFor(db, [...socketUnits(target), "pump"]);
+        expect({
+          precheck: fit.fits ? null : fit.gate,
+          ledger: await grantAll(db, replaced),
+        }).toEqual({ precheck: "ordinary_share", ledger: "ordinary_share" });
       }));
   });
 
