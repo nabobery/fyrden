@@ -2,6 +2,7 @@ import { type Oid, oidToHex } from "../object/oid.js";
 import { PackError } from "../pack/errors.js";
 import { ReaderWorkSpent } from "../reader/errors.js";
 import { type AlignLimits, alignFiles, MAX_ALIGN_WORK, MAX_SEARCH_ROUNDS } from "./align.js";
+import { removals, renameCheckBudget, UnreadableTree } from "./removals.js";
 import {
   type BlameCommitInfo,
   type BlameState,
@@ -43,6 +44,8 @@ export interface BlameSource {
   /** The bytes, or "too_large" with no body read. */
   blob(oid: Oid, maxBytes: number): Promise<Uint8Array | "too_large">;
   commitInfo(oid: Oid): Promise<BlameCommitInfo>;
+  /** A tree's body, or "too_large" with no body read. Throws `BlameObjectUnreadable` if it's missing or not a tree. */
+  tree(oid: Oid, maxBytes: number): Promise<Uint8Array | "too_large">;
 }
 
 /** A source's calls ran out. With `ReaderWorkSpent`, this is what a slice's budget ending looks like. */
@@ -232,15 +235,22 @@ async function runStep(
   const file = await source.fileAt(info.tree, state.path);
   if (!file) return terminal(entry, "history_unreadable");
 
-  // Parents' entries, in order. One identical to this commit's takes every line, and no diff runs.
-  const parents: { oid: Oid; generation: number; level: number; blob: Oid }[] = [];
+  // Each parent, in order. A file of this kind there that's identical takes every line, and no
+  // diff runs: git looks for one across all parents before anything else, renames included.
+  const parents: {
+    oid: Oid;
+    generation: number;
+    level: number;
+    tree: Oid;
+    blob: Oid | undefined;
+  }[] = [];
   for (const parent of info.parents) {
     const parentInfo = await source.commit(parent);
     // It might itself have been identical, so nothing can be decided past it.
     if (!parentInfo) return terminal(entry, "history_missing");
     const parentFile = await source.fileAt(parentInfo.tree, state.path);
-    if (!parentFile || parentFile.kind !== file.kind) continue;
-    if (sameOid(parentFile.oid, file.oid)) {
+    const present = parentFile !== null && parentFile.kind === file.kind;
+    if (present && sameOid(parentFile.oid, file.oid)) {
       const staged = newStaged();
       staged.passes.set(oidToHex(parent), {
         oid: parent,
@@ -255,19 +265,49 @@ async function runStep(
       oid: parent,
       generation: parentInfo.generation,
       level: parentInfo.level,
-      blob: parentFile.oid,
+      tree: parentInfo.tree,
+      blob: present ? parentFile.oid : undefined,
     });
+  }
+
+  // Git follows a whole-file rename into a path a parent has no file of this kind at,
+  // from a path that parent's change removes. Lines are passed on or settled only where
+  // no rename could take them: before the first parent with a removal (the barrier),
+  // and only when no parent could hold an identical copy under another name, which
+  // would take every line. A check the budget can't finish rules nothing out.
+  const budget = renameCheckBudget();
+  let barrier = parents.length;
+  let presentBefore = false;
+  for (let k = 0; k < parents.length; k++) {
+    const parent = parents[k] as (typeof parents)[number];
+    if (parent.blob) {
+      if (barrier === parents.length) presentBefore = true;
+      continue;
+    }
+    if (!presentBefore) {
+      // Nothing before it can keep a line: any removal refuses the step.
+      const found = await removals(source, parent.tree, info.tree, undefined, budget, spend);
+      if (found !== "none") return terminal(entry, "rename_possible");
+      continue;
+    }
+    const found = await removals(source, parent.tree, info.tree, file.oid, budget, spend);
+    if (found === "identical" || found === "unknown") return terminal(entry, "rename_possible");
+    if (found === "some" && barrier === parents.length) barrier = k;
   }
 
   const staged = newStaged();
   let left: number[] = Array.from(entry.pairs);
   spend(left.length / 2);
-  if (parents.length > 0) {
+  // Parents with a file of this kind before the barrier, in order: the only ones diffed.
+  const diffed = parents
+    .slice(0, barrier)
+    .filter((p): p is (typeof parents)[number] & { blob: Oid } => p.blob !== undefined);
+  if (diffed.length > 0) {
     const child = await source.blob(file.oid, limits.maxFileBytes);
     if (child === "too_large") return terminal(entry, "parent_too_large");
     const childLines = countLines(child);
     const aligned = new Set<string>();
-    for (const parent of parents) {
+    for (const parent of diffed) {
       if (left.length === 0) break;
       // A second parent with this blob could take nothing the first left.
       const blobHex = oidToHex(parent.blob);
@@ -314,6 +354,11 @@ async function runStep(
       left = next;
     }
   }
+  if (left.length > 0 && barrier < parents.length) {
+    // What the parents before the barrier didn't take, a rename from it could have.
+    for (let k = 1; k < left.length; k += 2) refuse(staged, "rename_possible", left[k] as number);
+    left = [];
+  }
   if (left.length > 0) {
     const fact = await source.commitInfo(entry.oid);
     // Refused whole rather than cut: git shows the whole field, and a cut one would disagree.
@@ -344,7 +389,8 @@ function passesTo(
 /** What a failed read means for the step, or undefined when it isn't the walk's to handle. */
 function classify(error: unknown): "budget" | UnresolvedReason | undefined {
   if (error instanceof BlameReadsSpent || error instanceof ReaderWorkSpent) return "budget";
-  if (error instanceof BlameObjectUnreadable) return "history_unreadable";
+  if (error instanceof BlameObjectUnreadable || error instanceof UnreadableTree)
+    return "history_unreadable";
   if (error instanceof PackError) {
     if (error.code === "object-too-large") return "object_limit";
     if (error.code === "delta-too-deep") return "work_limit";

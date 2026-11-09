@@ -15,6 +15,10 @@ import { createClockBlockCache } from "../../../../packages/adapters-cloudflare/
 import { createWorkersZlib } from "../../../../packages/adapters-cloudflare/src/zlib/node-zlib.ts";
 import { alignFiles } from "../../../../packages/git-core/src/blame/align.ts";
 import {
+  MAX_RENAME_CHECK_BYTES,
+  removals,
+} from "../../../../packages/git-core/src/blame/removals.ts";
+import {
   decodeBlameState,
   encodeBlameState,
 } from "../../../../packages/git-core/src/blame/state.ts";
@@ -526,6 +530,47 @@ const CASES: Record<string, Case> = {
         throw new Error("not found");
       }),
       tree.length,
+    );
+  },
+  async "rename check: 127 differing directories of 500 entries, nothing removed"() {
+    // The widest check the budget finishes: the root pair and 127 pairs, every entry walked.
+    const bodies = new Map<string, Uint8Array>();
+    const put = (oid: Uint8Array, body: Uint8Array) => {
+      bodies.set(hex(oid), body);
+      return oid;
+    };
+    const side = (salt: number) => {
+      const children = Array.from({ length: 127 }, (_, d) =>
+        put(
+          oidOf(salt + 1000 + d),
+          treeBytes(500, (k) => oidOf(salt * 7 + d * 1000 + k)),
+        ),
+      );
+      return put(
+        oidOf(salt),
+        treeBytes(127, (d) => children[d] as Uint8Array, "40000"),
+      );
+    };
+    const from = side(1_000_000);
+    const to = side(2_000_000);
+    const source = {
+      tree: async (oid: Uint8Array) => bodies.get(hex(oid)) as Uint8Array,
+    } as never;
+    let scanned = 0;
+    for (const body of bodies.values()) scanned += body.length;
+    return per(
+      await timed(async () => {
+        const answer = await removals(
+          source,
+          from as never,
+          to as never,
+          undefined,
+          { trees: 256, bytes: MAX_RENAME_CHECK_BYTES },
+          () => {},
+        );
+        if (answer !== "none") throw new Error(`expected none, got ${answer}`);
+      }),
+      scanned,
     );
   },
   ...ALIGN_CASES,

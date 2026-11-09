@@ -218,11 +218,25 @@ runs each generator at `FYRDEN_BLAME_SEARCH` pairs, 5,000 by default, against th
 pinned git. Whatever the engine settles has to be git's answer. Pairs a larger search
 found wrong stay in the test, shrunk.
 
+The oracle is plain `git blame`, which follows whole-file renames; the engine doesn't.
+So a settled line must be git's commit and source line from the same path, and a line
+git takes from another path must be unresolved, for any reason. The `filename` git prints
+is evidence only one way: git can follow a rename and come back to the name (f to g to
+f). Where git might follow a rename, the engine refuses as `rename_possible`: a parent
+with no file of this kind at the path whose change removes another path, or, in a merge,
+a parent that may hold an identical copy under another name, or a check that passes its
+budget of 256 trees or 8 MiB of trees. Each rename probe in `blame.git-oracle.test.ts`
+states git's own answer for every line as well as the engine's, so a change in what git
+follows fails even where the engine refuses everything. Eight seeded histories rename,
+copy and delete paths around the blamed file.
+
 The nightly `blame-fixtures` job compares whole blames of `lib/application.js`,
 `lib/router/index.js`, `merge-ort.c` and `read-cache.c` at frozen commits with git
-2.53.0: no differences, and at least 95% of each file's lines resolved. A failure names
-only commit ids and line numbers. git's own blame and diff sources are never fixtures,
-and a test keeps them out.
+2.53.0: no differences, and each file's settled share no lower than its first run under
+the rename rule (79%, 98%, 99% and 98%; the first two lose lines to renames). The frozen
+hashes cover each line's commit, line and path. A failure names only commit ids, line
+numbers and paths. git's own blame and diff sources are never fixtures, and a test keeps
+them out.
 
 ## Writing git-core tests
 

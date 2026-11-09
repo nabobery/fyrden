@@ -15,9 +15,11 @@ import { gitBinary, gitVersion } from "../../testing/git-cli.js";
 import { GitBlameSource, parsePorcelain } from "./blame-git-source.js";
 
 /*
- * Whole blames of real files at frozen commits, against the pinned oracle.
- * No third party's text is committed or printed: a failure names only commit
- * ids and line numbers, and what's committed is a hash of the oracle's vector.
+ * Whole blames of real files at frozen commits, against the pinned oracle,
+ * plain `git blame`. No third party's text is committed or printed: a failure
+ * names only commit ids, line numbers and paths, and what's committed is a
+ * hash of the oracle's vector: commit, line and path for each line. Each
+ * file's share of settled lines is frozen too, so it can't fall unnoticed.
  * The engine is written from git's behaviour, not its code, so git's own blame
  * and diff sources stay out of these comparisons even as fixtures.
  * Needs full clones, so it's nightly, and on request:
@@ -38,18 +40,28 @@ const CLOSED_SOURCES = /^(?:blame\.c$|builtin\/blame\.c$|xdiff\/|xdiff-interface
 const VECTORS = join(import.meta.dirname, "vectors/frozen.json");
 const dir = process.env.FYRDEN_BLAME_FIXTURES;
 const write = process.env.FYRDEN_BLAME_VECTORS === "write";
-const MIN_RESOLVED = 0.95;
+/**
+ * Each file's settled share may not fall below its first run under the rename rule
+ * (2026-11-09): 523 of 661, 660 of 673, 5,281 of 5,286 and 3,954 of 3,995.
+ */
+const MIN_RESOLVED: Record<string, number> = {
+  "lib/application.js": 0.79,
+  "lib/router/index.js": 0.98,
+  "merge-ort.c": 0.99,
+  "read-cache.c": 0.98,
+};
 const run = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
 
 /** The oracle's answer. A failure reports its exit code only: the error would carry the file's text. */
 async function oracleBlame(cwd: string, commit: string, path: string): Promise<string> {
   try {
-    const { stdout } = await run(
-      gitBinary,
-      ["blame", "--no-follow", "--line-porcelain", commit, "--", path],
-      { cwd, env: ENV, encoding: "latin1", maxBuffer: 1024 * 1024 * 1024 },
-    );
+    const { stdout } = await run(gitBinary, ["blame", "--line-porcelain", commit, "--", path], {
+      cwd,
+      env: ENV,
+      encoding: "latin1",
+      maxBuffer: 1024 * 1024 * 1024,
+    });
     return stdout;
   } catch (error) {
     const code = (error as { code?: unknown }).code;
@@ -75,7 +87,8 @@ describe.skipIf(dir === undefined)("blame of frozen public files", () => {
       const cwd = join(dir as string, repo);
       const expected = parsePorcelain(await oracleBlame(cwd, commit, path));
       const hash = createHash("sha256");
-      for (const { commit: from, line } of expected) hash.update(`${from} ${line}\n`);
+      for (const { commit: from, line, filename } of expected)
+        hash.update(`${from} ${line} ${filename}\n`);
       const sha256 = hash.digest("hex");
       if (write) frozen[`${commit} ${path}`] = sha256;
       else {
@@ -114,15 +127,23 @@ describe.skipIf(dir === undefined)("blame of frozen public files", () => {
             resolved++;
             const want = expected[range.startLine - 1 + k];
             expect(
-              `${oidToHex(range.commit)}@${range.sourceStartLine + k}`,
+              `${oidToHex(range.commit)}@${range.sourceStartLine + k} ${path}`,
               `final line ${range.startLine + k}`,
-            ).toBe(`${want?.commit}@${want?.line}`);
+            ).toBe(`${want?.commit}@${want?.line} ${want?.filename}`);
           }
         }
+        // Every line git takes from another path is unresolved, for whatever reason.
+        const told = new Array<boolean>(state.lines).fill(false);
+        for (const range of blameRanges(state, 0, Number.MAX_SAFE_INTEGER))
+          if ("unresolved" in range)
+            told.fill(true, range.startLine - 1, range.startLine - 1 + range.lineCount);
+        expected.forEach((line, k) => {
+          if (line.filename !== path) expect(told[k], `final line ${k + 1}`).toBe(true);
+        });
         console.log(
           `${path}: ${resolved} of ${state.lines} resolved, ${state.steps} steps, ${requests} slices, largest ${largestSlice} units of engine work, unresolved ${JSON.stringify(reasons)}`,
         );
-        expect(resolved / state.lines).toBeGreaterThanOrEqual(MIN_RESOLVED);
+        expect(resolved / state.lines).toBeGreaterThanOrEqual(MIN_RESOLVED[path] ?? 1);
       } finally {
         source.close();
       }

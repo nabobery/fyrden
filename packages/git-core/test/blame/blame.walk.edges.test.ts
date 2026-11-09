@@ -78,7 +78,7 @@ class ChangingSource extends FakeSource {
   override async fileAt(tree: Oid) {
     const found = await super.fileAt(tree);
     for (const name of this.fileGone)
-      if (oidToHex(oidOfName(`tree of ${name}`)) === oidToHex(tree)) return null;
+      if (oidToHex(this.treeOf(name)) === oidToHex(tree)) return null;
     return found;
   }
 }
@@ -433,5 +433,155 @@ describe("the walk's errors", () => {
   it("name themselves, as logs show them", () => {
     expect(new BlameReadsSpent("x").name).toBe("BlameReadsSpent");
     expect(new BlameObjectUnreadable("x").name).toBe("BlameObjectUnreadable");
+  });
+});
+
+describe("where git might follow a rename", () => {
+  const blameOf = async (history: History, tip: string, slice = SLICE) => {
+    const source = new FakeSource(history);
+    return answer(source, await finished(source, tip, slice));
+  };
+  const body = f("a", "b", "c");
+
+  it("a path new in a commit that removes another: every line refused", async () => {
+    expect(
+      await blameOf({ a: { others: { g: body } }, b: { parents: ["a"], file: body } }, "b"),
+    ).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("removed anywhere, even unlike the file: refused, as git can't be ruled out", async () => {
+    expect(
+      await blameOf(
+        {
+          a: { others: { "d/e/other": f("q") } },
+          b: { parents: ["a"], file: body, others: { "d/e/kept": f("k") } },
+        },
+        "b",
+      ),
+    ).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("a path new where nothing was removed: the commit's own, as before", async () => {
+    expect(
+      await blameOf(
+        { a: { others: { g: body } }, b: { parents: ["a"], file: body, others: { g: body } } },
+        "b",
+      ),
+    ).toEqual(["b@1", "b@2", "b@3"]);
+  });
+
+  it("a directory at the path in the parent counts as no file there", async () => {
+    expect(
+      await blameOf({ a: { others: { "f/inner": body } }, b: { parents: ["a"], file: body } }, "b"),
+    ).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("a merge: a parent with the file first keeps its lines; the rest stop at the rename's parent", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { file: f("a", "b", "x") },
+          p2: { others: { g: f("z") } },
+          m: { parents: ["p1", "p2"], file: f("a", "b", "c") },
+        },
+        "m",
+      ),
+    ).toEqual(["p1@1", "p1@2", "rename_possible"]);
+  });
+
+  it("a merge: an identical copy removed by a later parent, inside a removed directory, takes every line", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { file: f("a", "b", "x") },
+          p2: { others: { "gone/g": f("a", "b", "c") } },
+          m: { parents: ["p1", "p2"], file: f("a", "b", "c") },
+        },
+        "m",
+      ),
+    ).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("a merge: a parent with the identical file wins over an earlier parent's removed copy", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { others: { g: body } },
+          p2: { file: body },
+          m: { parents: ["p1", "p2"], file: body },
+        },
+        "m",
+      ),
+    ).toEqual(["p2@1", "p2@2", "p2@3"]);
+  });
+
+  it("a merge: the rename's parent first refuses everything, even what a later parent has", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { others: { g: f("z") } },
+          p2: { file: f("a", "b", "x") },
+          m: { parents: ["p1", "p2"], file: f("a", "b", "c") },
+        },
+        "m",
+      ),
+    ).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("a merge: absent in every parent, and none removes anything: the merge's own", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { others: { y: f("y") } },
+          p2: {},
+          m: { parents: ["p1", "p2"], file: body, others: { y: f("y") } },
+        },
+        "m",
+      ),
+    ).toEqual(["m@1", "m@2", "m@3"]);
+  });
+
+  it("a check the budget can't finish rules nothing out", async () => {
+    const dirs = (side: string) =>
+      Object.fromEntries(Array.from({ length: 130 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
+    expect(
+      await blameOf(
+        { a: { others: dirs("a") }, b: { parents: ["a"], file: body, others: dirs("b") } },
+        "b",
+      ),
+    ).toEqual(new Array(3).fill("rename_possible"));
+    // The same history with fewer differing directories is checked to the end.
+    const few = (side: string) =>
+      Object.fromEntries(Array.from({ length: 100 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
+    expect(
+      await blameOf(
+        { a: { others: few("a") }, b: { parents: ["a"], file: body, others: few("b") } },
+        "b",
+      ),
+    ).toEqual(["b@1", "b@2", "b@3"]);
+  });
+
+  it("a check that runs out of reads undoes the step, or refuses it when it began fresh", async () => {
+    const history: History = { a: { others: { g: body } }, b: { parents: ["a"], file: body } };
+    const source = new FakeSource(history);
+    source.failOn = (reading) => {
+      if (reading === "tree body") throw new BlameReadsSpent("spent");
+    };
+    const state = await start(source, "b");
+    const before = encodeBlameState(state);
+    const stale = await advanceBlame(state, source, { ...SLICE, stepIsFresh: () => false });
+    expect(stale.stop).toBe("budget");
+    expect(encodeBlameState(state)).toEqual(before);
+    await advanceBlame(state, source, SLICE);
+    expect(answer(source, state)).toEqual(new Array(3).fill("work_limit"));
+  });
+
+  it("a tree that doesn't parse is unreadable history", async () => {
+    const history: History = { a: { others: { g: body } }, b: { parents: ["a"], file: body } };
+    const source = new FakeSource(history);
+    source.tree = async () => new TextEncoder().encode("100644 broken");
+    expect(answer(source, await finished(source, "b"))).toEqual(
+      new Array(3).fill("history_unreadable"),
+    );
   });
 });

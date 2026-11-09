@@ -22,11 +22,16 @@ import {
   WITNESSES_REACHED_BY_A_REFUSAL,
 } from "./align-cases.js";
 import { batchChanged, type Changed, oldOfNewFrom } from "./align-oracle.js";
-import { GitBlameSource, parsePorcelain } from "./blame-git-source.js";
+import { type GitBlameLine, GitBlameSource, parsePorcelain } from "./blame-git-source.js";
 
 /*
- * Whole blames against the pinned oracle, over histories built with
- * fast-import: on every resolved line, the same commit and source line. Without
+ * Whole blames against the pinned oracle, plain `git blame`, over histories
+ * built with fast-import. A settled line must be git's: the same commit and
+ * source line, from the same path, since the engine never follows a rename. A
+ * line git takes from another path must be unresolved. That `filename` test
+ * only works one way: git can follow a rename and come back to the same name
+ * (f to g to f), so a matching name proves nothing; the settled-line check is
+ * what holds the guarantee. Without
  * the pin the comparison means nothing: it skips locally, and fails in CI so
  * that a dropped setting can't quietly turn parity off.
  *
@@ -97,22 +102,46 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     return (await sandbox.git(["rev-parse", `refs/heads/${prefix}/${tip}`])).stdout.trim();
   }
 
-  async function oracle(commit: string, path: string) {
-    const out = await sandbox.gitBytes(
-      ["blame", "--no-follow", "--line-porcelain", commit, "--", path],
-      { env: ENV },
-    );
+  async function oracle(commit: string, path: string): Promise<GitBlameLine[]> {
+    const out = await sandbox.gitBytes(["blame", "--line-porcelain", commit, "--", path], {
+      env: ENV,
+    });
     return parsePorcelain(Buffer.from(out).toString("latin1"));
   }
 
-  /** Runs the engine over a built history, and compares each line it resolved. */
-  async function compare(tip: string, path: string, slice = SLICE) {
+  /** Each commit's name in a built history, by id: its ref under the prefix. */
+  async function namesOf(prefix: string): Promise<Map<string, string>> {
+    const out = await sandbox.git([
+      "for-each-ref",
+      "--format=%(objectname) %(refname)",
+      `refs/heads/${prefix}/`,
+    ]);
+    const names = new Map<string, string>();
+    for (const row of out.stdout.trim().split("\n")) {
+      const [oid, ref] = row.split(" ");
+      names.set(oid as string, (ref as string).slice(`refs/heads/${prefix}/`.length));
+    }
+    return names;
+  }
+
+  /**
+   * Runs the engine over a built history and holds it to git: each settled line is
+   * git's commit and source line, from this path; each line git takes from another
+   * path is unresolved. Returns each line's answer, `<commit>@<line>` or a reason.
+   */
+  async function compare(
+    tip: string,
+    path: string,
+    slice = SLICE,
+    begin: { maxFileBytes?: number } = {},
+  ) {
     const source = await GitBlameSource.open(sandbox.dir, { ...process.env, ...ENV }, tip);
     try {
       const state = await startBlame(
         source,
         oidFromHex(tip),
         path.split("/").map((segment) => new TextEncoder().encode(segment)),
+        begin,
       );
       if ("failure" in state) throw new Error(state.failure);
       for (;;) {
@@ -122,23 +151,32 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
       expect(state.lines).toBe(expected.length);
       const reasons = new Map<string, number>();
       let resolved = 0;
-      const told = new Array<boolean>(state.lines).fill(false);
+      const answers = new Array<string>(state.lines).fill("");
       for (const range of blameRanges(state, 0, Number.MAX_SAFE_INTEGER)) {
         for (let k = 0; k < range.lineCount; k++) {
           const line = range.startLine - 1 + k;
-          told[line] = true;
+          const git = expected[line] as GitBlameLine;
           if ("unresolved" in range) {
+            answers[line] = range.unresolved;
             reasons.set(range.unresolved, (reasons.get(range.unresolved) ?? 0) + 1);
             continue;
           }
           resolved++;
-          expect(`${oidToHex(range.commit)}@${range.sourceStartLine + k}`, `line ${line + 1}`).toBe(
-            `${expected[line]?.commit}@${expected[line]?.line}`,
+          answers[line] = `${oidToHex(range.commit)}@${range.sourceStartLine + k}`;
+          expect(`${answers[line]} ${path}`, `line ${line + 1}`).toBe(
+            `${git.commit}@${git.line} ${git.filename}`,
           );
         }
       }
-      expect(told.every(Boolean)).toBe(true);
-      return { resolved, reasons, lines: state.lines };
+      expect(answers.every((a) => a !== "")).toBe(true);
+      expected.forEach((git, line) => {
+        if (git.filename !== path)
+          expect([line + 1, answers[line]], "git took it from another path").toEqual([
+            line + 1,
+            expect.not.stringMatching(/@/),
+          ]);
+      });
+      return { resolved, reasons, lines: state.lines, answers, git: expected };
     } finally {
       source.close();
     }
@@ -146,7 +184,10 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
 
   const f = (...words: string[]) => lines(...words);
   const one = (text: string) => ({ f: text });
-  const SYNTHETIC: Record<string, { history: Record<string, Node>; tip: string }> = {
+  const SYNTHETIC: Record<
+    string,
+    { history: Record<string, Node>; tip: string; refused?: Record<string, number> }
+  > = {
     "merge-two": {
       tip: "m",
       history: {
@@ -190,15 +231,11 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
         b: { parents: ["a"], files: one("a\nb\nc\n") },
       },
     },
-    "rename-no-follow": {
-      tip: "b",
-      history: {
-        a: { files: { old: f("a", "b") } },
-        b: { parents: ["a"], files: { f: f("a", "b") } },
-      },
-    },
     "delete-recreate": {
       tip: "c",
+      // c's path is new where b removed `other`: git doesn't follow it (too unlike), but
+      // that isn't knowable without git's similarity measure.
+      refused: { rename_possible: 1 },
       history: {
         a: { files: one(f("x")) },
         b: { parents: ["a"], files: { other: f("y") } },
@@ -211,6 +248,8 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     },
     "path-kinds": {
       tip: "d",
+      // At d a directory became the file, removing f/inner.
+      refused: { rename_possible: 1 },
       history: {
         a: { files: { f: "target\n" } },
         b: { parents: ["a"], files: { f: "120000 target\n" } },
@@ -220,22 +259,359 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     },
   };
 
-  it("fails loudly if `--no-follow` stops turning rename following off", async () => {
-    const { history, tip } = SYNTHETIC["rename-no-follow"] as {
-      history: Record<string, Node>;
-      tip: string;
-    };
-    const commit = await build("rename-check", history, tip);
-    const lastCommit = (await oracle(commit, "f"))[0]?.commit;
-    expect(lastCommit).toBe(commit);
-  });
-
   it.each(Object.keys(SYNTHETIC))("%s", async (name) => {
-    const { history, tip } = SYNTHETIC[name] as { history: Record<string, Node>; tip: string };
+    const { history, tip, refused = {} } = SYNTHETIC[name] as (typeof SYNTHETIC)[string];
     const commit = await build(name, history, tip);
     const { reasons, resolved, lines: count } = await compare(commit, "f");
-    expect(reasons.size).toBe(0);
-    expect(resolved).toBe(count);
+    expect(Object.fromEntries(reasons)).toEqual(refused);
+    const refusedLines = Object.values(refused).reduce((a, b) => a + b, 0);
+    expect(resolved).toBe(count - refusedLines);
+  });
+
+  describe("renames: what git does, then what the engine answers", () => {
+    // Each probe pins git's own answer for every line (commit, path, source line), so a
+    // change in what git follows fails here even where the engine refuses every line;
+    // then the engine's answer: a commit and line, or the reason.
+    const BODY = Array.from(
+      { length: 12 },
+      (_, k) => `line ${k} of the original text, long enough`,
+    );
+    const OTHER = Array.from({ length: 12 }, (_, k) => `unrelated ${k} words sharing nothing`);
+    const B = (...range: number[]) => BODY.slice(...range);
+    const runOf = (who: string, from: number, to: number) =>
+      Array.from({ length: to - from + 1 }, (_, k) => `${who}@${from + k}`);
+    const times = (n: number, what: string) => new Array<string>(n).fill(what);
+    const R = "rename_possible";
+    const dirs = (side: string) =>
+      Object.fromEntries(Array.from({ length: 130 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
+
+    const PROBES: Record<
+      string,
+      {
+        history: Record<string, Node>;
+        tip: string;
+        git: string[];
+        engine: string[];
+        slice?: BlameSliceLimits;
+        begin?: { maxFileBytes?: number };
+      }
+    > = {
+      "exact rename": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("a:g", 1, 12),
+        engine: times(12, R),
+      },
+      "an edited rename git follows": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...B(0, 7), ...OTHER.slice(0, 5)) } },
+        },
+        git: [...runOf("a:g", 1, 7), ...runOf("b:f", 8, 12)],
+        engine: times(12, R),
+      },
+      "an edited rename git doesn't follow: refused anyway": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...B(0, 3), ...OTHER.slice(0, 9)) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: times(12, R),
+      },
+      "a rename and another deletion": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY), h: f(...OTHER) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("a:g", 1, 12),
+        engine: times(12, R),
+      },
+      "a deletion with no rename: refused anyway": {
+        tip: "b",
+        history: {
+          a: { files: { h: f(...OTHER) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: times(12, R),
+      },
+      "a copy, nothing removed": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { g: f(...BODY), f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: runOf("b", 1, 12),
+      },
+      "a swap: the path was there": {
+        tip: "b",
+        history: {
+          a: { files: { f: f(...OTHER), g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY), g: f(...OTHER) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: runOf("b", 1, 12),
+      },
+      "a rewrite with the old text's path deleted: the path was there": {
+        tip: "b",
+        history: {
+          a: { files: { f: f(...OTHER), g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: runOf("b", 1, 12),
+      },
+      "the path was a directory": {
+        tip: "b",
+        history: {
+          a: { files: { "f/x": f(...OTHER), g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("a:g", 1, 12),
+        engine: times(12, R),
+      },
+      "the path was a symlink, and another path was deleted": {
+        tip: "b",
+        history: {
+          a: { files: { f: "120000 target", g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: times(12, R),
+      },
+      "another path changed type": {
+        tip: "b",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { g: "120000 target", f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: times(12, R),
+      },
+      "a rename across directories": {
+        tip: "b",
+        history: {
+          a: { files: { "d1/d2/g": f(...BODY), "d3/keep": f("k") } },
+          b: { parents: ["a"], files: { f: f(...BODY), "d3/keep": f("k") } },
+        },
+        git: runOf("a:d1/d2/g", 1, 12),
+        engine: times(12, R),
+      },
+      "a rename, then an edit": {
+        tip: "c",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+          c: { parents: ["b"], files: { f: f(...BODY, "added in c") } },
+        },
+        git: [...runOf("a:g", 1, 12), "c:f@13"],
+        engine: [...times(12, R), "c@13"],
+      },
+      "away and back to the same name": {
+        tip: "c",
+        history: {
+          a: { files: { f: f(...BODY) } },
+          b: { parents: ["a"], files: { g: f(...BODY) } },
+          c: { parents: ["b"], files: { f: f(...BODY) } },
+        },
+        git: runOf("a:f", 1, 12),
+        engine: times(12, R),
+      },
+      "away and back, edited each way": {
+        tip: "c",
+        history: {
+          a: { files: { f: f(...BODY) } },
+          b: { parents: ["a"], files: { g: f(...BODY, "edit in b") } },
+          c: { parents: ["b"], files: { f: f(...BODY, "edit in b", "edit in c") } },
+        },
+        git: [...runOf("a:f", 1, 12), "b:g@13", "c:f@14"],
+        engine: times(14, R),
+      },
+      "a large parent before the rename: refused for that first": {
+        tip: "c",
+        history: {
+          a: { files: { g: f(...BODY) } },
+          b: { parents: ["a"], files: { f: f(...BODY) } },
+          c: { parents: ["b"], files: { f: f(...B(0, 6)) } },
+        },
+        begin: { maxFileBytes: 400 },
+        slice: { ...SLICE, maxFileBytes: 400 },
+        git: runOf("a:g", 1, 6),
+        engine: times(6, "parent_too_large"),
+      },
+      "a check too large for its budget: refused, though git finds nothing": {
+        tip: "b",
+        history: {
+          a: { files: dirs("a") },
+          b: { parents: ["a"], files: { ...dirs("b"), f: f(...BODY) } },
+        },
+        git: runOf("b:f", 1, 12),
+        engine: times(12, R),
+      },
+      "merge: a rename in the second parent": {
+        tip: "m",
+        history: {
+          base: { files: { g: f(...BODY) } },
+          p1: { parents: ["base"], files: { g: f(...BODY), f: f(...B(0, 6), "p1 line") } },
+          p2: { parents: ["base"], files: { g: f(...BODY), x: f("x") } },
+          m: { parents: ["p1", "p2"], files: { f: f(...B(0, 6), "p1 line", ...B(6)), x: f("x") } },
+        },
+        git: [...runOf("p1:f", 1, 7), ...runOf("base:g", 7, 12)],
+        engine: [...runOf("p1", 1, 7), ...times(6, R)],
+      },
+      "merge: a rename in the first parent": {
+        tip: "m",
+        history: {
+          base: { files: { g: f(...BODY) } },
+          p1: { parents: ["base"], files: { g: f(...BODY), x: f("x") } },
+          p2: { parents: ["base"], files: { g: f(...BODY), f: f(...B(0, 6), "p2 line") } },
+          m: { parents: ["p1", "p2"], files: { f: f(...B(0, 6), "p2 line", ...B(6)), x: f("x") } },
+        },
+        git: [...runOf("base:g", 1, 6), "p2:f@7", ...runOf("base:g", 7, 12)],
+        engine: times(13, R),
+      },
+      "merge: the first parent's file differs, the second removed an identical copy": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f(...B(0, 6), "p1 line") } },
+          base: { files: { g: f(...BODY) } },
+          p2: { parents: ["base"], files: { g: f(...BODY), x: f("x") } },
+          m: { parents: ["p1", "p2"], files: { f: f(...BODY), x: f("x") } },
+        },
+        git: runOf("base:g", 1, 12),
+        engine: times(12, R),
+      },
+      "merge: the first parent's file is identical, the second renamed one": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f(...BODY) } },
+          base: { files: { g: f(...BODY) } },
+          p2: { parents: ["base"], files: { g: f(...BODY), x: f("x") } },
+          m: { parents: ["p1", "p2"], files: { f: f(...BODY), x: f("x") } },
+        },
+        git: runOf("p1:f", 1, 12),
+        engine: runOf("p1", 1, 12),
+      },
+      "merge: an identical file in the second parent beats the first's removed copy": {
+        tip: "m",
+        history: {
+          p1: { files: { g: f(...BODY) } },
+          p2: { files: { f: f(...BODY) } },
+          m: { parents: ["p1", "p2"], files: { f: f(...BODY) } },
+        },
+        git: runOf("p2:f", 1, 12),
+        engine: runOf("p2", 1, 12),
+      },
+      "merge: an identical copy inside a removed directory": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: { "gone/g": f("a", "b", "c") } },
+          m: { parents: ["p1", "p2"], files: { f: f("a", "b", "c") } },
+        },
+        git: runOf("p2:gone/g", 1, 3),
+        engine: times(3, R),
+      },
+      "merge: an identical copy in a nested removed directory": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: { "deep/er/g": f("a", "b", "c") } },
+          m: { parents: ["p1", "p2"], files: { f: f("a", "b", "c") } },
+        },
+        git: runOf("p2:deep/er/g", 1, 3),
+        engine: times(3, R),
+      },
+      "merge: an identical copy in a directory that became a file": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: { "p/g": f("a", "b", "c") } },
+          m: { parents: ["p1", "p2"], files: { f: f("a", "b", "c"), p: f("now a file") } },
+        },
+        git: runOf("p2:p/g", 1, 3),
+        engine: times(3, R),
+      },
+      "octopus: an identical copy inside the third parent's removed directory": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: { y: f("y") } },
+          p3: { files: { "gone/g": f("a", "b", "c") } },
+          m: { parents: ["p1", "p2", "p3"], files: { f: f("a", "b", "c"), y: f("y") } },
+        },
+        git: runOf("p3:gone/g", 1, 3),
+        engine: times(3, R),
+      },
+      "merge: git names another path at the same commit and line": {
+        tip: "m",
+        history: {
+          root: { files: { f: f(...BODY), g: f(...BODY) } },
+          p1: { parents: ["root"], files: { f: f(...BODY, "x"), g: f(...BODY) } },
+          p2: { parents: ["root"], files: { g: f(...BODY) } },
+          m: { parents: ["p1", "p2"], files: { f: f(...BODY) } },
+        },
+        git: runOf("root:g", 1, 12),
+        engine: times(12, R),
+      },
+      "merge: absent in both parents, one deletes": {
+        tip: "m",
+        history: {
+          base: { files: { g: f(...BODY), h: f(...OTHER) } },
+          p1: { parents: ["base"], files: { g: f(...BODY), h: f(...OTHER), y: f("y") } },
+          p2: { parents: ["base"], files: { g: f(...BODY), h: f(...OTHER), z: f("z") } },
+          m: {
+            parents: ["p1", "p2"],
+            files: { h: f(...OTHER), y: f("y"), z: f("z"), f: f(...BODY) },
+          },
+        },
+        git: runOf("base:g", 1, 12),
+        engine: times(12, R),
+      },
+      "octopus: a rename in the third parent": {
+        tip: "m",
+        history: {
+          base: { files: { g: f(...BODY) } },
+          p1: { parents: ["base"], files: { g: f(...BODY), f: f(...B(0, 4), "p1 line") } },
+          p2: {
+            parents: ["base"],
+            files: { g: f(...BODY), f: f(...B(0, 4), "p2 line"), y: f("y") },
+          },
+          p3: { parents: ["base"], files: { g: f(...BODY), x: f("x") } },
+          m: {
+            parents: ["p1", "p2", "p3"],
+            files: { f: f(...B(0, 4), "p1 line", "p2 line", ...B(4)), x: f("x"), y: f("y") },
+          },
+        },
+        git: [...runOf("p1:f", 1, 5), "p2:f@5", ...runOf("base:g", 5, 12)],
+        engine: [...runOf("p1", 1, 5), "p2@5", ...times(8, R)],
+      },
+    };
+
+    it.each(Object.keys(PROBES))("%s", async (name) => {
+      const probe = PROBES[name] as (typeof PROBES)[string];
+      const prefix = `probe-${Object.keys(PROBES).indexOf(name)}`;
+      const tip = await build(prefix, probe.history, probe.tip);
+      const names = await namesOf(prefix);
+      const path = "f";
+      const git = (await oracle(tip, path)).map(
+        (l) => `${names.get(l.commit) ?? l.summary}:${l.filename}@${l.line}`,
+      );
+      expect(git, "git's own answer").toEqual(probe.git);
+      const { answers } = await compare(tip, path, probe.slice ?? SLICE, probe.begin ?? {});
+      const engine = answers.map((a) => {
+        const [oid, line] = a.split("@");
+        return line === undefined ? a : `${names.get(oid as string)}@${line}`;
+      });
+      expect(engine, "the engine's answer").toEqual(probe.engine);
+    });
   });
 
   it("a run of crowded lines at a common prefix: no line goes to the wrong commit", async () => {
@@ -453,6 +829,99 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     }
     return history;
   }
+
+  /**
+   * A seeded history where the blamed file is renamed (sometimes back), edited and
+   * copied, other paths come and go, and some commits merge. Returns the file's
+   * name at the tip.
+   */
+  function renamingHistory(
+    seed: number,
+    size: number,
+  ): { history: Record<string, Node>; path: string } {
+    let state = seed >>> 0 || 1;
+    const rand = () => {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      return (state >>> 0) / 0x100000000;
+    };
+    const pick = <T>(items: readonly T[]) => items[Math.floor(rand() * items.length)] as T;
+    const NAMES = ["f", "g", "dir/h", "dir/sub/f"];
+    const OTHERS = ["o1", "o2", "dir/o3", "far/o4", "far/deep/o5"];
+    const word = () => `w${Math.floor(rand() * 40)} of a line long enough to weigh`;
+    const history: Record<string, Node> = {};
+    const states: { name: string; text: string[]; others: Record<string, string> }[] = [];
+    for (let k = 0; k < size; k++) {
+      let current: { name: string; text: string[]; others: Record<string, string> };
+      const parents: string[] = [];
+      if (k === 0) {
+        current = { name: "f", text: Array.from({ length: 30 }, word), others: { o1: f(word()) } };
+      } else {
+        const first = Math.max(0, k - 1 - Math.floor(rand() * 3));
+        parents.push(`c${first}`);
+        const base = states[first] as (typeof states)[number];
+        current = { name: base.name, text: [...base.text], others: { ...base.others } };
+        if (k > 2 && rand() < 0.2) {
+          const second = Math.floor(rand() * k);
+          if (second !== first) {
+            parents.push(`c${second}`);
+            const other = states[second] as (typeof states)[number];
+            const at = Math.floor(rand() * other.text.length);
+            current.text.splice(
+              Math.floor(rand() * current.text.length),
+              0,
+              ...other.text.slice(at, at + 6),
+            );
+            for (const [path, text] of Object.entries(other.others))
+              if (rand() < 0.5) current.others[path] = text;
+          }
+        }
+        const roll = rand();
+        if (roll < 0.15) current.name = pick(NAMES.filter((n) => n !== current.name));
+        else if (roll < 0.25) {
+          const gone = pick(Object.keys(current.others));
+          if (gone) delete current.others[gone];
+        } else if (roll < 0.35) current.others[pick(OTHERS)] = f(word(), word());
+        else if (roll < 0.4) current.others[pick(OTHERS)] = f(...current.text);
+        const edits = Math.floor(rand() * 3);
+        for (let e = 0; e < edits; e++) {
+          const at = Math.floor(rand() * (current.text.length + 1));
+          if (rand() < 0.6)
+            current.text.splice(at, 0, ...Array.from({ length: 1 + Math.floor(rand() * 4) }, word));
+          else current.text.splice(at, 1 + Math.floor(rand() * 2));
+        }
+      }
+      // A path can't be both a file and a directory: other paths under the file's name go.
+      for (const path of Object.keys(current.others)) {
+        if (
+          path === current.name ||
+          path.startsWith(`${current.name}/`) ||
+          current.name.startsWith(`${path}/`)
+        )
+          delete current.others[path];
+      }
+      states.push(current);
+      history[`c${k}`] = {
+        parents,
+        files: {
+          ...current.others,
+          [current.name]: current.text.length > 0 ? f(...current.text) : "",
+        },
+      };
+    }
+    return { history, path: (states[size - 1] as (typeof states)[number]).name };
+  }
+
+  it.each([1, 2, 3, 4, 5, 6, 7, 8])("a seeded history with renames, seed %i", async (seed) => {
+    const { history, path } = renamingHistory(seed * 104_729, 60);
+    const commit = await build(`renaming-${seed}`, history, "c59");
+    const { resolved, reasons, lines: count, git } = await compare(commit, path);
+    expect(resolved + [...reasons.values()].reduce((a, b) => a + b, 0)).toBe(count);
+    console.log(
+      `seed ${seed}: ${count} lines, ${resolved} settled, git through another path ${git.filter((l) => l.filename !== path).length}, ${JSON.stringify(Object.fromEntries(reasons))}`,
+    );
+  });
 
   it.each([1, 2, 3, 4, 5, 6, 7, 8])("a seeded history, seed %i", async (seed) => {
     const history = seededHistory(seed * 7919, 60);

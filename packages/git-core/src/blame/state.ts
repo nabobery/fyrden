@@ -22,6 +22,7 @@ export const UNRESOLVED_REASONS = [
   "history_limit",
   "state_limit",
   "commit_info_too_large",
+  "rename_possible",
 ] as const;
 export type UnresolvedReason = (typeof UNRESOLVED_REASONS)[number];
 

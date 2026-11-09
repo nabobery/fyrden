@@ -1,5 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import type { BlameCommitInfo, BlameSource } from "../../src/blame/walk.js";
+import {
+  type BlameCommitInfo,
+  BlameObjectUnreadable,
+  type BlameSource,
+} from "../../src/blame/walk.js";
 import { parseCommit } from "../../src/object/commit.js";
 import { GitObjectError } from "../../src/object/fsck.js";
 import { type Oid, oidFromHex, oidToHex } from "../../src/object/oid.js";
@@ -183,6 +187,12 @@ export class GitBlameSource implements BlameSource {
     return null;
   }
 
+  async tree(oid: Oid, maxBytes: number) {
+    const bytes = await this.#tree(oid);
+    if (!bytes) throw new BlameObjectUnreadable(`tree ${oidToHex(oid)} is missing or isn't a tree`);
+    return bytes.length > maxBytes ? ("too_large" as const) : bytes;
+  }
+
   async blob(oid: Oid, maxBytes: number) {
     const object = await this.#objects.read(oidToHex(oid));
     if (!object) throw new Error("a blob is missing");
@@ -197,18 +207,31 @@ export class GitBlameSource implements BlameSource {
   }
 }
 
-/** What `git blame --line-porcelain` says of each line: its commit and source line. */
-export function parsePorcelain(output: string): { commit: string; line: number }[] {
-  const out: { commit: string; line: number }[] = [];
-  let expectHeader = true;
+/** One line of `git blame --line-porcelain`: its commit, source line, and the path it came from. */
+export interface GitBlameLine {
+  readonly commit: string;
+  readonly line: number;
+  /** The path in that commit, as git prints it (unquoted bytes, read as latin1). */
+  readonly filename: string;
+  readonly summary: string;
+}
+
+/** What `git blame --line-porcelain` says of each line. */
+export function parsePorcelain(output: string): GitBlameLine[] {
+  const out: GitBlameLine[] = [];
+  let current: { commit: string; line: number; filename: string; summary: string } | undefined;
   for (const line of output.split("\n")) {
-    if (expectHeader) {
+    if (!current) {
       const match = /^([0-9a-f]{40}) (\d+) (\d+)/.exec(line);
       if (!match) continue;
-      out.push({ commit: match[1] as string, line: Number(match[2]) });
-      expectHeader = false;
+      current = { commit: match[1] as string, line: Number(match[2]), filename: "", summary: "" };
     } else if (line.startsWith("\t")) {
-      expectHeader = true;
+      out.push(current);
+      current = undefined;
+    } else if (line.startsWith("filename ")) {
+      current.filename = line.slice(9);
+    } else if (line.startsWith("summary ")) {
+      current.summary = line.slice(8);
     }
   }
   return out;

@@ -200,6 +200,8 @@ describe("which parent gets a line", () => {
 
 describe("which file a commit has", () => {
   it("a symlink is blamed as its text, and only a symlink parent counts", async () => {
+    // At b the path changes type, which is a removal: whether git could follow a rename
+    // there isn't ruled out, so the line is refused rather than settled on b.
     expect(
       await blame(
         {
@@ -209,7 +211,7 @@ describe("which file a commit has", () => {
         },
         "c",
       ),
-    ).toEqual(["b@1"]);
+    ).toEqual(["rename_possible"]);
   });
 
   it("the path gone in the parent starts here, and a recreation starts again", async () => {
