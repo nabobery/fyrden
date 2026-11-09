@@ -100,20 +100,37 @@ describe("blame through the repository's source, against git", () => {
   });
 
   it("agrees with git on every line where nothing is refused", async () => {
-    // Git credits the conversion of a legacy-mode symlink to a file, and keeps facts as written.
-    expect(fromGit("legacydir/link").map((l) => "commit" in l && l.commit)).toEqual([
-      fx.commits.legacyFile,
-    ]);
+    // Git keeps facts as written.
     expect(fromGit("facts.txt")).toMatchObject([
       { summary: "first" },
       { summary: "\uFEFFword", name: "\uFEFFBo Test" },
       { date: "8640000000001 -0730" },
     ]);
     const stub = await pushed();
-    for (const path of ["f.txt", "link", "dir/inner.txt", "legacydir/link", "facts.txt"]) {
+    for (const path of ["f.txt", "link", "dir/inner.txt", "facts.txt"]) {
       const got = await blame(stub, path);
       expect({ path, got }).toEqual({ path, got: { lines: fromGit(path) } });
     }
+  });
+
+  it("refuses lines git takes through a rename, and those where one can't be ruled out", async () => {
+    const named = (path: string) =>
+      (fx.blames[path] ?? []).map((g) => `${g.commit}:${g.filename}@${g.line}`);
+    const { withOld, added, p2, legacyFile } = fx.commits;
+    // What git says, apart from the engine: through old.txt, at the adding commit, through
+    // the second side's identical copy, and at the conversion of a symlink to a file.
+    expect(named("renamed.txt")).toEqual([1, 2, 3].map((n) => `${withOld}:old.txt@${n}`));
+    expect(named("added.txt")).toEqual([`${added}:added.txt@1`]);
+    expect(named("merged.txt")).toEqual([1, 2, 3].map((n) => `${p2}:gone/g.txt@${n}`));
+    expect(named("legacydir/link")).toEqual([`${legacyFile}:legacydir/link@1`]);
+    const stub = await pushed();
+    const refused = { unresolved: "rename_possible" };
+    expect(await blame(stub, "renamed.txt")).toEqual({ lines: [refused, refused, refused] });
+    expect(await blame(stub, "added.txt")).toEqual({ lines: [refused] });
+    expect(await blame(stub, "merged.txt")).toEqual({ lines: [refused, refused, refused] });
+    // The path's own change of type is a removal: whether git could follow a rename into it
+    // isn't knowable, so the line is refused where git credits the conversion.
+    expect(await blame(stub, "legacydir/link")).toEqual({ lines: [refused] });
   });
 
   it("refuses a 17-parent commit's lines, where git names the branch that made them", async () => {

@@ -4,7 +4,10 @@
 // source test walks the same history through Fyrden's reader and compares.
 // The history has a merge, facts in ISO-8859-1, summaries git treats
 // specially, a 17-parent octopus reachable from one path, commit objects of
-// exactly 64 KiB and one byte more, a symlink, a directory and a submodule.
+// exactly 64 KiB and one byte more, a symlink, a directory and a submodule;
+// and renames git follows: a whole-file rename, a file added where another
+// was deleted, and a merge whose second parent holds an identical copy in a
+// directory the merge removed.
 // Uses the git on PATH (or FYRDEN_GIT_BINARY), with no user or system
 // config and fixed dates, so ids are the same on every run.
 import { spawnSync } from "node:child_process";
@@ -226,14 +229,50 @@ export default function setup(project: TestProject): () => void {
   commits.far = commit(facts("nul", "bom", "far"), [commits.bom], "Far future\n", {
     when: "8640000000001 -0730",
   });
-  commits.tip = commit(
-    withF(tipF, [
-      ...octo,
-      big("a\nb\n"),
-      ["040000", legacyFile, "legacydir"],
-      ["100644", blob(lines("nul", "bom", "far")), "facts.txt"],
-    ]),
+  const kept: Entry[] = [
+    ["040000", legacyFile, "legacydir"],
+    ["100644", blob(lines("nul", "bom", "far")), "facts.txt"],
+  ];
+  const entry = (name: string, text: string): Entry => ["100644", blob(text), name];
+  const renamedText = lines("r one", "r two", "r three");
+  commits.withOld = commit(
+    later(...kept, entry("old.txt", renamedText), entry("doomed.txt", lines("doomed"))),
     [commits.far],
+    "Old and doomed\n",
+  );
+  // Git follows this rename: every line is old.txt's in withOld.
+  commits.renamed = commit(
+    later(...kept, entry("renamed.txt", renamedText), entry("doomed.txt", lines("doomed"))),
+    [commits.withOld],
+    "Rename old to renamed\n",
+  );
+  // Nothing like doomed.txt: git credits this commit, but a rename can't be ruled out.
+  const settled = [...kept, entry("renamed.txt", renamedText)];
+  commits.added = commit(
+    later(...settled, entry("added.txt", lines("brand new"))),
+    [commits.renamed],
+    "Add one, delete another\n",
+  );
+  const afterAdded = [...settled, entry("added.txt", lines("brand new"))];
+  commits.p1 = commit(
+    later(...afterAdded, entry("merged.txt", lines("a", "b", "x"))),
+    [commits.added],
+    "First side\n",
+  );
+  commits.p2 = commit(
+    later(...afterAdded, ["040000", tree([entry("g.txt", lines("a", "b", "c"))]), "gone"]),
+    [commits.added],
+    "Second side\n",
+  );
+  // Git takes all of merged.txt from the second side's gone/g.txt, an identical copy.
+  commits.merged = commit(
+    later(...afterAdded, entry("merged.txt", lines("a", "b", "c"))),
+    [commits.p1, commits.p2],
+    "Merge with a copy\n",
+  );
+  commits.tip = commit(
+    withF(tipF, [...octo, big("a\nb\n"), ...afterAdded, entry("merged.txt", lines("a", "b", "c"))]),
+    [commits.merged],
     "Tip\n",
   );
 
@@ -278,6 +317,8 @@ function porcelain(output: string): GitBlameLine[] {
       current.name = line.slice("author ".length);
     } else if (line.startsWith("summary ")) {
       current.summary = line.slice("summary ".length);
+    } else if (line.startsWith("filename ")) {
+      current.filename = line.slice("filename ".length);
     }
   }
   return result;

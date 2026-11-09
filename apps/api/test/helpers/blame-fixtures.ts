@@ -10,6 +10,8 @@ export interface GitBlameLine {
   readonly time: string;
   /** The author's offset, as git prints it. */
   readonly tz: string;
+  /** The path in that commit, as git prints it: another path when git followed a rename. */
+  readonly filename: string;
 }
 
 /**
@@ -41,4 +43,7 @@ export const BLAME_PATHS = [
   "big.txt",
   "legacydir/link",
   "facts.txt",
+  "renamed.txt",
+  "added.txt",
+  "merged.txt",
 ] as const;
