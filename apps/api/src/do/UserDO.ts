@@ -1199,10 +1199,13 @@ export class UserDO extends MigratingDO {
           });
         continue;
       }
-      this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
       await this.#scheduleLive();
       if (admittedStill() && this.#holdsTurn()) break;
     }
+    // Open only as it is attached (nothing awaited between): until then its row is still being
+    // confirmed, so no turn sends it anything or counts it due, and an open row with no socket
+    // attached is one whose connection is gone (see `#send`).
+    this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
     const [client, server] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
     this.ctx.acceptWebSocket(server, [admitted.socketId]);
     // When its prepaid end passes, on this object's clock (read with no SQL by its callbacks).
@@ -1213,6 +1216,9 @@ export class UserDO extends MigratingDO {
       until: terminal.envelope.plan.validUntil - offset,
     });
     feedHooks.acknowledged?.(this.ctx, this.#turnRunning !== null);
+    // Due again now that it is open (what changed while it was confirmed is its to hear), after
+    // the 101: nothing is awaited before it.
+    this.ctx.waitUntil(this.#scheduleLive().catch(() => {}));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1760,6 +1766,7 @@ export class UserDO extends MigratingDO {
             CLOSE_EXPIRED,
             "expired: renew in time or reconnect",
           );
+        else if (sent === "gone") await this.#closeSocket(s.socket_id, 1001, "gone");
       }
     }
     // What a run's bounds left is due at once (the alarm sets it by `Live.nextDue`).
@@ -2353,16 +2360,17 @@ export class UserDO extends MigratingDO {
     candidates: ReadonlyMap<string, readonly LiveCandidate[]>,
     gate: Gate,
     now: number,
-  ): "expired" | undefined {
+  ): "expired" | "gone" | undefined {
     const current = live.socket(s.socket_id);
     if (!current || current.phase !== "open") return;
     // Its deadline or life passed while the run was authorizing: nothing more is sent.
     if (current.deadline <= now || current.expires_at <= now) return "expired";
     if (current.sent - current.acked >= LIVE_POLICY.window) return;
-    // Nothing sent, nor its cursor moved, while no socket is attached to it (an opening between
-    // its row and its 101): what it would have heard waits for its first turn once attached.
+    // Open with no socket attached (an opening's row is open only once attached): its connection
+    // is gone and its close was not taken (the directory unreadable then, say). Nothing is sent,
+    // nor its cursor moved; it is ended as a close ends it, so no turn chooses it again.
     const attached = this.ctx.getWebSockets(s.socket_id);
-    if (attached.length === 0) return;
+    if (attached.length === 0) return "gone";
     const streams = dirty.filter(
       (d) =>
         d.seq > current.delivered_seq &&

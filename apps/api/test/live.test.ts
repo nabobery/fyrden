@@ -1625,14 +1625,16 @@ describe("a feed's turn", () => {
     const credential = await credentialOf(owner);
     // It lapses while the opened socket's alarm is set.
     let lapsed = false;
+    // (The opening's second alarm write, in its last checks: its first is as its row is written.)
+    let writes = 0;
     feedHooks.beforeAlarmWrite = async () => {
-      if (
-        state.storage.sql.exec("SELECT 1 FROM live_local WHERE phase = 'open'").toArray().length
-      ) {
-        delete feedHooks.beforeAlarmWrite;
-        lapsed = true;
-        vi.setSystemTime(Date.now() + 3_000);
-      }
+      const confirming = state.storage.sql
+        .exec("SELECT 1 FROM live_local WHERE phase = 'confirming'")
+        .toArray().length;
+      if (!confirming || ++writes < 2) return;
+      delete feedHooks.beforeAlarmWrite;
+      lapsed = true;
+      vi.setSystemTime(Date.now() + 3_000);
     };
     onTestFinished(() => {
       delete feedHooks.beforeAlarmWrite;
@@ -1749,9 +1751,13 @@ describe("a feed's turn", () => {
     let armed = false;
     let ran: Promise<void> | undefined;
     let beforeAttached: { attached: number; behind: boolean; sent: number } | undefined;
+    // (The opening's second alarm write, in its last checks: its first is as its row is written.)
+    let writes = 0;
     feedHooks.beforeAlarmWrite = async () => {
-      if (!state.storage.sql.exec("SELECT 1 FROM live_local WHERE phase = 'open'").toArray().length)
-        return;
+      const confirming = state.storage.sql
+        .exec("SELECT 1 FROM live_local WHERE phase = 'confirming'")
+        .toArray().length;
+      if (!confirming || ++writes < 2) return;
       delete feedHooks.beforeAlarmWrite;
       vi.setSystemTime(Date.now() + 3_000);
       unpin();
@@ -1782,7 +1788,7 @@ describe("a feed's turn", () => {
           feedHooks.afterTurnWork = async () => {
             delete feedHooks.afterTurnWork;
             const live = new Live(state.storage.sql);
-            const socket = live.sockets().find((x) => x.phase === "open");
+            const [socket] = live.sockets();
             beforeAttached = {
               attached: state.getWebSockets().length,
               behind: (socket?.delivered_seq ?? Number.POSITIVE_INFINITY) < live.seq(),
@@ -1819,6 +1825,39 @@ describe("a feed's turn", () => {
     ws.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
     for (let turn = 0; turn < 3 && frames.length === 0; turn++) await runTurnNow(owner);
     expect(frames[0]).toMatchObject({ t: "changed" });
+  });
+
+  it("retires a socket left with no connection, and serves the connected one", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    // Closed while the object was cold and the directory could not be read: its row stays, with
+    // nothing attached to it.
+    await evictDurableObject(feedOf(owner));
+    feedHooks.beforeEpochRead = async () => {
+      throw new Error("directory unavailable");
+    };
+    const gone = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await socket.closed;
+    await gone();
+    delete feedHooks.beforeEpochRead;
+    const rows = () =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        new Live(state.storage.sql)
+          .sockets()
+          .map((s) => ({ attached: state.getWebSockets(s.socket_id).length, sent: s.sent })),
+      );
+    expect(await rows()).toEqual([{ attached: 0, sent: 0 }]);
+    // Another credential's socket, connected.
+    const connected = await open(await scopedToken(owner.principalId, []));
+    onTestFinished(() => connected.ws?.close(1000, "done"));
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    for (let turn = 0; turn < 3 && connected.frames.length === 0; turn++)
+      await runDurableObjectAlarm(feedOf(owner));
+    expect(connected.frames[0]).toMatchObject({ t: "changed" });
+    // The one left with nothing attached is gone, on its end's provision.
+    expect(await rows()).toEqual([{ attached: 1, sent: 1 }]);
   });
 
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {
