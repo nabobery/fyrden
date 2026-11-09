@@ -79,6 +79,12 @@ const DELTA_CACHE_BYTES = 8 * MiB;
 const PREPAID_BYTES = 12 * MiB;
 const CACHE_CALLS = 40;
 const MAX_TAG_BYTES = 64 * 1024;
+/**
+ * Resolving a ref has its own small budget, so peeling a tag doesn't spend the
+ * walk's allowance. A tag chain of at most 64 tags of at most 64 KiB fits.
+ */
+const RESOLVE_CALLS = 96;
+const RESOLVE_WORK = 16 * MiB;
 /** A checkpoint's state, plus its envelope's header and hash. */
 const MAX_CHECKPOINT_BYTES = MAX_STATE_BYTES + 64 * 1024;
 const MAX_WINDOW_LINES = 5_000;
@@ -179,6 +185,15 @@ const restarted = () =>
     "The blame this continuation reads has started over; start again from the beginning.",
   );
 
+/** A ref resolved and pinned, or the answer refusing it. */
+type Resolved = { ok: true; commit: Oid } | { ok: false; result: BlameResult };
+
+/** A run's checkpoint read: its state, a reason to replace the run, or an answer. */
+type Loaded =
+  | { ok: true; state: BlameState }
+  | { ok: false; replace: string }
+  | { ok: false; result: BlameResult };
+
 /** A request's reads and work, for one reader opened on first use. */
 interface Request {
   readonly allowance: number;
@@ -273,20 +288,29 @@ export class RepoBlame {
         return busy("Blame is busy in this repository; ask again shortly.");
       throw error;
     }
-    const request = this.#request();
     try {
-      return await this.#answer(input, token, path, windowed, perPage, request);
+      return await this.#answer(input, token, path, windowed, perPage);
     } finally {
-      request.release();
       share.release();
     }
   }
 
-  #request(): Request {
+  /**
+   * A reader's allowance from what the invocation has left: the walk's up to
+   * 600 calls with the full decoding work, or, for resolving a ref, a small
+   * fixed budget of its own. Resolution's calls stay in the invocation's
+   * tally, so the walk's allowance is taken after it.
+   */
+  #request(kind: "walk" | "resolve" = "walk"): Request {
     const spent = this.deps.spentCalls?.() ?? currentInvocation()?.tally.internal ?? 0;
-    const allowance = Math.min(MAX_ALLOWANCE, CALL_BUDGET - spent - CALL_RESERVE);
+    const left = CALL_BUDGET - spent - CALL_RESERVE;
+    const allowance = Math.min(kind === "walk" ? MAX_ALLOWANCE : RESOLVE_CALLS, left);
     const counts = { reads: 0 };
-    const work = createReaderWorkMeter(BLAME_DECODING_WORK);
+    const work = createReaderWorkMeter(
+      kind === "walk"
+        ? BLAME_DECODING_WORK
+        : { limit: RESOLVE_WORK, weights: BLAME_DECODING_WORK.weights },
+    );
     let opened: Promise<ObjectReader | undefined> | undefined;
     return {
       allowance,
@@ -320,7 +344,6 @@ export class RepoBlame {
     path: Uint8Array[],
     windowed: boolean,
     perPage: number,
-    request: Request,
   ): Promise<BlameResult> {
     const repoId = this.deps.repoId();
     const epochGen = this.deps.epochGen();
@@ -332,10 +355,38 @@ export class RepoBlame {
       if (token.epoch !== epochGen) return restarted();
       commit = oidFromHex(token.commit);
     } else {
-      const resolved = await this.#resolve(input.ref, request);
+      // The commit is resolved and pinned first, on a budget of its own, so peeling a
+      // tag doesn't spend the walk's allowance: a recovery needs that allowance whole.
+      const resolution = this.#request("resolve");
+      let resolved: Resolved;
+      try {
+        resolved = await this.#resolveCommit(input.ref, resolution);
+      } finally {
+        resolution.release();
+      }
       if (!resolved.ok) return resolved.result;
       commit = resolved.commit;
     }
+    const request = this.#request();
+    try {
+      return await this.#run(input, token, commit, path, windowed, perPage, digest, request);
+    } finally {
+      request.release();
+    }
+  }
+
+  async #run(
+    input: BlameRequest,
+    token: BlameToken | undefined,
+    commit: Oid,
+    path: Uint8Array[],
+    windowed: boolean,
+    perPage: number,
+    digest: string,
+    request: Request,
+  ): Promise<BlameResult> {
+    const repoId = this.deps.repoId();
+    const epochGen = this.deps.epochGen();
     const key: RunKey = { commit, path: input.path, engineVersion: BLAME_ENGINE_VERSION, epochGen };
     let row: RunRow | undefined;
     if (token) {
@@ -368,7 +419,9 @@ export class RepoBlame {
       if (row) {
         const deaths = this.#ledger.peek(row.runId, 0);
         if (deaths >= GIVE_UP_DEATHS) {
-          this.#runs.remove(row.runId);
+          // Kept as a tombstone until it expires: the next viewer mustn't start the
+          // same dying work again with a fresh count.
+          this.#runs.markLost(row.runId, this.#now());
           this.#event("start_given_up", row.runId);
           return lost();
         }
@@ -398,15 +451,23 @@ export class RepoBlame {
       } else if (walks) {
         retry = true;
       }
-      const loaded = await this.#load(row, identity(row));
+      const marked = row;
+      let loaded: Loaded;
+      try {
+        loaded = await this.#load(row, identity(row));
+      } catch (error) {
+        // A failure the request reports isn't a death: take the attempt back.
+        if (attempt > 0) this.#ledger.release(marked.runId, marked.generation);
+        throw error;
+      }
       if (!loaded.ok) {
         if ("replace" in loaded) {
           this.#runs.remove(row.runId);
           this.#event("replaced", row.runId, loaded.replace);
           if (token) return restarted();
-          return this.#answer(input, undefined, path, windowed, perPage, request);
+          return this.#run(input, undefined, commit, path, windowed, perPage, digest, request);
         }
-        if (attempt > 0) this.#ledger.clear(row.runId);
+        if (attempt > 0) this.#ledger.release(marked.runId, marked.generation);
         return loaded.result;
       }
       state = loaded.state;
@@ -436,7 +497,7 @@ export class RepoBlame {
     };
   }
 
-  async #resolve(
+  async #resolveCommit(
     ref: string | undefined,
     request: Request,
   ): Promise<{ ok: true; commit: Oid } | { ok: false; result: BlameResult }> {
@@ -489,8 +550,17 @@ export class RepoBlame {
             : fail(404, "ref_not_found", `No commit ${ref} was found.`),
       };
     } catch (error) {
-      const refused = this.#initRefusal(error, request);
-      if (refused) return { ok: false, result: refused };
+      // Resolution has a small budget of its own: a tag that needs more is refused.
+      const spent =
+        error instanceof ReadBudgetError ||
+        error instanceof ReaderWorkSpent ||
+        (error instanceof PackError &&
+          (error.code === "delta-too-deep" || error.code === "object-too-large"));
+      if (spent)
+        return {
+          ok: false,
+          result: fail(422, "ref_unreadable", "The tag takes more than blame reads to peel."),
+        };
       throw error;
     }
   }
@@ -553,7 +623,6 @@ export class RepoBlame {
       } catch (error) {
         const refused = this.#initRefusal(error, request);
         if (refused) return giveUp(refused);
-        this.#runs.remove(run.runId);
         throw error;
       }
       if ("failure" in started) {
@@ -577,6 +646,13 @@ export class RepoBlame {
       // Publishing clears the attempt mark.
       const published = await this.#publish(run, started, blob ?? null, identity);
       return { ok: true, row: published, state: started };
+    } catch (error) {
+      // A failure the request reports (R2, say) isn't a death. A run this request
+      // created goes, as a start that answers does; one an earlier start left keeps
+      // its earlier deaths, less this attempt.
+      if (existing) this.#ledger.release(run.runId, 0);
+      else this.#runs.remove(run.runId);
+      throw error;
     } finally {
       this.#active.delete(run.runId);
     }
@@ -700,20 +776,23 @@ export class RepoBlame {
     identity: (r: RunRow) => CheckpointIdentity,
     attempt: number,
   ): Promise<{ row: RunRow; state: BlameState }> {
-    const reader = await request.reader();
-    if (!reader) return { row, state };
     this.#active.add(row.runId);
     try {
+      const reader = await request.reader();
+      if (!reader) {
+        this.#ledger.release(row.runId, row.generation);
+        return { row, state };
+      }
       const walked = await this.#walk(row, state, request, identity, reader, attempt);
       if (!walked.published) {
         const pending = walked.state.queue.length > 0 && !walked.state.stateLimit;
-        if (afterSlice({ attempt, steps: walked.steps, pending }) === "clear")
-          this.#ledger.clear(row.runId);
+        if (afterSlice({ attempt, steps: walked.steps, pending }) === "release")
+          this.#ledger.release(row.runId, row.generation);
       }
       return walked;
     } catch (error) {
-      // A failure the request reports is not a death.
-      this.#ledger.clear(row.runId);
+      // A failure the request reports is not a death: take this attempt back.
+      this.#ledger.release(row.runId, row.generation);
       throw error;
     } finally {
       this.#active.delete(row.runId);

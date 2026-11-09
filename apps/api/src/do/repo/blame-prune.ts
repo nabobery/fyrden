@@ -82,11 +82,16 @@ export function blamePruneHandler(deps: {
         if (!active.has(row.runId)) runs.remove(row.runId);
 
       const repoId = deps.repoId();
+      const r2 = (op: string) =>
+        git.context.metrics.count("r2.class_a", { bucket: "fyrden-git", op });
       let truncated: boolean;
       let next: string | null;
       let removed = pass.removed;
       let young = pass.young;
       try {
+        // Each R2 call is counted before it's made, so the invocation's tally, which the
+        // job queue checks before every slice, sees this job's calls.
+        r2("list_blame");
         const page = await git.bucket.list({
           prefix: blameCheckpointPrefix(repoId),
           limit: LISTED_PER_SLICE,
@@ -97,7 +102,8 @@ export function blamePruneHandler(deps: {
         for (const object of page.objects) {
           const parsed = parseBlameCheckpointKey(repoId, object.key);
           // Not a checkpoint key: not this job's to remove.
-          if (!parsed || named.has(object.key)) continue;
+          // A run being written may publish this object next, whatever its key's clock said.
+          if (!parsed || named.has(object.key) || active.has(parsed.runId)) continue;
           if (now - ulidTime(parsed.ulid) < PRUNE_GRACE_MS) {
             young = true;
             continue;
@@ -105,6 +111,7 @@ export function blamePruneHandler(deps: {
           doomed.push(object.key);
         }
         if (doomed.length > 0) {
+          r2("delete_blame");
           await git.bucket.delete(doomed);
           removed = true;
         }

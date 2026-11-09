@@ -23,7 +23,12 @@ export interface AttemptLedger {
   begin(run: string, generation: number): Promise<number>;
   /** The attempts recorded on `generation`, without recording one. */
   peek(run: string, generation: number): number;
-  /** Forgets the run's attempts: its slice ended, however it ended. */
+  /**
+   * Takes back the attempt just begun on `generation`: it ended in a failure
+   * the request reported, not a death. Earlier deaths still count.
+   */
+  release(run: string, generation: number): void;
+  /** Forgets the run's attempts. */
   clear(run: string): void;
 }
 
@@ -43,6 +48,12 @@ export class MemoryAttemptLedger implements AttemptLedger {
     return mark?.generation === generation ? mark.attempts : 0;
   }
 
+  release(run: string, generation: number): void {
+    const mark = this.#marks.get(run);
+    if (mark?.generation === generation && mark.attempts > 0)
+      this.#marks.set(run, { generation, attempts: mark.attempts - 1 });
+  }
+
   clear(run: string): void {
     this.#marks.delete(run);
   }
@@ -55,7 +66,10 @@ export class MemoryAttemptLedger implements AttemptLedger {
  */
 export class RunRowAttemptLedger implements AttemptLedger {
   constructor(
-    private readonly runs: Pick<BlameRuns, "beginAttempt" | "peekAttempt" | "clearAttempts">,
+    private readonly runs: Pick<
+      BlameRuns,
+      "beginAttempt" | "peekAttempt" | "releaseAttempt" | "clearAttempts"
+    >,
     private readonly storage: Pick<DurableObjectStorage, "sync">,
   ) {}
 
@@ -67,6 +81,10 @@ export class RunRowAttemptLedger implements AttemptLedger {
 
   peek(run: string, generation: number): number {
     return this.runs.peekAttempt(run, generation);
+  }
+
+  release(run: string, generation: number): void {
+    this.runs.releaseAttempt(run, generation);
   }
 
   clear(run: string): void {
@@ -86,7 +104,7 @@ export function sliceAttempt(attempt: number, limits: BlameSliceLimits): SliceAt
 }
 
 /**
- * Whether a slice's attempt mark is cleared when it ends without publishing.
+ * Whether a slice's attempt is taken back when it ends without publishing.
  * A recovery attempt (2 or more) that made no step while lines are pending is
  * treated as a death: its mark stays, so the next attempt counts on and
  * reaches the refusal. A recovery runs only on a whole allowance, whose first
@@ -96,6 +114,6 @@ export function afterSlice(at: {
   attempt: number;
   steps: number;
   pending: boolean;
-}): "keep" | "clear" {
-  return at.attempt >= 2 && at.steps === 0 && at.pending ? "keep" : "clear";
+}): "keep" | "release" {
+  return at.attempt >= 2 && at.steps === 0 && at.pending ? "keep" : "release";
 }

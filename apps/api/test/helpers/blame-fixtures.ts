@@ -28,6 +28,8 @@ export interface BlameFixtures {
   readonly blames: Readonly<Record<string, readonly GitBlameLine[]>>;
   /** Each recorded path's blob at the tip, in hex. */
   readonly blobs: Readonly<Record<string, string>>;
+  /** An annotated tag of the tip, named v1, in hex: pushed as refs/tags/v1 where a test needs it. */
+  readonly tag: string;
 }
 
 declare module "vitest" {

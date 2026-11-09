@@ -293,7 +293,13 @@ export default function setup(project: TestProject): () => void {
       ),
     ]),
   );
-  const pack = toHex(git(["pack-objects", "--stdout", "--revs", "-q"], `${commits.tip}\n`));
+  // An annotated tag of the tip, so a blame can be asked for through one.
+  clock += 60;
+  const tag = out(
+    ["hash-object", "-t", "tag", "-w", "--stdin"],
+    `object ${commits.tip}\ntype commit\ntag v1\ntagger Fyrden Test <test@fyrden.invalid> ${clock} +0000\n\nRelease v1\n`,
+  );
+  const pack = toHex(git(["pack-objects", "--stdout", "--revs", "-q"], `${commits.tip}\n${tag}\n`));
 
   const fixtures: BlameFixtures = {
     pack,
@@ -302,6 +308,7 @@ export default function setup(project: TestProject): () => void {
     sizes,
     blames,
     blobs,
+    tag,
   };
   project.provide("blameFixtures", fixtures);
   return () => rmSync(root, { recursive: true, force: true });

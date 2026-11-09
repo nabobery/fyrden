@@ -296,6 +296,19 @@ export class BlameRuns {
     return row?.attemptGeneration === generation ? row.attempts : 0;
   }
 
+  /**
+   * Takes back one attempt on `generation`, for an attempt that ended in a
+   * failure the request reported: it didn't die, and earlier deaths still count.
+   */
+  releaseAttempt(runId: string, generation: number): void {
+    this.storage.sql.exec(
+      `UPDATE blame_runs SET attempts = attempts - 1
+       WHERE run_id = ? AND attempt_generation = ? AND attempts > 0`,
+      runId,
+      generation,
+    );
+  }
+
   clearAttempts(runId: string): void {
     this.storage.sql.exec(
       "UPDATE blame_runs SET attempts = 0, attempt_generation = NULL WHERE run_id = ?",

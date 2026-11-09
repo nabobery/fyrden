@@ -7,8 +7,11 @@ import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import {
   blameCheckpointKey,
   blameCheckpointPrefix,
+  DEFAULT_JOB_POLICY,
+  JobQueue,
   newUlid,
 } from "@fyrden/adapters-cloudflare/git";
+import { currentInvocation, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { oidFromHex } from "@fyrden/git-core";
 import { describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
@@ -143,6 +146,53 @@ describe("blame_prune", () => {
     expect(seen.keys).toEqual([]);
     // Two pages delete everything; one more pass finds nothing, and ends.
     expect(seen.results).toEqual([false, false, true]);
+  });
+
+  it("keeps an old unnamed checkpoint of a run being written, whatever its clock said", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      const now = repo.git.context.now();
+      const writing = await checkpointAt(repo, repoId, now - 2 * HOUR);
+      await checkpointAt(repo, repoId, now - 2 * HOUR, "01J9ABCDEFGHJKMNPQRSTVWXY0");
+      await handler(repo, repoId, new Set([RUN])).runSlice(job());
+      return { keys: await keysUnder(repo, repoId), writing };
+    });
+    expect(seen.keys).toEqual([seen.writing]);
+  });
+
+  it("counts its R2 calls, so the scheduler stops the sweep at the invocation's budget", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      const now = repo.git.context.now();
+      for (let k = 0; k < 250; k++) await checkpointAt(repo, repoId, now - 2 * HOUR - k);
+      return measureInvocation(
+        repo.git.context.metrics,
+        { where: "do", op: "test", doClass: "RepoDO" },
+        async () => {
+          const jobs = new JobQueue(repo.git.context, () => {}, {
+            ...DEFAULT_JOB_POLICY,
+            maxInternalCalls: 4,
+          });
+          jobs.ensure("blame_prune", "blame_prune");
+          const ran = await jobs.runDue(
+            { blame_prune: handler(repo, repoId) },
+            repo.git.memory,
+            now + 60_000,
+          );
+          return {
+            ran,
+            calls: currentInvocation()?.tally.internal ?? -1,
+            job: jobs.get("blame_prune")?.state,
+            left: (await keysUnder(repo, repoId)).length,
+          };
+        },
+      );
+    });
+    // Each slice lists once and deletes once: two slices reach the budget of four.
+    expect(seen.ran).toBe(2);
+    expect(seen.calls).toBe(4);
+    expect(seen.job).toBe("queued");
+    expect(seen.left).toBe(50);
   });
 
   it("doesn't end while a slice is writing, even with nothing to remove", async () => {

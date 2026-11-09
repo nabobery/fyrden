@@ -24,9 +24,16 @@ async function pushed(): Promise<{ stub: DurableObjectStub<RepoDO>; repoId: stri
   const target = await pushTarget();
   const reply = await postPush(
     target,
-    pushBody([{ old: ZERO, new: fx.tip, ref: "refs/heads/main" }], { pack: fx.pack }),
+    pushBody(
+      [
+        { old: ZERO, new: fx.tip, ref: "refs/heads/main" },
+        { old: ZERO, new: fx.tag, ref: "refs/tags/v1" },
+      ],
+      { pack: fx.pack },
+    ),
   );
   expect(reply.report).toContain("ok refs/heads/main\n");
+  expect(reply.report).toContain("ok refs/tags/v1\n");
   return { stub: target.repo.stub, repoId: target.repo.id };
 }
 
@@ -92,17 +99,100 @@ describe("blame after slices die", () => {
       const thrice = runs.create(key("link"), Date.now(), new Set()).row.runId;
       for (let k = 0; k < 3; k++) runs.beginAttempt(thrice, 0);
       const given = await blamer(repo, repoId).answer({ path: "link" });
+      // The next viewer must not start the same dying work again with a fresh count.
+      const again = await blamer(repo, repoId).answer({ path: "link" });
+      const rows = repo.git.context.storage.sql
+        .exec<{ n: number }>("SELECT count(*) AS n FROM blame_runs WHERE path = 'link'")
+        .one().n;
       return {
         retried: retried.ok ? retried.value.state : refusal(retried),
         retriedRow: row(repo, "f.txt"),
         given: refusal(given),
-        givenRow: row(repo, "link") ?? null,
+        again: refusal(again),
+        givenRow: row(repo, "link"),
+        rows,
+        thrice,
       };
     });
     expect(seen.retried).toBe("complete");
     expect(seen.retriedRow).toMatchObject({ state: "done", attempts: 0 });
     expect(seen.given).toEqual({ status: 422, code: "work_limit", retryAfter: undefined });
-    expect(seen.givenRow).toBeNull();
+    expect(seen.again).toEqual(seen.given);
+    expect(seen.givenRow).toMatchObject({ run_id: seen.thrice, state: "lost" });
+    expect(seen.rows).toBe(1);
+  });
+
+  it("doesn't count a failure it reports as a death: failing reads and writes leave no mark", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      /** The storage with every `method` call to R2 failing. */
+      const failing = (method: "get" | "put") => {
+        const bucket = new Proxy(repo.git.bucket, {
+          get(inner, property) {
+            const value = Reflect.get(inner, property);
+            if (typeof value !== "function") return value;
+            return (...args: unknown[]) =>
+              property === method
+                ? Promise.reject(new Error(`R2 ${method} failed`))
+                : value.apply(inner, args);
+          },
+        });
+        return new Proxy(repo.git, {
+          get: (inner, property) => (property === "bucket" ? bucket : Reflect.get(inner, property)),
+        });
+      };
+      const before = await partway(repo, repoId);
+      const reads: string[] = [];
+      for (let k = 0; k < 3; k++)
+        reads.push(
+          await blamer(repo, repoId, { git: failing("get") })
+            .answer(WALK)
+            .then(
+              (r) => JSON.stringify(refusal(r)),
+              (e: Error) => e.message,
+            ),
+        );
+      const afterReads = row(repo, "f.txt");
+      const recovered = await blamer(repo, repoId).answer(WALK);
+      const writes: string[] = [];
+      for (let k = 0; k < 3; k++)
+        writes.push(
+          await blamer(repo, repoId, { git: failing("put") })
+            .answer({ path: "link" })
+            .then(
+              (r) => JSON.stringify(refusal(r)),
+              (e: Error) => e.message,
+            ),
+        );
+      const started = await blamer(repo, repoId).answer({ path: "link" });
+      return {
+        reads,
+        afterReads,
+        before,
+        recovered: refusal(recovered),
+        writes,
+        started: started.ok ? started.value.state : refusal(started),
+        linkRow: row(repo, "link"),
+      };
+    });
+    expect(seen.reads).toEqual(["R2 get failed", "R2 get failed", "R2 get failed"]);
+    expect(seen.afterReads).toMatchObject({ generation: seen.before.generation, attempts: 0 });
+    expect(seen.recovered).toBe("answered");
+    expect(seen.writes).toEqual(["R2 put failed", "R2 put failed", "R2 put failed"]);
+    expect(seen.started).toBe("complete");
+    expect(seen.linkRow).toMatchObject({ state: "done", attempts: 0 });
+  });
+
+  it("recovers through an annotated tag: peeling it doesn't spend the recovery's allowance", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      const before = await partway(repo, repoId);
+      new BlameRuns(repo.git.context.storage).beginAttempt(before.run_id, before.generation);
+      const recovered = await blamer(repo, repoId).answer({ ...WALK, ref: "v1" });
+      return { recovered, before, after: row(repo, "f.txt") };
+    });
+    expect(seen.recovered.ok ? seen.recovered.value.commit : refusal(seen.recovered)).toBe(fx.tip);
+    expect(seen.after).toMatchObject({ generation: seen.before.generation + 1, attempts: 0 });
   });
 
   it("runs a recovery only on a whole allowance; short of one it's busy and counts nothing", async () => {
@@ -200,8 +290,8 @@ describe("afterSlice", () => {
   it("keeps the mark when a recovery made no step with lines still pending, else clears it", () => {
     expect(afterSlice({ attempt: 2, steps: 0, pending: true })).toBe("keep");
     expect(afterSlice({ attempt: 3, steps: 0, pending: true })).toBe("keep");
-    expect(afterSlice({ attempt: 2, steps: 1, pending: true })).toBe("clear");
-    expect(afterSlice({ attempt: 2, steps: 0, pending: false })).toBe("clear");
-    expect(afterSlice({ attempt: 1, steps: 0, pending: true })).toBe("clear");
+    expect(afterSlice({ attempt: 2, steps: 1, pending: true })).toBe("release");
+    expect(afterSlice({ attempt: 2, steps: 0, pending: false })).toBe("release");
+    expect(afterSlice({ attempt: 1, steps: 0, pending: true })).toBe("release");
   });
 });
