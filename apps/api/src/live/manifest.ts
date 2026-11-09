@@ -303,12 +303,13 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
   // Its D1 measured locally, every statement's as D1 reports it, from both of its callers: a
   // feed's first opening half a minute before midnight, its admission's, terminal's, blocks' and
   // turn's grants each reading both days' rows, the feed's epoch and as many expired receipts as
-  // grants allow, its turn's grant removing a full page of done turns: a browser's upgrade (724
-  // read, 80 written) and, the most, an MCP listen's opening, which also grants its transport (860
-  // read; written 90, measured before owners' runs stopped writing two indexes, 87 since). Free's
-  // 2026-11-01 measurement was 422 and 67.
+  // grants allow, its turn's grant removing a full page of done turns, and 100 of the feed's turns
+  // that ran still valid (passed over by its lookup of a turn the feed holds): a browser's upgrade
+  // (734 read, 80 written) and, the most, an MCP listen's opening, which also grants its transport
+  // (870 read; written 90, measured before owners' runs stopped writing two indexes, 87 since).
+  // Free's 2026-11-01 measurement was 422 and 67.
   upgrade_transport: estimated(
-    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 860, d1_rows_written: 90 },
+    { do_rows_read: 32, do_rows_written: 7, d1_rows_read: 870, d1_rows_written: 90 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "owner",

@@ -12,6 +12,7 @@ import {
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
   LIVE_PROTECTED,
+  LIVE_TURN_RECEIPT_LOOK,
   type LiveGate,
   type LiveGrantPlan,
   type LiveRefusalReason,
@@ -23,7 +24,15 @@ import { liveOpeningTarget, ownedCall, planFor } from "../src/live/funding.js";
 import { LIVE_PRICES, type LiveManifestEntry, liveKindOf } from "../src/live/manifest.js";
 import { LIVE_OWNER_LIMITS } from "../src/live/owners.js";
 import { liveRefusalMemo } from "../src/live/refusal-memo.js";
-import { clockedD1, DAY, isolated, plan, testDay, vector } from "./helpers/live-budget.js";
+import {
+  clockedD1,
+  countD1Rows,
+  DAY,
+  isolated,
+  plan,
+  testDay,
+  vector,
+} from "./helpers/live-budget.js";
 
 const R = DISCRETIONARY_RESOURCES.filter((r) => r !== "queue_ops");
 const RECIPIENT = "usr_opening_fits";
@@ -357,6 +366,100 @@ describe("the pre-check", () => {
         expect(await verdicts(db)).toEqual({ precheck: null, run: null });
       });
     });
+  });
+
+  describe("taking the feed's turn as held", () => {
+    /** One turn granted the feed, as an opening would grant it; its receipt row. */
+    const grantTurn = async (db: D1Database) => {
+      const { plans } = await plansFor(db, ["pump"]);
+      const request = await makeLiveGrant(plans[0] as LiveGrantPlan);
+      expect((await reserveLive(db, request)).status).toBe("granted");
+      return (await env.DIRECTORY.prepare(
+        "SELECT * FROM live_budget_receipts WHERE operation_id = ?",
+      )
+        .bind(request.operationId)
+        .first()) as Record<string, unknown>;
+    };
+    let copySeq = Number.MAX_SAFE_INTEGER - 1_000;
+    /** `n` copies of `row`, each `step` ms on in validity from the one before, changed by `change`. */
+    const copies = (row: Record<string, unknown>, n: number, step: number, change = {}) =>
+      env.DIRECTORY.batch(
+        Array.from({ length: n }, (_, i) => {
+          const copy = {
+            ...row,
+            seq: copySeq--,
+            operation_id: crypto.randomUUID(),
+            mint: crypto.randomUUID(),
+            valid_from: (row.valid_from as number) + (i + 1) * step,
+            valid_until: (row.valid_until as number) + (i + 1) * step,
+            ...change,
+          };
+          const columns = Object.keys(copy);
+          return env.DIRECTORY.prepare(
+            `INSERT INTO live_budget_receipts (${columns.join(", ")})
+             VALUES (${columns.map(() => "?").join(", ")})`,
+          ).bind(...Object.values(copy));
+        }),
+      );
+    const released = { released_owners: JSON.stringify(["own_ran"]) };
+    const release = (row: Record<string, unknown>) =>
+      env.DIRECTORY.prepare("UPDATE live_budget_receipts SET released_owners = ? WHERE seq = ?")
+        .bind(released.released_owners, row.seq)
+        .run();
+    const held = async (db: D1Database) => (await liveOpeningTarget(db, RECIPIENT)).turnHeld;
+    const readRows = async (db: D1Database) => {
+      const counter = countD1Rows();
+      let read: number;
+      try {
+        await liveOpeningTarget(db, RECIPIENT);
+      } finally {
+        read = counter.stop().d1Read;
+      }
+      return read;
+    };
+
+    it("takes the newest as held, however many released turns are still valid before it", () =>
+      isolated(async () => {
+        const { db } = at(day);
+        const turn = await grantTurn(db);
+        // 100 turns that ran, released and still valid, before the one held: a feed whose turns
+        // came a second apart, each granted by the one before.
+        await copies(turn, 100, -1_000, released);
+        expect(await held(db)).toBe(true);
+      }));
+
+    it("reads a bounded few of the feed's turns, however many released ones are still valid", () =>
+      isolated(async () => {
+        const { db } = at(day);
+        const turn = await grantTurn(db);
+        await release(turn);
+        const one = await readRows(db);
+        await copies(turn, 100, 1_000, released);
+        expect(await held(db)).toBe(false);
+        expect(await readRows(db)).toBeLessThanOrEqual(one + 2 * LIVE_TURN_RECEIPT_LOOK);
+      }));
+
+    // Turns later than a held one are never released while it is held (each successor is granted
+    // by the turn running, which is released only once it has ended, and an admission's turn
+    // replaces the feed's only when that can no longer run), so this only pins what the bound
+    // passes over.
+    it("passes over a turn with more of the feed's turns released after it than it looks at", () =>
+      isolated(async () => {
+        const { db } = at(day);
+        const turn = await grantTurn(db);
+        await copies(turn, LIVE_TURN_RECEIPT_LOOK, 1_000, released);
+        expect(await held(db)).toBe(false);
+      }));
+
+    it("takes none of another incarnation or epoch as held", () =>
+      isolated(async () => {
+        const { db } = at(day);
+        const turn = await grantTurn(db);
+        await release(turn);
+        await copies(turn, 1, 1_000, { incarnation: "f".repeat(32) });
+        await copies(turn, 1, 2_000, { epoch: 7 });
+        expect(await held(db)).toBe(false);
+      }));
   });
 
   it("takes a block of controls as held only if it lasts past the feed's next renewal", async () => {
