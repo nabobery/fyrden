@@ -425,8 +425,10 @@ export class RepoReleaseAssets {
     if (row.state === "completed")
       return fail(409, "upload_completed", "The upload made its asset already.");
     if (row.state !== "aborted") this.#end(row);
+    // Read before R2 is asked: the job may clear the ended row meanwhile.
+    const view = this.#view(this.#row(uploadId) as UploadRow);
     await this.#letGo(row);
-    return { ok: true, view: this.#view(this.#row(uploadId) as UploadRow) };
+    return { ok: true, view };
   }
 
   /**

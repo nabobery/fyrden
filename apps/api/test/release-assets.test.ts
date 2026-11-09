@@ -724,6 +724,32 @@ describe("aborting", () => {
     expect([done.status, done.body.code]).toEqual([409, "upload_aborted"]);
   });
 
+  it("answers the aborted session though the job cleared it while R2 was asked", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    await inRepo(r.stub, (repo) => {
+      const bucket = env.ASSETS;
+      repo.assetBucket = {
+        ...bucket,
+        head: bucket.head.bind(bucket),
+        delete: bucket.delete.bind(bucket),
+        resumeMultipartUpload: (key: string, id: string) => {
+          const upload = bucket.resumeMultipartUpload(key, id);
+          return {
+            ...upload,
+            // The job runs while the abort waits on R2, and clears the ended session.
+            abort: async () => {
+              await upload.abort();
+              await repo.releaseAssets.slice();
+            },
+          } as R2MultipartUpload;
+        },
+      } as R2Bucket;
+    });
+    const ended = await abort(r, begun.body.id);
+    expect([ended.status, ended.body.state]).toEqual([200, "aborted"]);
+    expect(await sessions(r.stub)).toEqual([]);
+  });
+
   it("is only for whoever began the session", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     const other = await (await import("./helpers/api.js")).user();
