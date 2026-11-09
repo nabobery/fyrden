@@ -859,6 +859,9 @@ CREATE INDEX live_duration_owners_parent ON live_duration_owners (parent_id)
 -- index live_recovery_targets_due
 CREATE INDEX live_recovery_targets_due ON live_recovery_targets (next_attempt_at, feed);
 
+-- index live_recovery_targets_incarnation
+CREATE INDEX live_recovery_targets_incarnation ON live_recovery_targets (incarnation, feed);
+
 -- index live_socket_deps_socket
 CREATE INDEX live_socket_deps_socket ON live_socket_deps (socket_id);
 

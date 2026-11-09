@@ -638,13 +638,13 @@ LIVE_PRICES.org_confirmation = estimated(
  * run's own grant over a midnight, owner and checks, with an overdue
  * receipt removed (252 read, 39 written), 16 receipts each holding escrow
  * on two days of its own (3,361, 49), a day (28, 2), a day's duration debt
- * served (5, 2), 2 recovery targets adopted (11, 4) and 2 coordinated, each
+ * served (5, 2), 2 recovery targets adopted (11, 6) and 2 coordinated, each
  * granted its own cleanup unit half a minute before a midnight (the feed's
  * epoch, both days' rows and 15 expired receipts read), their durations
  * settled (179, 26; their pages funded on their own), each kind reaped a
  * page, leases lapsed both ways (268, 46), and 2 owners settled two whole
  * pages of days each and released (102, 28): at most 4,275 read and 194
- * written over two runs, its reads rounded up. Revocations are a page of
+ * written over three runs (its adoption's index written since), its reads rounded up. Revocations are a page of
  * their own (`revocation_page`).
  */
 export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_300, d1_rows_written: 194 };
