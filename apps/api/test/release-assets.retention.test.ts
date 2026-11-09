@@ -67,6 +67,22 @@ const purge = (token = r.owner.token) =>
   );
 
 describe("expiry", () => {
+  it("ends a deleted release's open sessions and frees their holds", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const removed = await json(api("DELETE", `${r.path}/releases/${release}`, r.owner.token));
+    expect(removed.status).toBe(200);
+    await assetSlice(r.stub);
+    expect((await sessions(r.stub)).filter((s) => s.state !== "aborted")).toEqual([]);
+    const quota = await json<{ reserved_bytes: number }>(
+      api("GET", "/user/quota", r.owner.token),
+    );
+    expect(quota.body.reserved_bytes).toBe(0);
+    // Ended and cleared: a part finds no session.
+    const late = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
+    expect(late.status).toBe(404);
+  });
+
   it("keeps a completed session for retries until it expires, then clears it", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);

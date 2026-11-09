@@ -811,7 +811,10 @@ export class RepoReleaseAssets {
     return { ok: true };
   }
 
-  /** In a release's deleting transaction: its assets' objects retained, still counted. */
+  /**
+   * In a release's deleting transaction: its assets' objects retained, still
+   * counted, and its open sessions left for the job to end.
+   */
   retainRelease(releaseId: number): void {
     const now = this.#now();
     const assets = this.#exec<AssetRow>(
@@ -820,7 +823,12 @@ export class RepoReleaseAssets {
     );
     for (const asset of assets) this.#retain(asset.object_id, asset.bytes, now);
     this.#exec("DELETE FROM release_assets WHERE release_id = ?", releaseId);
-    if (assets.length > 0) this.#ensureJob();
+    // Its open sessions can't commit now: the job ends them, as it ends expired ones.
+    const open = this.#exec(
+      "SELECT 1 FROM release_asset_uploads WHERE release_id = ? AND state IN ('receiving', 'completing') LIMIT 1",
+      releaseId,
+    );
+    if (assets.length > 0 || open.length > 0) this.#ensureJob();
   }
 
   /** In a transaction: an object kept for 30 days from `now`, its bytes still in `asset_bytes`. */
@@ -1005,12 +1013,13 @@ export class RepoReleaseAssets {
     return { done: false, runAfterMs: Math.max(0, next - this.#now()) };
   }
 
-  /** Ends expired sessions, frozen or not: the row first, then R2. */
+  /** Ends expired sessions and deleted releases' ones, frozen or not: the row first, then R2. */
   async #expire(): Promise<void> {
     const now = this.#now();
     for (const row of this.#exec<UploadRow>(
       `SELECT * FROM release_asset_uploads WHERE state IN ('receiving', 'completing')
-       AND expires_at <= ? ORDER BY expires_at LIMIT ?`,
+       AND (expires_at <= ? OR release_id NOT IN (SELECT id FROM releases))
+       ORDER BY expires_at LIMIT ?`,
       now,
       RELEASE_ASSET_POLICY.sessionBatch,
     )) {
