@@ -978,18 +978,22 @@ describe("the feed operations", () => {
         (i) => i.item_key,
       );
     expect(await keys()).toEqual([key]);
-    // The account's object fails every pull, and the repository's snapshot is too old to decide by.
-    const org = env.ORG.getByName(owner.principalId);
-    await runInDurableObject(org, (instance: OrgDO) => {
-      instance.snapshotFor = async () => {
+    // Every pull of the account's snapshot fails, and the repository's snapshot is too old to
+    // decide by. The pull fails on the repository's side: shadowing a Durable Object's RPC method
+    // with an own property makes the vitest pool reject the call before the stub runs.
+    const stub = env.REPO.getByName(repo.id);
+    let pull: RepoDO["pullAcl"] | undefined;
+    await runInDurableObject(stub, (instance: RepoDO) => {
+      pull = instance.pullAcl;
+      instance.pullAcl = async () => {
         throw new Error("unavailable");
       };
     });
     vi.setSystemTime(Date.now() + ACL_POLICY.writeWindowMs + 1_000);
     expect(await keys()).toEqual([]);
     expect(await stored(reader.principalId)).toEqual([key]);
-    await runInDurableObject(org, (instance: OrgDO) => {
-      Reflect.deleteProperty(instance, "snapshotFor");
+    await runInDurableObject(stub, (instance: RepoDO) => {
+      instance.pullAcl = pull as RepoDO["pullAcl"];
     });
     expect(await keys()).toEqual([key]);
   });

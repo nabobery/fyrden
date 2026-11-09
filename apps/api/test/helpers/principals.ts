@@ -50,7 +50,7 @@ export async function scopedToken(
     type: tokenType,
     scopes,
     ...(repoIds && { repoIds }),
-    ttlMs: 60 * 60 * 1000,
+    ttlMs: 6 * 60 * 60 * 1000,
     audit: { actorId: principalId },
   });
   return token;

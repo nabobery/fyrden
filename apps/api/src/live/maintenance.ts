@@ -1,17 +1,25 @@
-import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { MAINTENANCE_OBJECT } from "../cron/maintenance.js";
 import {
   expireLiveReceipts,
   LIVE_NOW,
+  LIVE_RECEIPTS_DUE,
   LIVE_RECEIPTS_OVERDUE,
   liveReceiptsOverdue,
   makeLiveGrant,
   pruneLiveBudgetDays,
   reserveLive,
 } from "./budget.js";
-import { reaping, sweep } from "./directory.js";
+import {
+  LIVE_ADMISSION,
+  reapableRevocations,
+  reaping,
+  reapingTransports,
+  reapingWindowMoved,
+  sweep,
+} from "./directory.js";
 import { type FundedResult, liveTarget, ownedCall, planFor } from "./funding.js";
-import { LIVE_PRICES, type LiveManifestEntry } from "./manifest.js";
+import { LIVE_PRICES, type LiveManifestEntry, liveKindOf } from "./manifest.js";
 import { releaseLiveOwner, serviceLiveDurationDebt, settleLiveOwnerPage } from "./owners.js";
 import {
   adoptLiveRecoveryTargets,
@@ -38,8 +46,8 @@ import {
 /**
  * A run's pages (Proposed): what one maintenance grant pays for at most,
  * sized with its price (each page measured full) so a day's runs fit
- * cleanup's share: a run is due for expired receipts only once they call
- * for cleanup (`LIVE_RECEIPTS_OVERDUE`), for lapsed leases only two hours
+ * cleanup's share: a run is due for expired receipts only a little before
+ * they call for cleanup (`LIVE_RECEIPTS_DUE`), for lapsed leases only two hours
  * on (admission already passes over a lapsed one), and for expired
  * transports once a page of them is, or one has been for two hours, so a
  * quiet deployment runs about every two hours rather than every five
@@ -70,36 +78,61 @@ export const LIVE_REVOCATION_PAGE = { revocations: 8, scan: 8, deliveries: 1 } a
 
 const N = LIVE_NOW;
 
-/** What live maintenance has due (one statement, nothing written): its routine pages, revocations. */
-export async function liveMaintenanceWork(
-  db: D1Database,
-): Promise<{ readonly routine: boolean; readonly revocations: boolean }> {
+/** A maintenance step that failed, logged by name (the run goes on; the next run tries it again). */
+function stepFailed(step: string): (error: unknown) => void {
+  return (error) =>
+    createLogger({ op: "live.maintenance" }).warn("a maintenance step failed", { step, error });
+}
+
+/**
+ * What live maintenance has due (one statement, nothing written): routine
+ * pages, whether any but expired receipts and transports (`full`, its whole
+ * price; else its light one), and revocations.
+ */
+export async function liveMaintenanceWork(db: D1Database): Promise<{
+  readonly routine: boolean;
+  readonly full: boolean;
+  readonly revocations: boolean;
+}> {
   const row = await db
     .withSession("first-primary")
     .prepare(
       `SELECT
-         ${liveReceiptsOverdue(N)}
-         OR EXISTS (SELECT 1 FROM live_duration_owners WHERE status IN ('observing', 'accounted')
-           OR (status = 'reserved' AND dispatch_until <= ${N}))
-         OR EXISTS (SELECT 1 FROM live_budget_days
-           WHERE day < CAST(${N} / 86400000 AS INTEGER) - 7 AND retain_until <= ${N})
-         OR EXISTS (SELECT 1 FROM live_recovery_targets INDEXED BY live_recovery_targets_due
-           WHERE next_attempt_at <= ${N})
-         OR EXISTS (SELECT 1 FROM live_sockets INDEXED BY live_sockets_expiry
-           WHERE expires_at <= ${N} - ${LIVE_RECEIPTS_OVERDUE.graceMs})
+         ${liveReceiptsOverdue(N, LIVE_RECEIPTS_DUE)}
          OR EXISTS (SELECT 1 FROM live_ticket_transports INDEXED BY live_ticket_transports_expiry
            WHERE expires_at <= ${N} - ${LIVE_RECEIPTS_OVERDUE.graceMs})
          OR (SELECT count(*) FROM (SELECT 1 FROM live_ticket_transports
            INDEXED BY live_ticket_transports_expiry WHERE expires_at <= ${N}
            LIMIT ${LIVE_MAINTENANCE.reap.transports})) >= ${LIVE_MAINTENANCE.reap.transports}
+           AS light,
+         EXISTS (SELECT 1 FROM live_duration_owners WHERE status IN ('observing', 'accounted')
+           OR (status = 'reserved' AND dispatch_until <= ${N}))
+         OR EXISTS (SELECT 1 FROM live_budget_days
+           WHERE day < CAST(${N} / 86400000 AS INTEGER) - 7 AND retain_until <= ${N})
+         OR EXISTS (SELECT 1 FROM live_recovery_targets INDEXED BY live_recovery_targets_due
+           WHERE next_attempt_at <= ${N})
+         OR EXISTS (SELECT 1 FROM live_budget_state WHERE id = 1
+           AND incarnation <> targets_incarnation)
+         OR EXISTS (SELECT 1 FROM live_sockets INDEXED BY live_sockets_expiry
+           WHERE expires_at <= ${N} - ${LIVE_RECEIPTS_OVERDUE.graceMs})
          OR EXISTS (SELECT 1 FROM live_budget_state WHERE id = 1 AND duration_debt_ms > 0
-           AND debt_service_day < CAST(${N} / 86400000 AS INTEGER)) AS routine,
+           AND debt_service_day < CAST(${N} / 86400000 AS INTEGER)) AS full_work,
+         EXISTS (SELECT 1 FROM live_admissions INDEXED BY live_admissions_day
+           WHERE day < CAST(${N} / 86400000 AS INTEGER) - 1)
+         OR EXISTS (SELECT 1 FROM live_ticket_days INDEXED BY live_ticket_days_day
+           WHERE day < CAST(${N} / 86400000 AS INTEGER) - 1)
+         OR EXISTS (${reapableRevocations(`${N} - ${LIVE_ADMISSION.keepMs}`)}) AS reaping,
          EXISTS (SELECT 1 FROM revocations INDEXED BY revocations_open WHERE expanded = 0)
          OR EXISTS (SELECT 1 FROM revocation_targets INDEXED BY revocation_targets_due
            WHERE next_attempt_at <= ${N}) AS revocations`,
     )
-    .first<{ routine: number; revocations: number }>();
-  return { routine: row?.routine === 1, revocations: row?.revocations === 1 };
+    .first<{ light: number; full_work: number; reaping: number; revocations: number }>();
+  // Old counts and revocations call for no run of their own: a run that is due takes them too.
+  return {
+    routine: row?.light === 1 || row?.full_work === 1,
+    full: row?.full_work === 1 || (row?.light === 1 && row?.reaping === 1),
+    revocations: row?.revocations === 1,
+  };
 }
 
 /** Whether live maintenance has anything due (one statement, nothing written). */
@@ -121,7 +154,7 @@ export async function runLiveMaintenance(
   metrics?.count("d1.query", { db: "directory", op: "live_maintenance_due" });
   const work = await liveMaintenanceWork(db);
   if (!work.routine && !work.revocations) return null;
-  const routine = work.routine ? await runRoutine(env, metrics) : null;
+  const routine = work.routine ? await runRoutine(env, work.full, metrics) : null;
   const revocations = work.revocations ? await runRevocations(env, metrics) : null;
   return routine ?? revocations;
 }
@@ -129,8 +162,9 @@ export async function runLiveMaintenance(
 /** A cleanup grant of `unit`'s owned by the maintenance object, run as `call` (see `ownedCall`). */
 async function maintenanceCall(
   db: D1Database,
-  unit: "maintenance" | "revocation_page",
+  unit: "maintenance" | "maintenance_light" | "revocation_page",
   call: (signal: AbortSignal) => Promise<void>,
+  metrics?: Metrics,
 ): Promise<FundedResult<void>> {
   const target = await liveTarget(db, MAINTENANCE_OBJECT);
   const entry = LIVE_PRICES[unit] as LiveManifestEntry;
@@ -143,63 +177,104 @@ async function maintenanceCall(
         recipientType: "MaintenanceDO",
         recipient: MAINTENANCE_OBJECT,
         class: "cleanup",
-        kind: unit,
+        kind: liveKindOf(unit),
         producesLocal: false,
       },
       target.ledger.now,
     ),
   );
-  return ownedCall(db, request, unit, (_funding, signal) => call(signal), {
+  return ownedCall(db, request, liveKindOf(unit), (_funding, signal) => call(signal), {
     ledger: target.ledger,
     pendingMs: entry.pendingMs as number,
+    ...(metrics && { metrics }),
   });
 }
 
-/** Routine maintenance's pages, under a `maintenance` grant (each page on its own). */
-async function runRoutine(env: Env, metrics?: Metrics): Promise<FundedResult<void>> {
+/**
+ * Routine maintenance's pages, each on its own: under a `maintenance` grant, or,
+ * with only expired receipts and transports due, a cheaper one paying for just
+ * those two (anything found due meanwhile waits for the next run).
+ */
+async function runRoutine(env: Env, full: boolean, metrics?: Metrics): Promise<FundedResult<void>> {
   const db = env.DIRECTORY;
-  await settleStrandedOwners(db, LIVE_MAINTENANCE.owners).catch(() => {});
-  return maintenanceCall(db, "maintenance", async (signal) => {
-    const steps: (() => Promise<unknown>)[] = [
-      () => expireLiveReceipts(db, LIVE_MAINTENANCE.receipts),
-      () => pruneLiveBudgetDays(db, LIVE_MAINTENANCE.days),
-      () => serviceLiveDurationDebt(db),
-      () => adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries),
-      () =>
-        recoverLiveTargets(db, {
-          limit: LIVE_MAINTENANCE.recoveries,
-          reserveTarget: (feed) => recoveryGrant(db, feed),
-          proceed: () => !signal.aborted,
-          tell: (request) => {
-            metrics?.count("do.request", { class: "UserDO", method: "recoverLiveV1" });
-            return env.USER.getByName(request.feed).recoverLiveV1(request);
-          },
-        }),
-      () => db.batch(reaping(db, Date.now(), LIVE_MAINTENANCE.reap)),
-    ];
-    // Each page on its own: one failing leaves the others to run, and its own to the next run.
-    for (const step of steps) {
-      if (signal.aborted) return;
-      await step().catch(() => {});
-    }
-  });
+  if (!full)
+    return maintenanceCall(
+      db,
+      "maintenance_light",
+      async (signal) => {
+        const steps: [string, () => Promise<unknown>][] = [
+          ["receipts", () => expireLiveReceipts(db, LIVE_MAINTENANCE.receipts)],
+          [
+            "transports",
+            () =>
+              db.batch([
+                reapingTransports(db, Date.now(), LIVE_MAINTENANCE.reap.transports),
+                reapingWindowMoved(db, Date.now()),
+              ]),
+          ],
+        ];
+        for (const [name, step] of steps) {
+          if (signal.aborted) return;
+          await step().catch(stepFailed(name));
+        }
+      },
+      metrics,
+    );
+  await settleStrandedOwners(db, LIVE_MAINTENANCE.owners).catch(stepFailed("owners"));
+  return maintenanceCall(
+    db,
+    "maintenance",
+    async (signal) => {
+      const steps: [string, () => Promise<unknown>][] = [
+        ["receipts", () => expireLiveReceipts(db, LIVE_MAINTENANCE.receipts)],
+        ["days", () => pruneLiveBudgetDays(db, LIVE_MAINTENANCE.days)],
+        ["duration_debt", () => serviceLiveDurationDebt(db)],
+        ["adopt_targets", () => adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries)],
+        [
+          "recoveries",
+          () =>
+            recoverLiveTargets(db, {
+              limit: LIVE_MAINTENANCE.recoveries,
+              reserveTarget: (feed) => recoveryGrant(db, feed, metrics),
+              proceed: () => !signal.aborted,
+              tell: (request) => {
+                metrics?.count("do.request", { class: "UserDO", method: "recoverLiveV1" });
+                return env.USER.getByName(request.feed).recoverLiveV1(request);
+              },
+            }),
+        ],
+        ["reaping", () => db.batch(reaping(db, Date.now(), LIVE_MAINTENANCE.reap))],
+      ];
+      // Each page on its own: one failing leaves the others to run, and its own to the next run.
+      for (const [name, step] of steps) {
+        if (signal.aborted) return;
+        await step().catch(stepFailed(name));
+      }
+    },
+    metrics,
+  );
 }
 
 /** A revocation page, under a `revocation_page` grant of its own (`LIVE_REVOCATION_PAGE`). */
 function runRevocations(env: Env, metrics?: Metrics): Promise<FundedResult<void>> {
   const db = env.DIRECTORY;
-  return maintenanceCall(db, "revocation_page", async (signal) => {
-    await sweep(
-      db,
-      (feed, dependencies) => {
-        metrics?.count("do.request", { class: "UserDO", method: "revoked" });
-        return env.USER.getByName(feed).revoked(dependencies);
-      },
-      Date.now(),
-      metrics,
-      { ...LIVE_REVOCATION_PAGE, proceed: () => !signal.aborted },
-    ).catch(() => {});
-  });
+  return maintenanceCall(
+    db,
+    "revocation_page",
+    async (signal) => {
+      await sweep(
+        db,
+        (feed, dependencies) => {
+          metrics?.count("do.request", { class: "UserDO", method: "revoked" });
+          return env.USER.getByName(feed).revoked(dependencies);
+        },
+        Date.now(),
+        metrics,
+        { ...LIVE_REVOCATION_PAGE, proceed: () => !signal.aborted },
+      ).catch(stepFailed("revocations"));
+    },
+    metrics,
+  );
 }
 
 /**
@@ -232,7 +307,7 @@ export async function settleStrandedOwners(db: D1Database, limit: number): Promi
 }
 
 /** A cleanup grant paying for one recovery page of `feed`. */
-async function recoveryGrant(db: D1Database, feed: string) {
+async function recoveryGrant(db: D1Database, feed: string, metrics?: Metrics) {
   const target = await liveTarget(db, feed);
   return reserveLive(
     db,
@@ -252,5 +327,6 @@ async function recoveryGrant(db: D1Database, feed: string) {
         LIVE_RECOVERY_DURATION.tailMs,
       ),
     ),
+    metrics,
   );
 }

@@ -218,7 +218,8 @@ describe("a tab's live hints", () => {
     const failing = harness();
     failing.hub.listen(want("rep_a"));
     failing.stop("failing");
-    failing.advance(LIVE_HUB.failedPauseMs - 1);
+    // Between half the pause and all of it (the random half fixed at 0.5).
+    failing.advance(LIVE_HUB.failedPauseMs * 0.75 - 1);
     failing.hub.visibility();
     expect(failing.client.starts).toBe(1);
     failing.advance(1);
@@ -260,7 +261,7 @@ describe("a tab's live hints", () => {
     const h = harness();
     h.hub.listen(want("rep_a"));
     h.stop("failing");
-    h.advance(LIVE_HUB.failedPauseMs - 1);
+    h.advance(LIVE_HUB.failedPauseMs * 0.75 - 1);
     expect(h.client.starts).toBe(1);
     h.advance(1);
     expect(h.client.starts).toBe(2);

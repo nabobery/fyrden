@@ -1,3 +1,4 @@
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { feedEpochSource } from "../do/user/feed.js";
 import {
   DISCRETIONARY_RESOURCES,
@@ -67,12 +68,25 @@ export const LIVE_TURN_RECEIPT_PAGE = 2;
 export const LIVE_TURN_RECEIPT_LOOK = 4;
 
 /**
- * When expired receipts call for cleanup (Proposed): a page of them
- * overdue, or one overdue for two hours. Until then a grant goes on (their
- * debt still counted), and maintenance waits to remove them a page at a
- * time rather than one a run.
+ * When expired receipts hold ordinary grants back (Proposed): a page of them
+ * expired for as long as two runs of the five-minute cron take, or one overdue for
+ * two hours. Receipts expire in batches (an opening's ticket and transport), so a
+ * page can expire between two runs. Until then a grant goes on, their debt still
+ * counted and still within its limit.
  */
-export const LIVE_RECEIPTS_OVERDUE = { page: 16, graceMs: 2 * 60 * 60_000 } as const;
+export const LIVE_RECEIPTS_OVERDUE = {
+  page: 16,
+  graceMs: 2 * 60 * 60_000,
+  pageAfterMs: 10 * 60_000,
+} as const;
+
+/**
+ * When a run is due for expired receipts (Proposed): before they hold ordinary
+ * grants back, by about two of the five-minute cron's runs at the rate they
+ * expire. So with a working cron the gate above never closes: a refused turn's
+ * successor costs its feed its hints until a socket next renews.
+ */
+export const LIVE_RECEIPTS_DUE = { page: 13, graceMs: 105 * 60_000, pageAfterMs: 0 } as const;
 
 /** Receipts other than maintenance's own (its runs', its revocation pages'): the overdue index's. */
 const NOT_MAINTENANCE = "kind NOT IN ('maintenance', 'revocation_page')";
@@ -84,12 +98,22 @@ const NOT_MAINTENANCE = "kind NOT IN ('maintenance', 'revocation_page')";
  * read through an index of the others only (a page at most, whatever
  * maintenance's own left).
  */
-export function liveReceiptsOverdue(now: string = LIVE_NOW): string {
-  const { page, graceMs } = LIVE_RECEIPTS_OVERDUE;
+export function liveReceiptsOverdue(
+  now: string = LIVE_NOW,
+  {
+    page,
+    graceMs,
+    pageAfterMs,
+  }: {
+    readonly page: number;
+    readonly graceMs: number;
+    readonly pageAfterMs: number;
+  } = LIVE_RECEIPTS_OVERDUE,
+): string {
   return `(EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
       WHERE expires_at <= ${now} - ${graceMs} AND ${NOT_MAINTENANCE})
     OR (SELECT count(*) FROM (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_overdue
-      WHERE expires_at <= ${now} AND ${NOT_MAINTENANCE} LIMIT ${page})) >= ${page})`;
+      WHERE expires_at <= ${now} - ${pageAfterMs} AND ${NOT_MAINTENANCE} LIMIT ${page})) >= ${page})`;
 }
 
 /** D1's clock in milliseconds (tests replace the marked expression). */
@@ -179,11 +203,50 @@ export interface LiveEnvelope {
 
 export type LiveRefusal = "daily" | "temporary" | "expired" | "fenced" | "invalid";
 
+/**
+ * Which of a grant's gates refused it, from the one list that decides it (see
+ * `liveGates`); `unknown` when no gate did (an answer lost). Diagnostic: names
+ * may change, so nothing but people and dashboards reads them.
+ */
+export type LiveGate =
+  | "first_day"
+  | "daily_total"
+  | "ordinary_share"
+  | "duration_day"
+  | "second_day"
+  | "duration_closed"
+  | "escrow_full"
+  | `debt:${DiscretionaryResource}`
+  | "overdue_receipts"
+  | "old_days"
+  | "epoch"
+  | "target_incarnation"
+  | "validity"
+  | "unknown";
+
+/** Why live work was refused, whichever step refused it: a grant's gate, or what came after. */
+export type LiveRefusalReason =
+  | LiveGate
+  | "owner:capacity"
+  | "owner:blocked"
+  | "owner:unfunded"
+  | "allowance"
+  | "admissions"
+  | "tickets"
+  | "feed_cap"
+  | "conflict"
+  | "given_up"
+  | "no_controls";
+
+/** A 4412's close reason, naming why. */
+export const liveTryAgain = (reason: LiveRefusalReason) => `try again soon: ${reason}`;
+
 export type LiveGrantResult =
   | { readonly status: "granted"; readonly replay: boolean; readonly grant: LiveEnvelope }
   | {
       readonly status: "refused";
       readonly reason: LiveRefusal;
+      readonly gate: LiveGate;
       /** A daily refusal's: the start of the next UTC day, by D1's clock. */
       readonly retryAt?: number;
     };
@@ -249,6 +312,12 @@ export function canonicalPlan(plan: LiveGrantPlan): string {
   });
 }
 
+/**
+ * How long a receipt outlives its validity (Proposed), a margin for slow callers:
+ * past its validity it is refused by its dates whether or not its row is there.
+ */
+export const LIVE_RECEIPT_MARGIN_MS = 60 * 60_000;
+
 /** When a grant's settlement window closes, and when its receipt may be removed. */
 export function liveReceiptDeadlines(plan: LiveGrantPlan): {
   readonly settleUntil: number;
@@ -257,7 +326,10 @@ export function liveReceiptDeadlines(plan: LiveGrantPlan): {
   const covered = plan.charges.flatMap((c) => (c.duration ? [c.duration.until] : []));
   const settleUntil =
     covered.length > 0 ? Math.max(plan.validUntil, Math.max(...covered) + DAY) : plan.validUntil;
-  return { settleUntil, expiresAt: Math.max(plan.validUntil + 2 * DAY, settleUntil) };
+  return {
+    settleUntil,
+    expiresAt: Math.max(plan.validUntil + LIVE_RECEIPT_MARGIN_MS, settleUntil),
+  };
 }
 
 /** Why a plan is malformed, or null when it holds together (its first day is D1's to check). */
@@ -462,31 +534,348 @@ function retiredDebt(plan: LiveGrantPlan, r: DiscretionaryResource): string {
   return isTurn(plan) ? `(SELECT ${r} FROM retired)` : "0";
 }
 
-/** Whether each charge fits its day (all of it, and ordinary work outside the protected part). */
-function fits(charge: LiveDayCharge, ordinary: boolean): string {
-  const parts = R.filter((r) => charge.resources[r] > 0).flatMap((r) => [
-    `coalesce((SELECT ${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r]}`,
-    ...(ordinary
-      ? [
-          r === "do_duration_ms"
-            ? // Ordinary duration leaves the day's reserve, its withheld debt and the debt owed.
-              `coalesce((SELECT do_duration_ms - protected_do_duration_ms + debt_withheld_ms FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]}
+/** One condition a grant must meet, with the name a refusal reports it by. */
+interface Gate {
+  readonly name: LiveGate;
+  readonly holds: string;
+  /**
+   * Implied by a later gate, so the grant's transition need not read it: only a
+   * refusal does, to say which of the two failed.
+   */
+  readonly reportOnly?: true;
+}
+
+/** What each charge's fit to its day asks (all of it, and ordinary work outside the protected part). */
+function chargeGates(charge: LiveDayCharge, first: boolean, ordinary: boolean): Gate[] {
+  // The first day's duration apart from its other room: what grants hold of it can come back today.
+  const total = (r: DiscretionaryResource): LiveGate =>
+    !first ? "second_day" : r === "do_duration_ms" ? "duration_day" : "daily_total";
+  const share = (r: DiscretionaryResource): LiveGate =>
+    !first ? "second_day" : r === "do_duration_ms" ? "duration_day" : "ordinary_share";
+  const used = (r: DiscretionaryResource) =>
+    `coalesce((SELECT ${r} - protected_${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`;
+  const gates: Gate[] = R.filter((r) => charge.resources[r] > 0).map((r) => ({
+    name: total(r),
+    holds: `coalesce((SELECT ${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r]}`,
+  }));
+  if (ordinary)
+    for (const r of R.filter((x) => charge.resources[x] > 0))
+      if (r !== "do_duration_ms") gates.push({ name: share(r), holds: used(r) });
+      else
+        gates.push(
+          { name: share(r), holds: used(r), reportOnly: true },
+          {
+            // Ordinary duration leaves the day's reserve, its withheld debt and the debt owed.
+            name: "duration_closed",
+            holds: `coalesce((SELECT do_duration_ms - protected_do_duration_ms + debt_withheld_ms FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]}
                 + (SELECT duration_reserve_ms + duration_debt_ms FROM live_budget_state WHERE id = 1)
-                <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`
-            : `coalesce((SELECT ${r} - protected_${r} FROM live_budget_days WHERE day = ${charge.day}), 0) + ${charge.resources[r]} <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`,
-        ]
-      : []),
-  ]);
+                <= ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`,
+          },
+        );
   if (ordinary && charge.resources.do_duration_ms > 0)
     // Not while ordinary duration is blocked, or once the day's reserve is spent.
-    parts.push(`(SELECT ordinary_duration_blocked = 0 AND (duration_reserve_ms = 0
+    gates.push({
+      name: "duration_closed",
+      holds: `(SELECT ordinary_duration_blocked = 0 AND (duration_reserve_ms = 0
       OR coalesce((SELECT reserve_used_ms FROM live_budget_days WHERE day = ${charge.day}), 0)
-        < duration_reserve_ms) FROM live_budget_state WHERE id = 1)`);
+        < duration_reserve_ms) FROM live_budget_state WHERE id = 1)`,
+    });
   if (charge.duration)
-    parts.push(
-      `coalesce((SELECT json_array_length(escrow) FROM live_budget_days WHERE day = ${charge.day}), 0) < ${LIVE_ESCROW_ENTRIES}`,
+    gates.push({
+      name: "escrow_full",
+      holds: `coalesce((SELECT json_array_length(escrow) FROM live_budget_days WHERE day = ${charge.day}), 0) < ${LIVE_ESCROW_ENTRIES}`,
+    });
+  return gates;
+}
+
+/** The sum of what `escrow` (a day's column) holds; its ordinary grants' only, when asked. */
+function heldInEscrow(escrow: string, ordinaryOnly = false): string {
+  const ms = ordinaryOnly
+    ? `CASE WHEN json_extract(value, '$.class') = 'cleanup' THEN 0 ELSE json_extract(value, '$.ms') END`
+    : `json_extract(value, '$.ms')`;
+  return `(SELECT coalesce(sum(${ms}), 0) FROM json_each(${escrow}))`;
+}
+
+/**
+ * Whether `plan` would fit today's duration (`d`, a day's row) were all that grants hold given back.
+ * A cleanup grant's refund leaves the day's total, and leaves the ordinary share as it was.
+ */
+function durationReopens(plan: LiveGrantPlan): string {
+  const charge = plan.charges[0]?.resources.do_duration_ms ?? 0;
+  const wanted = `d.do_duration_ms + ${charge}`;
+  const total = `${wanted} - ${heldInEscrow("d.escrow")} <= ${LIVE_DAILY.do_duration_ms}`;
+  return plan.class === "ordinary"
+    ? `${total} AND ${wanted} - d.protected_do_duration_ms - ${heldInEscrow("d.escrow", true)} <= ${LIVE_DAILY.do_duration_ms - LIVE_PROTECTED.do_duration_ms}`
+    : total;
+}
+
+/**
+ * Everything that decides whether `plan` may be granted, read against
+ * `live_budget_state` (its columns unqualified): the grant's transition ANDs
+ * them and a refusal names the first that fails, so the two cannot disagree.
+ * In the order a refusal is told by: a plan that is not valid now first, then
+ * the day's room (a refusal until tomorrow), then the rest.
+ */
+function liveGates(
+  plan: LiveGrantPlan,
+  b: (value: string | number) => string,
+  source: string,
+): readonly Gate[] {
+  const ordinary = plan.class === "ordinary";
+  const first = plan.charges[0] as LiveDayCharge;
+  const charges = plan.charges.flatMap((c) => chargeGates(c, c === first, ordinary));
+  const inOrder: LiveGate[] = [
+    "daily_total",
+    "ordinary_share",
+    "duration_day",
+    "second_day",
+    "duration_closed",
+    "escrow_full",
+  ];
+  return [
+    { name: "validity", holds: `${plan.validFrom} <= ${N} AND ${N} < ${plan.validUntil}` },
+    { name: "first_day", holds: `${first.day} = ${D}` },
+    ...inOrder.flatMap((name) => charges.filter((g) => g.name === name)),
+    ...(ordinary
+      ? [
+          ...R.map(
+            // After what it retires: a turn that owes no more than it takes off is let through.
+            (r): Gate => ({
+              name: `debt:${r}`,
+              holds: `debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
+            }),
+          ),
+          // Expired receipts once they call for cleanup (maintenance's own never do).
+          { name: "overdue_receipts", holds: `NOT ${liveReceiptsOverdue(N)}` } as Gate,
+          {
+            name: "old_days",
+            holds: `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
+          } as Gate,
+        ]
+      : []),
+    ...(plan.recipientType === "UserDO"
+      ? [
+          {
+            name: "epoch",
+            holds: `${plan.epoch} = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ${b(source)}), 0)`,
+          } as Gate,
+        ]
+      : []),
+    ...(plan.producesLocal
+      ? [
+          {
+            name: "target_incarnation",
+            holds: `NOT EXISTS (SELECT 1 FROM live_recovery_targets WHERE feed = ${b(plan.recipient)} AND incarnation <> ${b(plan.incarnation)})`,
+          } as Gate,
+        ]
+      : []),
+  ];
+}
+
+/** A day's use, as `liveOpeningFits` compares it. */
+export type LiveDayView = Readonly<Record<DiscretionaryResource, number>> & {
+  readonly protectedUse: Readonly<Record<DiscretionaryResource, number>>;
+  readonly escrow: number;
+  /** What grants hold of its duration: the most that settling them could give back. */
+  readonly heldMs: number;
+  /** What ordinary grants hold of it: all that settling can give the ordinary share. */
+  readonly heldOrdinaryMs: number;
+  readonly reserveUsedMs: number;
+  readonly debtWithheldMs: number;
+};
+
+/** What the ledger holds now, read in the one statement before an opening's grants. */
+export interface LiveLedgerView {
+  readonly today: number;
+  readonly debts: Readonly<Record<DiscretionaryResource, number>>;
+  readonly ordinaryDurationBlocked: boolean;
+  readonly durationReserveMs: number;
+  readonly durationDebtMs: number;
+  readonly days: Readonly<Record<number, LiveDayView>>;
+  readonly receiptsOverdue: boolean;
+  readonly oldDays: boolean;
+  readonly targetElsewhere: boolean;
+  /** Places left for another ordinary owner of this feed: the deployment's and its own. */
+  readonly ownerRoom: number;
+}
+
+/** The columns `parseLiveLedgerView` reads: `recipient` is a parameter holding the feed. */
+export function liveLedgerViewColumns(recipient: string): string {
+  return `(SELECT json_object(${R.map((r) => `'${r}', debt_${r}`).join(", ")},
+      '_blocked', ordinary_duration_blocked, '_reserve', duration_reserve_ms,
+      '_durationDebt', duration_debt_ms)
+      FROM live_budget_state WHERE id = 1) AS view_state,
+    (SELECT json_group_array(json_object('_day', day, ${R.map((r) => `'${r}', ${r}, 'p_${r}', protected_${r}`).join(", ")},
+      '_escrow', json_array_length(escrow),
+      '_held', ${heldInEscrow("escrow")}, '_heldOrdinary', ${heldInEscrow("escrow", true)},
+      '_reserveUsed', reserve_used_ms,
+      '_withheld', debt_withheld_ms))
+      FROM live_budget_days WHERE day IN (${D}, ${D} + 1)) AS view_days,
+    ${liveReceiptsOverdue(N)} AS view_overdue,
+    EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N}
+      ORDER BY day LIMIT 1) AS view_old_days,
+    EXISTS (SELECT 1 FROM live_recovery_targets WHERE feed = ${recipient}
+      AND incarnation <> (SELECT incarnation FROM live_budget_state WHERE id = 1)) AS view_elsewhere,
+    ${D} AS view_today`;
+}
+
+/** What `liveLedgerViewColumns` answered, with the places left for owners. */
+export function parseLiveLedgerView(
+  row: {
+    view_state: string;
+    view_days: string;
+    view_overdue: number;
+    view_old_days: number;
+    view_elsewhere: number;
+    view_today: number;
+  },
+  ownerRoom: number,
+): LiveLedgerView {
+  const state = JSON.parse(row.view_state) as Record<string, number>;
+  const rows = JSON.parse(row.view_days) as Record<string, number>[];
+  const part = (source: Record<string, number>, prefix: string) =>
+    Object.fromEntries(R.map((r) => [r, source[`${prefix}${r}`] as number])) as Record<
+      DiscretionaryResource,
+      number
+    >;
+  return {
+    today: row.view_today,
+    debts: part(state, ""),
+    ordinaryDurationBlocked: state._blocked !== 0,
+    durationReserveMs: state._reserve as number,
+    durationDebtMs: state._durationDebt as number,
+    days: Object.fromEntries(
+      rows.map((day) => [
+        day._day,
+        {
+          ...part(day, ""),
+          protectedUse: part(day, "p_"),
+          escrow: day._escrow as number,
+          heldMs: day._held as number,
+          heldOrdinaryMs: day._heldOrdinary as number,
+          reserveUsedMs: day._reserveUsed as number,
+          debtWithheldMs: day._withheld as number,
+        },
+      ]),
+    ),
+    receiptsOverdue: row.view_overdue === 1,
+    oldDays: row.view_old_days === 1,
+    targetElsewhere: row.view_elsewhere === 1,
+    ownerRoom,
+  };
+}
+
+export type LiveOpeningFit =
+  | { readonly fits: true }
+  | {
+      readonly fits: false;
+      readonly reason: "daily" | "temporary";
+      readonly gate: LiveRefusalReason;
+      readonly retryAt?: number;
+    };
+
+/**
+ * Whether all of an ordinary opening's `plans`, granted one after another, can
+ * fit the ledger as `view` shows it, and if not which gate stops them, in
+ * `liveGates`' order. `reserveLive` still decides: this reads no more than one
+ * statement's worth, to refuse without charging. It counts a turn's debt in full
+ * and nothing it might retire, so it may refuse slightly early but never lets an
+ * opening through that a later grant must fail (a test runs both at each limit).
+ */
+export function liveOpeningFits(
+  view: LiveLedgerView,
+  plans: readonly LiveGrantPlan[],
+  ownerPlaces = 0,
+): LiveOpeningFit {
+  const days = [...new Set(plans.flatMap((p) => p.charges.map((c) => c.day)))].sort(
+    (a, b) => a - b,
+  );
+  const charged = (day: number, r: DiscretionaryResource) =>
+    plans.reduce((n, p) => n + (p.charges.find((c) => c.day === day)?.resources[r] ?? 0), 0);
+  const inOrder: { gate: LiveGate; closed: boolean }[] = [];
+  for (const day of days) {
+    const row = view.days[day];
+    const first = day === view.today;
+    const used = (r: DiscretionaryResource) => row?.[r] ?? 0;
+    const ordinaryUsed = (r: DiscretionaryResource) => used(r) - (row?.protectedUse[r] ?? 0);
+    const costly = R.filter((r) => charged(day, r) > 0);
+    for (const r of costly)
+      inOrder.push(
+        {
+          gate: !first ? "second_day" : r === "do_duration_ms" ? "duration_day" : "daily_total",
+          closed: used(r) + charged(day, r) > LIVE_DAILY[r],
+        },
+        {
+          gate: !first ? "second_day" : r === "do_duration_ms" ? "duration_day" : "ordinary_share",
+          closed: ordinaryUsed(r) + charged(day, r) > LIVE_DAILY[r] - LIVE_PROTECTED[r],
+        },
+      );
+    if (charged(day, "do_duration_ms") > 0)
+      inOrder.push({
+        gate: "duration_closed",
+        closed:
+          ordinaryUsed("do_duration_ms") +
+            (row?.debtWithheldMs ?? 0) +
+            charged(day, "do_duration_ms") +
+            view.durationReserveMs +
+            view.durationDebtMs >
+            LIVE_DAILY.do_duration_ms - LIVE_PROTECTED.do_duration_ms ||
+          view.ordinaryDurationBlocked ||
+          (view.durationReserveMs !== 0 && (row?.reserveUsedMs ?? 0) >= view.durationReserveMs),
+      });
+    const holds = plans.filter((p) => p.charges.some((c) => c.day === day && c.duration)).length;
+    if (holds > 0)
+      inOrder.push({
+        gate: "escrow_full",
+        closed: (row?.escrow ?? 0) + holds > LIVE_ESCROW_ENTRIES,
+      });
+  }
+  const order: LiveGate[] = [
+    "daily_total",
+    "ordinary_share",
+    "duration_day",
+    "second_day",
+    "duration_closed",
+    "escrow_full",
+  ];
+  const closed = order.find((gate) => inOrder.some((g) => g.gate === gate && g.closed));
+  // Today's duration comes back as grants settle, if all they hold would make room: a cleanup
+  // grant's refund leaves the day's total, and leaves the ordinary share as it was.
+  const today = view.days[view.today];
+  const wanted = (today?.do_duration_ms ?? 0) + charged(view.today, "do_duration_ms");
+  const reopens =
+    wanted - (today?.heldMs ?? 0) <= LIVE_DAILY.do_duration_ms &&
+    wanted - (today?.protectedUse.do_duration_ms ?? 0) - (today?.heldOrdinaryMs ?? 0) <=
+      LIVE_DAILY.do_duration_ms - LIVE_PROTECTED.do_duration_ms;
+  if (
+    closed === "daily_total" ||
+    closed === "ordinary_share" ||
+    (closed === "duration_day" && !reopens)
+  )
+    return { fits: false, reason: "daily", gate: closed, retryAt: (view.today + 1) * DAY };
+  const added = (r: DiscretionaryResource) =>
+    plans.reduce(
+      (n, p) =>
+        n +
+        p.directoryCleanupDebt[r] +
+        p.localCleanupDebt[r] +
+        p.charges.filter((c) => !view.days[c.day]).length * p.dayCleanupDebt[r],
+      0,
     );
-  return parts.length > 0 ? parts.join(" AND ") : "1";
+  const refusedFor = (gate: LiveRefusalReason): LiveOpeningFit => ({
+    fits: false,
+    reason: "temporary",
+    gate,
+  });
+  if (closed) return refusedFor(closed);
+  const owing = R.find((r) => view.debts[r] + added(r) > LIVE_ORDINARY_DEBT_LIMIT[r]);
+  if (owing) return refusedFor(`debt:${owing}`);
+  if (view.receiptsOverdue) return refusedFor("overdue_receipts");
+  if (view.oldDays) return refusedFor("old_days");
+  if (view.targetElsewhere && plans.some((p) => p.producesLocal))
+    return refusedFor("target_incarnation");
+  if (ownerPlaces > view.ownerRoom) return refusedFor("owner:capacity");
+  return { fits: true };
 }
 
 /**
@@ -502,16 +891,20 @@ function fits(charge: LiveDayCharge, ordinary: boolean): string {
 export async function reserveLive(
   db: D1Database,
   request: LiveGrantRequest,
+  metrics?: Metrics,
 ): Promise<LiveGrantResult> {
-  const refused = (reason: LiveRefusal): LiveGrantResult => ({ status: "refused", reason });
   const plan = request.plan;
-  if (livePlanError(plan) !== null || !(await identityHolds(request))) return refused("invalid");
+  const refused = (reason: LiveRefusal, gate: LiveGate, retryAt?: number): LiveGrantResult => {
+    metrics?.count("live.grant_refusal", { unit: plan.kind, gate });
+    return { status: "refused", reason, gate, ...(retryAt !== undefined && { retryAt }) };
+  };
+  if (livePlanError(plan) !== null || !(await identityHolds(request)))
+    return refused("invalid", "validity");
   const mint = crypto.randomUUID();
   const { settleUntil, expiresAt } = liveReceiptDeadlines(plan);
   const ordinary = plan.class === "ordinary";
   const planText = canonicalPlan(plan);
   const source = feedEpochSource(plan.recipient);
-  const first = plan.charges[0] as LiveDayCharge;
   type Bind = (value: string | number) => string;
   const M = (b: Bind) =>
     `EXISTS (SELECT 1 FROM live_budget_state WHERE id = 1 AND last_mint = ${b(mint)})`;
@@ -522,43 +915,22 @@ export async function reserveLive(
   const statements: D1PreparedStatement[] = [];
   statements.push(
     statement(db, (b) => {
-      const epochCurrent =
-        plan.recipientType === "UserDO"
-          ? `${plan.epoch} = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ${b(source)}), 0)`
-          : "1";
-      const targetCurrent = plan.producesLocal
-        ? `NOT EXISTS (SELECT 1 FROM live_recovery_targets WHERE feed = ${b(plan.recipient)} AND incarnation <> ${b(plan.incarnation)})`
-        : "1";
-      const ordinaryGates = ordinary
-        ? [
-            ...R.map(
-              // After what it retires: a turn that owes no more than it takes off is let through.
-              (r) =>
-                `debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r)} <= ${LIVE_ORDINARY_DEBT_LIMIT[r]}`,
-            ),
-            // Expired receipts once they call for cleanup (maintenance's own never do).
-            `NOT ${liveReceiptsOverdue(N)}`,
-            `NOT EXISTS (SELECT 1 FROM live_budget_days WHERE day < ${D} - 7 AND retain_until <= ${N} ORDER BY day LIMIT 1)`,
-          ].join("\n    AND ")
-        : "1";
+      const gates = liveGates(plan, b, source)
+        .filter((gate) => !gate.reportOnly)
+        .map((gate) => gate.holds);
       return `${retiring(plan, b)}UPDATE live_budget_state
   SET grant_seq = grant_seq + 1, last_mint = ${b(mint)}, last_mint_at = ${N},
     ${R.map((r) => `debt_${r} = debt_${r} + ${addedDebt(plan, r, b)} - ${retiredDebt(plan, r)}`).join(",\n    ")}
   WHERE id = 1 AND incarnation = ${b(plan.incarnation)} AND grant_seq < ${MAX}
-    AND ${plan.validFrom} <= ${N} AND ${N} < ${plan.validUntil}
-    AND ${first.day} = ${D}
     AND NOT EXISTS (SELECT 1 FROM live_budget_receipts WHERE operation_id = ${b(request.operationId)})
-    AND ${plan.charges.map((c) => fits(c, ordinary)).join("\n    AND ")}
-    AND ${ordinaryGates}
-    AND ${epochCurrent}
-    AND ${targetCurrent}`;
+    AND ${gates.join("\n    AND ")}`;
     }),
   );
   for (const charge of plan.charges) {
     const held = charge.duration?.ms ?? 0;
     statements.push(
       statement(db, (b) => {
-        const entry = `json_object('id', ${b(request.operationId)}, 'ms', ${held})`;
+        const entry = `json_object('id', ${b(request.operationId)}, 'ms', ${held}, 'class', '${plan.class}')`;
         return `INSERT INTO live_budget_days
     (day, ${R.join(", ")}, ${R.map((r) => `protected_${r}`).join(", ")}, escrow, retain_until, cleanup_debt)
   SELECT ${charge.day}, ${R.map((r) => charge.resources[r]).join(", ")},
@@ -622,24 +994,21 @@ export async function reserveLive(
     AND ${M(b)}`,
       ),
     );
-  // What happened, and if nothing did, why: read in the same batch.
-  const firstDayFails = R.filter((r) => first.resources[r] > 0)
-    .flatMap((r) => [
-      `coalesce((SELECT ${r} FROM live_budget_days WHERE day = ${first.day}), 0) + ${first.resources[r]} > ${LIVE_DAILY[r]}`,
-      ...(ordinary
-        ? [
-            `coalesce((SELECT ${r} - protected_${r} FROM live_budget_days WHERE day = ${first.day}), 0) + ${first.resources[r]} > ${LIVE_DAILY[r] - LIVE_PROTECTED[r]}`,
-          ]
-        : []),
-    ])
-    .join(" OR ");
+  // What happened, and if nothing did, why: read in the same batch. Which gate failed is read only
+  // with no receipt to show for it, so a granted path pays nothing for it.
   statements.push(
     statement(
       db,
       (b) => `SELECT ${N} AS now, ${D} AS today,
     (SELECT incarnation FROM live_budget_state WHERE id = 1) AS incarnation,
     ${plan.recipientType === "UserDO" ? `coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ${b(source)}), 0)` : "NULL"} AS epoch,
-    (SELECT ${firstDayFails || "0"}) AS daily,
+    CASE WHEN r.seq IS NULL THEN (${retiring(plan, b)}SELECT CASE
+      ${liveGates(plan, b, source)
+        .map((gate) => `WHEN NOT (${gate.holds}) THEN '${gate.name}'`)
+        .join("\n      ")}
+      ELSE 'unknown' END FROM live_budget_state WHERE id = 1) END AS gate,
+    CASE WHEN r.seq IS NULL THEN (SELECT ${durationReopens(plan)}
+      FROM live_budget_days d WHERE d.day = ${D}) END AS duration_reopens,
     r.seq, r.mint, r.plan, r.incarnation AS receipt_incarnation, r.granted_at, r.settled_at,
     r.valid_until
   FROM (SELECT 1) LEFT JOIN live_budget_receipts r ON r.operation_id = ${b(request.operationId)}`,
@@ -648,9 +1017,10 @@ export async function reserveLive(
   let rows: {
     now: number;
     today: number;
+    duration_reopens: number | null;
     incarnation: string;
     epoch: number | null;
-    daily: number;
+    gate: LiveGate | null;
     seq: number | null;
     mint: string | null;
     plan: string | null;
@@ -664,10 +1034,10 @@ export async function reserveLive(
     rows = (results.at(-1)?.results ?? []) as typeof rows;
   } catch {
     // An answer lost or a statement failed: unknown, retried with the same identity.
-    return refused("temporary");
+    return refused("temporary", "unknown");
   }
   const row = rows[0];
-  if (!row) return refused("temporary");
+  if (!row) return refused("temporary", "unknown");
   const envelope = (): LiveEnvelope => ({
     protocol: 1,
     operationId: request.operationId,
@@ -677,22 +1047,31 @@ export async function reserveLive(
   });
   if (row.seq !== null) {
     if (row.plan !== canonicalPlan(plan) || row.receipt_incarnation !== plan.incarnation)
-      return refused("invalid");
+      return refused("invalid", "validity");
     // `mint` is private to this call: equal only when this batch granted it.
     if (row.mint === mint) return { status: "granted", replay: false, grant: envelope() };
     if (row.settled_at !== null || row.now >= (row.valid_until as number))
-      return refused("expired");
+      return refused("expired", "validity");
     // A replay is fenced as a new grant would be (a restore, another incarnation since).
-    if (row.incarnation !== plan.incarnation) return refused("fenced");
-    if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch) return refused("fenced");
+    if (row.incarnation !== plan.incarnation) return refused("fenced", "target_incarnation");
+    if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch)
+      return refused("fenced", "epoch");
     return { status: "granted", replay: true, grant: envelope() };
   }
-  if (row.now >= plan.validUntil) return refused("expired");
-  if (row.incarnation !== plan.incarnation) return refused("fenced");
-  if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch) return refused("fenced");
-  if (row.now >= plan.validFrom && first.day === row.today && row.daily === 1)
-    return { status: "refused", reason: "daily", retryAt: (row.today + 1) * DAY };
-  return refused("temporary");
+  if (row.now >= plan.validUntil) return refused("expired", "validity");
+  if (row.incarnation !== plan.incarnation) return refused("fenced", "target_incarnation");
+  if (plan.recipientType === "UserDO" && row.epoch !== plan.epoch)
+    return refused("fenced", "epoch");
+  const gate = row.gate ?? "unknown";
+  // The first day's own room gone: nothing frees it before tomorrow. Its duration, though, comes
+  // back as grants settle, if all they hold would make room.
+  if (
+    gate === "daily_total" ||
+    gate === "ordinary_share" ||
+    (gate === "duration_day" && row.duration_reopens !== 1)
+  )
+    return refused("daily", gate, (row.today + 1) * DAY);
+  return refused("temporary", gate);
 }
 
 /**

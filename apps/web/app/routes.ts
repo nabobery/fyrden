@@ -20,6 +20,7 @@ export default [
   route(":owner/:repo/edit/:ref/*", "routes/repo.edit.tsx"),
   route(":owner/:repo/raw/:ref/*", "routes/repo.raw.ts"),
   route(":owner/:repo/preview/:ref/*", "routes/repo.preview.ts"),
+  route(":owner/:repo/paths", "routes/repo.paths.ts"),
   route(":owner/:repo/archive/:format", "routes/repo.archive.ts"),
   route(":owner/:repo/commits", "routes/repo.commits.tsx"),
   route(":owner/:repo/commits/:ref/*", "routes/repo.commits.tsx", { id: "repo.commits.at" }),
