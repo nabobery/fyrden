@@ -643,11 +643,12 @@ LIVE_PRICES.org_confirmation = estimated(
  * epoch, both days' rows and 15 expired receipts read), their durations
  * settled (179, 26; their pages funded on their own), each kind reaped a
  * page, leases lapsed both ways (268, 46), and 2 owners settled two whole
- * pages of days each and released (102, 28): at most 4,275 read and 194
- * written over three runs (its adoption's index written since), its reads rounded up. Revocations are a page of
+ * pages of days each and released (102, 28): at most 4,275 read and 196
+ * written over four runs and test orders (its adoption's index written since), its reads
+ * rounded up. Revocations are a page of
  * their own (`revocation_page`).
  */
-export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_300, d1_rows_written: 194 };
+export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_300, d1_rows_written: 196 };
 
 LIVE_PRICES.maintenance = estimated(
   LIVE_MAINTENANCE_MEASURED,
