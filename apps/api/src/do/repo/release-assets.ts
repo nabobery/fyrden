@@ -210,7 +210,7 @@ export class RepoReleaseAssets {
         readonly epochGen: number;
         readonly seq: number;
         readonly mustFit: boolean;
-        readonly dropReservation?: string;
+        readonly dropReservations?: readonly string[];
       }) => Promise<StatementAnswer>;
       /** Frees a session's reservation, best effort. */
       readonly releaseHold: (holdId: string) => Promise<void>;
@@ -508,10 +508,7 @@ export class RepoReleaseAssets {
     // The fit: the total, this session in it, checked before anything commits.
     const refusedNow = this.#refusal();
     if (refusedNow) return refusedNow;
-    const stated = await this.#stateTotal({
-      mustFit: true,
-      dropReservation: assetHoldId(row.upload_id),
-    });
+    const stated = await this.#stateTotal({ mustFit: true });
     await hooks.step?.("stated");
     if (stated === "no_room")
       return this.#refuse(
@@ -850,18 +847,19 @@ export class RepoReleaseAssets {
   /**
    * States the total to the account: read, with `usage_seq` bumped, in one
    * transaction, so a tuple names one total; `told_seq` moves only to a
-   * tuple the account took.
+   * tuple the account took. The total counts every `completing` session, so
+   * their holds are named to be left out and let go, each counted once.
    */
-  async #stateTotal(options: {
-    mustFit: boolean;
-    dropReservation?: string;
-  }): Promise<StatementAnswer | "failed"> {
+  async #stateTotal(options: { mustFit: boolean }): Promise<StatementAnswer | "failed"> {
     const statement = this.#storage().transactionSync(() => {
       this.#bump();
       return {
         bytes: this.total(),
         seq: this.counters().usage_seq,
         epochGen: this.deps.events.epochGen(),
+        dropReservations: this.#exec<{ upload_id: string }>(
+          "SELECT upload_id FROM release_asset_uploads WHERE state = 'completing'",
+        ).map((row) => assetHoldId(row.upload_id)),
       };
     });
     let answer: StatementAnswer;

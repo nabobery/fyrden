@@ -334,6 +334,34 @@ describe("completing", () => {
     expect((await complete(r, begun.body.id, parts)).body.state).toBe("completed");
   });
 
+  it("counts another completing session's bytes once, not in its hold as well", async () => {
+    const before = await quota();
+    await setLimit(before.storage_bytes + 20);
+    const first = await begin(r, release, { name: "a", size: 10 });
+    const firstPut = await putPart(first.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const firstParts = [{ part_number: 1, etag: firstPut.body.etag as string }];
+    // The first completion stops in completing: the account answers not_here.
+    await inRepoOrg((sql) =>
+      sql.exec(
+        "INSERT INTO released_repos (repo_id, transfer_id, released_at) VALUES (?, 't', 0)",
+        r.id,
+      ),
+    );
+    expect((await complete(r, first.body.id, firstParts)).status).toBe(503);
+    await inRepoOrg((sql) => sql.exec("DELETE FROM released_repos WHERE repo_id = ?", r.id));
+    const second = await begin(r, release, { name: "b", size: 10 });
+    const put = await putPart(second.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const done = await complete(r, second.body.id, [
+      { part_number: 1, etag: put.body.etag as string },
+    ]);
+    expect([done.status, done.body.state]).toEqual([200, "completed"]);
+    expect((await complete(r, first.body.id, firstParts)).body.state).toBe("completed");
+    expect(await quota()).toMatchObject({
+      storage_bytes: before.storage_bytes + 20,
+      reserved_bytes: 0,
+    });
+  });
+
   it("commits on a retry after the object stopped before deciding", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);

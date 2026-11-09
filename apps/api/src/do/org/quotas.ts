@@ -112,7 +112,7 @@ export class AccountQuotas {
     return {
       limits: this.limits(),
       usedBytes: this.#used(),
-      reservedBytes: this.#held(this.now(), null),
+      reservedBytes: this.#held(this.now(), []),
     };
   }
 
@@ -272,10 +272,11 @@ export class AccountQuotas {
    * A repository's statement of its release assets' total: `stale` when an
    * older tuple than the last one taken (newer generation first, then
    * number); with `mustFit`, `no_room` when the account's other usage, its
-   * holds but `dropReservation`'s, and `bytes` together exceed the limit (the
+   * holds but `dropReservations`', and `bytes` together exceed the limit (the
    * total, not the growth, is tested: an unchecked statement may have
    * carried these bytes already). Otherwise the total replaces the last
-   * one, and `dropReservation`'s hold goes, in one transaction.
+   * one, and `dropReservations`' holds go, in one transaction: the
+   * sessions whose bytes the total counts.
    */
   setAssets(input: {
     readonly repoId: string;
@@ -283,7 +284,7 @@ export class AccountQuotas {
     readonly epochGen: number;
     readonly seq: number;
     readonly mustFit: boolean;
-    readonly dropReservation?: string;
+    readonly dropReservations?: readonly string[];
   }): "stale" | "no_room" | "ok" {
     return this.storage.transactionSync(() => {
       const last = this.#sql<{ bytes: number; epoch_gen: number; seq: number }>(
@@ -298,7 +299,7 @@ export class AccountQuotas {
         return "stale";
       if (input.mustFit) {
         const others =
-          this.#used() - (last?.bytes ?? 0) + this.#held(this.now(), input.dropReservation ?? null);
+          this.#used() - (last?.bytes ?? 0) + this.#held(this.now(), input.dropReservations ?? []);
         if (others + input.bytes > this.limits().maxStorageBytes) return "no_room";
       }
       this.storage.sql.exec(
@@ -310,7 +311,7 @@ export class AccountQuotas {
         input.epochGen,
         input.seq,
       );
-      if (input.dropReservation !== undefined) this.release(input.dropReservation);
+      for (const holdId of input.dropReservations ?? []) this.release(holdId);
       return "ok";
     });
   }
@@ -366,7 +367,8 @@ export class AccountQuotas {
   /** Bytes free now, not counting what `exceptUpload` itself holds. */
   #free(now: number, exceptUpload: string | null): number {
     const { maxStorageBytes } = this.limits();
-    return Math.max(0, maxStorageBytes - this.#used() - this.#held(now, exceptUpload));
+    const except = exceptUpload === null ? [] : [exceptUpload];
+    return Math.max(0, maxStorageBytes - this.#used() - this.#held(now, except));
   }
 
   /** Bytes of committed uploads and release assets: a row of each per repository. */
@@ -379,14 +381,14 @@ export class AccountQuotas {
     );
   }
 
-  /** Bytes live holds keep (uploads being stored or committed), but `exceptUpload`'s. */
-  #held(now: number, exceptUpload: string | null): number {
+  /** Bytes live holds keep (uploads being stored or committed), but `except`'s. */
+  #held(now: number, except: readonly string[]): number {
     return (
       this.#sql<{ n: number }>(
         `SELECT coalesce(sum(bytes), 0) AS n FROM quota_holds
-         WHERE expires_at > ? AND upload_id IS NOT ?`,
+         WHERE expires_at > ? AND upload_id NOT IN (SELECT value FROM json_each(?))`,
         now,
-        exceptUpload,
+        JSON.stringify(except),
       )[0]?.n ?? 0
     );
   }
