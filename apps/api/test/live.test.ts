@@ -2630,6 +2630,28 @@ describe("a feed's turn", () => {
       socket.ws?.close(1000, "done");
     });
 
+    it("tells a socket of a lapsed turn at most once, though its attachment had no room for the mark", async () => {
+      const owner = await user();
+      const socket = await open(owner.token);
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => toLapse(state, -1_000));
+      // The platform refusing the attachment with its mark (past its size): the frame must not be
+      // sent again by every later alarm.
+      const serialize = WebSocket.prototype.serializeAttachment;
+      WebSocket.prototype.serializeAttachment = function (this: WebSocket, value: unknown) {
+        if (typeof (value as { paused?: unknown } | null)?.paused === "string")
+          throw new RangeError("attachment too large");
+        return serialize.call(this, value);
+      };
+      try {
+        await runTurnNow(owner);
+        await runTurnNow(owner);
+      } finally {
+        WebSocket.prototype.serializeAttachment = serialize;
+      }
+      expect(pausedFrames(socket).length).toBeLessThanOrEqual(1);
+      socket.ws?.close(1000, "done");
+    });
+
     it("tells nothing of a turn left for want of room that can still run", async () => {
       const owner = await user();
       const socket = await open(owner.token);

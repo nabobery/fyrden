@@ -2272,11 +2272,19 @@ export class UserDO extends MigratingDO {
     const frame = JSON.stringify({ t: "paused", until, reason: refused.gate });
     for (const ws of sockets)
       try {
+        // Which turn it is told of, kept with it across hibernation (no row written), before the
+        // frame: one whose mark cannot be kept is told nothing rather than told again by every
+        // later alarm (its renewal's close still reaches it). Only its known fields, so its size
+        // is theirs.
+        const { v, id, until } = ws.deserializeAttachment() as {
+          v?: number;
+          id?: string;
+          until?: number;
+        };
+        ws.serializeAttachment({ v, id, until, paused: operationId });
         ws.send(frame);
-        // Which turn it was told of, kept with it across hibernation (no row written).
-        ws.serializeAttachment({ ...(ws.deserializeAttachment() as object), paused: operationId });
       } catch {
-        // Closing since it was looked at: the others still hear of it.
+        // Closing since it was looked at, or its mark refused: the others still hear of it.
       }
   }
 
