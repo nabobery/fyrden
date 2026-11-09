@@ -636,19 +636,20 @@ LIVE_PRICES.org_confirmation = estimated(
  * A maintenance run with every page full, at its worst (Proposed; measured
  * locally by its fixture, D1's rows as an invocation counts them): the
  * run's own grant over a midnight, owner and checks, with an overdue
- * receipt removed (252 read, 39 written), 16 receipts each holding escrow
+ * receipt removed (323 read, 35 written), 16 receipts each holding escrow
  * on two days of its own (3,361, 49), a day (28, 2), a day's duration debt
- * served (5, 2), 2 recovery targets adopted (11, 6) and 2 coordinated, each
- * granted its own cleanup unit half a minute before a midnight (the feed's
- * epoch, both days' rows and 15 expired receipts read), their durations
- * settled (179, 26; their pages funded on their own), each kind reaped a
- * page, leases lapsed both ways (268, 46), and 2 owners settled two whole
- * pages of days each and released (102, 28): at most 4,275 read and 196
- * written over four runs and test orders (its adoption's index written since), its reads
- * rounded up. Revocations are a page of
- * their own (`revocation_page`).
+ * served (5, 2), 2 recovery targets of another incarnation adopted (12, 6
+ * with more left; 13, 7 as the last page, which also marks none left), 2
+ * recoveries coordinated, each granted its own cleanup unit half a minute
+ * before a midnight (the feed's epoch, both days' rows and 15 expired
+ * receipts read), their durations settled (179, 26; their pages funded on
+ * their own), each kind reaped a page, leases lapsed both ways (268, 46),
+ * and 2 owners settled two whole pages of days each and released (100 to
+ * 102 read, 28 to 30 written): at most 4,289 read and 197 written over the
+ * test orders tried, its reads rounded up and its writes as measured.
+ * Revocations are a page of their own (`revocation_page`).
  */
-export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_300, d1_rows_written: 196 };
+export const LIVE_MAINTENANCE_MEASURED = { d1_rows_read: 4_300, d1_rows_written: 197 };
 
 LIVE_PRICES.maintenance = estimated(
   LIVE_MAINTENANCE_MEASURED,

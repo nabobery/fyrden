@@ -143,20 +143,43 @@ describe("a maintenance run's pages, full", () => {
       out.debt = await measure(now, (db) => serviceLiveDurationDebt(db));
       await clear(now);
 
-      // Targets of another incarnation, a page and one more.
+      // Targets of another incarnation, a full page each time, the ledger's marker still naming
+      // that incarnation: a page with one more left after it, and a last page, which also marks
+      // none left. The most of the two.
       const targetDebt = `json_object('do_requests', 0, 'do_rows_read', 0, 'do_rows_written', 2,
         'do_duration_ms', 0, 'd1_rows_read', 0, 'd1_rows_written', 0, 'queue_ops', 0)`;
-      for (let i = 0; i <= LIVE_MAINTENANCE.recoveries; i++)
+      const adoptPage = async (targets: number) => {
         await env.DIRECTORY.prepare(
-          `INSERT INTO live_recovery_targets (feed, incarnation, through_seq, next_attempt_at,
-             attempts, local_cleanup_debt) VALUES (?, ?, 1, ?, 0, ${targetDebt})`,
+          "UPDATE live_budget_state SET targets_incarnation = ? WHERE id = 1",
         )
-          .bind(`usr_adopt_${i}`, "0".repeat(32), now + DAY)
+          .bind("0".repeat(32))
           .run();
-      out.adopt = await measure(now, (db) =>
-        adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries),
-      );
-      await env.DIRECTORY.prepare("DELETE FROM live_recovery_targets").run();
+        for (let i = 0; i < targets; i++)
+          await env.DIRECTORY.prepare(
+            `INSERT INTO live_recovery_targets (feed, incarnation, through_seq, next_attempt_at,
+               attempts, local_cleanup_debt) VALUES (?, ?, 1, ?, 0, ${targetDebt})`,
+          )
+            .bind(`usr_adopt_${i}`, "0".repeat(32), now + DAY)
+            .run();
+        const rows = await measure(now, (db) =>
+          adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries),
+        );
+        await env.DIRECTORY.prepare("DELETE FROM live_recovery_targets").run();
+        return rows;
+      };
+      const [more, last] = [
+        await adoptPage(LIVE_MAINTENANCE.recoveries + 1),
+        await adoptPage(LIVE_MAINTENANCE.recoveries),
+      ];
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT targets_incarnation = incarnation AS marked FROM live_budget_state WHERE id = 1",
+        ).first(),
+      ).toEqual({ marked: 1 });
+      out.adopt = {
+        read: Math.max(more.read, last.read),
+        written: Math.max(more.written, last.written),
+      };
 
       // Recoveries coordinated (their funded pages are recovery's own): targets due, each paid for
       // by its cleanup grant as a run makes it (the feed's target and the grant read half a minute
