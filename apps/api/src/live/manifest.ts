@@ -731,9 +731,10 @@ LIVE_PRICES.revocation_page = estimated(
 // Its object's rows its page's bound; its D1 measured locally, its object's side of a page for a
 // registered principal's feed restored since it began: its coverage checked and two dispatched
 // owners quarantined, an object's most at once (20 read, 2 written, whichever two of its turn and
-// pending kinds they are).
+// pending kinds they are), and at its most with a refill besides whose owner the directory no
+// longer holds (24 read, 2 written).
 LIVE_PRICES.recovery = estimated(
-  { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 20, d1_rows_written: 2 },
+  { do_rows_read: 130, do_rows_written: 64, d1_rows_read: 24, d1_rows_written: 2 },
   {
     validity: { maxMs: 10 * 60_000, days: 2 },
     duration: "owner",

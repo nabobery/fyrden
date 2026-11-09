@@ -768,96 +768,128 @@ describe("live recovery", () => {
     });
   });
 
-  it("uses no more of D1 in the feed's object than its price was measured at, every owner it may hold at once quarantined", async () => {
-    await isolated(async () => {
-      // A registered principal's feed, restored once (its epoch read as recovery reads it).
-      const feed = (await user()).principalId;
-      const epoch = 3;
-      await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, ?)")
-        .bind(`feed:${feed}`, epoch)
-        .run();
-      await feedOf(feed).inboxThread("none");
-      const grant = await ordinaryGrant(feed, undefined, epoch);
-      // Work dispatched by an instance gone since, as much as a feed may hold at once: two ordinary
-      // owners (an object's most), an installation pending and its turn; each in the directory.
-      const kinds = ["install", "turn"] as const;
-      const owners = kinds.map((kind) => ({ kind, operationId: uniqueId(`op_${kind}`) }));
-      await env.DIRECTORY.batch(
-        owners.map(({ operationId }) =>
-          env.DIRECTORY.prepare(
-            `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id, class,
+  // Work dispatched by an instance gone since, as much as a feed may hold at once: two ordinary
+  // owners (an object's most) in the directory, and a refill whose owner the directory no longer
+  // holds (one admitted under an earlier epoch, say).
+  it.each([
+    { name: "an installation and its turn", owned: ["install", "turn"], missing: [] },
+    {
+      name: "a refill and its turn, and a refill whose owner is gone",
+      owned: ["mark_refill", "turn"],
+      missing: ["control_refill"],
+    },
+  ] as const)(
+    "uses no more of D1 in the feed's object than its price was measured at, holding $name",
+    async ({ owned, missing }) => {
+      await isolated(async () => {
+        // A registered principal's feed, restored once (its epoch read as recovery reads it).
+        const feed = (await user()).principalId;
+        const epoch = 3;
+        await env.DIRECTORY.prepare(
+          "INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, ?)",
+        )
+          .bind(`feed:${feed}`, epoch)
+          .run();
+        await feedOf(feed).inboxThread("none");
+        const grant = await ordinaryGrant(feed, undefined, epoch);
+        const kinds = owned;
+        const owners = kinds.map((kind) => ({ kind, operationId: uniqueId(`op_${kind}`) }));
+        await env.DIRECTORY.batch(
+          owners.map(({ operationId }) =>
+            env.DIRECTORY.prepare(
+              `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id, class,
                epoch, incarnation, dispatch_from, dispatch_until, holds, status, instance,
                started_at, admitted_at)
              VALUES (?1 || '/feed', ?1, 'UserDO', ?2, 'ordinary', ?4, ?3, 0, 1, '[]', 'dispatched',
                'gone', 0, 0)`,
-          ).bind(operationId, feed, grant.plan.incarnation, epoch),
-        ),
-      );
-      await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
-        for (const { kind, operationId } of owners)
-          if (kind === "turn")
-            state.storage.sql.exec(
-              `INSERT INTO live_turn (id, operation_id, envelope_json, phase, intended_at, owner_id,
+            ).bind(operationId, feed, grant.plan.incarnation, epoch),
+          ),
+        );
+        await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+          for (const { kind, operationId } of owners)
+            if (kind === "turn")
+              state.storage.sql.exec(
+                `INSERT INTO live_turn (id, operation_id, envelope_json, phase, intended_at, owner_id,
                  dispatch_instance, budget_epoch, budget_incarnation, budget_seq,
                  budget_valid_until)
                VALUES (1, ?, ?, 'dispatched', 0, ?, 'gone', ?, ?, ?, ?)`,
-              operationId,
-              JSON.stringify(grant),
-              `${operationId}/feed`,
-              epoch,
-              grant.plan.incarnation,
-              grant.seq,
-              grant.plan.validUntil,
-            );
-          else
-            state.storage.sql.exec(
-              `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+                operationId,
+                JSON.stringify(grant),
+                `${operationId}/feed`,
+                epoch,
+                grant.plan.incarnation,
+                grant.seq,
+                grant.plan.validUntil,
+              );
+            else
+              state.storage.sql.exec(
+                `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
                  budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase,
                  request_json, owner_id, dispatch_instance)
                VALUES (?, ?, 0, 0, ?, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
+                kind,
+                operationId,
+                epoch,
+                grant.plan.incarnation,
+                grant.seq,
+                grant.plan.validUntil,
+                `${operationId}/feed`,
+              );
+          for (const kind of missing)
+            state.storage.sql.exec(
+              `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+               budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase,
+               request_json, owner_id, dispatch_instance)
+             VALUES (?, ?, 0, 0, ?, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
               kind,
-              operationId,
+              uniqueId(`op_${kind}`),
               epoch,
               grant.plan.incarnation,
               grant.seq,
               grant.plan.validUntil,
-              `${operationId}/feed`,
+              uniqueId("gone"),
             );
-      });
-      let used: { d1Read: number; d1Written: number } | undefined;
-      expect(
-        await recoverLiveTargets(env.DIRECTORY, {
-          limit: 10,
-          reserveTarget: (target) => recoveryCoverage(target, epoch),
-          tell: async (request) => {
-            const counter = countD1Rows();
-            try {
-              return await tell(request);
-            } finally {
-              used = counter.stop();
-            }
-          },
-        }),
-      ).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
-      expect(
-        await env.DIRECTORY.prepare(
-          "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ? AND status = 'uncertain'",
-        )
+        });
+        let used: { d1Read: number; d1Written: number } | undefined;
+        expect(
+          await recoverLiveTargets(env.DIRECTORY, {
+            limit: 10,
+            reserveTarget: (target) => recoveryCoverage(target, epoch),
+            tell: async (request) => {
+              const counter = countD1Rows();
+              try {
+                return await tell(request);
+              } finally {
+                used = counter.stop();
+              }
+            },
+          }),
+          // One whose owner is gone stays until the directory can account for it.
+        ).toEqual(
+          missing.length === 0
+            ? { attempted: 1, retired: 1, pending: 0, failed: 0 }
+            : { attempted: 1, retired: 0, pending: 1, failed: 0 },
+        );
+        expect(
+          await env.DIRECTORY.prepare(
+            "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ? AND status = 'uncertain'",
+          )
+            .bind(feed)
+            .first(),
+        ).toEqual({ n: kinds.length });
+        const observed = (LIVE_PRICES.recovery as LiveManifestEntry).observed;
+        const most = (k: "d1_rows_read" | "d1_rows_written") =>
+          Math.max(...Object.values(observed).map((o) => o[k]));
+        expect(used).toEqual({
+          d1Read: Math.min(used?.d1Read ?? 0, most("d1_rows_read")),
+          d1Written: Math.min(used?.d1Written ?? 0, most("d1_rows_written")),
+        });
+        await env.DIRECTORY.prepare("DELETE FROM live_duration_owners WHERE object_id = ?")
           .bind(feed)
-          .first(),
-      ).toEqual({ n: kinds.length });
-      const observed = (LIVE_PRICES.recovery as LiveManifestEntry).observed;
-      const most = (k: "d1_rows_read" | "d1_rows_written") =>
-        Math.max(...Object.values(observed).map((o) => o[k]));
-      expect(used).toEqual({
-        d1Read: Math.min(used?.d1Read ?? 0, most("d1_rows_read")),
-        d1Written: Math.min(used?.d1Written ?? 0, most("d1_rows_written")),
+          .run();
       });
-      await env.DIRECTORY.prepare("DELETE FROM live_duration_owners WHERE object_id = ?")
-        .bind(feed)
-        .run();
-    });
-  });
+    },
+  );
 
   it("keeps a dispatched installation whose owner the directory does not hold, and stays pending", async () => {
     await isolated(async () => {
