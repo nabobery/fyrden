@@ -44,7 +44,7 @@ import {
 import { liveCredential } from "../src/live/credential.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { LIVE_PENDING_MS } from "../src/live/duration.js";
-import { liveOpeningTarget, planFor } from "../src/live/funding.js";
+import { LIVE_MANIFEST_REVISION, liveOpeningTarget, planFor } from "../src/live/funding.js";
 import {
   LIVE_BLOCK_MS,
   LIVE_BLOCK_UNITS,
@@ -1695,6 +1695,130 @@ describe("a feed's turn", () => {
     }
     expect(revoked).toBeDefined();
     expect(opened.ok).toBe(false);
+  });
+
+  it("keeps a hint for an opening's socket until it is attached, though a turn ran meanwhile", async () => {
+    const at = Math.floor(Date.now() / DAY) * DAY + 10 * HOUR;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    let unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const first = await open(owner.token);
+    const gone = handled(owner, "close");
+    first.ws?.close(1000, "done");
+    await gone();
+    const [instance, state, held] = await runInDurableObject(
+      feedOf(owner),
+      (feed: UserDO, s) => [feed, s, new LiveBudget(s.storage.sql).turn()] as const,
+    );
+    if (!held) throw new Error("no turn");
+    // Two seconds before the turn it holds lapses; a turn to replace it granted already.
+    const almost = held.envelope.plan.validUntil - 2_000;
+    unpin();
+    unpin = await pinLedgerClock(almost);
+    vi.setSystemTime(almost);
+    const target = await liveOpeningTarget(env.DIRECTORY, owner.principalId);
+    const replacement = await reserveLive(
+      env.DIRECTORY,
+      await makeLiveGrant(
+        planFor(
+          LIVE_PRICES.pump as LiveManifestEntry,
+          {
+            incarnation: target.incarnation,
+            epoch: target.epoch,
+            recipientType: "UserDO",
+            recipient: owner.principalId,
+            class: "ordinary",
+            kind: "pump",
+            producesLocal: true,
+          },
+          target.ledger.now,
+        ),
+      ),
+    );
+    if (replacement.status !== "granted") throw new Error("no replacement");
+    const credential = await credentialOf(owner);
+    // The held turn lapses while the opened socket's alarm is set; while the object then grants
+    // itself a turn, the replacement is handed over and runs with a change marked, before the
+    // socket is attached.
+    type Batching = { batch(statements: unknown[]): Promise<unknown> };
+    const session = Object.getPrototypeOf(env.DIRECTORY.withSession("first-primary")) as Batching;
+    const batch = session.batch;
+    let armed = false;
+    let ran: Promise<void> | undefined;
+    let beforeAttached: { attached: number; behind: boolean; sent: number } | undefined;
+    feedHooks.beforeAlarmWrite = async () => {
+      if (!state.storage.sql.exec("SELECT 1 FROM live_local WHERE phase = 'open'").toArray().length)
+        return;
+      delete feedHooks.beforeAlarmWrite;
+      vi.setSystemTime(Date.now() + 3_000);
+      unpin();
+      unpin = await pinLedgerClock(Date.now());
+      armed = true;
+    };
+    session.batch = async function (this: Batching, statements: unknown[]) {
+      const race = armed;
+      armed = false;
+      const result = await batch.call(this, statements);
+      if (race) {
+        expect(
+          await instance.liveTurnV1({
+            protocol: 1,
+            revision: LIVE_MANIFEST_REVISION,
+            envelope: replacement.grant,
+            quantity: 1,
+            ownerId: null,
+          }),
+        ).toBe(true);
+        const budget = new LiveBudget(state.storage.sql);
+        new Live(state.storage.sql).mark(
+          [{ repoId: repo.id, subject: "issue", explicit: true }],
+          budget.turnStamp(budget.ledgerNow(Date.now())) ?? undefined,
+        );
+        budget.bringTurn(0);
+        const worked = new Promise<void>((resolve) => {
+          feedHooks.afterTurnWork = async () => {
+            delete feedHooks.afterTurnWork;
+            const live = new Live(state.storage.sql);
+            const socket = live.sockets().find((x) => x.phase === "open");
+            beforeAttached = {
+              attached: state.getWebSockets().length,
+              behind: (socket?.delivered_seq ?? Number.POSITIVE_INFINITY) < live.seq(),
+              sent: socket?.sent ?? -1,
+            };
+            resolve();
+          };
+        });
+        ran = instance.alarm();
+        await worked;
+      }
+      return result;
+    };
+    onTestFinished(() => {
+      session.batch = batch;
+      delete feedHooks.beforeAlarmWrite;
+      delete feedHooks.afterTurnWork;
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    await ran;
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+    const ws = opened.response.webSocket as WebSocket;
+    ws.accept();
+    onTestFinished(() => ws.close(1000, "done"));
+    // Nothing sent, nor its cursor moved, with no socket to send to.
+    expect(beforeAttached).toEqual({ attached: 0, behind: true, sent: 0 });
+    // Once attached, its turn tells it.
+    const frames: unknown[] = [];
+    ws.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    for (let turn = 0; turn < 3 && frames.length === 0; turn++) await runTurnNow(owner);
+    expect(frames[0]).toMatchObject({ t: "changed" });
   });
 
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {

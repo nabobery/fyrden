@@ -2359,6 +2359,10 @@ export class UserDO extends MigratingDO {
     // Its deadline or life passed while the run was authorizing: nothing more is sent.
     if (current.deadline <= now || current.expires_at <= now) return "expired";
     if (current.sent - current.acked >= LIVE_POLICY.window) return;
+    // Nothing sent, nor its cursor moved, while no socket is attached to it (an opening between
+    // its row and its 101): what it would have heard waits for its first turn once attached.
+    const attached = this.ctx.getWebSockets(s.socket_id);
+    if (attached.length === 0) return;
     const streams = dirty.filter(
       (d) =>
         d.seq > current.delivered_seq &&
@@ -2378,7 +2382,7 @@ export class UserDO extends MigratingDO {
               n: current.sent + 1,
               streams: streams.map((d) => ({ repo: d.repo_id, kind: d.subject })),
             };
-    if (frame) for (const ws of this.ctx.getWebSockets(s.socket_id)) ws.send(JSON.stringify(frame));
+    if (frame) for (const ws of attached) ws.send(JSON.stringify(frame));
     this.ctx.storage.transactionSync(() =>
       live.update(s.socket_id, {
         delivered_seq: Math.max(current.delivered_seq, reach),
