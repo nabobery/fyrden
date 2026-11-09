@@ -4195,12 +4195,17 @@ describe("live work's rows in a feed's object", () => {
     const listenSocket = listened?.ok ? listened.response.webSocket : null;
     listenSocket?.accept();
     // And as the first of a feed whose Worker grants its turns too cheap for its object (a build
-    // priced lower at the same revision): the object takes none, and grants itself one too.
+    // priced lower at the same revision): the object takes none, and grants itself one too. An
+    // agent's, its owner a dependency of its socket too (indexed with it).
     const cheap = await userWithEpoch();
     await repoWithIssue(cheap);
     await doneTurnReceipts(cheap, at);
     await releasedTurns(cheap, at + 27 * MINUTE);
+    await env.DIRECTORY.prepare("UPDATE principals SET type = 'agent', owner_id = ? WHERE id = ?")
+      .bind(other.principalId, cheap.principalId)
+      .run();
     const cheapCredential = await credentialOf(cheap);
+    expect(cheapCredential.dependencies).toHaveLength(3);
     const pump = LIVE_PRICES.pump as LiveManifestEntry;
     feedHooks.beforeEpochRead = async () => {
       LIVE_PRICES.pump = {
