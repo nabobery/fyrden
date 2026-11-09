@@ -1859,7 +1859,9 @@ export class UserDO extends MigratingDO {
             // Its work done: what it used, its end (the successor's grant among it) still to come.
             feedHooks.turnDone?.(meter.used(), paid);
             if (this.#live().sockets().length === 0) return null;
-            return await this.#grantTurn(current).catch((): Untold => ({ gate: "unknown" }));
+            return await this.#grantTurn(current, envelope.plan.validFrom).catch(
+              (): Untold => ({ gate: "unknown" }),
+            );
           } finally {
             if (this.#meter === meter) this.#meter = null;
             meter.stop();
@@ -2185,8 +2187,9 @@ export class UserDO extends MigratingDO {
   }
 
   /**
-   * The feed's successor turn, granted from the ledger now (null when
-   * refused, or stopped): a pump when it has live work beyond renewals (a
+   * The feed's successor turn, granted from the ledger now, never starting
+   * before `parentFrom` (the running turn's start), so a feed's turns are
+   * valid no earlier than the one before (null when refused, or stopped): a pump when it has live work beyond renewals (a
    * change to deliver, a refill, a page to prune), else a turn of renewals
    * only, priced for nothing more (its meter leaves anything marked since to
    * the pump after it). Else why not, for its sockets if the feed is left with
@@ -2194,7 +2197,7 @@ export class UserDO extends MigratingDO {
    * result is out of date, which says nothing of what they face now. Its
    * turn's end tells and counts that (`#reconcileTurn`).
    */
-  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | Untold> {
+  async #grantTurn(current: () => boolean, parentFrom: number): Promise<LiveEnvelope | Untold> {
     if (!current()) return { gate: "given_up" };
     const feed = this.ctx.id.name;
     if (!feed) return { gate: "unknown" };
@@ -2216,7 +2219,11 @@ export class UserDO extends MigratingDO {
           kind,
           producesLocal: true,
         },
-        budget.ledgerEarliest(Date.now()),
+        // Never before its parent's start: a later answer that widened this object's view of the
+        // ledger's clock would otherwise give it an earlier validity than turns already released,
+        // and an opening's lookup of the turn held (the newest few) would pass it over. Its
+        // parent's start was D1's time or earlier when granted, so this is never after D1's now.
+        Math.max(budget.ledgerEarliest(Date.now()), parentFrom),
       ),
     );
     const metrics = createMetrics(this.env.METRICS);

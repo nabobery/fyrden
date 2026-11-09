@@ -1357,9 +1357,10 @@ describe("a feed's turn", () => {
       .first<string>("operation_id");
 
   // What lets an opening look at only a feed's newest turns for the one it holds: each successor
-  // is granted by the turn running (`finishTurn` prepares it in the same transaction, valid later
-  // than its own), and an opening's turn is prepared only when the feed holds none that can run
-  // (`prepareTurn`), so the turn held is the newest granted and installed.
+  // is granted by the turn running (`finishTurn` prepares it in the same transaction, its start
+  // never before the running turn's, however the object's view of the ledger's clock widened), and
+  // an opening's turn is prepared only when the feed holds none that can run (`prepareTurn`), so
+  // the turn held is the newest granted and installed.
   it("holds its newest turn grant once each turn has named its successor", async () => {
     const owner = await user();
     const repo = await repoWithIssue(owner);
@@ -1382,6 +1383,36 @@ describe("a feed's turn", () => {
       }
       expect(await socket.next()).toMatchObject({ t: "changed" });
     }
+    socket.ws?.close(1000, "done");
+  });
+
+  it("still holds its newest turn grant when a late answer widened its view of the ledger's clock", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // More of the feed's turns run and released than an opening looks at.
+    for (let turn = 0; turn < LIVE_TURN_RECEIPT_LOOK + 1; turn++) await runTurnNow(owner);
+    // A check that read D1 at once but was answered 8 seconds later, heard just before the turn
+    // names its successor: the ledger's earliest possible time is 8 seconds further back.
+    feedHooks.afterTurnWork = async (_feed, state) => {
+      delete feedHooks.afterTurnWork;
+      const sent = Date.now();
+      const ledgerAt = (
+        (await env.DIRECTORY.prepare("SELECT unixepoch() * 1000 AS at").first<{
+          at: number;
+        }>()) as {
+          at: number;
+        }
+      ).at;
+      new LiveBudget(state.storage.sql).noteLedger(ledgerAt, sent, sent + 8_000);
+    };
+    onTestFinished(() => {
+      delete feedHooks.afterTurnWork;
+    });
+    await runTurnNow(owner);
+    const turns = await turnOf(owner);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.operation_id).toBe(await newestTurnGrant(owner));
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
     socket.ws?.close(1000, "done");
   });
 

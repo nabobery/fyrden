@@ -441,7 +441,8 @@ describe("the pre-check", () => {
       }));
 
     // Turns later than a held one are never released while it is held (each successor is granted
-    // by the turn running, which is released only once it has ended, and an admission's turn
+    // by the turn running, starting no earlier than it, which is released only once it has ended,
+    // and an admission's turn
     // replaces the feed's only when that can no longer run), so this only pins what the bound
     // passes over.
     it("passes over a turn with more of the feed's turns released after it than it looks at", () =>

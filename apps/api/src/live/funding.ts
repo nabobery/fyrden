@@ -362,9 +362,11 @@ export interface LiveTarget {
    * owner never released (a turn that ran released it), valid five minutes
    * on. Only the newest few of each turn kind are looked at (an index range
    * each), however many that ran are still valid: the turn a feed holds is
-   * its newest granted (each successor granted by the turn running, valid
-   * later, and an opening's turn prepared only when the feed holds none that
-   * can run), and none later is released while it is held.
+   * its newest granted (each successor granted by the turn running, its
+   * start never before that turn's, however this object's view of the
+   * ledger's clock widened, and an opening's turn, granted at D1's time,
+   * prepared only when the feed holds none that can run), and none later is
+   * released while it is held.
    */
   readonly turnHeld: boolean;
   /** Whether the feed holds a block of controls still valid past its next renewal; of marks, half an hour on. */
