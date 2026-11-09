@@ -565,11 +565,12 @@ keeps it a week.
 
 ## Blame
 
-`GET /repos/{owner}/{repo}/blame` (REST, and MCP as `get_blame`) says which commit introduced each line of a file, as `git blame` does, or why a line has no answer (`unresolved`, with its reason; renames aren't followed). A file is blamed in slices across requests, kept as a run inside the repository's Durable Object: follow `next_continuation` until it's null.
+`GET /repos/{owner}/{repo}/blame` (REST, and MCP as `get_blame`) says which commit introduced each line of a file, as `git blame` does, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests, kept as a run inside the repository's Durable Object: follow `next_continuation` until it's null.
 
 | Limit | Value | Kind |
 |---|---|---|
 | File blamed | 1 MiB and 100,000 lines; more is `422 file_too_large` | Product limit |
+| Renamed files | Lines git might attribute through a whole-file rename are unresolved, possibly for an earlier reason such as `parent_too_large`. `rename_possible` covers a parent without the file (or with another kind of entry there) whose change removes another path, and, in a merge, a possible identical copy elsewhere. A step whose check passes 256 trees or 8 MiB of trees is refused the same way. Final for that commit and path | Product limit |
 | Ranges in one answer | `per_page`, 1 to 5,000, default 1,000 | Default |
 | A window (`line_start`, `line_end`) | Both, in order, at most 5,000 lines apart; else `422 invalid_input`. No continuation | Product limit |
 | Rate class | `expensive` | Default |

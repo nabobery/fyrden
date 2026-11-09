@@ -92,6 +92,23 @@ describe("GET /repos/{owner}/{repo}/blame", () => {
     expect(pages.at(-1)).toMatchObject({ commit: fx.tip, state: "complete" });
   });
 
+  it("answers lines git takes through a rename as rename_possible, never settled", async () => {
+    const { token, path } = await pushedRepo();
+    for (const [file, count] of [
+      ["renamed.txt", 3],
+      ["merged.txt", 3],
+    ] as const) {
+      // Git takes them from another path; the API refuses them rather than credit the wrong commit.
+      expect((fx.blames[file] ?? []).every((g) => g.filename !== file)).toBe(true);
+      const page = await get(path, token, { path: file });
+      expect([file, page.status, page.body.ranges]).toEqual([
+        file,
+        200,
+        [{ start_line: 1, line_count: count, unresolved: "rename_possible" }],
+      ]);
+    }
+  });
+
   it("gives a window's ranges in line order, with no continuation", async () => {
     const { token, path } = await pushedRepo();
     const window = await get(path, token, { path: "f.txt", line_start: 2, line_end: 4 });

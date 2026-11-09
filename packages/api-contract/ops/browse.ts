@@ -226,6 +226,7 @@ export const UNRESOLVED_REASONS = [
   "history_limit",
   "state_limit",
   "commit_info_too_large",
+  "rename_possible",
   "step_lost",
 ] as const;
 
@@ -272,7 +273,7 @@ export const getBlame = defineOperation({
   path: "/repos/{owner}/{repo}/blame",
   summary: "Blame a file",
   description:
-    "Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason; renames aren't followed). A file is blamed in slices across requests: pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, with no continuation; follow-up windows should name the returned `commit`, not the ref. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path.",
+    "Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, with no continuation; follow-up windows should name the returned `commit`, not the ref. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path.",
   input: z
     .object({
       owner: Owner,
