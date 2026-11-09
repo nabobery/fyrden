@@ -270,6 +270,12 @@ const HELD_UNTIL_ENDED = Number.MAX_SAFE_INTEGER;
 /** How long an ended arrival is remembered, so a late runner makes no room for it. Proposed. */
 const ENDED_ARRIVAL_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
+/** What a repository leaving an account takes with it to the next (`releaseRepo`). */
+export type RepoHandover = {
+  collaborators: { principalId: string; handle: string; role: RepoRole }[];
+  usageBytes: number;
+};
+
 type Meta = {
   account_id: string;
   kind: "org" | "user";
@@ -1340,14 +1346,33 @@ export class OrgDO extends MigratingDO {
   }
 
   /**
-   * A repository leaving this account (a transfer): its collaborators and
-   * the storage its uploads use. Team grants stay behind: they are this
+   * A repository states its release assets' total (see
+   * `AccountQuotas.setAssets`); `not_here` when it is not this account's
+   * (moved, or deleted), with nothing checked or written.
+   */
+  setReleaseAssetStorage(
+    input: Parameters<AccountQuotas["setAssets"]>[0],
+  ): "not_here" | ReturnType<AccountQuotas["setAssets"]> {
+    if (this.#notHere(input.repoId)) return "not_here";
+    return this.#quotas().setAssets(input);
+  }
+
+  /**
+   * A repository leaving this account (a transfer): what it hands over, and
+   * its release assets' last stated total, for a transfer's first check.
+   * The total is not handed over: the repository states it to the new
+   * account itself, where a copy kept here may lag.
+   */
+  repoForTransfer(repoId: string): RepoHandover & { assetBytes: number } {
+    return { ...this.#handover(repoId), assetBytes: this.#quotas().assetBytes(repoId) };
+  }
+
+  /**
+   * What a repository leaving this account hands over: its collaborators
+   * and the storage its uploads use. Team grants stay behind: they are this
    * account's.
    */
-  repoForTransfer(repoId: string): {
-    collaborators: { principalId: string; handle: string; role: RepoRole }[];
-    usageBytes: number;
-  } {
+  #handover(repoId: string): RepoHandover {
     const collaborators = this.ctx.storage.sql
       .exec<{ principal_id: string; handle: string; role: RepoRole }>(
         "SELECT principal_id, handle, role FROM collaborators WHERE repo_id = ? ORDER BY principal_id",
@@ -1371,7 +1396,7 @@ export class OrgDO extends MigratingDO {
   async adoptRepo(
     transferId: string,
     repoId: string,
-    from: ReturnType<OrgDO["repoForTransfer"]>,
+    from: RepoHandover,
   ): Promise<{ epochGen: number; version: number }> {
     // Collaborators being deleted are not taken (a deletion may have begun since they were
     // handed over).
@@ -1422,7 +1447,7 @@ export class OrgDO extends MigratingDO {
     transferId: string,
     repoId: string,
   ): Promise<
-    ReturnType<OrgDO["repoForTransfer"]> & {
+    RepoHandover & {
       acl: { epochGen: number; version: number } | undefined;
     }
   > {
@@ -1437,9 +1462,8 @@ export class OrgDO extends MigratingDO {
           transferId,
         )
         .toArray()[0];
-      if (done?.handed_over)
-        return { ...(JSON.parse(done.handed_over) as ReturnType<OrgDO["repoForTransfer"]>), acl };
-      const handedOver = this.repoForTransfer(repoId);
+      if (done?.handed_over) return { ...(JSON.parse(done.handed_over) as RepoHandover), acl };
+      const handedOver = this.#handover(repoId);
       this.ctx.storage.sql.exec(
         "INSERT INTO transfer_ops (transfer_id, op, handed_over, done_at) VALUES (?, 'release', ?, ?)",
         transferId,

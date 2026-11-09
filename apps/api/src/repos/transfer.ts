@@ -83,17 +83,19 @@ export async function transferRepoOperation(
   const name = input.new_name ?? entry.name;
   const { maxRepos, maxStorageBytes } = await accountLimits(env, to.id, metrics);
   await checkNewRepo(env, to, name, maxRepos, metrics);
-  // Its storage must fit there too (checked before it freezes; pushes after it are refused).
+  // Its storage must fit there too, release assets included (checked before it freezes; pushes
+  // after it are refused). Only a first refusal: the arrival holds what it brings.
   metrics.count("do.request", { class: "OrgDO", method: "repoForTransfer" }, 2);
   const [usage, status] = await Promise.all([
     env.ORG.getByName(entry.ownerId).repoForTransfer(entry.id),
     env.ORG.getByName(to.id).quotaStatus(),
   ]);
-  if (usage.usageBytes > maxStorageBytes - status.usedBytes - status.reservedBytes)
+  const bytes = usage.usageBytes + usage.assetBytes;
+  if (bytes > maxStorageBytes - status.usedBytes - status.reservedBytes)
     throw new OperationError(
       403,
       "quota_exceeded",
-      `${to.handle}'s storage quota has no room for this repository's ${usage.usageBytes} bytes.`,
+      `${to.handle}'s storage quota has no room for this repository's ${bytes} bytes.`,
     );
   metrics.count("do.request", { class: "OrgDO", method: "canAdopt" });
   if (!(await env.ORG.getByName(to.id).canAdopt(to.id, usage.collaborators)))
