@@ -1114,6 +1114,7 @@ export class UserDO extends MigratingDO {
       return refuse(429);
     // Installed only while its grants are current here, stamped with its admission's, its end
     // provided for on each day it may live on, the feed's pools given their first blocks.
+    const supplied = budget.turn !== undefined;
     const installed = this.ctx.storage.transactionSync(() => {
       const grants = [admission, terminal, controls, marks].flatMap((f) => (f ? [f.envelope] : []));
       if (!grants.every((g) => this.#current(g))) return false;
@@ -1136,6 +1137,18 @@ export class UserDO extends MigratingDO {
       // admission never confirmed is forgotten by it).
       if (turn && this.#current(turn.envelope))
         budget.prepareTurn(turn.envelope, Date.now() + LIVE_CONFIRM_MS, now);
+      // One it was given but could not take (priced by an older build's manifest, say), with no
+      // other to run or adopt: not installed, since the Worker that gave it one asks for no other,
+      // and a socket opened so would have nothing to send it hints. Refused before it is
+      // acknowledged (its end forgotten; the feed's blocks, paid for, kept), granting nothing more.
+      const left = budget.turn();
+      if (
+        supplied &&
+        !this.#turnRunning &&
+        !budget.runnableTurn(Date.now()) &&
+        (left === null || left.phase === "prepared")
+      )
+        return false;
       live.addSocket(
         {
           id: admitted.socketId,

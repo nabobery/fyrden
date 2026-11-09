@@ -1488,6 +1488,47 @@ describe("a feed's turn", () => {
     expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
   });
 
+  it("refuses an opening whose turn its object would not take, rather than open it with none", async () => {
+    const owner = await user();
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    // A Worker of an earlier build: the feed's first turn granted at the pump's price then, which
+    // the object, built with a higher one, will not take. That Worker asks for no other turn once
+    // it supplied one.
+    const pump = LIVE_PRICES.pump as LiveManifestEntry;
+    onTestFinished(() => {
+      LIVE_PRICES.pump = pump;
+      delete feedHooks.beforeEpochRead;
+    });
+    feedHooks.beforeEpochRead = async () => {
+      delete feedHooks.beforeEpochRead;
+      LIVE_PRICES.pump = {
+        ...pump,
+        resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
+      };
+    };
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    if (opened.ok) opened.response.webSocket?.accept();
+    onTestFinished(() => {
+      if (opened.ok) opened.response.webSocket?.close(1000, "done");
+    });
+    expect(opened.ok).toBe(false);
+    expect(await turnOf(owner)).toEqual([]);
+    expect(
+      await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 0 });
+  });
+
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {
     const owner = await user();
     const repo = await repoWithIssue(owner);
