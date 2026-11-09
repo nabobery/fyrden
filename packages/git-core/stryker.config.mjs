@@ -46,7 +46,7 @@ const SCOPES = {
   blame: {
     tests: ["test/blame/"],
     exclude: ["**/*.git-oracle.test.ts", "**/*.fixtures.test.ts", "**/*.generate.test.ts"],
-    break: 0,
+    break: 92,
   },
   diff: { tests: ["test/diff/"], exclude: ["**/*.git-oracle.test.ts"], break: 80 },
   merge: { tests: ["test/merge/"], exclude: ["**/*.git-oracle.test.ts"], break: 77 },

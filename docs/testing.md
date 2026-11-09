@@ -158,6 +158,7 @@ assertion or a local variable does). They are listed below.
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
 | `src/diff` (its git-oracle tests left out: too slow per mutant) | 82.1% | 80.0% | 987 | | 80 | 2026-10-15 |
 | `src/merge` (its git-oracle tests left out: too slow per mutant) | 79.7% | 77.2% | 518 | | 77 | 2026-10-15 |
+| `src/blame` (its git-oracle, fixture and vector-generating tests left out) | 92.8% | 87.3% | 2,102 | | 92 | 2026-11-08 ‡ |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
 \* Measured on a busy machine with Stryker's default timeout, under which
@@ -168,6 +169,8 @@ re-records them. The other rows were measured with the 60 s timeout.
 2026-10-11) grew past what one CI job can run (3,409 mutants, about six hours)
 and was split: the push object checks became `push-fsck`, which runs only
 their own tests.
+‡ Measured in CI, on the pull request that added the scope, with every mutant run
+(no cached results yet) and the 60 s timeout.
 
 ## Blame's limits and how they were measured
 
@@ -180,8 +183,8 @@ Benches run only under `FYRDEN_BENCH=1`, on the pinned Node.
 | CPU per primitive | `node tools/bench/blame/run.ts --only=cpu` | ns per counted unit, in one idle workerd isolate |
 | Delta-base cache retention | `node tools/bench/blame/run.ts --only=retention` | What the 8 MiB charge holds in workerd: 8.01 MiB at most |
 | Churn | `node tools/bench/blame/run.ts --only=memory` | The high-water with no forced collection |
-| Allocation boundaries | `vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
-| Charge against bytes built | `vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
+| Allocation boundaries | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
+| Charge against bytes built | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
 
 Retention with heap counted depends on the runtime: Node 24 held up to 10.66 MiB
 where Node 26 held 7.54 and workerd 8.01. So the Node bench holds only buffers to

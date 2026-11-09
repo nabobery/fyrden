@@ -130,6 +130,9 @@ function countLines(bytes: Uint8Array): number {
   return count;
 }
 
+/** The caller's line limit, held to what a checkpoint can record, so every state decodes again. */
+const fileLineLimit = (asked = MAX_BLAME_LINES) => Math.min(asked, MAX_BLAME_LINES);
+
 const sameOid = (a: Oid, b: Oid) => {
   for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
   return true;
@@ -157,7 +160,7 @@ export async function startBlame(
   const bytes = await source.blob(file.oid, maxBytes);
   if (bytes === "too_large") return { failure: "file_too_large" };
   const lines = countLines(bytes);
-  if (lines > (options.maxFileLines ?? MAX_BLAME_LINES)) return { failure: "file_too_large" };
+  if (lines > fileLineLimit(options.maxFileLines)) return { failure: "file_too_large" };
   const live = liveBytesOf({
     path: pathLiveBytes(path),
     pairs: lines,
@@ -272,7 +275,7 @@ async function runStep(
       aligned.add(blobHex);
       const before = await source.blob(parent.blob, limits.maxFileBytes);
       const beforeLines = before === "too_large" ? 0 : countLines(before);
-      if (before === "too_large" || beforeLines > limits.maxFileLines) {
+      if (before === "too_large" || beforeLines > fileLineLimit(limits.maxFileLines)) {
         for (let k = 0; k < left.length; k += 2)
           refuse(staged, "parent_too_large", left[k + 1] as number);
         left = [];
@@ -563,9 +566,28 @@ function refuseEverything(
 /**
  * Walks whole commit steps until the slice's limits or the end of history. A
  * step's reads can stop it partway, and then the state is as it was. A failure
- * that isn't a limit or lasting corruption throws, state unchanged.
+ * that isn't a limit or lasting corruption throws, state unchanged. A state is
+ * advanced by one call at a time; a second while one runs is refused.
  */
 export async function advanceBlame(
+  state: BlameState,
+  source: BlameSource,
+  limits: BlameSliceLimits,
+): Promise<BlameAdvance> {
+  // Two at once would both apply the step at the head of the queue.
+  if (advancing.has(state)) throw new Error("a blame state is already being advanced");
+  advancing.add(state);
+  try {
+    return await advance(state, source, limits);
+  } finally {
+    advancing.delete(state);
+  }
+}
+
+/** States an `advanceBlame` call is walking now. */
+const advancing = new WeakSet<BlameState>();
+
+async function advance(
   state: BlameState,
   source: BlameSource,
   limits: BlameSliceLimits,

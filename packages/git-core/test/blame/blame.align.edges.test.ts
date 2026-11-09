@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { alignFiles, MAX_ALIGN_WORK } from "../../src/blame/align.js";
+import { alignFiles, MAX_ALIGN_WORK, MAX_SEARCH_ROUNDS } from "../../src/blame/align.js";
 import { lines } from "./align-cases.js";
 
 /*
@@ -64,6 +64,29 @@ describe("alignFiles: edges", () => {
     const limits = (maxRounds: number) => ({ maxRounds, maxWork: MAX_ALIGN_WORK });
     expect(alignFiles(bytes(a), bytes(b), limits(40)).kind).toBe("aligned");
     expect(alignFiles(bytes(a), bytes(b), limits(39)).kind).toBe("refused");
+  });
+
+  it("refuses limits it can't keep before it starts, and takes those at each bound", () => {
+    // An insertion needs no search, so a limit that would never stop one still shows here.
+    const [a, b] = [bytes("a\nb\n"), bytes("a\nx\nb\n")];
+    const ok = { maxRounds: MAX_SEARCH_ROUNDS, maxWork: MAX_ALIGN_WORK };
+    for (const bad of [
+      { maxRounds: Number.NaN },
+      { maxRounds: 1.5 },
+      { maxRounds: 0 },
+      { maxRounds: MAX_SEARCH_ROUNDS + 1 },
+      { maxWork: Number.NaN },
+      { maxWork: -1 },
+      { maxWork: 0.5 },
+      { maxWork: Number.POSITIVE_INFINITY },
+    ]) {
+      const limits = { ...ok, ...bad };
+      expect(() => alignFiles(a, b, limits), `${limits.maxRounds} ${limits.maxWork}`).toThrow(
+        RangeError,
+      );
+    }
+    expect(() => alignFiles(a, b, { maxRounds: 1, maxWork: 0 })).not.toThrow();
+    expect(() => alignFiles(a, b, { ...ok, maxWork: Number.MAX_SAFE_INTEGER })).not.toThrow();
   });
 
   // The work count decides refusal: a charge changed on purpose updates these five values.

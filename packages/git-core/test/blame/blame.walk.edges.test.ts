@@ -4,6 +4,7 @@ import {
   decodeBlameState,
   encodeBlameState,
   liveStateBytes,
+  MAX_BLAME_LINES,
 } from "../../src/blame/state.js";
 import {
   advanceBlame,
@@ -164,10 +165,45 @@ describe("counting lines", () => {
     expect(answer(over, refused)).toEqual(new Array(4).fill("parent_too_large"));
   });
 
+  it("holds a file to the checkpoint's line limit, whatever larger limit is asked for", async () => {
+    // Past it the state couldn't be decoded again, so a sliced blame couldn't resume.
+    const longer = MAX_BLAME_LINES + 1;
+    const big = new FakeSource({ a: { file: "x\n".repeat(longer) } });
+    expect(await startBlame(big, oidOfName("a"), PATH, { maxFileLines: longer })).toEqual({
+      failure: "file_too_large",
+    });
+    const history: History = {
+      a: { file: `y\n${"x\n".repeat(MAX_BLAME_LINES)}` },
+      b: { parents: ["a"], file: f("y") },
+    };
+    const source = new FakeSource(history);
+    const state = await start(source, "b");
+    await advanceBlame(state, source, { ...SLICE, maxFileLines: longer });
+    expect(answer(source, state)).toEqual(["parent_too_large"]);
+  });
+
   it("a root commit takes its lines without reading its file again", async () => {
     const source = new FakeSource({ a: { file: f("x") } });
     await finished(source, "a");
     expect(source.blobReads).toEqual([f("x")]);
+  });
+});
+
+describe("one advance at a time", () => {
+  it("refuses a second advance of a state while the first runs, and the first still ends sound", async () => {
+    const source = new FakeSource({
+      a: { file: f("x") },
+      b: { parents: ["a"], file: f("x", "y") },
+    });
+    const state = await start(source, "b");
+    const first = advanceBlame(state, source, SLICE);
+    await expect(advanceBlame(state, source, SLICE)).rejects.toThrow(
+      "a blame state is already being advanced",
+    );
+    expect((await first).stop).toBe("done");
+    expect(answer(source, decodeBlameState(encodeBlameState(state)))).toEqual(["a@1", "b@2"]);
+    // Once it's done, the state can be advanced again.
+    expect((await advanceBlame(state, source, SLICE)).stop).toBe("done");
   });
 });
 

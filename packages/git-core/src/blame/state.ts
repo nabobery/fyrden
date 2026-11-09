@@ -290,14 +290,13 @@ export function decodeBlameState(
   const need = (count: number) => {
     if (count > bytes.length - at) throw bad("runs past the end");
   };
-  const pathAt: [number, number][] = [];
+  const pathAt = at;
   let pathLive = SEGMENT_LIVE * segments;
   for (let k = 0; k < segments; k++) {
     need(2);
     const length = view.getUint16(at);
     at += 2;
     need(length);
-    pathAt.push([at, length]);
     pathLive += length;
     at += length;
   }
@@ -392,8 +391,9 @@ export function decodeBlameState(
     at += QUEUE_RECORD;
     const list = new Int32Array(count * 2);
     for (let p = 0; p < count; p++) {
+      // From 0, and reported from 1: the last line a file can have is the limit less one.
       const current = view.getUint32(at);
-      if (current > MAX_BLAME_LINES) throw bad("a current line past any file");
+      if (current >= MAX_BLAME_LINES) throw bad("a current line past any file");
       const final = view.getUint32(at + 4);
       once(final);
       list[2 * p] = current;
@@ -413,7 +413,7 @@ export function decodeBlameState(
     for (let line = start; line < start + count; line++) once(line);
     if (reference >= 0) {
       if (reference >= factCount) throw bad("a range of an unknown commit");
-      if (source < 1 || source > MAX_BLAME_LINES) throw bad("a range's source line");
+      if (source < 1 || source > MAX_BLAME_LINES - count + 1) throw bad("a range's source line");
     } else {
       if (-1 - reference >= UNRESOLVED_REASONS.length) throw bad("an unknown reason");
       if (source !== 0) throw bad("a refused range with a source line");
@@ -440,17 +440,27 @@ export function decodeBlameState(
   };
   for (let k = 0; k < factCount; k++) {
     const oid = oidFromBytes(bytes.subarray(at, at + OID_BYTES));
+    const hex = oidToHex(oid);
+    if (Object.hasOwn(facts, hex)) throw bad("a commit's facts twice");
     at += OID_BYTES;
     const summary = text();
     const name = text();
     const email = text();
     const date = text();
-    facts[oidToHex(oid)] = { summary, name, email, date };
+    facts[hex] = { summary, name, email, date };
     factOrder.push(oid);
+  }
+  // Each segment is a copy, so a short path never holds on to the checkpoint's bytes.
+  const path: Uint8Array[] = [];
+  at = pathAt;
+  for (let k = 0; k < segments; k++) {
+    const length = view.getUint16(at);
+    path.push(new Uint8Array(bytes.subarray(at + 2, at + 2 + length)));
+    at += 2 + length;
   }
   return {
     commit: oidFromBytes(commit),
-    path: pathAt.map(([from, length]) => bytes.slice(from, from + length)),
+    path,
     lines,
     steps,
     queue,

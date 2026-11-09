@@ -6,7 +6,11 @@ import type { PackStore } from "../../src/ports/pack-store.js";
 import type { Zlib } from "../../src/ports/zlib.js";
 import { ObjectReader, ReaderWorkSpent } from "../../src/reader/object-reader.js";
 import type { RepoView } from "../../src/reader/view.js";
-import { createReaderWorkMeter, type ReaderWork } from "../../src/reader/work.js";
+import {
+  createReaderWorkMeter,
+  type ReaderWork,
+  type ReaderWorkKind,
+} from "../../src/reader/work.js";
 import { createMemoryBlockCache } from "../../testing/fakes/memory-block-cache.js";
 import { createMemoryBudget } from "../../testing/fakes/memory-budget.js";
 import { createMemoryRepoStore } from "../../testing/fakes/memory-repo-store.js";
@@ -171,7 +175,8 @@ describe("reader: work port", () => {
     // 1 MiB, then 2, then the 3 MiB it takes: attempts that stopped are paid for.
     expect(inflates.length).toBeGreaterThanOrEqual(3);
     reader.release();
-  });
+    // Under coverage in CI this took 29 s, against the 30 s default.
+  }, 120_000);
 
   it("charges a warm read: the lookup, the blocks and the returned copy, with no store call", async () => {
     const { view, store } = await open(chain);
@@ -414,6 +419,26 @@ describe("createReaderWorkMeter", () => {
     );
     const meter = createReaderWorkMeter({ limit: 1 });
     expect(() => meter.charge("inflate", -1)).toThrow(/bad work charge -1 for inflate/);
+  });
+
+  it("refuses a weight or charge that isn't finite, which would make the count NaN", () => {
+    for (const weight of [Number.POSITIVE_INFINITY, Number.NaN])
+      expect(() =>
+        createReaderWorkMeter({ limit: 10, weights: { "returned-copy": weight } }),
+      ).toThrow(new RangeError(`bad weight ${weight} for returned-copy`));
+    const free = createReaderWorkMeter({ limit: 10, weights: { inflate: 0 } });
+    expect(() => free.charge("inflate", Number.POSITIVE_INFINITY)).toThrow(
+      /bad work charge Infinity for inflate/,
+    );
+    expect(free.spent()).toBe(0);
+  });
+
+  it("keeps the weights it checked, whatever happens to the object they came in", () => {
+    const weights: Partial<Record<ReaderWorkKind, number>> = { inflate: 2 };
+    const meter = createReaderWorkMeter({ limit: 10, weights });
+    weights.inflate = Number.NaN;
+    meter.charge("inflate", 3);
+    expect(meter.spent()).toBe(6);
   });
 
   it("takes a charge of nothing, as an empty object's scan is", () => {

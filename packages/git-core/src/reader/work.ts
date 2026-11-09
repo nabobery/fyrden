@@ -44,15 +44,22 @@ export function createReaderWorkMeter(options: {
   readonly limit: number;
   readonly weights?: Partial<Record<ReaderWorkKind, number>>;
 }): ReaderWorkMeter {
-  const { limit, weights = {} } = options;
+  const { limit } = options;
   if (!(limit >= 1)) throw new RangeError(`a work limit must be at least 1, not ${limit}`);
+  // A copy: a weight changed after this check can't reach the count. Infinity times a
+  // charge of 0 is NaN, which no later charge could pass the limit from.
+  const weights = { ...options.weights };
   for (const [kind, weight] of Object.entries(weights)) {
-    if (!(weight >= 0)) throw new RangeError(`bad weight ${weight} for ${kind}`);
+    if (!Number.isFinite(weight) || weight < 0) {
+      throw new RangeError(`bad weight ${weight} for ${kind}`);
+    }
   }
   let spent = 0;
   return {
     charge(kind, units) {
-      if (!(units >= 0)) throw new RangeError(`bad work charge ${units} for ${kind}`);
+      if (!Number.isFinite(units) || units < 0) {
+        throw new RangeError(`bad work charge ${units} for ${kind}`);
+      }
       const next = spent + units * (weights[kind] ?? 1);
       if (next > limit) {
         throw new ReaderWorkSpent(limit, `decoding took more than ${limit} units of work`);

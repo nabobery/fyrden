@@ -221,12 +221,13 @@ describe("each check of a checkpoint", () => {
       patched((v) => v.setUint32(QUEUE1 + 32 + 4, 1)),
       "a line told twice",
     );
+    // A current line counts from 0, and is reported from 1: the last one a file can have is the limit less one.
     refuses(
-      patched((v) => v.setUint32(QUEUE1 + 32, MAX_BLAME_LINES + 1)),
+      patched((v) => v.setUint32(QUEUE1 + 32, MAX_BLAME_LINES)),
       "a current line past any file",
     );
-    const atLimit = patched((v) => v.setUint32(QUEUE1 + 32, MAX_BLAME_LINES));
-    expect(decodeBlameState(atLimit).queue[0]?.pairs[0]).toBe(MAX_BLAME_LINES);
+    const atLimit = patched((v) => v.setUint32(QUEUE1 + 32, MAX_BLAME_LINES - 1));
+    expect(decodeBlameState(atLimit).queue[0]?.pairs[0]).toBe(MAX_BLAME_LINES - 1);
     refuses(
       patched((v) => v.setInt32(RANGE, 0)),
       "a line told twice",
@@ -261,6 +262,13 @@ describe("each check of a checkpoint", () => {
     );
     const atLimit = patched((v) => v.setInt32(RANGE + 12, MAX_BLAME_LINES));
     expect(decodeBlameState(atLimit).ranges[3]).toBe(MAX_BLAME_LINES);
+    // The range's last source line is held to the limit too, not only its first.
+    const span = (source: number) =>
+      encodeBlameState(
+        withFactsKeyed(base({ lines: 2, queue: [], ranges: Int32Array.from([0, 2, 0, source]) })),
+      );
+    refuses(span(MAX_BLAME_LINES), "a range's source line");
+    expect(decodeBlameState(span(MAX_BLAME_LINES - 1)).ranges[3]).toBe(MAX_BLAME_LINES - 1);
     const reason = (k: number, source = 0) =>
       patched((v) => {
         v.setInt32(RANGE + 8, -1 - k);
@@ -271,6 +279,18 @@ describe("each check of a checkpoint", () => {
     );
     refuses(reason(UNRESOLVED_REASONS.length), "an unknown reason");
     refuses(reason(0, 1), "a refused range with a source line");
+  });
+
+  it("a commit's facts given twice", () => {
+    refuses(encoded({ factOrder: [oid(99), oid(99)] }), "a commit's facts twice");
+  });
+
+  it("a path that holds none of the checkpoint's bytes", () => {
+    // A Node Buffer's slice is a view: a short path mustn't keep the whole checkpoint alive.
+    const from = Buffer.from(encoded());
+    const path = decodeBlameState(from).path;
+    expect(path.map((segment) => new TextDecoder().decode(segment))).toEqual(["f"]);
+    for (const segment of path) expect(segment.buffer).not.toBe(from.buffer);
   });
 
   it("a fact's text that isn't UTF-8", () => {

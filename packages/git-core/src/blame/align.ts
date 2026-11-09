@@ -778,8 +778,17 @@ export function alignFiles(
   newBytes: Uint8Array,
   limits: AlignLimits = DEFAULT_LIMITS,
 ): Alignment {
+  // A search sizes its vectors by the round limit and stops only at a limit, so a limit
+  // that isn't a whole number in range would size them wrong or never stop it.
+  const { maxRounds, maxWork } = limits;
+  if (!Number.isSafeInteger(maxRounds) || maxRounds < 1 || maxRounds > MAX_SEARCH_ROUNDS) {
+    throw new RangeError(`bad round limit ${maxRounds}`);
+  }
+  if (!Number.isSafeInteger(maxWork) || maxWork < 0) {
+    throw new RangeError(`bad work limit ${maxWork}`);
+  }
   const p = prepare(oldBytes, newBytes);
-  const meter = new Meter(limits.maxWork);
+  const meter = new Meter(maxWork);
   try {
     const refused = run(p, limits, meter);
     const oldOfNew = pairedLines(p);

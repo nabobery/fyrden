@@ -21,7 +21,8 @@ export interface PrepaidMemory extends MemoryBudget {
  * It takes nothing further and never waits: it counts what the reader says
  * it holds, and throws past `limit`, so a reservation nobody foresaw is an
  * error rather than a silent grant. The error isn't a `RangeError`, which
- * `reservePackMemory` would turn into a pack refusal.
+ * `reservePackMemory` would turn into a pack refusal. `tryReserve` throws too,
+ * rather than answering undefined: a spill would hide the same defect.
  */
 export function createPrepaidMemory(limit: number): PrepaidMemory {
   if (!Number.isSafeInteger(limit) || limit <= 0) {

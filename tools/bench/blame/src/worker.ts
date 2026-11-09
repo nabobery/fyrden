@@ -294,11 +294,9 @@ const ALIGN_CASES: Record<string, Case> = {
     const block = Array.from({ length: 200 }, (_, k) => `line${k}`);
     const lines = Array.from({ length: 400 }, (_, k) => block[k % 200] as string);
     const shifted = [...lines.slice(100), ...lines.slice(0, 100)];
-    return alignCase(
-      textOf(lines.concat(lines, lines)),
-      textOf(shifted.concat(lines, shifted)),
-      7200,
-    );
+    const old = lines.concat(lines, lines);
+    const new_ = shifted.concat(lines, shifted);
+    return alignCase(textOf(old), textOf(new_), old.length + new_.length);
   },
   async "align: 255 rounds over 100,000 lines"() {
     const unique = Array.from({ length: 49_000 }, (_, k) => `u${k}`);
@@ -590,8 +588,9 @@ async function churn(rounds: number, yieldEvery: number) {
   for (let round = 0; round < rounds; round++) {
     for (const oid of heldOids) {
       await held.readObject(oid);
+      reads++;
       // What an R2 read does, and when the inspector's question gets answered.
-      if (yieldEvery > 0 && ++reads % yieldEvery === 0) {
+      if (yieldEvery > 0 && reads % yieldEvery === 0) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
     }
