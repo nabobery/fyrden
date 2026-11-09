@@ -56,7 +56,7 @@ export interface DeployDeps {
   fetch?: typeof fetch;
   /**
    * Live notification hints, on (`FYRDEN_LIVE=on`, and `FYRDEN_LIVE_SOCKETS`
-   * when given); left out, off (each deploy sets the variables).
+   * when given, 15 on Free when not); left out, off (each deploy sets the variables).
    */
   live?: { sockets?: number } | undefined;
   /**
@@ -227,6 +227,8 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ([name]) => !DEPLOY_SWITCHES.has(name),
     ),
   );
+  // Free holds about 10 sockets; a silently dead one holds its lease up to about two hours.
+  const liveSockets = deps.live?.sockets ?? (deps.live && deps.plan === "free" ? 15 : undefined);
   const deployConfig: Record<string, unknown> = {
     ...config,
     account_id: account.id,
@@ -241,7 +243,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.watchAudiences && { FYRDEN_WATCH_AUDIENCES: "on" }),
       ...(deps.readModelMaintenance && { FYRDEN_READ_MODEL_MAINTENANCE: "on" }),
       ...(deps.live && { FYRDEN_LIVE: "on" }),
-      ...(deps.live?.sockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(deps.live.sockets) }),
+      ...(liveSockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(liveSockets) }),
       ...(deps.email && {
         FYRDEN_EMAIL_PROVIDER: deps.email.provider,
         FYRDEN_EMAIL_FROM: deps.email.from,

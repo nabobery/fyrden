@@ -150,7 +150,7 @@ export async function expiredReceipts(at: number, n: number): Promise<void> {
         `INSERT INTO live_budget_receipts (seq, operation_id, mint, incarnation, recipient_type,
            recipient, kind, class, epoch, produces_local, valid_from, valid_until, granted_at,
            plan, directory_cleanup_debt, settle_until, expires_at)
-         VALUES (?, ?, ?, ?, 'UserDO', ?, 'ticket', 'ordinary', 0, 0, ?, ?, ?, '{}', ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'UserDO', ?, 'ticket', 'ordinary', 0, 0, ?, ?, ?, '{"charges":[]}', ?, ?, ?)`,
       ).bind(
         Number.MAX_SAFE_INTEGER - i,
         uniqueId("expired"),
@@ -269,6 +269,11 @@ export async function isolated(fn: () => Promise<void>): Promise<void> {
 }
 
 const DEBTS = [
+  "targets_incarnation",
+  "revocations_reap_at",
+  "revocations_reap_seq",
+  "revocations_reap_end_at",
+  "revocations_reap_end_seq",
   "duration_debt_ms",
   "debt_service_day",
   "duration_reserve_ms",

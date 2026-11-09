@@ -379,21 +379,55 @@ export class LiveBudget {
    * (on this object's clock); null for none.
    */
   runnableTurn(local: number): { intendedAt: number; validUntil: number; seq: number } | null {
+    return this.turnReadiness(local)?.ready ?? null;
+  }
+
+  /**
+   * The feed's turn, from one read of its row, and whether it can run now
+   * (see `runnableTurn`): its id whether or not it can. Null for none.
+   */
+  turnReadiness(local: number): {
+    operationId: string;
+    ready: { intendedAt: number; validUntil: number; seq: number } | null;
+  } | null {
     const turn = this.turn();
-    if (!turn || turn.phase !== "prepared") return null;
+    if (!turn) return null;
     const plan = turn.envelope.plan;
     const now = this.ledgerNow(local);
-    if (
-      this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) ||
-      now >= plan.validUntil ||
-      !turnPaid(turn.envelope)
-    )
-      return null;
+    const runs =
+      turn.phase === "prepared" &&
+      !this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) &&
+      now < plan.validUntil &&
+      turnPaid(turn.envelope);
     return {
-      intendedAt: turn.intendedAt,
-      validUntil: plan.validUntil - (now - local),
-      seq: turn.envelope.seq,
+      operationId: turn.operationId,
+      ready: runs
+        ? {
+            intendedAt: turn.intendedAt,
+            validUntil: plan.validUntil - (now - local),
+            seq: turn.envelope.seq,
+          }
+        : null,
     };
+  }
+
+  /**
+   * Whose the feed's turn is once an attempt at one has ended, and whether
+   * it can still run: prepared, current, paid for, unexpired now, and due
+   * before it lapses (by this object's clock `local`). Null for none.
+   */
+  turnAfter(local: number): { operationId: string; runs: boolean } | null {
+    const turn = this.turn();
+    if (!turn) return null;
+    const plan = turn.envelope.plan;
+    const now = this.ledgerNow(local);
+    const runs =
+      turn.phase === "prepared" &&
+      !this.#fenced({ epoch: plan.epoch, incarnation: plan.incarnation, seq: turn.envelope.seq }) &&
+      turnPaid(turn.envelope) &&
+      now < plan.validUntil &&
+      turn.intendedAt < plan.validUntil - (now - local);
+    return { operationId: turn.operationId, runs };
   }
 
   /** Brings the prepared turn's due time to `at` at the latest (whether one is prepared). */
@@ -468,8 +502,9 @@ export class LiveBudget {
    * Ends the running turn `operationId` (claimed, or dispatched once its
    * owner was accounted), and, when it is still current and valid now,
    * prepares `successor`, paid for by it, in the same transaction (an
-   * expired, fenced or exhausted turn names none). False when it is not the
-   * running turn, or its owner is not accounted yet.
+   * expired, fenced or exhausted turn names none). `"kept"` when it is not
+   * the running turn, or its owner is not accounted yet; `"succeeded"` when
+   * its successor was prepared, else `"ended"`.
    */
   finishTurn(
     operationId: string,
@@ -479,11 +514,11 @@ export class LiveBudget {
       readonly ownerAccounted?: boolean;
       readonly successor?: { readonly envelope: LiveEnvelope; readonly intendedAt: number };
     } = {},
-  ): boolean {
+  ): "kept" | "ended" | "succeeded" {
     const turn = this.turn();
-    if (!turn || turn.operationId !== operationId || turn.phase === "prepared") return false;
+    if (!turn || turn.operationId !== operationId || turn.phase === "prepared") return "kept";
     // Its owner's reference is what recovery quarantines by: kept until it was accounted.
-    if (turn.phase === "dispatched" && !options.ownerAccounted) return false;
+    if (turn.phase === "dispatched" && !options.ownerAccounted) return "kept";
     this.sql.exec("DELETE FROM live_turn WHERE id = 1 AND operation_id = ?", operationId);
     const plan = turn.envelope.plan;
     const current = !this.#fenced({
@@ -492,9 +527,12 @@ export class LiveBudget {
       seq: turn.envelope.seq,
     });
     // A successor only from a turn still current and valid: a fenced or expired one pays for none.
-    if (options.successor && current && now < plan.validUntil)
-      this.prepareTurn(options.successor.envelope, options.successor.intendedAt, now);
-    return true;
+    return options.successor &&
+      current &&
+      now < plan.validUntil &&
+      this.prepareTurn(options.successor.envelope, options.successor.intendedAt, now)
+      ? "succeeded"
+      : "ended";
   }
 
   /**

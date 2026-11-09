@@ -474,6 +474,21 @@ describe("fyrden deploy", () => {
     expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_READ_MODEL_MAINTENANCE");
   });
 
+  it("admits 15 live sockets on Free unless told otherwise, and leaves the API's default on Paid", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { plan: "free", live: {} }).d);
+    expect((await generatedConfig()).vars).toMatchObject({
+      FYRDEN_LIVE: "on",
+      FYRDEN_LIVE_SOCKETS: "15",
+    });
+    await deploy(deps(fake.runner, { plan: "free", live: { sockets: 10 } }).d);
+    expect((await generatedConfig()).vars).toMatchObject({ FYRDEN_LIVE_SOCKETS: "10" });
+    await deploy(deps(fake.runner, { plan: "paid", live: {} }).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_LIVE_SOCKETS");
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_LIVE_SOCKETS");
+  });
+
   it("never keeps a switch it owns from the committed configuration's variables", async () => {
     const path = join(repoRoot, "apps/api/wrangler.jsonc");
     const committed = parseJsonc<Record<string, unknown>>(await readFile(path, "utf8"));

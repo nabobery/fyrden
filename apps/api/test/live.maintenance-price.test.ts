@@ -16,14 +16,14 @@ import {
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   expireLiveReceipts,
-  LIVE_RECEIPTS_OVERDUE,
+  LIVE_RECEIPTS_DUE,
   type LiveDayCharge,
   type LiveEnvelope,
   makeLiveGrant,
   pruneLiveBudgetDays,
   reserveLive,
 } from "../src/live/budget.js";
-import { reaping } from "../src/live/directory.js";
+import { LIVE_ADMISSION, reaping } from "../src/live/directory.js";
 import {
   LIVE_MAINTENANCE,
   LIVE_REVOCATION_PAGE,
@@ -31,7 +31,11 @@ import {
   runLiveMaintenance,
   settleStrandedOwners,
 } from "../src/live/maintenance.js";
-import { LIVE_MAINTENANCE_MEASURED, LIVE_REVOCATION_PAGE_MEASURED } from "../src/live/manifest.js";
+import {
+  LIVE_MAINTENANCE_LIGHT_MEASURED,
+  LIVE_MAINTENANCE_MEASURED,
+  LIVE_REVOCATION_PAGE_MEASURED,
+} from "../src/live/manifest.js";
 import {
   admitLiveOwners,
   LIVE_OWNER_LIMITS,
@@ -357,8 +361,62 @@ describe("a maintenance run's pages, full", () => {
         unpin();
         vi.useRealTimers();
       });
-      // As many expired receipts as grants allow: its grant's checks read every one.
-      await expiredReceipts(now, LIVE_RECEIPTS_OVERDUE.page - 1);
+      // As many expired receipts as can wait with nothing routine due (more call for a run first,
+      // which removes them): its grant's checks read every one.
+      await expiredReceipts(now, LIVE_RECEIPTS_DUE.page - 1);
+      // Every other place an owner may take held (dispatched elsewhere), its own the last
+      // cleanup one: its admission reads them all.
+      const incarnation = (
+        await env.DIRECTORY.prepare(
+          "SELECT incarnation FROM live_budget_state WHERE id = 1",
+        ).first<{
+          incarnation: string;
+        }>()
+      )?.incarnation as string;
+      const places: D1PreparedStatement[] = [];
+      for (const [i, cls] of [
+        ...Array.from({ length: LIVE_OWNER_LIMITS.deploymentOrdinary }, () => "ordinary"),
+        ...Array.from({ length: LIVE_OWNER_LIMITS.deploymentCleanup - 1 }, () => "cleanup"),
+      ].entries())
+        places.push(
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id,
+               class, epoch, incarnation, dispatch_from, dispatch_until, holds, status,
+               instance, started_at, admitted_at)
+             VALUES (?1, ?1, 'UserDO', ?2, ?3, 0, ?4, ?5, ?6, '[]', 'dispatched', 'inst_held', ?5,
+               ?5)`,
+          ).bind(`held_${i}`, `usr_held_${i}`, cls, incarnation, now - 60_000, now + DAY),
+        );
+      await env.DIRECTORY.batch(places);
+      onTestFinished(async () => {
+        await env.DIRECTORY.prepare(
+          "DELETE FROM live_duration_owners WHERE owner_id LIKE 'held_%'",
+        ).run();
+      });
+      // Old revocations still being told, more than any window (each a target not due yet): what
+      // looking for ones to reap passes over.
+      const waiting: D1PreparedStatement[] = [];
+      for (let i = 0; i < 128; i++)
+        waiting.push(
+          env.DIRECTORY.prepare(
+            "INSERT INTO revocations (subject, at, expanded) VALUES (?, ?, 1)",
+          ).bind(`dep_wait_${i}`, now - LIVE_ADMISSION.keepMs - DAY + i),
+          env.DIRECTORY.prepare(
+            `INSERT INTO revocation_targets (seq, feed, attempts, next_attempt_at)
+             SELECT seq, 'usr_wait', 1, ? FROM revocations WHERE subject = ?`,
+          ).bind(now + DAY, `dep_wait_${i}`),
+        );
+      for (let i = 0; i < waiting.length; i += 50)
+        await env.DIRECTORY.batch(waiting.slice(i, i + 50));
+      onTestFinished(async () => {
+        await env.DIRECTORY.batch([
+          env.DIRECTORY.prepare(
+            `DELETE FROM revocation_targets WHERE seq IN (SELECT seq FROM revocations
+               WHERE subject LIKE 'dep_wait_%')`,
+          ),
+          env.DIRECTORY.prepare("DELETE FROM revocations WHERE subject LIKE 'dep_wait_%'"),
+        ]);
+      });
       // Revocations to expand past a page, each resting on a socket in a feed of its own (each a
       // scan row and a target: a page's most).
       const fill: D1PreparedStatement[] = [];
@@ -408,7 +466,23 @@ describe("a maintenance run's pages, full", () => {
       // Nothing routine due (earlier files' leftovers cleared), revocations due.
       for (let i = 0; i < 20 && (await liveMaintenanceWork(env.DIRECTORY)).routine; i++)
         await runLiveMaintenance(env);
-      expect(await liveMaintenanceWork(env.DIRECTORY)).toEqual({
+      // Transports expired, a page's but one, within their grace: no run of their own, read by
+      // its check.
+      const quiet: D1PreparedStatement[] = [];
+      for (let i = 0; i < LIVE_MAINTENANCE.reap.transports - 1; i++)
+        quiet.push(
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at,
+               operation_id) VALUES (?, 'usr_quiet', 'tok_quiet', ?, 'op_quiet')`,
+          ).bind(`quiet_${i}`, now - 30 * MINUTE),
+        );
+      await env.DIRECTORY.batch(quiet);
+      onTestFinished(async () => {
+        await env.DIRECTORY.prepare(
+          "DELETE FROM live_ticket_transports WHERE ticket_hash LIKE 'quiet_%'",
+        ).run();
+      });
+      expect(await liveMaintenanceWork(env.DIRECTORY)).toMatchObject({
         routine: false,
         revocations: true,
       });
@@ -477,5 +551,73 @@ describe("a maintenance run's pages, full", () => {
           "DELETE FROM live_sockets WHERE socket_id LIKE 'sx_%' OR socket_id LIKE 'st_%'",
         ),
       ]);
+    }));
+});
+
+describe("a light maintenance run", () => {
+  it("costs no more than its price was measured at, its pages full", () =>
+    isolated(async () => {
+      for (const table of [
+        "live_sockets",
+        "live_socket_deps",
+        "live_admissions",
+        "live_ticket_days",
+      ])
+        await env.DIRECTORY.prepare(`DELETE FROM ${table}`).run();
+      await env.DIRECTORY.prepare("DELETE FROM live_ticket_transports").run();
+      await env.DIRECTORY.prepare("DELETE FROM revocation_targets").run();
+      await env.DIRECTORY.prepare("DELETE FROM revocations").run();
+      await env.DIRECTORY.prepare(
+        "UPDATE live_budget_state SET duration_debt_ms = 0, ordinary_duration_blocked = 0",
+      ).run();
+      const day = testDay(30);
+      // A page of receipts holding escrow on two days each, a page of them on days still kept.
+      // Latest first: an earlier one granted later would find the later ones overdue.
+      for (let i = LIVE_MAINTENANCE.receipts - 1; i >= 0; i--)
+        await overMidnight(day + Math.floor(i / 3), `usr_light_${i}`);
+      // Half a minute before a midnight: the run's own grant is charged to two days.
+      const now = (day + 8) * DAY - 30_000;
+      const fill: D1PreparedStatement[] = [];
+      for (let i = 0; i <= LIVE_MAINTENANCE.reap.transports; i++)
+        fill.push(
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_ticket_transports (ticket_hash, feed, credential_id, expires_at,
+               operation_id) VALUES (?, 'usr_light', 'tok_light', ?, 'op')`,
+          ).bind(`light_${i}`, now - DAY),
+        );
+      await env.DIRECTORY.batch(fill);
+      expect(await liveMaintenanceWork(clockedD1(env.DIRECTORY, { now }))).toMatchObject({
+        routine: true,
+        full: false,
+      });
+      // (Transports are reaped by this Worker's clock.)
+      vi.setSystemTime(now);
+      const rows = await measureInvocation(
+        createMetrics(env.METRICS),
+        { where: "do", op: "liveMaintenance", doClass: "MaintenanceDO" },
+        async () => {
+          const before = d1RowsRun();
+          const run = await runLiveMaintenance({
+            ...env,
+            DIRECTORY: countedD1(clockedD1(env.DIRECTORY, { now })),
+          } as typeof env);
+          if (run?.status !== "funded") throw new Error(JSON.stringify(run));
+          const after = d1RowsRun();
+          return { read: after.read - before.read, written: after.written - before.written };
+        },
+      );
+      // Its pages were full, and it went no further.
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT count(*) AS n FROM live_budget_receipts WHERE recipient LIKE 'usr_light_%'",
+        ).first(),
+      ).toEqual({ n: 0 });
+      expect(
+        await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_ticket_transports").first(),
+      ).toEqual({ n: 1 });
+      expect(rows).toEqual({
+        read: Math.min(rows.read, LIVE_MAINTENANCE_LIGHT_MEASURED.d1_rows_read),
+        written: Math.min(rows.written, LIVE_MAINTENANCE_LIGHT_MEASURED.d1_rows_written),
+      });
     }));
 });

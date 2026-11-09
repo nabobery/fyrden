@@ -8,6 +8,7 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { DISCRETIONARY_RESOURCES } from "../src/effects/discretionary.js";
 import {
+  expireLiveReceipts,
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
@@ -15,6 +16,7 @@ import {
   LIVE_RECEIPTS_OVERDUE,
   type LiveDurationCompletion,
   type LiveGrantResult,
+  liveReceiptDeadlines,
   makeLiveGrant,
   reserveLive,
   settleLiveDuration,
@@ -184,6 +186,7 @@ describe("a live grant", () => {
       expect(await reserveLive(db, await makeLiveGrant(p))).toEqual({
         status: "refused",
         reason: "invalid",
+        gate: "validity",
       });
       expect(await receipts()).toBe(0);
     });
@@ -246,7 +249,11 @@ describe("a live grant", () => {
         );
       const results = await Promise.all([one(), one()]);
       expect(results.filter(granted)).toHaveLength(1);
-      expect(results.find((x) => !granted(x))).toEqual({ status: "refused", reason: "temporary" });
+      expect(results.find((x) => !granted(x))).toEqual({
+        status: "refused",
+        reason: "temporary",
+        gate: "debt:do_rows_written",
+      });
       expect((await ledger())?.debt_do_rows_written).toBe(limit);
     });
   });
@@ -276,7 +283,7 @@ describe("a live grant", () => {
           }),
         ),
       );
-      expect(result).toEqual({ status: "refused", reason: "temporary" });
+      expect(result).toEqual({ status: "refused", reason: "temporary", gate: "second_day" });
       expect(await dayRow(day)).toBeNull();
       expect((await dayRow(day + 1))?.do_requests).toBe(
         LIVE_DAILY.do_requests - LIVE_PROTECTED.do_requests,
@@ -304,7 +311,11 @@ describe("a live grant", () => {
       ).run();
       const before = await ledger();
       try {
-        expect(await reserveLive(db, request)).toEqual({ status: "refused", reason: "temporary" });
+        expect(await reserveLive(db, request)).toEqual({
+          status: "refused",
+          reason: "temporary",
+          gate: "unknown",
+        });
       } finally {
         await env.DIRECTORY.prepare("DROP TRIGGER live_budget_test_fail").run();
       }
@@ -346,7 +357,11 @@ describe("a live grant", () => {
           ],
         }),
       );
-      expect(await reserveLive(lossy, request)).toEqual({ status: "refused", reason: "temporary" });
+      expect(await reserveLive(lossy, request)).toEqual({
+        status: "refused",
+        reason: "temporary",
+        gate: "unknown",
+      });
       const first = (await ledger())?.grant_seq as number;
       const retry = await reserveLive(db, request);
       expect(retry).toMatchObject({ status: "granted", replay: true, grant: { seq: first } });
@@ -371,7 +386,11 @@ describe("a live grant", () => {
       await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 4)")
         .bind(`feed:${recipient}`)
         .run();
-      expect(await reserveLive(db, request)).toEqual({ status: "refused", reason: "fenced" });
+      expect(await reserveLive(db, request)).toEqual({
+        status: "refused",
+        reason: "fenced",
+        gate: "epoch",
+      });
     });
   });
 
@@ -381,10 +400,42 @@ describe("a live grant", () => {
       const { db } = at(day);
       const request = await makeLiveGrant(await plan({ day }));
       const altered = { ...request, plan: { ...request.plan, recipient: "usr_other" } };
-      expect(await reserveLive(db, altered)).toEqual({ status: "refused", reason: "invalid" });
+      expect(await reserveLive(db, altered)).toEqual({
+        status: "refused",
+        reason: "invalid",
+        gate: "validity",
+      });
       expect(await receipts()).toBe(0);
     });
   });
+
+  it("notes each hold's class: a cleanup grant's refund gives the ordinary share nothing", () =>
+    isolated(async () => {
+      const day = testDay(9);
+      const { db } = at(day);
+      for (const held of ["ordinary", "cleanup"] as const) {
+        const result = await reserveLive(
+          db,
+          await makeLiveGrant(
+            await plan({
+              day,
+              class: held,
+              kind: held === "cleanup" ? "maintenance" : "pump",
+              charges: [
+                {
+                  day,
+                  resources: vector({ do_duration_ms: 10 }),
+                  duration: { day, from: day * DAY, until: day * DAY + DAY / 2 + 60_000, ms: 10 },
+                },
+              ],
+            }),
+          ),
+        );
+        expect(result.status).toBe("granted");
+      }
+      const entries = JSON.parse(String((await dayRow(day))?.escrow)) as { class: string }[];
+      expect(entries.map((entry) => entry.class).sort()).toEqual(["cleanup", "ordinary"]);
+    }));
 
   it("holds 64 unsettled durations a day, refusing the 65th whole", async () => {
     await isolated(async () => {
@@ -410,7 +461,7 @@ describe("a live grant", () => {
         );
       for (let i = 0; i < LIVE_ESCROW_ENTRIES; i++) expect((await hold()).status).toBe("granted");
       const before = await dayRow(day);
-      expect(await hold()).toEqual({ status: "refused", reason: "temporary" });
+      expect(await hold()).toEqual({ status: "refused", reason: "temporary", gate: "escrow_full" });
       const after = await dayRow(day);
       expect(JSON.parse(String(after?.escrow))).toHaveLength(LIVE_ESCROW_ENTRIES);
       expect(after).toEqual(before);
@@ -431,7 +482,7 @@ describe("a live grant", () => {
         ).status;
       expect(await ordinary()).toBe("granted");
       // Its receipt's expiry: overdue from then, not yet removed.
-      const expiry = day * DAY + DAY / 2 + 60_000 + 2 * DAY;
+      const expiry = day * DAY + DAY / 2 + 60_000 + 60 * 60_000;
       clock.now = expiry + LIVE_RECEIPTS_OVERDUE.graceMs - 60_000;
       expect(await ordinary()).toBe("granted");
       clock.now = expiry + LIVE_RECEIPTS_OVERDUE.graceMs;
@@ -467,11 +518,16 @@ describe("a live grant", () => {
             await makeLiveGrant(await plan({ day: Math.floor(clock.now / DAY), from: clock.now })),
           )
         ).status;
-      const expiry = noon + 60_000 + 2 * DAY;
+      const expiry = noon + 60_000 + 60 * 60_000;
       clock.now = expiry + 60_000;
       expect(await ordinary()).toBe("granted");
-      // A page overdue, however recently.
+      // The page's last just expired: the cron's next run has yet to come.
       clock.now = expiry + 31 * 60_000;
+      expect(await ordinary()).toBe("granted");
+      // A page expired for as long as two of the cron's runs take: maintenance isn't clearing them.
+      clock.now = expiry + 30 * 60_000 + LIVE_RECEIPTS_OVERDUE.pageAfterMs - 1_000;
+      expect(await ordinary()).toBe("granted");
+      clock.now = expiry + 30 * 60_000 + LIVE_RECEIPTS_OVERDUE.pageAfterMs;
       expect(await ordinary()).toBe("refused");
     });
   });
@@ -486,7 +542,7 @@ describe("a live grant", () => {
         .run();
       expect(
         await reserveLive(db, await makeLiveGrant(await plan({ day, recipient, epoch: 2 }))),
-      ).toEqual({ status: "refused", reason: "fenced" });
+      ).toEqual({ status: "refused", reason: "fenced", gate: "epoch" });
       expect(
         await reserveLive(
           db,
@@ -494,10 +550,14 @@ describe("a live grant", () => {
             await plan({ day, recipient, epoch: 3, incarnation: "0".repeat(32) }),
           ),
         ),
-      ).toEqual({ status: "refused", reason: "fenced" });
+      ).toEqual({ status: "refused", reason: "fenced", gate: "target_incarnation" });
       const request = await makeLiveGrant(await plan({ day, recipient, epoch: 3 }));
       clock.now = request.plan.validUntil;
-      expect(await reserveLive(db, request)).toEqual({ status: "refused", reason: "expired" });
+      expect(await reserveLive(db, request)).toEqual({
+        status: "refused",
+        reason: "expired",
+        gate: "validity",
+      });
       expect(await receipts()).toBe(0);
     });
   });
@@ -642,6 +702,88 @@ describe("a live grant's duration", () => {
       expect(beginLiveDuration(result.grant, deadline, 60_000, 0)).toBeNull();
       // A guard needing more than was held.
       expect(beginLiveDuration(result.grant, from, 120_000, 0)).toBeNull();
+    });
+  });
+});
+
+describe("how long a receipt is kept", () => {
+  const HOUR = 60 * 60_000;
+
+  it("is an hour past its validity, or until its settlement window closes", async () => {
+    const day = testDay(40);
+    const noon = day * DAY + DAY / 2;
+    expect(liveReceiptDeadlines(await plan({ day, from: noon }))).toEqual({
+      settleUntil: noon + 60_000,
+      expiresAt: noon + 60_000 + HOUR,
+    });
+    const until = noon + 60_000;
+    expect(
+      liveReceiptDeadlines(
+        await plan({
+          day,
+          from: noon,
+          charges: [
+            {
+              day,
+              resources: vector({ do_duration_ms: 10 }),
+              duration: { day, from: noon, until, ms: 10 },
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ settleUntil: until + DAY, expiresAt: until + DAY });
+  });
+
+  it("is accepted by the table's rule, and its debt leaves with its row", () =>
+    isolated(async () => {
+      const day = testDay(41);
+      const { db, clock } = at(day);
+      const debt = vector({ d1_rows_written: 7 });
+      const planned = await plan({ day, from: clock.now, directoryCleanupDebt: debt });
+      const before = (await ledger())?.debt_d1_rows_written as number;
+      expect((await reserveLive(db, await makeLiveGrant(planned))).status).toBe("granted");
+      expect((await ledger())?.debt_d1_rows_written).toBe(before + 7);
+      clock.now = planned.validUntil + HOUR - 1;
+      expect(await expireLiveReceipts(db)).toEqual({ expired: 0 });
+      clock.now = planned.validUntil + HOUR;
+      expect(await expireLiveReceipts(db)).toEqual({ expired: 1 });
+      expect((await ledger())?.debt_d1_rows_written).toBe(before);
+    }));
+
+  it("keeps every receipt and its dates when its table is rebuilt", () =>
+    isolated(async () => {
+      const day = testDay(43);
+      const { db, clock } = at(day);
+      const planned = await plan({ day, from: clock.now });
+      expect((await reserveLive(db, await makeLiveGrant(planned))).status).toBe("granted");
+      const all = () =>
+        env.DIRECTORY.prepare("SELECT * FROM live_budget_receipts ORDER BY seq").all();
+      const before = (await all()).results;
+      expect(before.length).toBeGreaterThan(0);
+      const migrations = (
+        env as unknown as { DIRECTORY_MIGRATIONS: { name: string; queries: string[] }[] }
+      ).DIRECTORY_MIGRATIONS;
+      const rebuild = migrations.find((m) => m.name.includes("live_receipts_retention"));
+      expect(rebuild).toBeDefined();
+      await env.DIRECTORY.batch(
+        (rebuild?.queries ?? []).map((query) => env.DIRECTORY.prepare(query)),
+      );
+      expect((await all()).results).toEqual(before);
+    }));
+
+  it("refuses a row kept less than the hour", async () => {
+    await isolated(async () => {
+      const day = testDay(42);
+      const { db, clock } = at(day);
+      const planned = await plan({ day, from: clock.now });
+      expect((await reserveLive(db, await makeLiveGrant(planned))).status).toBe("granted");
+      await expect(
+        env.DIRECTORY.prepare(
+          "UPDATE live_budget_receipts SET expires_at = valid_until + 3599999, settle_until = valid_until WHERE valid_from = ?",
+        )
+          .bind(planned.validFrom)
+          .run(),
+      ).rejects.toThrow(/CHECK/);
     });
   });
 });

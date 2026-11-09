@@ -16,6 +16,7 @@ import {
   type LiveDayCharge,
   type LiveEnvelope,
   type LiveGrantPlan,
+  liveReceiptDeadlines,
   makeLiveGrant,
   reserveLive,
   settleLiveDuration,
@@ -73,6 +74,7 @@ async function granted(
     recipientType?: "UserDO" | "OrgDO";
     acrossMidnight?: boolean;
     hold?: number;
+    kind?: LiveGrantPlan["kind"];
   } = {},
 ): Promise<LiveEnvelope> {
   const cleanup = options.class === "cleanup";
@@ -104,6 +106,7 @@ async function granted(
     from,
     validMs,
     recipient: options.recipient ?? "usr_owner",
+    ...(options.kind && { kind: options.kind }),
     ...(options.recipientType && { recipientType: options.recipientType }),
     ...(cleanup && { class: "cleanup", kind: "maintenance", recipientType: "MaintenanceDO" }),
     charges,
@@ -151,8 +154,13 @@ async function admitted(
 }
 
 /** An owner run from its grant's start for `ms`, observed; its id. */
-async function ran(day: number, ms: number, objectId = "usr_run") {
-  const { grant, ownerId } = await admitted(day, objectId);
+async function ran(
+  day: number,
+  ms: number,
+  objectId = "usr_run",
+  options: Parameters<typeof granted>[1] = {},
+) {
+  const { grant, ownerId } = await admitted(day, objectId, options);
   const db = clockedD1(env.DIRECTORY, { now: grant.plan.validFrom });
   const start = grant.plan.validFrom;
   expect(await markLiveOwnerDispatched(db, ownerId, { instance: "i1", startedAt: start })).toBe(
@@ -571,5 +579,77 @@ describe("the duration debt and reserve", () => {
       // A new ordinary grant holding duration is refused too.
       await expect(granted(day, { recipient: "usr_s" })).rejects.toThrow("not granted");
       await admitted(day, "maintenance", { class: "cleanup" });
+    }));
+});
+
+describe("releasing an owner", () => {
+  const HOUR = 60 * 60_000;
+  const TICKET = { kind: "ticket" } as const;
+  const receipt = (operationId: string) =>
+    env.DIRECTORY.prepare(
+      "SELECT valid_until, settle_until, expires_at FROM live_budget_receipts WHERE operation_id = ?",
+    )
+      .bind(operationId)
+      .first<{ valid_until: number; settle_until: number; expires_at: number }>();
+
+  it("lets its accounted receipt go an hour past its validity, not a day past its hold", () =>
+    isolated(async () => {
+      const day = testDay(50);
+      const { ownerId, grant, db } = await ran(day, 1_000, "usr_release", TICKET);
+      const kept = await receipt(grant.operationId);
+      expect(kept?.expires_at).toBeGreaterThan((kept?.valid_until as number) + HOUR);
+      expect(await settleLiveOwnerPage(db, ownerId)).toMatchObject({ accounted: true });
+      expect(await releaseLiveOwner(db, ownerId)).toBe("released");
+      const until = grant.plan.validUntil;
+      expect(await receipt(grant.operationId)).toEqual({
+        valid_until: until,
+        settle_until: until + HOUR,
+        expires_at: until + HOUR,
+      });
+      expect(await expireLiveReceipts(clockedD1(env.DIRECTORY, { now: until + HOUR - 1 }))).toEqual(
+        { expired: 0 },
+      );
+      expect(await expireLiveReceipts(clockedD1(env.DIRECTORY, { now: until + HOUR }))).toEqual({
+        expired: 1,
+      });
+    }));
+
+  it("keeps it no longer once released later than that, and never moves it on", () =>
+    isolated(async () => {
+      const day = testDay(51);
+      const { ownerId, grant, db } = await ran(day, 1_000, "usr_release_late", TICKET);
+      expect(await settleLiveOwnerPage(db, ownerId)).toMatchObject({ accounted: true });
+      const late = grant.plan.validUntil + 3 * HOUR;
+      expect(await releaseLiveOwner(clockedD1(env.DIRECTORY, { now: late }), ownerId)).toBe(
+        "released",
+      );
+      expect((await receipt(grant.operationId))?.expires_at).toBe(late);
+    }));
+
+  it("lets go of one never dispatched once its dispatch can no longer happen", () =>
+    isolated(async () => {
+      const day = testDay(52);
+      const { ownerId, grant } = await admitted(day, "usr_release_never", TICKET);
+      const past = clockedD1(env.DIRECTORY, { now: grant.plan.validUntil + 1 });
+      expect(await releaseLiveOwner(past, ownerId)).toBe("released");
+      expect((await receipt(grant.operationId))?.expires_at).toBe(grant.plan.validUntil + HOUR);
+    }));
+
+  it("leaves a turn's receipt to the later turns that retire it", () =>
+    isolated(async () => {
+      const day = testDay(53);
+      const { ownerId, grant } = await admitted(day, "usr_release_turn", { kind: "pump" });
+      const before = await receipt(grant.operationId);
+      const past = clockedD1(env.DIRECTORY, { now: grant.plan.validUntil + 1 });
+      expect(await releaseLiveOwner(past, ownerId)).toBe("released");
+      expect(await receipt(grant.operationId)).toEqual(before);
+    }));
+
+  it("keeps an owner never released its full time", () =>
+    isolated(async () => {
+      const day = testDay(54);
+      const { grant } = await ran(day, 1_000, "usr_unreleased", TICKET);
+      const { expiresAt } = liveReceiptDeadlines(grant.plan);
+      expect((await receipt(grant.operationId))?.expires_at).toBe(expiresAt);
     }));
 });
