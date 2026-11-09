@@ -52,6 +52,11 @@ describe("asset names", () => {
       expect(assetName(name)).toMatchObject({ ok: false });
   });
 
+  it("refuses bidirectional formatting characters, which can show a name as another", () => {
+    for (const control of ["\u061c", "\u200e", "\u200f", "\u202a", "\u202e", "\u2066", "\u2069"])
+      expect(assetName(`setup${control}txt.exe`)).toMatchObject({ ok: false });
+  });
+
   it("takes names that only contain dots or start with one", () => {
     expect(assetName("...").ok).toBe(true);
     expect(assetName(".hidden").ok).toBe(true);

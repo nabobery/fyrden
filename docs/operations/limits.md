@@ -946,7 +946,7 @@ An asset is uploaded through a session of its own (`POST …/releases/{release_i
 
 | What | Value |
 |---|---|
-| Assets | At most 100 a release (Proposed), listed only with their release. Names: 1 to 255 UTF-8 bytes in NFC, no slash, backslash or control character, not `.` or `..`; two names that differ only in case are the same name. The declared content type is metadata only |
+| Assets | At most 100 a release (Proposed), listed only with their release. Names: 1 to 255 UTF-8 bytes in NFC, no slash, backslash, control or bidirectional formatting character, not `.` or `..`; two names that differ only in case are the same name. The declared content type is metadata only |
 | Size | Exact: each part's length is checked as it arrives, and the assembled size at completion. At most 2 GiB (`RELEASE_ASSET_MAX_BYTES`, never more than 2,000 parts), so on a default account (1 GiB) the quota stops an upload first |
 | Sessions | 20 open a repository, each 24 hours (Proposed). Only the principal that began one may use it, and only the token that began it may complete it (409 `wrong_token`). Parts are 16 MiB but the last (`GIT_UPLOAD_PART_BYTES`); sending a part again replaces it. A reload loses the etags, so the upload starts again |
 | Quota | Beginning reserves the whole size, held until the session ends or commits (its expiry plus an hour). Completing states the repository's total to the account and commits only if it fits: 403 `quota_exceeded` otherwise, and the object goes. `state: completing` means another request holds the completion or it is still being decided: complete it again. While the account can't be asked: 503 `quota_unavailable`, nothing decided |

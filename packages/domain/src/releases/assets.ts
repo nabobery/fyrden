@@ -13,10 +13,14 @@ export type AssetName =
 
 const utf8 = new TextEncoder();
 
+/** The bidirectional formatting characters (Unicode's Bidi_Control). */
+const BIDI_CONTROL = /[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+
 /**
  * An asset's name as stored, in NFC, and the form two names are compared
  * by (`fold`, lowercased); or why it can't be one. A name is a file's:
- * no separator, no control character, not `.` or `..`, and short enough
+ * no separator, no control or bidirectional formatting character, not
+ * `.` or `..`, and short enough
  * for a file system, counted in the stored form's UTF-8 bytes.
  */
 export function assetName(raw: string): AssetName {
@@ -28,6 +32,9 @@ export function assetName(raw: string): AssetName {
     return { ok: false, reason: `is over ${MAX_ASSET_NAME_BYTES} bytes` };
   if (/[\p{Cc}/\\]/u.test(name))
     return { ok: false, reason: "holds a slash, a backslash or a control character" };
+  // A bidirectional control can show a name as another (`a\u202Etxt.exe` as `aexe.txt`).
+  if (BIDI_CONTROL.test(name))
+    return { ok: false, reason: "holds a bidirectional formatting character" };
   if (name === "." || name === "..") return { ok: false, reason: "is a directory's name" };
   return { ok: true, name, fold: name.toLowerCase() };
 }
