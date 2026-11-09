@@ -565,14 +565,38 @@ keeps it a week.
 
 ## Blame
 
-Blame isn't served yet; these are the limits its runs keep inside a repository's Durable Object.
+`GET /repos/{owner}/{repo}/blame` (REST, and MCP as `get_blame`) says which commit introduced each line of a file, as `git blame` does, or why a line has no answer (`unresolved`, with its reason; renames aren't followed). A file is blamed in slices across requests, kept as a run inside the repository's Durable Object: follow `next_continuation` until it's null.
 
 | Limit | Value | Kind |
 |---|---|---|
+| File blamed | 1 MiB and 100,000 lines; more is `422 file_too_large` | Product limit |
+| Ranges in one answer | `per_page`, 1 to 5,000, default 1,000 | Default |
+| A window (`line_start`, `line_end`) | Both, in order, at most 5,000 lines apart; else `422 invalid_input`. No continuation | Product limit |
+| Rate class | `expensive` | Default |
 | Blame requests running at once | 1 per repository object. A request takes a 48 MiB memory share (`BLAME_SHARE_BYTES`), over half of the object's 72 MiB operation pool (`DO_MEMORY.operationPoolBytes`). A second request, for the same file or another, waits up to 2 s for the share, then answers `503 blame_busy` with `retry_after`. Retrying is the client's job. A retry after the first request's slice has published resumes from its checkpoint, so no step is lost | Proposed |
 | Storage calls one blame request may make | 600, or what's left of the invocation's 800 after 4 are kept back for its checkpoint. Under 50, no walking starts | Proposed |
 | Runs kept per repository | 64; a new run removes the least recently touched, never one being written | Proposed |
 | How long a run is kept | Unfinished, or lost: 24 hours after it was last touched. Finished: 7 days after it was last read, or 1 hour when a line is refused for a reason caching can change (`work_limit`, `object_limit`) | Proposed |
+
+What a blame request can answer besides a page:
+
+| Status, code | When | Client |
+|---|---|---|
+| `503 blame_busy`, with `retry_after` and `Retry-After` | Another blame request holds the repository's object; its memory share isn't granted within 2 s; too little of the request is left to start; a recovery after a failed slice without a whole allowance; a state over its room | Wait `retry_after` seconds and ask again; the blame resumes |
+| `422 file_too_large` | The file is over 1 MiB or 100,000 lines | Final |
+| `422 object_limit` | Finding or reading the file needs an object over 4 MiB | Final |
+| `422 work_limit` | Finding or reading the file takes a whole request's allowance; or its start failed three times; or its run failed at the same step even after recovering, kept so until it expires | Final for that commit and path |
+| `422 ref_unreadable` | A tag over 64 KiB, or one that takes more than blame reads to peel | Final |
+| `404 ref_not_found` | No such ref | Final |
+| `404 path_not_found` | No such path, or a directory or submodule there | Final |
+| `404 repo_not_found` | The repository is gone, or the caller can't see it | Final |
+| `409 repo_empty` | Nothing to blame | Final |
+| `409 blame_restarted` | The continuation's run is gone (expired, capped or replaced) or the repository was restored | Start again without a continuation |
+| `422 invalid_path` | Empty, absolute, or with `.`, `..` or empty segments | Fix the request |
+| `422 invalid_continuation` | Malformed; doesn't match its run, repository, commit, path or engine version; or sent with a window | Fix the request |
+| `422 invalid_input` | A window without both lines, out of order or over 5,000 lines; `per_page` out of range | Fix the request |
+
+A commit's `author.date` is git's own: epoch seconds and offset, as `git blame` prints `author-time` and `author-tz` (`1700000000 +0100`).
 
 ## File writes
 
