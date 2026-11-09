@@ -1416,6 +1416,78 @@ describe("a feed's turn", () => {
     socket.ws?.close(1000, "done");
   });
 
+  it("holds the turn an opening hands its feed after a late look at the ledger, though newer turns ran and were released meanwhile", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    // An MCP listen whose look at the ledger is answered 10 seconds late: its feed holds a turn
+    // then, so it grants none with its socket.
+    const looked = Promise.withResolvers<number>();
+    const answer = Promise.withResolvers<void>();
+    type Preparing = { prepare(query: string): D1PreparedStatement };
+    const proto = Object.getPrototypeOf(env.DIRECTORY.withSession("first-primary")) as Preparing;
+    const prepare = proto.prepare;
+    let looks = 0;
+    proto.prepare = function (this: Preparing, query: string) {
+      const statement = prepare.call(this, query);
+      // Its second: the transport's grant reads the first.
+      if (!query.includes("AS turn_held") || ++looks !== 2) return statement;
+      proto.prepare = prepare;
+      const bind = statement.bind;
+      statement.bind = function (this: D1PreparedStatement, ...values: unknown[]) {
+        const bound = bind.apply(this, values);
+        const first = bound.first.bind(bound) as () => Promise<Record<string, unknown>>;
+        bound.first = (async () => {
+          const row = await first();
+          looked.resolve(row.now as number);
+          await answer.promise;
+          return row;
+        }) as typeof bound.first;
+        return bound;
+      };
+      return statement;
+    };
+    onTestFinished(() => {
+      proto.prepare = prepare;
+      answer.resolve();
+    });
+    const opening = openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    const at = await looked.promise;
+    // Meanwhile more of the feed's turns run than an opening looks at, and the last is released as
+    // the only socket closes.
+    const unpin = await pinLedgerClock(at + 10_000);
+    onTestFinished(unpin);
+    vi.setSystemTime(Date.now() + 10_000);
+    for (let version = 1; version <= LIVE_TURN_RECEIPT_LOOK + 1; version++) {
+      await feedOf(owner).applyFeed([change(owner, repo, version)]);
+      await runTurnNow(owner);
+      await runTurnNow(owner);
+    }
+    const closed = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await closed();
+    await runTurnNow(owner);
+    expect(await turnOf(owner)).toEqual([]);
+    // The look answered: the socket opens, and the feed asks for a turn, granted after it.
+    answer.resolve();
+    const opened = await opening;
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+    opened.response.webSocket?.accept();
+    onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    expect(await turnOf(owner)).toHaveLength(1);
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
+  });
+
   it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {
     const owner = await user();
     const repo = await repoWithIssue(owner);

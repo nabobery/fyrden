@@ -333,7 +333,7 @@ export class LiveBudget {
    * Prepares the feed's next turn, paid for by `envelope` (an admission's,
    * or the turn finishing in the same transaction: `finishTurn`), due at
    * `intendedAt`: only when none is held, its grant current and valid now.
-   * Preparing never dispatches it.
+   * Preparing never dispatches it. Its start is kept (`turnFrom`), the latest.
    */
   prepareTurn(envelope: LiveEnvelope, intendedAt: number, now: number): boolean {
     const plan = envelope.plan;
@@ -345,7 +345,7 @@ export class LiveBudget {
     const held = this.turn();
     if (held?.phase === "prepared" && !turnPaid(held.envelope))
       this.sql.exec("DELETE FROM live_turn WHERE id = 1 AND operation_id = ?", held.operationId);
-    return (
+    const prepared =
       this.sql.exec(
         // A prepared turn that can no longer run (expired, or fenced since) gives way; one held
         // otherwise stays.
@@ -369,8 +369,25 @@ export class LiveBudget {
         envelope.seq,
         plan.validUntil,
         now,
-      ).rowsWritten > 0
-    );
+      ).rowsWritten > 0;
+    if (prepared)
+      this.sql.exec(
+        "UPDATE live_budget_fence SET turn_from = ?1 WHERE id = 1 AND turn_from < ?1",
+        plan.validFrom,
+      );
+    return prepared;
+  }
+
+  /**
+   * The latest start of a turn this feed prepared, kept across times it holds
+   * none: what a turn granted it next starts no earlier than, so its validity
+   * never ends before that of turns already granted and released (an opening
+   * looks at the newest few for the one held). Never ahead of the ledger's time.
+   */
+  turnFrom(): number {
+    return this.sql
+      .exec<{ at: number }>("SELECT turn_from AS at FROM live_budget_fence WHERE id = 1")
+      .one().at;
   }
 
   /**

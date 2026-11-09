@@ -447,7 +447,7 @@ export const LIVE_TURN_STEPS = {
   // successor and settlement), the successor's grant reading both days' rows, the feed's epoch, as
   // many expired receipts as grants allow, and a full page of done turns of each kind, two of
   // which it removes (305 read, 27 written; its writes' most is an earlier ledger probe's, 28).
-  end: { do_rows_read: 276, do_rows_written: 6, d1_rows_read: 305, d1_rows_written: 28 },
+  end: { do_rows_read: 278, do_rows_written: 6, d1_rows_read: 305, d1_rows_written: 28 },
   housekeep: { do_rows_read: 120, do_rows_written: 0, d1_rows_read: 0, d1_rows_written: 0 },
   forget: { do_rows_read: 7, do_rows_written: 6, d1_rows_read: 17, d1_rows_written: 6 },
   renewal: { do_rows_read: 23, do_rows_written: 2, d1_rows_read: 5, d1_rows_written: 2 },
@@ -549,8 +549,8 @@ function turnUnit(
  * as grants allow, and removing a full page of done turns (1,312 read, 36 written).
  */
 const PUMP_MEASURED = {
-  do_rows_read: 1_197,
-  do_rows_written: 87,
+  do_rows_read: 1_199,
+  do_rows_written: 88,
   d1_rows_read: 1_312,
   d1_rows_written: 36,
 };

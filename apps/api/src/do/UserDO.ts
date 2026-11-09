@@ -111,7 +111,10 @@ import { TurnMeter, type TurnRows, times } from "./user/turn-meter.js";
 /** The header the Worker hands an admitted live socket's upgrade over in (internal). */
 export const LIVE_BUDGET = "X-Fyrden-Live-Budget-V1";
 
-/** On an admitted socket's 101: the feed holds no turn to run, so the Worker grants one (internal). */
+/**
+ * On an admitted socket's 101: the feed holds no turn to run, so the Worker grants one (internal),
+ * starting no earlier than the value (ledger ms; one from before it, "1", or none: no floor).
+ */
 export const LIVE_TURN_WANTED = "X-Fyrden-Live-Turn-Wanted";
 
 /** What the Worker hands a live upgrade: an admitted socket with its funding, or a refusal with its transport's. */
@@ -1179,7 +1182,8 @@ export class UserDO extends MigratingDO {
     this.ctx.storage.transactionSync(() => live.open(admitted.socketId));
     await this.#scheduleLive();
     // No turn to run, and none running to name one (one left stranded dealt with first): the
-    // Worker grants one (see `liveTurnV1`).
+    // Worker grants one (see `liveTurnV1`), starting no earlier than the latest this feed
+    // prepared, which the header carries.
     await this.#adoptTurn(null).catch(() => {});
     const holding = new LiveBudget(this.ctx.storage.sql);
     const wanted =
@@ -1189,7 +1193,7 @@ export class UserDO extends MigratingDO {
     return new Response(null, {
       status: 101,
       webSocket: client,
-      ...(wanted && { headers: { [LIVE_TURN_WANTED]: "1" } }),
+      ...(wanted && { headers: { [LIVE_TURN_WANTED]: String(holding.turnFrom()) } }),
     });
   }
 
@@ -1859,9 +1863,7 @@ export class UserDO extends MigratingDO {
             // Its work done: what it used, its end (the successor's grant among it) still to come.
             feedHooks.turnDone?.(meter.used(), paid);
             if (this.#live().sockets().length === 0) return null;
-            return await this.#grantTurn(current, envelope.plan.validFrom).catch(
-              (): Untold => ({ gate: "unknown" }),
-            );
+            return await this.#grantTurn(current).catch((): Untold => ({ gate: "unknown" }));
           } finally {
             if (this.#meter === meter) this.#meter = null;
             meter.stop();
@@ -2188,8 +2190,9 @@ export class UserDO extends MigratingDO {
 
   /**
    * The feed's successor turn, granted from the ledger now, never starting
-   * before `parentFrom` (the running turn's start), so a feed's turns are
-   * valid no earlier than the one before (null when refused, or stopped): a pump when it has live work beyond renewals (a
+   * before any turn it prepared (`turnFrom`), the running one's among them, so
+   * a feed's turns are valid no earlier than those before (null when refused,
+   * or stopped): a pump when it has live work beyond renewals (a
    * change to deliver, a refill, a page to prune), else a turn of renewals
    * only, priced for nothing more (its meter leaves anything marked since to
    * the pump after it). Else why not, for its sockets if the feed is left with
@@ -2197,7 +2200,7 @@ export class UserDO extends MigratingDO {
    * result is out of date, which says nothing of what they face now. Its
    * turn's end tells and counts that (`#reconcileTurn`).
    */
-  async #grantTurn(current: () => boolean, parentFrom: number): Promise<LiveEnvelope | Untold> {
+  async #grantTurn(current: () => boolean): Promise<LiveEnvelope | Untold> {
     if (!current()) return { gate: "given_up" };
     const feed = this.ctx.id.name;
     if (!feed) return { gate: "unknown" };
@@ -2219,11 +2222,11 @@ export class UserDO extends MigratingDO {
           kind,
           producesLocal: true,
         },
-        // Never before its parent's start: a later answer that widened this object's view of the
-        // ledger's clock would otherwise give it an earlier validity than turns already released,
-        // and an opening's lookup of the turn held (the newest few) would pass it over. Its
-        // parent's start was D1's time or earlier when granted, so this is never after D1's now.
-        Math.max(budget.ledgerEarliest(Date.now()), parentFrom),
+        // Never before a turn the feed prepared: a later answer that widened this object's view of
+        // the ledger's clock would otherwise give it an earlier validity than turns already
+        // released, and an opening's lookup of the turn held (the newest few) would pass it over.
+        // Each such start was D1's time or earlier when granted, so this is never after D1's now.
+        Math.max(budget.ledgerEarliest(Date.now()), budget.turnFrom()),
       ),
     );
     const metrics = createMetrics(this.env.METRICS);

@@ -566,9 +566,16 @@ export async function openLiveSocket(
     // The feed holds no turn to run (its first was never delivered, say): one granted and handed
     // over now, after the socket (whose opening does not wait on it). Refused or lost, the socket
     // would have nothing to renew it or send it hints: it is refused as its admission would be.
+    const wanted = response.headers.get(LIVE_TURN_WANTED);
     const delivered =
-      response.headers.get(LIVE_TURN_WANTED) && turn === undefined
-        ? await deliverTurn(env, target, credential.principalId, metrics).catch(
+      wanted && turn === undefined
+        ? await deliverTurn(
+            env,
+            target,
+            credential.principalId,
+            metrics,
+            Number(wanted) || 0,
+          ).catch(
             (): FundedResult<never> => ({
               status: "refused",
               reason: "temporary",
@@ -626,15 +633,31 @@ export async function openLiveSocket(
   };
 }
 
-/** Grants the feed a turn and hands it to its object to prepare; its grant's refusal, if any. */
+/**
+ * Grants the feed a turn and hands it to its object to prepare; its grant's refusal, if any. It
+ * starts no earlier than `from`, the latest start of a turn the object prepared: this opening's
+ * look at the ledger may be older than turns that ran since, and a turn starting before them would
+ * end before them, so an opening's lookup of the newest few would pass over the one held.
+ */
 async function deliverTurn(
   env: Env,
   target: LiveOpeningTarget,
   feed: string,
   metrics: Metrics | undefined,
+  from: number,
 ): Promise<FundedResult<void>> {
   metrics?.count("d1.query", { db: "directory", op: "live_grant" });
-  const turn = await fund(env.DIRECTORY, await grantFor(target, feed, "pump"), metrics);
+  const turn = await fund(
+    env.DIRECTORY,
+    await makeLiveGrant(
+      planOf(
+        { ...target, ledger: { ...target.ledger, now: Math.max(target.ledger.now, from) } },
+        feed,
+        "pump",
+      ),
+    ),
+    metrics,
+  );
   if (turn.status !== "funded") return turn;
   metrics?.count("do.request", { class: "UserDO", method: "liveTurnV1" });
   await env.USER.getByName(feed).liveTurnV1({
