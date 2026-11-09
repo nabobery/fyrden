@@ -4070,6 +4070,37 @@ describe("live work's rows in a feed's object", () => {
     expect(listened?.ok).toBe(true);
     const listenSocket = listened?.ok ? listened.response.webSocket : null;
     listenSocket?.accept();
+    // And as the first of a feed whose Worker grants its turns too cheap for its object (a build
+    // priced lower at the same revision): the object takes none, and grants itself one too.
+    const cheap = await userWithEpoch();
+    await repoWithIssue(cheap);
+    await doneTurnReceipts(cheap, at);
+    await releasedTurns(cheap, at + 27 * MINUTE);
+    const cheapCredential = await credentialOf(cheap);
+    const pump = LIVE_PRICES.pump as LiveManifestEntry;
+    feedHooks.beforeEpochRead = async () => {
+      LIVE_PRICES.pump = {
+        ...pump,
+        resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
+      };
+    };
+    let cheaply: Awaited<ReturnType<typeof openOwnedLiveSocket>> | undefined;
+    const twoTurns = await rows(cheap, async () => {
+      try {
+        cheaply = await openOwnedLiveSocket(
+          { ...env, ...LIVE } as Env,
+          cheapCredential,
+          `listen:${uniqueId("lsk")}`,
+          undefined,
+        );
+      } finally {
+        LIVE_PRICES.pump = pump;
+        delete feedHooks.beforeEpochRead;
+      }
+    });
+    expect(cheaply?.ok).toBe(true);
+    const cheapSocket = cheaply?.ok ? cheaply.response.webSocket : null;
+    cheapSocket?.accept();
     // Its turn granted again, by its object.
     expect(
       await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
@@ -4107,10 +4138,11 @@ describe("live work's rows in a feed's object", () => {
     });
     withinObserved({
       ticket: most(first.ticket, again.ticket),
-      upgrade_transport: most(most(first.upgrade, again.upgrade), listen),
+      upgrade_transport: most(most(first.upgrade, again.upgrade), most(listen, twoTurns)),
       org_confirmation: { ...confirmation, read: 0, written: 0 },
     });
-    for (const ws of [warm.ws, first.ws, again.ws, listenSocket]) ws?.close(1000, "done");
+    for (const ws of [warm.ws, first.ws, again.ws, listenSocket, cheapSocket])
+      ws?.close(1000, "done");
   });
 
   it("is within each unit's observed rows", async () => {
