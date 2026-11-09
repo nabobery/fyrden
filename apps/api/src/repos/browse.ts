@@ -1,6 +1,7 @@
 import type {
   compareCommits,
   getArchive,
+  getBlame,
   getBranch,
   getCodeOwnersErrors,
   getCommit,
@@ -154,6 +155,33 @@ export async function getCommitOperation(
   const stub = await repoStub(ctx, input.owner, input.repo);
   ctx.metrics.count("do.request", { class: "RepoDO", method: "browseCommit" });
   return resolveOne(ctx, value(await stub.browseCommit(input.ref)));
+}
+
+/**
+ * The `repos.blame.get` operation. The repository object answers in the wire's
+ * shape; its refusals are thrown here directly, since `value` would drop the
+ * wait a `blame_busy` carries.
+ */
+export async function getBlameOperation(
+  ctx: OpContext,
+  input: Input<typeof getBlame>,
+): Promise<Output<typeof getBlame>> {
+  const stub = await repoStub(ctx, input.owner, input.repo);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "blame" });
+  const result = await stub.blame({
+    path: input.path,
+    perPage: input.per_page,
+    ...(input.ref !== undefined && { ref: input.ref }),
+    ...(input.continuation !== undefined && { continuation: input.continuation }),
+    ...(input.line_start !== undefined && { lineStart: input.line_start }),
+    ...(input.line_end !== undefined && { lineEnd: input.line_end }),
+  });
+  if (result === null) throw new OperationError(404, "repo_not_found", "Repository not found.");
+  if (!result.ok) {
+    const { status, code, message, retryAfter } = result.failure;
+    throw new OperationError(status, code, message, undefined, undefined, retryAfter);
+  }
+  return result.value;
 }
 
 /** The `repos.compare` operation. */

@@ -42,6 +42,7 @@ import {
   refuseHead,
   startBlame,
   UNRESOLVED_REASONS,
+  type UnresolvedReason,
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { peelOid } from "../../git/peel.js";
@@ -126,7 +127,7 @@ export interface BlameAnswer {
   readonly pending_lines: number;
   readonly ranges: (
     | { start_line: number; line_count: number; commit: string; source_start_line: number }
-    | { start_line: number; line_count: number; unresolved: string }
+    | { start_line: number; line_count: number; unresolved: UnresolvedReason }
   )[];
   readonly commits: Record<
     string,

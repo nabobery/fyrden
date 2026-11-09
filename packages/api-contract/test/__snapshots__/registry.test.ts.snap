@@ -35,7 +35,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             "type": "string",
           },
           "retry_after": {
-            "description": "With a 429: seconds to wait before trying again (also the \`Retry-After\` header).",
+            "description": "With a 429 or a 503: seconds to wait before trying again (also the \`Retry-After\` header).",
             "maximum": 9007199254740991,
             "minimum": -9007199254740991,
             "type": "integer",
@@ -8237,6 +8237,325 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Get an archive link",
+        "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/blame": {
+      "get": {
+        "description": "Which commit introduced each line of a file, at a branch, tag or commit (the default branch without \`ref\`), as \`git blame\` says, or why a line has no answer (\`unresolved\`, with its reason; renames aren't followed). A file is blamed in slices across requests: pass \`next_continuation\` back as \`continuation\` until it is null, whatever \`state\` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With \`line_start\` and \`line_end\` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, with no continuation; follow-up windows should name the returned \`commit\`, not the ref. \`blame_busy\` (503) carries \`retry_after\`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (\`file_too_large\`, \`object_limit\`, \`work_limit\`, \`ref_unreadable\`) are final for that commit and path.",
+        "operationId": "repos.blame.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "description": "The file's path in the repository.",
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "description": "A branch, tag or commit SHA; the default branch without it.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "continuation",
+            "required": false,
+            "schema": {
+              "description": "A previous answer's \`next_continuation\`.",
+              "maxLength": 1024,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "description": "Most ranges in one answer, 1-5000.",
+              "maximum": 5000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "line_start",
+            "required": false,
+            "schema": {
+              "description": "A window's first line, from 1.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "line_end",
+            "required": false,
+            "schema": {
+              "description": "A window's last line.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "blob": {
+                      "description": "The file's blob at that commit.",
+                      "type": "string",
+                    },
+                    "commit": {
+                      "description": "The commit blamed: the ref, resolved.",
+                      "type": "string",
+                    },
+                    "commits": {
+                      "additionalProperties": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "author": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "date": {
+                                "description": "The author time as git prints it: epoch seconds and offset, such as \`1700000000 +0100\`. Exact for any time git holds.",
+                                "type": "string",
+                              },
+                              "email": {
+                                "type": "string",
+                              },
+                              "name": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "name",
+                              "email",
+                              "date",
+                            ],
+                            "type": "object",
+                          },
+                          "summary": {
+                            "description": "The commit message's first line that isn't blank, as git blame gives it.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "summary",
+                          "author",
+                        ],
+                        "type": "object",
+                      },
+                      "description": "The facts of the commits these ranges name.",
+                      "propertyNames": {
+                        "description": "A full commit SHA (40 hex digits).",
+                        "type": "string",
+                      },
+                      "type": "object",
+                    },
+                    "lines": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "next_continuation": {
+                      "description": "Pass as \`continuation\`; null only when the blame is complete and read to the end.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "path": {
+                      "type": "string",
+                    },
+                    "pending_lines": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "ranges": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "commit": {
+                                "description": "The commit that introduced these lines.",
+                                "type": "string",
+                              },
+                              "line_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "source_start_line": {
+                                "description": "The first line's number in that commit's version of the file, from 1.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "start_line": {
+                                "description": "The range's first line in this file, from 1.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                            },
+                            "required": [
+                              "start_line",
+                              "line_count",
+                              "commit",
+                              "source_start_line",
+                            ],
+                            "type": "object",
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "line_count": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "start_line": {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "unresolved": {
+                                "description": "Why these lines have no answer. Not a failure: the rest of the blame stands.",
+                                "enum": [
+                                  "parent_too_large",
+                                  "too_many_parents",
+                                  "diff_budget",
+                                  "slide_unsettled",
+                                  "object_limit",
+                                  "work_limit",
+                                  "history_unreadable",
+                                  "history_missing",
+                                  "history_limit",
+                                  "state_limit",
+                                  "commit_info_too_large",
+                                  "step_lost",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "start_line",
+                              "line_count",
+                              "unresolved",
+                            ],
+                            "type": "object",
+                          },
+                        ],
+                      },
+                      "type": "array",
+                    },
+                    "resolved_lines": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "retry_after_seconds": {
+                      "description": "Too little of this request was left to walk on: ask again after this many seconds.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "state": {
+                      "description": "\`complete\` once every line is settled or refused; a partial blame continues.",
+                      "enum": [
+                        "complete",
+                        "partial",
+                      ],
+                      "type": "string",
+                    },
+                    "unresolved_lines": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "commit",
+                    "path",
+                    "blob",
+                    "lines",
+                    "state",
+                    "resolved_lines",
+                    "unresolved_lines",
+                    "pending_lines",
+                    "ranges",
+                    "commits",
+                    "next_continuation",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Blame a file",
         "x-fyrden-permission": "contents:read",
         "x-fyrden-principals": [
           "user",

@@ -7201,6 +7201,70 @@ export type ReposCompareOutput = {
   })[];
 };
 
+/** Input of `repos.blame.get`: Blame a file. */
+export type ReposBlameGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The file's path in the repository. */
+  path: string;
+  /** A branch, tag or commit SHA; the default branch without it. */
+  ref?: string;
+  /** A previous answer's `next_continuation`. */
+  continuation?: string;
+  /** Most ranges in one answer, 1-5000. */
+  per_page?: number;
+  /** A window's first line, from 1. */
+  line_start?: number;
+  /** A window's last line. */
+  line_end?: number;
+};
+
+/** Output of `repos.blame.get`. */
+export type ReposBlameGetOutput = {
+  /** The commit blamed: the ref, resolved. */
+  commit: string;
+  path: string;
+  /** The file's blob at that commit. */
+  blob: string;
+  lines: number;
+  /** `complete` once every line is settled or refused; a partial blame continues. */
+  state: "complete" | "partial";
+  resolved_lines: number;
+  unresolved_lines: number;
+  pending_lines: number;
+  ranges: ({
+    /** The range's first line in this file, from 1. */
+    start_line: number;
+    line_count: number;
+    /** The commit that introduced these lines. */
+    commit: string;
+    /** The first line's number in that commit's version of the file, from 1. */
+    source_start_line: number;
+  } | {
+    start_line: number;
+    line_count: number;
+    /** Why these lines have no answer. Not a failure: the rest of the blame stands. */
+    unresolved: "parent_too_large" | "too_many_parents" | "diff_budget" | "slide_unsettled" | "object_limit" | "work_limit" | "history_unreadable" | "history_missing" | "history_limit" | "state_limit" | "commit_info_too_large" | "step_lost";
+  })[];
+  /** The facts of the commits these ranges name. */
+  commits: Record<string, {
+    /** The commit message's first line that isn't blank, as git blame gives it. */
+    summary: string;
+    author: {
+      name: string;
+      email: string;
+      /** The author time as git prints it: epoch seconds and offset, such as `1700000000 +0100`. Exact for any time git holds. */
+      date: string;
+    };
+  }>;
+  /** Pass as `continuation`; null only when the blame is complete and read to the end. */
+  next_continuation: string | null;
+  /** Too little of this request was left to walk on: ask again after this many seconds. */
+  retry_after_seconds?: number;
+};
+
 /** Input of `repos.contents.root`: List the repository's root directory. */
 export type ReposContentsRootInput = {
   /** The owner's handle. */
@@ -8467,6 +8531,7 @@ export const OPERATIONS = {
   "repos.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/commits", pathParams: ["owner","repo"], idempotent: false, items: "commits" },
   "repos.commits.get": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref+}", pathParams: ["owner","repo","ref"], idempotent: false },
   "repos.compare": { method: "GET", path: "/repos/{owner}/{repo}/compare/{basehead+}", pathParams: ["owner","repo","basehead"], idempotent: false },
+  "repos.blame.get": { method: "GET", path: "/repos/{owner}/{repo}/blame", pathParams: ["owner","repo"], idempotent: false },
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
   "repos.readme.get": { method: "GET", path: "/repos/{owner}/{repo}/readme", pathParams: ["owner","repo"], idempotent: false },
@@ -8882,6 +8947,8 @@ export interface Operations {
   "repos.commits.get": { input: ReposCommitsGetInput; output: ReposCommitsGetOutput };
   /** Compare two commits. Compares `base...head` (branches, tags or SHAs): how far head is ahead of and behind base, their merge base, and the commits in head and not in base, oldest first (the newest 100). File differences are not included. */
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };
+  /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason; renames aren't followed). A file is blamed in slices across requests: pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, with no continuation; follow-up windows should name the returned `commit`, not the ref. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
+  "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };
   /** List the repository's root directory. The root directory's entries at a branch, tag or commit, a page at a time. */
   "repos.contents.root": { input: ReposContentsRootInput; output: ReposContentsRootOutput };
   /** Get repository content. What a path names at a branch, tag or commit: a directory's entries (in git's order, a page at a time), a file and its content (base64, up to 1 MiB; larger files have `encoding: none` and are read through `download_url`), a symlink and its target, or a submodule and its commit. */

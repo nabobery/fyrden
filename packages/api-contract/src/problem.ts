@@ -23,7 +23,9 @@ export const Problem = z.object({
     .number()
     .int()
     .optional()
-    .describe("With a 429: seconds to wait before trying again (also the `Retry-After` header)."),
+    .describe(
+      "With a 429 or a 503: seconds to wait before trying again (also the `Retry-After` header).",
+    ),
   retry_at: z
     .number()
     .int()
