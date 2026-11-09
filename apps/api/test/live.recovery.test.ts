@@ -23,6 +23,7 @@ import {
   validateLiveCoverage,
 } from "../src/live/budget.js";
 import { reserveDuration } from "../src/live/duration.js";
+import { LIVE_PRICES, type LiveManifestEntry } from "../src/live/manifest.js";
 import {
   backoffLiveTarget,
   captureLiveRecoveryTarget,
@@ -36,6 +37,7 @@ import {
 import { countingExec } from "./helpers/feed.js";
 import {
   clockedD1,
+  countD1Rows,
   DAY,
   dayRow,
   incarnation,
@@ -758,6 +760,89 @@ describe("live recovery", () => {
       ).toEqual({ status: "uncertain" });
       await env.DIRECTORY.prepare("DELETE FROM live_duration_owners WHERE owner_id = ?")
         .bind(ownerId)
+        .run();
+    });
+  });
+
+  it("uses no more of D1 in the feed's object than its price was measured at, every owner it may hold quarantined", async () => {
+    await isolated(async () => {
+      const feed = `usr_${uniqueId("most")}`;
+      const grant = await ordinaryGrant(feed);
+      // Work dispatched by an instance gone since, as much as a feed holds: an installation, a
+      // refill of each kind and a renewal pending, and its turn; each owner in the directory.
+      const kinds = ["install", "control_refill", "mark_refill", "renewal", "turn"] as const;
+      const owners = kinds.map((kind) => ({ kind, operationId: uniqueId(`op_${kind}`) }));
+      await env.DIRECTORY.batch(
+        owners.map(({ operationId }) =>
+          env.DIRECTORY.prepare(
+            `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id, class,
+               epoch, incarnation, dispatch_from, dispatch_until, holds, status, instance,
+               started_at, admitted_at)
+             VALUES (?1 || '/feed', ?1, 'UserDO', ?2, 'ordinary', 0, ?3, 0, 1, '[]', 'dispatched',
+               'gone', 0, 0)`,
+          ).bind(operationId, feed, grant.plan.incarnation),
+        ),
+      );
+      await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
+        for (const { kind, operationId } of owners)
+          if (kind === "turn")
+            state.storage.sql.exec(
+              `INSERT INTO live_turn (id, operation_id, envelope_json, phase, intended_at, owner_id,
+                 dispatch_instance, budget_epoch, budget_incarnation, budget_seq,
+                 budget_valid_until)
+               VALUES (1, ?, ?, 'dispatched', 0, ?, 'gone', 0, ?, ?, ?)`,
+              operationId,
+              JSON.stringify(grant),
+              `${operationId}/feed`,
+              grant.plan.incarnation,
+              grant.seq,
+              grant.plan.validUntil,
+            );
+          else
+            state.storage.sql.exec(
+              `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
+                 budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase,
+                 request_json, owner_id, dispatch_instance)
+               VALUES (?, ?, 0, 0, 0, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
+              kind,
+              operationId,
+              grant.plan.incarnation,
+              grant.seq,
+              grant.plan.validUntil,
+              `${operationId}/feed`,
+            );
+      });
+      let used: { d1Read: number; d1Written: number } | undefined;
+      expect(
+        await recoverLiveTargets(env.DIRECTORY, {
+          limit: 10,
+          reserveTarget: recoveryCoverage,
+          tell: async (request) => {
+            const counter = countD1Rows();
+            try {
+              return await tell(request);
+            } finally {
+              used = counter.stop();
+            }
+          },
+        }),
+      ).toEqual({ attempted: 1, retired: 1, pending: 0, failed: 0 });
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT count(*) AS n FROM live_duration_owners WHERE object_id = ? AND status = 'uncertain'",
+        )
+          .bind(feed)
+          .first(),
+      ).toEqual({ n: kinds.length });
+      const observed = (LIVE_PRICES.recovery as LiveManifestEntry).observed;
+      const most = (k: "d1_rows_read" | "d1_rows_written") =>
+        Math.max(...Object.values(observed).map((o) => o[k]));
+      expect(used).toEqual({
+        d1Read: Math.min(used?.d1Read ?? 0, most("d1_rows_read")),
+        d1Written: Math.min(used?.d1Written ?? 0, most("d1_rows_written")),
+      });
+      await env.DIRECTORY.prepare("DELETE FROM live_duration_owners WHERE object_id = ?")
+        .bind(feed)
         .run();
     });
   });

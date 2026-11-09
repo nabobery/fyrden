@@ -59,7 +59,8 @@ const DAY = 86_400_000;
  * The manifest live work is priced by: a funding of another revision is
  * refused. Raised whenever its prices change (3: an owner's table lost two indexes,
  * and an owner's release shortens its receipt's life; 4: an opening's lookup of the turn its feed
- * holds reads its newest few turns, whatever ran before them), so a funding in flight across a deploy
+ * holds reads its newest few turns, whatever ran before them, and maintenance and recovery are
+ * priced from their real grants' and quarantines' D1), so a funding in flight across a deploy
  * never pays old prices for new work.
  */
 export const LIVE_MANIFEST_REVISION = 4;
