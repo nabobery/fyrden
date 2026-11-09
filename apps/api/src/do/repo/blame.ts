@@ -59,9 +59,12 @@ import { type BlameToken, decodeBlameToken, encodeBlameToken, pathDigest } from 
 
 const MiB = 1024 * 1024;
 /**
- * The request's one memory share (design §6); Proposed. Over half the
- * object's operation pool, so one blame request runs per object at a time:
- * a second waits for the share, then answers 503 blame_busy.
+ * The request's one memory share, taken whole before any reading; Proposed.
+ * It holds the reader's buffers and caches for one phase at a time, which
+ * phases reuse, and ROOM_BYTES for the pack view and the live state, which
+ * are counted exactly. Over half the object's operation pool, so one blame
+ * request runs per object at a time: a second waits for the share, then
+ * answers 503 blame_busy.
  */
 export const BLAME_SHARE_BYTES = 48 * MiB;
 /** The one cleanup job of a repository's blame runs. */
@@ -70,7 +73,13 @@ const SHARE_WAIT_MS = 2_000;
 /** The view and the live state together; each pack in the view counts 1 KiB. */
 const ROOM_BYTES = 8 * MiB;
 const VIEW_ENTRY_BYTES = 1024;
-/** The physical-call allowance (design §5); Proposed. */
+/**
+ * Storage calls (index and pack range reads, the checkpoint's writes) an
+ * invocation may make before blame stops; Proposed. It's the line the job
+ * queue's default draws, below the 1,000 internal calls an invocation has on
+ * Workers Free (FREE_INTERNAL_CALLS, measured). CALL_RESERVE of them pay for
+ * the checkpoint, and one request reads with at most MAX_ALLOWANCE.
+ */
 const CALL_BUDGET = 800;
 const CALL_RESERVE = 4;
 const MAX_ALLOWANCE = 600;
