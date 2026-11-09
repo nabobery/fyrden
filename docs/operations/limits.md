@@ -592,9 +592,9 @@ What a blame request can answer besides a page:
 | `404 repo_not_found` | The repository is gone, or the caller can't see it | Final |
 | `409 repo_empty` | Nothing to blame | Final |
 | `409 blame_restarted` | The continuation's run is gone (expired, capped or replaced) or the repository was restored | Start again without a continuation |
-| `422 invalid_path` | Empty, absolute, or with `.`, `..` or empty segments | Fix the request |
+| `422 invalid_path` | Absolute (a leading `/`), or with `.`, `..` or empty segments | Fix the request |
 | `422 invalid_continuation` | Malformed; doesn't match its run, repository, commit, path or engine version; or sent with a window | Fix the request |
-| `422 invalid_input` | A window without both lines, out of order or over 5,000 lines; `per_page` out of range | Fix the request |
+| `422 invalid_input` | A path that's missing, empty or over 4,096 characters; a window without both lines, out of order or over 5,000 lines; `per_page` out of range | Fix the request |
 
 A commit's `author.date` is git's own: epoch seconds and offset, as `git blame` prints `author-time` and `author-tz` (`1700000000 +0100`).
 
