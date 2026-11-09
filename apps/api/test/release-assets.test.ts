@@ -334,6 +334,22 @@ describe("completing", () => {
     expect((await complete(r, begun.body.id, parts)).body.state).toBe("completed");
   });
 
+  it("answers another token, or an ended session, as such while another completion holds the lock", async () => {
+    const begun = await begin(r, release, { name: "a", size: 10 });
+    const put = await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
+    const parts = [{ part_number: 1, etag: put.body.etag as string }];
+    const id = begun.body.id;
+    await inRepo(r.stub, (repo) => {
+      repo.git.locks.tryAcquire(`release-asset-complete:${id}`, "elsewhere", 60_000);
+    });
+    const other = await scopedToken(r.owner.principalId, ["contents:write"]);
+    const wrong = await complete(r, id, parts, other);
+    expect([wrong.status, wrong.body.code]).toEqual([409, "wrong_token"]);
+    await abort(r, id);
+    const ended = await complete(r, id, parts);
+    expect([ended.status, ended.body.code]).toEqual([409, "upload_aborted"]);
+  });
+
   it("counts another completing session's bytes once, not in its hold as well", async () => {
     const before = await quota();
     await setLimit(before.storage_bytes + 20);

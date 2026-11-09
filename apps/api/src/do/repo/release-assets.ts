@@ -453,7 +453,13 @@ export class RepoReleaseAssets {
       if (lock) this.deps.git.locks.release(lock);
       return NO_UPLOAD;
     }
-    if (!lock) return { ok: true, view: { ...this.#view(current), state: "completing" } };
+    if (!lock)
+      return (
+        this.#settled(current, caller) ?? {
+          ok: true,
+          view: { ...this.#view(current), state: "completing" },
+        }
+      );
     try {
       return await this.#complete(lock, current, input);
     } finally {
@@ -468,11 +474,8 @@ export class RepoReleaseAssets {
   ): Promise<UploadAnswer> {
     const { caller } = input;
     const hooks = this.deps.hooks();
-    if (row.token_id !== caller.tokenId)
-      return fail(409, "wrong_token", "Complete the upload with the token that started it.");
-    if (row.state === "completed") return { ok: true, view: this.#view(row) };
-    if (row.state === "aborted")
-      return fail(409, "upload_aborted", "The upload was ended. Start it again.");
+    const settled = this.#settled(row, caller);
+    if (settled) return settled;
     // A restored session never deletes a key, whatever its state: a later state may name it.
     if (row.epoch_gen !== this.deps.events.epochGen()) {
       this.#end(row);
@@ -554,6 +557,16 @@ export class RepoReleaseAssets {
     if (decided?.code === "release_asset_transferring") return decided;
     if (decided) return this.#refuse(lock, row, decided);
     return { ok: true, view: this.#view(this.#row(row.upload_id) as UploadRow) };
+  }
+
+  /** The answer no completion changes: another token's, or a session that ended. */
+  #settled(row: UploadRow, caller: AssetCaller): UploadAnswer | undefined {
+    if (row.token_id !== caller.tokenId)
+      return fail(409, "wrong_token", "Complete the upload with the token that started it.");
+    if (row.state === "completed") return { ok: true, view: this.#view(row) };
+    if (row.state === "aborted")
+      return fail(409, "upload_aborted", "The upload was ended. Start it again.");
+    return undefined;
   }
 
   /** The part list's problem, if any: checked before the session takes it. */
