@@ -211,7 +211,8 @@ final engine read 2.3 to 3.6 times local per case, which puts the same slice at 
 12.1 s against the 30 s limit. Not deployed: a whole slice through the real reader with
 R2 under it. Memory isn't settled: garbage isn't bounded by the charges, and deployed
 instances reset intermittently after dense delta work, with the cause unverified. The
-design's §6 has the runs.
+deployed runs were made on 7 and 8 November 2026, in one colo, on bench and probe deployments;
+their raw results are kept outside the repository.
 
 Alignment's rules come from black-box probing, so generated pairs check them too. `blame.git-oracle.test.ts`
 runs each generator at `FYRDEN_BLAME_SEARCH` pairs, 5,000 by default, against the
