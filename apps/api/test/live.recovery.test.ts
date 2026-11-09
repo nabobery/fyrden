@@ -34,6 +34,7 @@ import {
   recoverLiveTargets,
   retireLiveTarget,
 } from "../src/live/recovery.js";
+import { user } from "./helpers/api.js";
 import { countingExec } from "./helpers/feed.js";
 import {
   clockedD1,
@@ -62,6 +63,7 @@ const feedOf = (feed: string) => env.USER.getByName(feed);
 async function ordinaryGrant(
   feed: string,
   localDebt = vector({ do_rows_written: 4 }),
+  epoch = 0,
 ): Promise<LiveEnvelope> {
   const from = Date.now() - 60_000;
   const db = clockedD1(env.DIRECTORY, { now: from });
@@ -76,6 +78,7 @@ async function ordinaryGrant(
         kind: "control",
         producesLocal: true,
         localCleanupDebt: localDebt,
+        epoch,
       }),
     ),
   );
@@ -97,7 +100,7 @@ const mint = (request: Awaited<ReturnType<typeof makeLiveGrant>>) =>
   reserveLive(clockedD1(env.DIRECTORY, { now: request.plan.validFrom }), request);
 
 /** A recovery attempt's own cleanup grant for `feed`, valid now. */
-async function recoveryCoverage(feed: string): Promise<LiveGrantResult> {
+async function recoveryCoverage(feed: string, epoch = 0): Promise<LiveGrantResult> {
   const from = recently();
   const until = from + 10 * 60_000;
   const holds = reserveDuration(
@@ -115,6 +118,7 @@ async function recoveryCoverage(feed: string): Promise<LiveGrantResult> {
         recipient: feed,
         kind: "recovery",
         class: "cleanup",
+        epoch,
         charges: holds.map((h) => ({
           day: h.day,
           resources: vector({ do_requests: 1, do_duration_ms: h.ms }),
@@ -764,13 +768,19 @@ describe("live recovery", () => {
     });
   });
 
-  it("uses no more of D1 in the feed's object than its price was measured at, every owner it may hold quarantined", async () => {
+  it("uses no more of D1 in the feed's object than its price was measured at, every owner it may hold at once quarantined", async () => {
     await isolated(async () => {
-      const feed = `usr_${uniqueId("most")}`;
-      const grant = await ordinaryGrant(feed);
-      // Work dispatched by an instance gone since, as much as a feed holds: an installation, a
-      // refill of each kind and a renewal pending, and its turn; each owner in the directory.
-      const kinds = ["install", "control_refill", "mark_refill", "renewal", "turn"] as const;
+      // A registered principal's feed, restored once (its epoch read as recovery reads it).
+      const feed = (await user()).principalId;
+      const epoch = 3;
+      await env.DIRECTORY.prepare("INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, ?)")
+        .bind(`feed:${feed}`, epoch)
+        .run();
+      await feedOf(feed).inboxThread("none");
+      const grant = await ordinaryGrant(feed, undefined, epoch);
+      // Work dispatched by an instance gone since, as much as a feed may hold at once: two ordinary
+      // owners (an object's most), an installation pending and its turn; each in the directory.
+      const kinds = ["install", "turn"] as const;
       const owners = kinds.map((kind) => ({ kind, operationId: uniqueId(`op_${kind}`) }));
       await env.DIRECTORY.batch(
         owners.map(({ operationId }) =>
@@ -778,9 +788,9 @@ describe("live recovery", () => {
             `INSERT INTO live_duration_owners (owner_id, operation_id, object_type, object_id, class,
                epoch, incarnation, dispatch_from, dispatch_until, holds, status, instance,
                started_at, admitted_at)
-             VALUES (?1 || '/feed', ?1, 'UserDO', ?2, 'ordinary', 0, ?3, 0, 1, '[]', 'dispatched',
+             VALUES (?1 || '/feed', ?1, 'UserDO', ?2, 'ordinary', ?4, ?3, 0, 1, '[]', 'dispatched',
                'gone', 0, 0)`,
-          ).bind(operationId, feed, grant.plan.incarnation),
+          ).bind(operationId, feed, grant.plan.incarnation, epoch),
         ),
       );
       await runInDurableObject(feedOf(feed), (_: UserDO, state) => {
@@ -790,10 +800,11 @@ describe("live recovery", () => {
               `INSERT INTO live_turn (id, operation_id, envelope_json, phase, intended_at, owner_id,
                  dispatch_instance, budget_epoch, budget_incarnation, budget_seq,
                  budget_valid_until)
-               VALUES (1, ?, ?, 'dispatched', 0, ?, 'gone', 0, ?, ?, ?)`,
+               VALUES (1, ?, ?, 'dispatched', 0, ?, 'gone', ?, ?, ?, ?)`,
               operationId,
               JSON.stringify(grant),
               `${operationId}/feed`,
+              epoch,
               grant.plan.incarnation,
               grant.seq,
               grant.plan.validUntil,
@@ -803,9 +814,10 @@ describe("live recovery", () => {
               `INSERT INTO live_budget_pending (kind, operation_id, intended_at, authorization_gen,
                  budget_epoch, budget_incarnation, budget_seq, budget_valid_until, phase,
                  request_json, owner_id, dispatch_instance)
-               VALUES (?, ?, 0, 0, 0, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
+               VALUES (?, ?, 0, 0, ?, ?, ?, ?, 'dispatched', '{}', ?, 'gone')`,
               kind,
               operationId,
+              epoch,
               grant.plan.incarnation,
               grant.seq,
               grant.plan.validUntil,
@@ -816,7 +828,7 @@ describe("live recovery", () => {
       expect(
         await recoverLiveTargets(env.DIRECTORY, {
           limit: 10,
-          reserveTarget: recoveryCoverage,
+          reserveTarget: (target) => recoveryCoverage(target, epoch),
           tell: async (request) => {
             const counter = countD1Rows();
             try {
