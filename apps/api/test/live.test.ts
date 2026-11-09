@@ -1191,41 +1191,67 @@ describe("a feed's live credit", () => {
     ).toEqual({ n: 0 });
   });
 
-  it("ends a socket past midnight on the next day's provision, yesterday's credit unusable", async () => {
-    const owner = await user();
-    const socket = await open(owner.token);
-    // Its provisions, and the ledger's clock as the object judges it.
-    const { offset, provisions } = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
-      offset: state.storage.sql
-        .exec<{ o: number }>("SELECT ledger_offset_ms AS o FROM live_budget_fence")
-        .one().o,
-      provisions: state.storage.sql
-        .exec<{ day: number; until: number }>(
-          "SELECT day, budget_valid_until AS until FROM live_budget_terminal ORDER BY day",
-        )
-        .toArray(),
-    }));
-    // Two minutes into the next day (on the ledger's clock), when its provision there still holds;
-    // an admission in a day's first minutes has none past the next midnight, so it is past its
-    // prepaid end there instead.
-    const next = (provisions[0]?.day ?? 0) + 1;
-    const target = next * 86_400_000 + 120_000;
-    const covered = provisions.some((p) => p.day === next && p.until > target + 60_000);
-    vi.setSystemTime(target - offset);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-    // Past its renewal deadline: closed, on that day's provision when it has one.
-    expect(await socket.closed).toEqual({ code: 4401 });
-    expect((await credit(owner)).terminal).toBe(covered ? 0 : provisions.length);
-    // No control of any day spent for it: every block it was given whole.
-    const blocks = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
-      state.storage.sql
-        .exec("SELECT remaining FROM live_budget_balances WHERE kind = 'control'")
-        .toArray()
-        .map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests),
-    );
-    expect(blocks.length).toBeGreaterThan(0);
-    expect(blocks.every((units) => units === LIVE_BLOCK_UNITS)).toBe(true);
-  });
+  it.each([
+    ["early in the UTC day", 1 * HOUR],
+    ["mid-day", 12 * HOUR],
+    ["late in the UTC day", 22 * HOUR + 30 * MINUTE],
+  ])(
+    "ends a socket past midnight on the next day's provision, yesterday's credit unusable, opened %s",
+    async (_when, hour) => {
+      // Opened at a fixed hour of today (UTC), on both clocks.
+      const at = Math.floor(Date.now() / DAY) * DAY + hour;
+      vi.useFakeTimers({ toFake: ["Date"], now: at });
+      const unpin = await pinLedgerClock(at);
+      onTestFinished(unpin);
+      // Receipts granted at another hour (another case's) would be overdue at this one.
+      const forget = async () => {
+        await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+      };
+      await forget();
+      onTestFinished(forget);
+      const owner = await user();
+      const socket = await open(owner.token);
+      // Its provisions, and the ledger's clock as the object judges it.
+      const { offset, deadline, provisions } = await runInDurableObject(
+        feedOf(owner),
+        (_: UserDO, state) => ({
+          offset: state.storage.sql
+            .exec<{ o: number }>("SELECT ledger_offset_ms AS o FROM live_budget_fence")
+            .one().o,
+          deadline: state.storage.sql
+            .exec<{ d: number }>("SELECT deadline AS d FROM live_local")
+            .one().d,
+          provisions: state.storage.sql
+            .exec<{ day: number; until: number }>(
+              "SELECT day, budget_valid_until AS until FROM live_budget_terminal ORDER BY day",
+            )
+            .toArray(),
+        }),
+      );
+      // Into the next day (on the ledger's clock) and past its renewal deadline: two minutes past
+      // midnight, or just past its deadline when that is later (one opened within a renewal period
+      // of midnight is not due to close two minutes into the next day). Its provision there still
+      // holds then; an admission in a day's first minutes has none past the next midnight, so it is
+      // past its prepaid end there instead.
+      const next = (provisions[0]?.day ?? 0) + 1;
+      const target = Math.max(next * 86_400_000 + 120_000, deadline + offset + 1_000);
+      const covered = provisions.some((p) => p.day === next && p.until > target + 60_000);
+      vi.setSystemTime(target - offset);
+      socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+      // Past its renewal deadline: closed, on that day's provision when it has one.
+      expect(await socket.closed).toEqual({ code: 4401 });
+      expect((await credit(owner)).terminal).toBe(covered ? 0 : provisions.length);
+      // No control of any day spent for it: every block it was given whole.
+      const blocks = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql
+          .exec("SELECT remaining FROM live_budget_balances WHERE kind = 'control'")
+          .toArray()
+          .map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests),
+      );
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks.every((units) => units === LIVE_BLOCK_UNITS)).toBe(true);
+    },
+  );
 
   it("pays for each mark, stamped with its grant; once marks run out the change still applies", async () => {
     const owner = await user();
