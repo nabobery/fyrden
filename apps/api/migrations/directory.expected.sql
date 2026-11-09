@@ -958,9 +958,6 @@ CREATE UNIQUE INDEX repos_owner_name ON repos (owner_id, name COLLATE NOCASE) WH
 -- index revocation_targets_due
 CREATE INDEX revocation_targets_due ON revocation_targets (next_attempt_at, seq, feed);
 
--- index revocations_at
-CREATE INDEX revocations_at ON revocations (at);
-
 -- index revocations_open
 CREATE INDEX revocations_open ON revocations (seq) WHERE expanded = 0;
 
