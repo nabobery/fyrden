@@ -1156,8 +1156,9 @@ export class RepoReleaseAssets {
     const now = this.#now();
     const [sessions] = this.#exec<{ expiry: number | null; settle: number | null; ended: number }>(
       `SELECT
-         (SELECT min(expires_at) FROM release_asset_uploads WHERE state IN ('receiving', 'completing'))
-           AS expiry,
+         -- A session whose release went is due now: a deletion during a slice wakes no one.
+         (SELECT min(CASE WHEN release_id IN (SELECT id FROM releases) THEN expires_at ELSE 0 END)
+           FROM release_asset_uploads WHERE state IN ('receiving', 'completing')) AS expiry,
          (SELECT min(CASE WHEN state = 'completed'
              THEN max(coalesce(settle_after, 0), expires_at) ELSE coalesce(settle_after, 0) END)
            FROM release_asset_uploads WHERE state IN ('completed', 'aborted')) AS settle,

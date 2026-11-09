@@ -67,6 +67,32 @@ const purge = (token = r.owner.token) =>
   );
 
 describe("expiry", () => {
+  it("runs again at once for an open session whose release went while a slice ran", async () => {
+    const ended = await begin(r, release, { name: "a", size: 10 });
+    await api("DELETE", `${r.path}/releases/assets/uploads/${ended.body.id}`, r.owner.token);
+    await begin(r, release, { name: "b", size: 10 });
+    const next = await inRepo(r.stub, async (repo) => {
+      const bucket = env.ASSETS;
+      repo.assetBucket = {
+        ...bucket,
+        head: bucket.head.bind(bucket),
+        resumeMultipartUpload: bucket.resumeMultipartUpload.bind(bucket),
+        // Clearing the aborted session: the slice already picked what had expired, and the
+        // release goes now, its job already running.
+        delete: (keys: string | string[]) => {
+          repo.git.context.storage.sql.exec("DELETE FROM releases WHERE id = ?", release);
+          return bucket.delete(keys);
+        },
+      } as R2Bucket;
+      try {
+        return await repo.releaseAssets.slice();
+      } finally {
+        repo.assetBucket = bucket;
+      }
+    });
+    expect(next).toEqual({ done: false, runAfterMs: 0 });
+  });
+
   it("ends a deleted release's open sessions and frees their holds", async () => {
     const begun = await begin(r, release, { name: "a", size: 10 });
     await putPart(begun.body.parts_url, 1, bytesOf(10), r.owner.token);
