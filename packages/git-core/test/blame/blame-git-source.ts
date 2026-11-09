@@ -13,16 +13,21 @@ import { gitBinary } from "../../testing/git-cli.js";
 const SYMLINK_MODE = 0o120000;
 const GITLINK_MODE = 0o160000;
 
-/** One request at a time to a long-running `git cat-file --batch`. */
+/** One request at a time to a long-running `git cat-file --batch`, or `--batch-check` for headers only. */
 class CatFile {
+  readonly #headersOnly: boolean;
   readonly #child: ChildProcess;
   #buffered: Buffer = Buffer.alloc(0);
   #wake: (() => void) | undefined;
   #closed = false;
   #tail: Promise<unknown> = Promise.resolve();
+  /** Bodies read so far. */
+  bodies = 0;
 
-  constructor(dir: string, env: NodeJS.ProcessEnv) {
-    this.#child = spawn(gitBinary, ["cat-file", "--batch"], { cwd: dir, env, stdio: "pipe" });
+  constructor(dir: string, env: NodeJS.ProcessEnv, headersOnly = false) {
+    this.#headersOnly = headersOnly;
+    const mode = headersOnly ? "--batch-check" : "--batch";
+    this.#child = spawn(gitBinary, ["cat-file", mode], { cwd: dir, env, stdio: "pipe" });
     this.#child.stdout?.on("data", (chunk: Buffer) => {
       this.#buffered = this.#buffered.length === 0 ? chunk : Buffer.concat([this.#buffered, chunk]);
       this.#wake?.();
@@ -42,7 +47,8 @@ class CatFile {
     }
   }
 
-  read(hex: string): Promise<{ type: string; bytes: Uint8Array } | undefined> {
+  /** The object's type and size, and its bytes unless this process reads headers only. */
+  read(hex: string): Promise<{ type: string; size: number; bytes: Uint8Array } | undefined> {
     const job = this.#tail.then(async () => {
       this.#child.stdin?.write(`${hex}\n`);
       await this.#need(() => this.#buffered.includes(10));
@@ -51,10 +57,12 @@ class CatFile {
       this.#buffered = this.#buffered.subarray(end + 1);
       if (header[1] === "missing") return undefined;
       const size = Number(header[2]);
+      if (this.#headersOnly) return { type: header[1] as string, size, bytes: new Uint8Array(0) };
+      this.bodies++;
       await this.#need(() => this.#buffered.length >= size + 1);
       const bytes = new Uint8Array(this.#buffered.subarray(0, size));
       this.#buffered = this.#buffered.subarray(size + 1);
-      return { type: header[1] as string, bytes };
+      return { type: header[1] as string, size, bytes };
     });
     this.#tail = job.catch(() => undefined);
     return job;
@@ -79,12 +87,19 @@ interface GraphRow {
  */
 export class GitBlameSource implements BlameSource {
   readonly #objects: CatFile;
+  readonly #headers: CatFile;
   readonly #rows: Map<string, GraphRow>;
   readonly #trees = new Map<string, Uint8Array>();
   readonly maxParents: number;
 
-  private constructor(objects: CatFile, rows: Map<string, GraphRow>, maxParents: number) {
+  private constructor(
+    objects: CatFile,
+    headers: CatFile,
+    rows: Map<string, GraphRow>,
+    maxParents: number,
+  ) {
     this.#objects = objects;
+    this.#headers = headers;
     this.#rows = rows;
     this.maxParents = maxParents;
   }
@@ -126,11 +141,17 @@ export class GitBlameSource implements BlameSource {
         generation,
       });
     }
-    return new GitBlameSource(new CatFile(dir, env), rows, maxParents);
+    return new GitBlameSource(new CatFile(dir, env), new CatFile(dir, env, true), rows, maxParents);
   }
 
   close(): void {
     this.#objects.close();
+    this.#headers.close();
+  }
+
+  /** Object bodies read from git so far. */
+  get bodiesRead(): number {
+    return this.#objects.bodies;
   }
 
   async commit(oid: Oid) {
@@ -187,10 +208,16 @@ export class GitBlameSource implements BlameSource {
     return null;
   }
 
+  /** As the port says: the type and size first, so a tree past `maxBytes` isn't fetched. */
   async tree(oid: Oid, maxBytes: number) {
-    const bytes = await this.#tree(oid);
-    if (!bytes) throw new BlameObjectUnreadable(`tree ${oidToHex(oid)} is missing or isn't a tree`);
-    return bytes.length > maxBytes ? ("too_large" as const) : bytes;
+    const known = this.#trees.get(oidToHex(oid));
+    const header = known
+      ? { type: "tree", size: known.length }
+      : await this.#headers.read(oidToHex(oid));
+    if (header?.type !== "tree")
+      throw new BlameObjectUnreadable(`tree ${oidToHex(oid)} is missing or isn't a tree`);
+    if (header.size > maxBytes) return "too_large" as const;
+    return (await this.#tree(oid)) as Uint8Array;
   }
 
   async blob(oid: Oid, maxBytes: number) {
@@ -211,7 +238,10 @@ export class GitBlameSource implements BlameSource {
 export interface GitBlameLine {
   readonly commit: string;
   readonly line: number;
-  /** The path in that commit, as git prints it (unquoted bytes, read as latin1). */
+  /**
+   * The path in that commit, its bytes one character each (latin1): git's quoting
+   * undone. Compare it with `latin1Path`.
+   */
   readonly filename: string;
   readonly summary: string;
 }
@@ -229,9 +259,53 @@ export function parsePorcelain(output: string): GitBlameLine[] {
       out.push(current);
       current = undefined;
     } else if (line.startsWith("filename ")) {
-      current.filename = line.slice(9);
+      current.filename = unquote(line.slice(9));
     } else if (line.startsWith("summary ")) {
       current.summary = line.slice(8);
+    }
+  }
+  return out;
+}
+
+/** A path's UTF-8 bytes, one character each, as `GitBlameLine.filename` holds them. */
+export const latin1Path = (path: string): string => Buffer.from(path, "utf8").toString("latin1");
+
+const ESCAPES: Record<string, number> = {
+  a: 7,
+  b: 8,
+  t: 9,
+  n: 10,
+  v: 11,
+  f: 12,
+  r: 13,
+  '"': 34,
+  "\\": 92,
+};
+
+/**
+ * A path as git quotes it when it has to (a control character, a quote, a
+ * backslash, or a byte past ASCII): in double quotes, with C escapes and three
+ * octal digits a byte. Answers its bytes, one character each; an unquoted path
+ * is already that.
+ */
+export function unquote(text: string): string {
+  if (!(text.length >= 2 && text.startsWith('"') && text.endsWith('"'))) return text;
+  let out = "";
+  for (let k = 1; k < text.length - 1; k++) {
+    const c = text[k] as string;
+    if (c !== "\\") {
+      out += c;
+      continue;
+    }
+    const next = text[++k] as string;
+    if (/[0-7]/.test(next)) {
+      out += String.fromCharCode(Number.parseInt(text.slice(k, k + 3), 8));
+      k += 2;
+    } else {
+      const code = ESCAPES[next];
+      if (code === undefined)
+        throw new Error(`git quoted a path with an unknown escape: \\${next}`);
+      out += String.fromCharCode(code);
     }
   }
   return out;

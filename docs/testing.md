@@ -222,7 +222,7 @@ The oracle is plain `git blame`, which follows whole-file renames; the engine do
 So a settled line must be git's commit and source line from the same path, and a line
 git takes from another path must be unresolved, for any reason. The `filename` git prints
 is evidence only one way: git can follow a rename and come back to the name (f to g to
-f). Where git might follow a rename, the engine refuses as `rename_possible`: a parent
+f). It's compared as bytes, with git's quoting of unusual names undone. Where git might follow a rename, the engine refuses as `rename_possible`: a parent
 with no file of this kind at the path whose change removes another path, or, in a merge,
 a parent that may hold an identical copy under another name, or a check that passes its
 budget of 256 trees or 8 MiB of trees. Each rename probe in `blame.git-oracle.test.ts`

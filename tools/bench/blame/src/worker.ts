@@ -573,6 +573,50 @@ const CASES: Record<string, Case> = {
       scanned,
     );
   },
+  async "rename check: 127 nested differing directories of 500 entries, nothing removed"() {
+    // The deepest check the budget finishes: one differing directory a level, every entry walked.
+    const bodies = new Map<string, Uint8Array>();
+    const put = (oid: Uint8Array, body: Uint8Array) => {
+      bodies.set(hex(oid), body);
+      return oid;
+    };
+    const side = (salt: number) => {
+      let below: Uint8Array | undefined;
+      for (let level = 127; level >= 0; level--) {
+        // The directory one level down first (its name sorts first), then files that differ by side.
+        const files = treeBytes(499, (k) => oidOf(salt + level * 1000 + k));
+        const head = below
+          ? new Uint8Array([...new TextEncoder().encode("40000 a-dir\0"), ...below])
+          : new Uint8Array(0);
+        const body = new Uint8Array(head.length + files.length);
+        body.set(head);
+        body.set(files, head.length);
+        below = put(oidOf(salt + 500_000 + level), body);
+      }
+      return below as Uint8Array;
+    };
+    const from = side(1_000_000);
+    const to = side(2_000_000);
+    const source = {
+      tree: async (oid: Uint8Array) => bodies.get(hex(oid)) as Uint8Array,
+    } as never;
+    let scanned = 0;
+    for (const body of bodies.values()) scanned += body.length;
+    return per(
+      await timed(async () => {
+        const answer = await removals(
+          source,
+          from as never,
+          to as never,
+          undefined,
+          { trees: 256, bytes: MAX_RENAME_CHECK_BYTES },
+          () => {},
+        );
+        if (answer !== "none") throw new Error(`expected none, got ${answer}`);
+      }),
+      scanned,
+    );
+  },
   ...ALIGN_CASES,
   async "hash: SHA-256 of 2 MiB"() {
     const body = random(2 * MiB, 12);

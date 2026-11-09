@@ -12,7 +12,7 @@ import {
 } from "../../src/blame/walk.js";
 import { oidFromHex, oidToHex } from "../../src/object/oid.js";
 import { gitBinary, gitVersion } from "../../testing/git-cli.js";
-import { GitBlameSource, parsePorcelain } from "./blame-git-source.js";
+import { GitBlameSource, latin1Path, parsePorcelain } from "./blame-git-source.js";
 
 /*
  * Whole blames of real files at frozen commits, against the pinned oracle,
@@ -127,7 +127,7 @@ describe.skipIf(dir === undefined)("blame of frozen public files", () => {
             resolved++;
             const want = expected[range.startLine - 1 + k];
             expect(
-              `${oidToHex(range.commit)}@${range.sourceStartLine + k} ${path}`,
+              `${oidToHex(range.commit)}@${range.sourceStartLine + k} ${latin1Path(path)}`,
               `final line ${range.startLine + k}`,
             ).toBe(`${want?.commit}@${want?.line} ${want?.filename}`);
           }
@@ -138,7 +138,7 @@ describe.skipIf(dir === undefined)("blame of frozen public files", () => {
           if ("unresolved" in range)
             told.fill(true, range.startLine - 1, range.startLine - 1 + range.lineCount);
         expected.forEach((line, k) => {
-          if (line.filename !== path) expect(told[k], `final line ${k + 1}`).toBe(true);
+          if (line.filename !== latin1Path(path)) expect(told[k], `final line ${k + 1}`).toBe(true);
         });
         console.log(
           `${path}: ${resolved} of ${state.lines} resolved, ${state.steps} steps, ${requests} slices, largest ${largestSlice} units of engine work, unresolved ${JSON.stringify(reasons)}`,

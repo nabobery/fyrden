@@ -439,7 +439,14 @@ describe("the walk's errors", () => {
 describe("where git might follow a rename", () => {
   const blameOf = async (history: History, tip: string, slice = SLICE) => {
     const source = new FakeSource(history);
-    return answer(source, await finished(source, tip, slice));
+    const state = await finished(source, tip, slice);
+    // Each line answered once: no range repeats a line another already holds.
+    const counted = blameRanges(state, 0, Number.MAX_SAFE_INTEGER).reduce(
+      (sum, range) => sum + range.lineCount,
+      0,
+    );
+    expect(counted).toBe(state.lines);
+    return answer(source, state);
   };
   const body = f("a", "b", "c");
 
@@ -539,6 +546,82 @@ describe("where git might follow a rename", () => {
         "m",
       ),
     ).toEqual(["m@1", "m@2", "m@3"]);
+  });
+
+  it("with nothing before it to keep a line, the check stops at the first removal, unread", async () => {
+    const source = new FakeSource({
+      a: { others: { "gone/g": body, "z/k": f("1") } },
+      b: { parents: ["a"], file: body, others: { "z/k": f("2") } },
+    });
+    expect(answer(source, await finished(source, "b"))).toEqual(
+      new Array(3).fill("rename_possible"),
+    );
+    // Only the two roots: the removed directory and the differing one go unread.
+    expect(source.treeReads).toHaveLength(2);
+  });
+
+  it("a merge: a parent without the file that removes nothing doesn't stop lines", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { file: f("a", "b", "x") },
+          p2: { others: { y: f("y") } },
+          m: { parents: ["p1", "p2"], file: f("a", "b", "c"), others: { y: f("y") } },
+        },
+        "m",
+      ),
+    ).toEqual(["p1@1", "p1@2", "m@3"]);
+  });
+
+  it("an octopus: the first parent with a removal is the barrier, and none after it is diffed", async () => {
+    expect(
+      await blameOf(
+        {
+          p1: { file: f("a", "q") },
+          p2: { others: { g: f("z") } },
+          p3: { file: f("b", "r") },
+          p4: { others: { h: f("w") } },
+          m: { parents: ["p1", "p2", "p3", "p4"], file: f("a", "b", "c") },
+        },
+        "m",
+      ),
+    ).toEqual(["p1@1", "rename_possible", "rename_possible"]);
+  });
+
+  it("a merge: an identity check the budget can't finish refuses every line", async () => {
+    // Git takes all three lines from p2's gone/g; the check runs out among the directories first.
+    const dirs = (side: string) =>
+      Object.fromEntries(Array.from({ length: 128 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
+    const history = (count: number): History => {
+      const some = (side: string) => Object.fromEntries(Object.entries(dirs(side)).slice(0, count));
+      return {
+        p1: { file: f("a", "b", "x") },
+        p2: { others: { "gone/g": f("a", "b", "c"), ...some("p") } },
+        m: { parents: ["p1", "p2"], file: f("a", "b", "c"), others: some("m") },
+      };
+    };
+    expect(await blameOf(history(128), "m")).toEqual(new Array(3).fill("rename_possible"));
+    // With room to finish, it finds the identical copy: refused all the same.
+    expect(await blameOf(history(100), "m")).toEqual(new Array(3).fill("rename_possible"));
+  });
+
+  it("a merge: its parents' checks share one budget", async () => {
+    // p2 and p3 remove nothing; each check alone fits, both together don't.
+    const dirs = (prefix: string, side: string, n: number) =>
+      Object.fromEntries(Array.from({ length: n }, (_, k) => [`${prefix}${k}/x`, `${side}${k}\n`]));
+    const history = (e: number): History => ({
+      p1: { file: f("a", "b", "x") },
+      p2: { others: dirs("d", "p2", 100) },
+      p3: { others: dirs("e", "p3", e) },
+      m: {
+        parents: ["p1", "p2", "p3"],
+        file: f("a", "b", "c"),
+        others: { ...dirs("d", "m", 100), ...dirs("e", "m", e) },
+      },
+    });
+    // 2 + 200 trees for p2, then 2 + 2e for p3, against 256.
+    expect(await blameOf(history(26), "m")).toEqual(["p1@1", "p1@2", "m@3"]);
+    expect(await blameOf(history(27), "m")).toEqual(new Array(3).fill("rename_possible"));
   });
 
   it("a check the budget can't finish rules nothing out", async () => {

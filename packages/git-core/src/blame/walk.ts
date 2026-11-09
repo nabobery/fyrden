@@ -1,8 +1,9 @@
+import { GitObjectError } from "../object/fsck.js";
 import { type Oid, oidToHex } from "../object/oid.js";
 import { PackError } from "../pack/errors.js";
 import { ReaderWorkSpent } from "../reader/errors.js";
 import { type AlignLimits, alignFiles, MAX_ALIGN_WORK, MAX_SEARCH_ROUNDS } from "./align.js";
-import { removals, renameCheckBudget, UnreadableTree } from "./removals.js";
+import { removals, renameCheckBudget } from "./removals.js";
 import {
   type BlameCommitInfo,
   type BlameState,
@@ -281,7 +282,7 @@ async function runStep(
   for (let k = 0; k < parents.length; k++) {
     const parent = parents[k] as (typeof parents)[number];
     if (parent.blob) {
-      if (barrier === parents.length) presentBefore = true;
+      presentBefore = true;
       continue;
     }
     if (!presentBefore) {
@@ -354,10 +355,11 @@ async function runStep(
       left = next;
     }
   }
-  if (left.length > 0 && barrier < parents.length) {
+  if (barrier < parents.length) {
     // What the parents before the barrier didn't take, a rename from it could have.
-    for (let k = 1; k < left.length; k += 2) refuse(staged, "rename_possible", left[k] as number);
-    left = [];
+    for (let k = 0; k < left.length; k += 2)
+      refuse(staged, "rename_possible", left[k + 1] as number);
+    return staged;
   }
   if (left.length > 0) {
     const fact = await source.commitInfo(entry.oid);
@@ -389,7 +391,8 @@ function passesTo(
 /** What a failed read means for the step, or undefined when it isn't the walk's to handle. */
 function classify(error: unknown): "budget" | UnresolvedReason | undefined {
   if (error instanceof BlameReadsSpent || error instanceof ReaderWorkSpent) return "budget";
-  if (error instanceof BlameObjectUnreadable || error instanceof UnreadableTree)
+  // A tree the rename check can't parse: the engine reads those itself.
+  if (error instanceof BlameObjectUnreadable || error instanceof GitObjectError)
     return "history_unreadable";
   if (error instanceof PackError) {
     if (error.code === "object-too-large") return "object_limit";

@@ -22,7 +22,12 @@ import {
   WITNESSES_REACHED_BY_A_REFUSAL,
 } from "./align-cases.js";
 import { batchChanged, type Changed, oldOfNewFrom } from "./align-oracle.js";
-import { type GitBlameLine, GitBlameSource, parsePorcelain } from "./blame-git-source.js";
+import {
+  type GitBlameLine,
+  GitBlameSource,
+  latin1Path,
+  parsePorcelain,
+} from "./blame-git-source.js";
 
 /*
  * Whole blames against the pinned oracle, plain `git blame`, over histories
@@ -163,14 +168,14 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
           }
           resolved++;
           answers[line] = `${oidToHex(range.commit)}@${range.sourceStartLine + k}`;
-          expect(`${answers[line]} ${path}`, `line ${line + 1}`).toBe(
+          expect(`${answers[line]} ${latin1Path(path)}`, `line ${line + 1}`).toBe(
             `${git.commit}@${git.line} ${git.filename}`,
           );
         }
       }
       expect(answers.every((a) => a !== "")).toBe(true);
       expected.forEach((git, line) => {
-        if (git.filename !== path)
+        if (git.filename !== latin1Path(path))
           expect([line + 1, answers[line]], "git took it from another path").toEqual([
             line + 1,
             expect.not.stringMatching(/@/),
@@ -282,8 +287,8 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
       Array.from({ length: to - from + 1 }, (_, k) => `${who}@${from + k}`);
     const times = (n: number, what: string) => new Array<string>(n).fill(what);
     const R = "rename_possible";
-    const dirs = (side: string) =>
-      Object.fromEntries(Array.from({ length: 130 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
+    const dirs = (side: string, n = 130, prefix = "d") =>
+      Object.fromEntries(Array.from({ length: n }, (_, k) => [`${prefix}${k}/x`, `${side}${k}\n`]));
 
     const PROBES: Record<
       string,
@@ -454,6 +459,44 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
         },
         git: runOf("b:f", 1, 12),
         engine: times(12, R),
+      },
+      "merge: an identity check that runs out of budget before the identical copy": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: { "gone/g": f("a", "b", "c"), ...dirs("p", 128) } },
+          m: { parents: ["p1", "p2"], files: { f: f("a", "b", "c"), ...dirs("m", 128) } },
+        },
+        git: runOf("p2:gone/g", 1, 3),
+        engine: times(3, R),
+      },
+      "octopus: checks that share one budget, too much together": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: dirs("p2", 100) },
+          p3: { files: dirs("p3", 27, "e") },
+          m: {
+            parents: ["p1", "p2", "p3"],
+            files: { f: f("a", "b", "c"), ...dirs("m", 100), ...dirs("m", 27, "e") },
+          },
+        },
+        git: ["p1:f@1", "p1:f@2", "m:f@3"],
+        engine: times(3, R),
+      },
+      "octopus: checks that share one budget, just enough": {
+        tip: "m",
+        history: {
+          p1: { files: { f: f("a", "b", "x") } },
+          p2: { files: dirs("p2", 100) },
+          p3: { files: dirs("p3", 26, "e") },
+          m: {
+            parents: ["p1", "p2", "p3"],
+            files: { f: f("a", "b", "c"), ...dirs("m", 100), ...dirs("m", 26, "e") },
+          },
+        },
+        git: ["p1:f@1", "p1:f@2", "m:f@3"],
+        engine: ["p1@1", "p1@2", "m@3"],
       },
       "merge: a rename in the second parent": {
         tip: "m",
@@ -830,6 +873,49 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     return history;
   }
 
+  it.each([
+    ["a tab", "f\tname"],
+    ["a control byte", "f\u0001x"],
+    ["a quote and a backslash", 'q"b\\s'],
+  ])(
+    "a path git quotes, with %s: its lines settle, and git's name is decoded",
+    async (title, path) => {
+      const prefix = `quoted-${title.replaceAll(" ", "-")}`;
+      const tip = await build(
+        prefix,
+        {
+          a: { files: { [path]: f("x") } },
+          b: { parents: ["a"], files: { [path]: f("x", "y") } },
+        },
+        "b",
+      );
+      const raw = Buffer.from(
+        await sandbox.gitBytes(["blame", "--line-porcelain", tip, "--", path], { env: ENV }),
+      ).toString("latin1");
+      expect(raw).toContain('\nfilename "');
+      const { resolved, lines: count } = await compare(tip, path);
+      expect(resolved).toBe(count);
+    },
+  );
+
+  it("the test source reads no tree body past the bytes it may", async () => {
+    const tip = await build("tree-bytes", { a: { files: { f: f("x"), g: f("y") } } }, "a");
+    const root = (await sandbox.git(["rev-parse", `${tip}^{tree}`])).stdout.trim();
+    const blob = (await sandbox.git(["rev-parse", `${tip}:f`])).stdout.trim();
+    const size = Number((await sandbox.git(["cat-file", "-s", root])).stdout.trim());
+    const source = await GitBlameSource.open(sandbox.dir, { ...process.env, ...ENV }, tip);
+    try {
+      expect(await source.tree(oidFromHex(root), size - 1)).toBe("too_large");
+      expect(source.bodiesRead).toBe(0);
+      expect(((await source.tree(oidFromHex(root), size)) as Uint8Array).length).toBe(size);
+      expect(source.bodiesRead).toBe(1);
+      await expect(source.tree(oidFromHex(blob), 1 << 20)).rejects.toThrow("isn't a tree");
+      expect(source.bodiesRead).toBe(1);
+    } finally {
+      source.close();
+    }
+  });
+
   /**
    * A seeded history where the blamed file is renamed (sometimes back), edited and
    * copied, other paths come and go, and some commits merge. Returns the file's
@@ -919,7 +1005,7 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     const { resolved, reasons, lines: count, git } = await compare(commit, path);
     expect(resolved + [...reasons.values()].reduce((a, b) => a + b, 0)).toBe(count);
     console.log(
-      `seed ${seed}: ${count} lines, ${resolved} settled, git through another path ${git.filter((l) => l.filename !== path).length}, ${JSON.stringify(Object.fromEntries(reasons))}`,
+      `seed ${seed}: ${count} lines, ${resolved} settled, git through another path ${git.filter((l) => l.filename !== latin1Path(path)).length}, ${JSON.stringify(Object.fromEntries(reasons))}`,
     );
   });
 

@@ -1,5 +1,4 @@
-import { GitObjectError } from "../object/fsck.js";
-import type { Oid } from "../object/oid.js";
+import { type Oid, oidEquals } from "../object/oid.js";
 import { compareTreeEntries, isTreeMode, type TreeEntry, treeEntries } from "../object/tree.js";
 import type { BlameSource } from "./walk.js";
 
@@ -32,12 +31,6 @@ const TYPE_BITS = 0o170000;
 /** A tree pair still to compare, or a removed tree whose entries are all removals. Oids are copies. */
 type Frame = { readonly old: Oid; readonly new?: Oid };
 
-const sameOid = (a: Uint8Array, b: Uint8Array) => {
-  if (a.length !== b.length) return false;
-  for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
-  return true;
-};
-
 /**
  * Compares `from` with `to`, reading only trees whose oids differ.
  *
@@ -49,6 +42,7 @@ const sameOid = (a: Uint8Array, b: Uint8Array) => {
  *
  * Each tree queued spends one of the budget's trees, when queued, so nothing
  * waits that couldn't be read. A tree larger than the bytes left isn't read.
+ * A tree that doesn't parse throws `GitObjectError`.
  */
 export async function removals(
   source: BlameSource,
@@ -58,7 +52,7 @@ export async function removals(
   budget: RenameCheckBudget,
   spend: (work: number) => void,
 ): Promise<Removals> {
-  if (sameOid(from, to)) return "none";
+  if (oidEquals(from, to)) return "none";
   const stack: Frame[] = [];
   const queue = (frame: Frame): boolean => {
     const cost = frame.new ? 2 : 1;
@@ -82,7 +76,7 @@ export async function removals(
       if (!identical) return "some";
       return queue({ old: entry.oid.slice() as Oid }) ? undefined : "unknown";
     }
-    if (identical && sameOid(entry.oid, identical)) return "identical";
+    if (identical && oidEquals(entry.oid, identical)) return "identical";
     if (!identical) return "some";
     found = "some";
     return undefined;
@@ -93,9 +87,9 @@ export async function removals(
     if (!oldBody) return "unknown";
     const newBody = frame.new ? await read(frame.new) : undefined;
     if (frame.new && !newBody) return "unknown";
-    const answer = scanned(() =>
-      newBody ? comparePair(oldBody, newBody, removed, queue) : walkRemoved(oldBody, removed),
-    );
+    const answer = newBody
+      ? comparePair(oldBody, newBody, removed, queue)
+      : walkRemoved(oldBody, removed);
     spend(Math.floor((oldBody.length + (newBody?.length ?? 0)) / 8) + answer.entries);
     if (answer.result !== undefined) return answer.result;
   }
@@ -144,7 +138,7 @@ function comparePair(
     }
     const older = a.value;
     const newer = (b as IteratorYieldResult<TreeEntry>).value;
-    if (!sameOid(older.oid, newer.oid)) {
+    if (!oidEquals(older.oid, newer.oid)) {
       if ((older.mode & TYPE_BITS) !== (newer.mode & TYPE_BITS)) {
         const result = removed(older);
         if (result !== undefined) return { result, entries };
@@ -162,19 +156,4 @@ function comparePair(
     b = news.next();
   }
   return { result: undefined, entries };
-}
-
-/** A tree that doesn't parse fails the same way every time. */
-function scanned<T>(scan: () => T): T {
-  try {
-    return scan();
-  } catch (error) {
-    if (error instanceof GitObjectError) throw new UnreadableTree(error.message);
-    throw error;
-  }
-}
-
-/** Thrown for a malformed tree; the walk reads it as unreadable history. */
-export class UnreadableTree extends Error {
-  override name = "UnreadableTree";
 }

@@ -6,9 +6,9 @@ import {
   type RenameCheckBudget,
   removals,
   renameCheckBudget,
-  UnreadableTree,
 } from "../../src/blame/removals.js";
 import type { BlameSource } from "../../src/blame/walk.js";
+import { GitObjectError } from "../../src/object/fsck.js";
 import { type Oid, oidFromHex, oidToHex } from "../../src/object/oid.js";
 import { encodeTree, FILE_MODES, type TreeEntry } from "../../src/object/tree.js";
 
@@ -123,6 +123,23 @@ describe("what a change removes", () => {
     expect((await check({ s: gitlink }, {})).result).toBe("some");
   });
 
+  it("stops at the first removal, before reading a later directory", async () => {
+    const { result, trees } = await check({ a: "gone", d: { k: "1" } }, { d: { k: "2" } });
+    expect(result).toBe("some");
+    expect(trees.calls).toHaveLength(2);
+  });
+
+  it("doesn't read a directory that's the same on both sides", async () => {
+    const same = { k: "1", deep: { j: "2" } };
+    const { result, trees } = await check({ s: same, f: "x" }, { s: same, f: "y" });
+    expect(result).toBe("none");
+    expect(trees.calls).toHaveLength(2);
+  });
+
+  it("a type change with new content too", async () => {
+    expect((await check({ g: "t" }, { g: "120000 u" })).result).toBe("some");
+  });
+
   it("a removed directory counts unread when the first removal is enough", async () => {
     const { result, trees } = await check({ gone: { g: "y" }, f: "x" }, { f: "x2" });
     expect(result).toBe("some");
@@ -138,6 +155,23 @@ describe("what a change removes", () => {
 describe("an identical copy removed, anywhere", () => {
   it("found among the removed files", async () => {
     expect((await check({ g: "A", h: "B" }, { f: "A" }, "A")).result).toBe("identical");
+  });
+
+  it("found past removals that aren't identical, in the same tree", async () => {
+    expect((await check({ h: "B", k: "A" }, { f: "A" }, "A")).result).toBe("identical");
+    // A type change that isn't identical, then the identical copy.
+    expect((await check({ g: "t", k: "A" }, { g: "120000 t", f: "A" }, "A")).result).toBe(
+      "identical",
+    );
+    expect((await check({ g: "t", k: "A" }, { g: "120000 u", f: "A" }, "A")).result).toBe(
+      "identical",
+    );
+  });
+
+  it("found anywhere in a removed directory, not only first", async () => {
+    expect((await check({ gone: { a: "other", g: "A" } }, { f: "A" }, "A")).result).toBe(
+      "identical",
+    );
   });
 
   it("found inside a removed directory, which is read", async () => {
@@ -200,6 +234,25 @@ describe("the budget", () => {
     );
   });
 
+  it("a check that starts with no trees left to queue is unknown, reading nothing", async () => {
+    const { result, trees } = await check({ g: "1" }, { f: "2" }, undefined, {
+      trees: 1,
+      bytes: MAX_RENAME_CHECK_BYTES,
+    });
+    expect(result).toBe("unknown");
+    expect(trees.calls).toEqual([]);
+  });
+
+  it("an older tree past the bytes left is unknown, and the newer isn't read", async () => {
+    const trees = new Trees();
+    const a = trees.make({ f: "x", g: "y" });
+    const b = trees.make({ f: "x2" });
+    const size = (trees.bodies.get(oidToHex(a)) as Uint8Array).length;
+    const budget = { trees: 2, bytes: size - 1 };
+    expect(await removals(trees.source(), a, b, undefined, budget, () => {})).toBe("unknown");
+    expect(trees.calls).toEqual([{ buffer: 20, got: "too_large" }]);
+  });
+
   it("reads a tree of exactly the bytes left, and not one byte more", async () => {
     const trees = new Trees();
     const a = trees.make({ f: "x", g: "y" });
@@ -224,18 +277,30 @@ describe("the budget", () => {
     for (const call of trees.calls) expect(call.buffer).toBe(20);
   });
 
-  it("charges engine work for each tree it walks", async () => {
-    const { work } = await check({ g: "1", f: "x" }, { f: "y" });
-    expect(work).toBeGreaterThan(0);
+  it("charges engine work for each tree walked: an eighth of its bytes and each entry", async () => {
+    const trees = new Trees();
+    const a = trees.make({ gone: { g: "1", h: "2" }, f: "x" });
+    const b = trees.make({ f: "y" });
+    const size = (oid: Oid) => (trees.bodies.get(oidToHex(oid)) as Uint8Array).length;
+    const charges: number[] = [];
+    await removals(trees.source(), a, b, blob("none"), renameCheckBudget(), (units) => {
+      charges.push(units);
+    });
+    const gone = trees.make({ g: "1", h: "2" });
+    // The root pair walks f and gone (2 entries); the removed directory walks g and h.
+    expect(charges).toEqual([
+      Math.floor((size(a) + size(b)) / 8) + 2,
+      Math.floor(size(gone) / 8) + 2,
+    ]);
   });
 });
 
-it("a tree that doesn't parse is unreadable", async () => {
+it("a tree that doesn't parse throws as git's object error", async () => {
   const trees = new Trees();
   const a = trees.make({ f: "x" });
   const bad = oidFromHex("ab".repeat(20));
   trees.bodies.set(oidToHex(bad), enc("100644 broken"));
   await expect(
     removals(trees.source(), a, bad, undefined, renameCheckBudget(), () => {}),
-  ).rejects.toBeInstanceOf(UnreadableTree);
+  ).rejects.toBeInstanceOf(GitObjectError);
 });
