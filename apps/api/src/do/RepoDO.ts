@@ -590,6 +590,7 @@ export class RepoDO extends MigratingDO {
     });
     this.blameRuns = new RepoBlame({
       git: this.git,
+      storage: this.ctx.storage,
       memoryBlocks: this.#memoryBlocks(),
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),

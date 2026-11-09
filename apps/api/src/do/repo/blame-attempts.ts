@@ -6,14 +6,8 @@
 // A second attempt on the same checkpoint runs one step, so the steps before
 // the one that dies aren't lost with it; a third refuses that step as
 // step_lost, visibly, and the walk moves on. No step is retried forever.
-import {
-  advanceBlame,
-  type BlameAdvance,
-  type BlameSliceLimits,
-  type BlameSource,
-  type BlameState,
-  refuseHead,
-} from "@fyrden/git-core";
+// RepoBlame applies this: it records the attempt, then decodes, then walks.
+import type { BlameSliceLimits } from "@fyrden/git-core";
 import type { BlameRuns } from "./blame-runs.js";
 
 /**
@@ -91,28 +85,17 @@ export function sliceAttempt(attempt: number, limits: BlameSliceLimits): SliceAt
   return { kind: "refuse" };
 }
 
-export type SliceAttemptResult =
-  | { readonly outcome: "advanced"; readonly advance: BlameAdvance }
-  | { readonly outcome: "refused" };
-
-/** One slice on checkpoint `generation` of `run`, under the ledger's mark. */
-export async function runSliceAttempt(input: {
-  readonly ledger: AttemptLedger;
-  readonly run: string;
-  readonly generation: number;
-  readonly state: BlameState;
-  readonly source: BlameSource;
-  readonly limits: BlameSliceLimits;
-}): Promise<SliceAttemptResult> {
-  const { ledger, run, state, limits } = input;
-  const plan = sliceAttempt(await ledger.begin(run, input.generation), limits);
-  try {
-    if (plan.kind === "refuse") {
-      refuseHead(state, "step_lost", limits);
-      return { outcome: "refused" };
-    }
-    return { outcome: "advanced", advance: await advanceBlame(state, input.source, plan.limits) };
-  } finally {
-    ledger.clear(run);
-  }
+/**
+ * Whether a slice's attempt mark is cleared when it ends without publishing.
+ * A recovery attempt (2 or more) that made no step while lines are pending is
+ * treated as a death: its mark stays, so the next attempt counts on and
+ * reaches the refusal. A recovery runs only on a whole allowance, whose first
+ * step can't end short, so this only catches a freshness rule that's wrong.
+ */
+export function afterSlice(at: {
+  attempt: number;
+  steps: number;
+  pending: boolean;
+}): "keep" | "clear" {
+  return at.attempt >= 2 && at.steps === 0 && at.pending ? "keep" : "clear";
 }

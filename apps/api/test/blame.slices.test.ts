@@ -101,6 +101,7 @@ describe("blame runs over slices", () => {
       const blame = new RepoBlame({
         git: repo.git,
         memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
         repoId: () => repoId,
         epochGen: () => repo.events.epochGen(),
         slice: { maxSteps: 1 },
@@ -126,6 +127,7 @@ describe("blame runs over slices", () => {
       const entered = gate();
       const deps = {
         memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
         repoId: () => repoId,
         epochGen: () => repo.events.epochGen(),
         slice: { maxSteps: 1 },
@@ -201,6 +203,7 @@ describe("blame runs over slices", () => {
       const blame = new RepoBlame({
         git: holdingPuts(repo.git, release.promise, entered.open),
         memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
         repoId: () => repoId,
         epochGen: () => repo.events.epochGen(),
       });
@@ -226,6 +229,7 @@ describe("blame runs over slices", () => {
       const blame = new RepoBlame({
         git: repo.git,
         memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
         repoId: () => repoId,
         epochGen: () => repo.events.epochGen(),
         slice: { maxSteps: 1 },

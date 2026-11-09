@@ -24,6 +24,10 @@ import {
  */
 export const METRICS = {
   "http.request": ["route", "method", "status"],
+  // Blame runs: event = lost (its slices kept dying at one point) |
+  // start_given_up (its start kept dying) | replaced (its checkpoint
+  // couldn't be read, so the run started over).
+  "blame.run": ["event"],
   "r2.class_a": ["bucket", "op"],
   "r2.class_b": ["bucket", "op"],
   "do.rows_written": ["class", "op"],

@@ -38,12 +38,14 @@ import {
   oidToHex,
   PackError,
   ReaderWorkSpent,
+  refuseHead,
   startBlame,
   UNRESOLVED_REASONS,
 } from "@fyrden/git-core";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { peelOid } from "../../git/peel.js";
 import { resolveRef } from "../../git/resolve-ref.js";
+import { afterSlice, RunRowAttemptLedger, sliceAttempt } from "./blame-attempts.js";
 import {
   BlameCheckpointRefused,
   type CheckpointIdentity,
@@ -132,7 +134,11 @@ export interface RepoBlameDeps {
   readonly memoryBlocks: BlockCache;
   readonly repoId: () => string;
   readonly epochGen: () => number;
+  /** Where the attempt mark is made durable: the object's storage, for `sync()`. */
+  readonly storage: Pick<DurableObjectStorage, "sync">;
   readonly now?: () => number;
+  /** Internal calls the invocation has made so far; the invocation's tally by default. */
+  readonly spentCalls?: () => number;
   /** Slice limits over the defaults; tests walk a run in small slices with it. */
   readonly slice?: Partial<Omit<BlameSliceLimits, "stepIsFresh">>;
 }
@@ -147,6 +153,21 @@ const fail = (
   failure: { status, code, message, ...(retryAfter !== undefined && { retryAfter }) },
 });
 const busy = (message: string) => fail(503, "blame_busy", message, RETRY_SECONDS);
+/** A run whose slices kept dying at the same point: final for this file and commit until it expires. */
+const lost = () =>
+  fail(
+    422,
+    "work_limit",
+    "This file's blame kept failing at the same point, and can't be finished for now.",
+  );
+/**
+ * Deaths after which a start is given up, or a run is kept lost: the third
+ * attempt refused the step, and it died even so.
+ */
+const GIVE_UP_DEATHS = 3;
+/** Whether a request still has its whole allowance: only then may a recovery attempt run. */
+const fresh = (request: Request) =>
+  request.allowance === MAX_ALLOWANCE && request.counts.reads === 0 && request.work.spent() === 0;
 const invalidContinuation = () =>
   fail(422, "invalid_continuation", "The continuation doesn't belong to this blame.");
 const restarted = () =>
@@ -176,6 +197,7 @@ function segments(path: string): Uint8Array[] | undefined {
 
 export class RepoBlame {
   readonly #runs: BlameRuns;
+  readonly #ledger: RunRowAttemptLedger;
   /**
    * Runs with a slice in progress, entered before its first write: the run
    * cap and cleanup leave these rows alone, and cleanup doesn't end while
@@ -191,6 +213,7 @@ export class RepoBlame {
 
   constructor(private readonly deps: RepoBlameDeps) {
     this.#runs = new BlameRuns(deps.git.context.storage);
+    this.#ledger = new RunRowAttemptLedger(this.#runs, deps.storage);
     this.#now = deps.now ?? Date.now;
   }
 
@@ -243,7 +266,7 @@ export class RepoBlame {
   }
 
   #request(): Request {
-    const spent = currentInvocation()?.tally.internal ?? 0;
+    const spent = this.deps.spentCalls?.() ?? currentInvocation()?.tally.internal ?? 0;
     const allowance = Math.min(MAX_ALLOWANCE, CALL_BUDGET - spent - CALL_RESERVE);
     const counts = { reads: 0 };
     const work = createReaderWorkMeter(BLAME_DECODING_WORK);
@@ -319,40 +342,75 @@ export class RepoBlame {
       generation: r.generation,
     });
 
+    const offset = token?.offset ?? 0;
+    if (row?.state === "lost") return lost();
     let state: BlameState | undefined;
     let retry = false;
-    if (!row) {
+    if (!row || row.state === "initializing") {
+      if (row) {
+        const deaths = this.#ledger.peek(row.runId, 0);
+        if (deaths >= GIVE_UP_DEATHS) {
+          this.#runs.remove(row.runId);
+          this.#event("start_given_up", row.runId);
+          return lost();
+        }
+        if (deaths >= 1 && !fresh(request))
+          return busy("This file's blame is recovering; ask again shortly.");
+      }
       if (request.allowance < MIN_ALLOWANCE)
         return busy("Too little of this request is left to start a blame.");
-      const made = await this.#initialize(key, path, request, identity);
+      const made = await this.#initialize(key, row, path, request, identity);
       if (!made.ok) return made.result;
       ({ row, state } = made);
     } else {
+      // Whether this request walks is decided from the row, before the checkpoint
+      // is decoded: decoding may be what kills a slice, so the attempt is marked first.
+      const walks = row.state !== "done" && (windowed || offset >= row.settledRanges);
+      let attempt = 0;
+      if (walks && request.allowance - request.counts.reads >= MIN_ALLOWANCE) {
+        const deaths = this.#ledger.peek(row.runId, row.generation);
+        if (deaths >= GIVE_UP_DEATHS) {
+          this.#runs.markLost(row.runId, this.#now());
+          this.#event("lost", row.runId);
+          return lost();
+        }
+        if (deaths >= 1 && !fresh(request))
+          return busy("This file's blame is recovering; ask again shortly.");
+        attempt = await this.#ledger.begin(row.runId, row.generation);
+      } else if (walks) {
+        retry = true;
+      }
       const loaded = await this.#load(row, identity(row));
       if (!loaded.ok) {
         if ("replace" in loaded) {
           this.#runs.remove(row.runId);
-          console.error(JSON.stringify({ message: "blame run replaced", reason: loaded.replace }));
+          this.#event("replaced", row.runId, loaded.replace);
           if (token) return restarted();
           return this.#answer(input, undefined, path, windowed, perPage, request);
         }
+        if (attempt > 0) this.#ledger.clear(row.runId);
         return loaded.result;
       }
       state = loaded.state;
+      if (attempt > 0) {
+        ({ row, state } = await this.#slice(row, state, request, identity, attempt));
+      } else if (row.state === "done") {
+        this.#runs.touch(row.runId, this.#now(), this.#expiry(row.state, state));
+      }
+      return {
+        ok: true,
+        value: this.#deliver(row, state, input, digest, offset, windowed, perPage, retry),
+      };
     }
 
-    const offset = token?.offset ?? 0;
-    const undelivered = offset < state.rangeCount;
-    if (row.state !== "done" && (windowed || !undelivered)) {
+    // A run just started: walk on in the same request when enough of it is left.
+    if (row.state !== "done") {
       if (request.allowance - request.counts.reads >= MIN_ALLOWANCE) {
-        const sliced = await this.#slice(row, state, request, identity);
-        row = sliced.row;
-        state = sliced.state;
+        const attempt = await this.#ledger.begin(row.runId, row.generation);
+        ({ row, state } = await this.#slice(row, state, request, identity, attempt));
       } else {
         retry = true;
       }
-    } else if (row.state === "done") {
-      this.#runs.touch(row.runId, this.#now(), this.#expiry(row.state, state));
     }
     return {
       ok: true,
@@ -436,65 +494,72 @@ export class RepoBlame {
     return undefined;
   }
 
+  /**
+   * Starts a run. Its row is created, or reused when an earlier start died,
+   * as initializing, and the attempt is marked before the starting text is
+   * read, so a start that dies is counted. A start that fails in a way it can
+   * answer creates no run: its row goes.
+   */
   async #initialize(
     key: RunKey,
+    existing: RunRow | undefined,
     path: Uint8Array[],
     request: Request,
     identity: (r: RunRow) => CheckpointIdentity,
   ): Promise<{ ok: true; row: RunRow; state: BlameState } | { ok: false; result: BlameResult }> {
     const reader = await request.reader();
     if (!reader) return { ok: false, result: fail(409, "repo_empty", "The repository is empty.") };
-    const base = repoBlameSource(reader, this.deps.git.commitGraph);
-    let blob: Oid | undefined;
-    // The starting file's blob is the first fileAt answer: startBlame looks it up first.
-    const source: BlameSource = {
-      ...base,
-      fileAt: async (tree, segs) => {
-        const found = await base.fileAt(tree, segs);
-        blob ??= found?.oid;
-        return found;
-      },
+    const run = existing ?? this.#runs.create(key, this.#now(), this.#active).row;
+    this.#active.add(run.runId);
+    const giveUp = (result: BlameResult) => {
+      this.#runs.remove(run.runId);
+      return { ok: false as const, result };
     };
-    let started: Awaited<ReturnType<typeof startBlame>>;
     try {
-      started = await startBlame(source, key.commit, path, { maxLiveStateBytes: this.#room() });
-    } catch (error) {
-      const refused = this.#initRefusal(error, request);
-      if (refused) return { ok: false, result: refused };
-      throw error;
-    }
-    if ("failure" in started) {
-      switch (started.failure) {
-        case "path_not_found":
-          return {
-            ok: false,
-            result: fail(404, "path_not_found", "No file is at that path at this commit."),
-          };
-        case "file_too_large":
-          return {
-            ok: false,
-            result: fail(
-              422,
-              "file_too_large",
-              "The file is over 1 MiB or 100,000 lines, more than blame reads.",
-            ),
-          };
-        case "commit_missing":
-          return {
-            ok: false,
-            result: fail(404, "ref_not_found", "The commit isn't in this repository."),
-          };
-        case "state_too_large":
-          return { ok: false, result: busy("Blame has no room for this file right now.") };
+      await this.#ledger.begin(run.runId, 0);
+      const base = repoBlameSource(reader, this.deps.git.commitGraph);
+      let blob: Oid | undefined;
+      // The starting file's blob is the first fileAt answer: startBlame looks it up first.
+      const source: BlameSource = {
+        ...base,
+        fileAt: async (tree, segs) => {
+          const found = await base.fileAt(tree, segs);
+          blob ??= found?.oid;
+          return found;
+        },
+      };
+      let started: Awaited<ReturnType<typeof startBlame>>;
+      try {
+        started = await startBlame(source, key.commit, path, { maxLiveStateBytes: this.#room() });
+      } catch (error) {
+        const refused = this.#initRefusal(error, request);
+        if (refused) return giveUp(refused);
+        this.#runs.remove(run.runId);
+        throw error;
       }
-    }
-    const created = this.#runs.create(key, this.#now(), this.#active);
-    this.#active.add(created.row.runId);
-    try {
-      const published = await this.#publish(created.row, started, blob ?? null, identity);
+      if ("failure" in started) {
+        switch (started.failure) {
+          case "path_not_found":
+            return giveUp(fail(404, "path_not_found", "No file is at that path at this commit."));
+          case "file_too_large":
+            return giveUp(
+              fail(
+                422,
+                "file_too_large",
+                "The file is over 1 MiB or 100,000 lines, more than blame reads.",
+              ),
+            );
+          case "commit_missing":
+            return giveUp(fail(404, "ref_not_found", "The commit isn't in this repository."));
+          case "state_too_large":
+            return giveUp(busy("Blame has no room for this file right now."));
+        }
+      }
+      // Publishing clears the attempt mark.
+      const published = await this.#publish(run, started, blob ?? null, identity);
       return { ok: true, row: published, state: started };
     } finally {
-      this.#active.delete(created.row.runId);
+      this.#active.delete(run.runId);
     }
   }
 
@@ -603,17 +668,34 @@ export class RepoBlame {
     }
   }
 
+  /**
+   * One slice of a running run, as attempt `attempt` on its checkpoint:
+   * the whole slice, one step on a recovery, or the head step refused as
+   * step_lost after two deaths. Publishing clears the mark; a slice that
+   * publishes nothing clears it, unless `afterSlice` says it counts as a death.
+   */
   async #slice(
     row: RunRow,
     state: BlameState,
     request: Request,
     identity: (r: RunRow) => CheckpointIdentity,
+    attempt: number,
   ): Promise<{ row: RunRow; state: BlameState }> {
     const reader = await request.reader();
     if (!reader) return { row, state };
     this.#active.add(row.runId);
     try {
-      return await this.#walk(row, state, request, identity, reader);
+      const walked = await this.#walk(row, state, request, identity, reader, attempt);
+      if (!walked.published) {
+        const pending = walked.state.queue.length > 0 && !walked.state.stateLimit;
+        if (afterSlice({ attempt, steps: walked.steps, pending }) === "clear")
+          this.#ledger.clear(row.runId);
+      }
+      return walked;
+    } catch (error) {
+      // A failure the request reports is not a death.
+      this.#ledger.clear(row.runId);
+      throw error;
     } finally {
       this.#active.delete(row.runId);
     }
@@ -625,10 +707,9 @@ export class RepoBlame {
     request: Request,
     identity: (r: RunRow) => CheckpointIdentity,
     reader: ObjectReader,
-  ): Promise<{ row: RunRow; state: BlameState }> {
-    const source = repoBlameSource(reader, this.deps.git.commitGraph);
-    const before = encodeBlameState(state);
-    await advanceBlame(state, source, {
+    attempt: number,
+  ): Promise<{ row: RunRow; state: BlameState; published: boolean; steps: number }> {
+    const limits: BlameSliceLimits = {
       ...DEFAULT_BLAME_SLICE,
       ...this.deps.slice,
       maxLiveStateBytes: this.#room(),
@@ -637,17 +718,40 @@ export class RepoBlame {
         request.allowance === MAX_ALLOWANCE &&
         request.counts.reads === 0 &&
         request.work.spent() === 0,
-    });
-    const after = encodeBlameState(state);
-    // Nothing moved (the allowance ran out before a step): nothing to write.
-    if (sameBytes(before, after)) return { row, state };
+    };
+    const plan = sliceAttempt(attempt, limits);
+    let steps = 0;
+    if (plan.kind === "refuse") {
+      refuseHead(state, "step_lost", limits);
+      steps = 1;
+    } else {
+      const before = encodeBlameState(state);
+      const source = repoBlameSource(reader, this.deps.git.commitGraph);
+      steps = (await advanceBlame(state, source, plan.limits)).steps;
+      // Nothing moved (the allowance ran out before a step): nothing to write.
+      if (sameBytes(before, encodeBlameState(state)))
+        return { row, state, published: false, steps };
+    }
     const published = await this.#publish(row, state, null, identity);
     if (published.generation !== row.generation + 1) {
       // The row moved under this slice: deliver what it now holds.
       const loaded = await this.#load(published, identity(published));
-      return { row: published, state: loaded.ok ? loaded.state : state };
+      return { row: published, state: loaded.ok ? loaded.state : state, published: true, steps };
     }
-    return { row: published, state };
+    return { row: published, state, published: true, steps };
+  }
+
+  /** A run event: a metric, and an error log for an operator. */
+  #event(event: "lost" | "start_given_up" | "replaced", runId: string, detail?: string): void {
+    this.deps.git.context.metrics.count("blame.run", { event });
+    console.error(
+      JSON.stringify({
+        message: event === "replaced" ? "blame run replaced" : "blame run lost",
+        event,
+        run: runId,
+        ...(detail && { detail }),
+      }),
+    );
   }
 
   #room(): number {

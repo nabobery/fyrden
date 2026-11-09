@@ -239,6 +239,34 @@ hashes cover each line's commit, line and path. A failure names only commit ids,
 numbers and paths. git's own blame and diff sources are never fixtures, and a test keeps
 them out.
 
+### Runs and the attempt mark
+
+Each slice writes its attempt mark on the run's row and waits on `ctx.storage.sync()`
+before it works, then moves the row when it publishes. Measured on 2026-11-09 in local
+workerd 1.20261101.1 (vitest), walking `f.txt` of the blame fixture one step a request,
+three runs with the same result:
+
+| Per request | Rows written |
+|---|---:|
+| A slice after the first: the mark, then the publish | 4: the mark 1, the publish 3 |
+| The first request: the run created, its start, one slice | 13 |
+
+The publish counts 3 because SQLite counts the index entries of the moved `touched_at`
+and `expires_at` with the row. So the mark adds 1 to the 3 a slice already writes. It
+counts toward the account's rows written a day.
+
+`sync()` took 0 ms in each of 16 calls, at the 1 ms resolution of workerd's clock, which
+moves only across I/O. That's the local cost only; its deployed latency isn't measured.
+
+Whether a synced mark survives a reset isn't tested here. In this harness `ctx.abort()`
+fails the test with an error no code can catch, `abortAllDurableObjects()` while a
+request waits stops the test pool's worker, and `evictDurableObject()` waits for
+requests to finish, so it can't land mid-slice. Even a harness that worked couldn't tell
+a synced mark from an unsynced one: a reset from outside lands only at an `await`, and
+local workerd commits a turn's writes before the next one. The guarantee relied on is
+Cloudflare's: `sync()` resolves once pending writes complete. A deployed probe that
+writes, syncs and resets itself would verify it.
+
 ## Writing git-core tests
 
 - Tests come first (see `AGENTS.md`). Parsers get a fast-check property suite

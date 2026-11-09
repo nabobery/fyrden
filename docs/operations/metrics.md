@@ -97,6 +97,7 @@ The latest point of a group is its current value.
 | `git.fetch.blocks` | `tier` (`memory`, `cache_api`, `miss`) | Pack block reads of one fetch plan, by the cache tier that answered (`miss`: read from R2) |
 | `git.maintenance` | `job` (`repack`, `gc`, `reachability`, `retire`), `what` | Amounts per maintenance step (`bytes_in`, `bytes_out`, `objects`, `packs_in`, `packs_out`, `garbage_objects`, `garbage_bytes`, `condemned`, `deleted`, `deleted_bytes`, `expired_fetch`, `stale_output`, `all_reachable`, `slices`, `restarts`) |
 | `git.reaped` | `what` (`upload`, `pack`, `scratch`, `object`, `abort_failed`) | Items the cleanup of abandoned uploads removed |
+| `blame.run` | `event` (`lost`, `start_given_up`, `replaced`) | A blame run event, with an error log naming the run. `lost`: its slices kept dying at one point, so it answers `422 work_limit` until it expires. `start_given_up`: its start died three times. `replaced`: its checkpoint couldn't be read, so it started over. Blame isn't served yet |
 
 ### Effects
 
