@@ -11,6 +11,7 @@ import {
   factFitsCheckpoint,
   factTextOf,
   liveBytesOf,
+  liveStateLimit,
   MAX_BLAME_LINES,
   MAX_STATE_BYTES,
   type PendingCommit,
@@ -176,6 +177,10 @@ export async function startBlame(
   } = {},
 ): Promise<BlameState | BlameStartFailure> {
   const lineLimit = fileLineLimit(options.maxFileLines);
+  const liveLimit =
+    options.maxLiveStateBytes === undefined
+      ? Number.POSITIVE_INFINITY
+      : liveStateLimit(options.maxLiveStateBytes);
   const info = await source.commit(commit);
   if (!info) return { failure: "commit_missing" };
   const file = await source.fileAt(info.tree, path);
@@ -194,7 +199,7 @@ export async function startBlame(
     facts: 0,
     factText: 0,
   });
-  if (live > (options.maxLiveStateBytes ?? Number.POSITIVE_INFINITY)) {
+  if (live > liveLimit) {
     return { failure: "state_too_large" };
   }
   const pairs = new Int32Array(lines * 2);
@@ -559,7 +564,7 @@ function apply(
     factText: running.factText + (addFact ? factTextOf(staged.fact as BlameCommitInfo) : 0),
   };
   if (
-    liveBytesOf(counts) > limits.maxLiveStateBytes ||
+    liveBytesOf(counts) > liveStateLimit(limits.maxLiveStateBytes) ||
     encodedBytesOf(state, counts) > encodedStateLimit(limits.maxEncodedBytes)
   ) {
     state.stateLimit = true;
@@ -622,7 +627,7 @@ function refuseEverything(
   };
   totalsOf(state).pairs = 0;
   if (
-    liveBytesOf(counts) > limits.maxLiveStateBytes ||
+    liveBytesOf(counts) > liveStateLimit(limits.maxLiveStateBytes) ||
     encodedBytesOf(state, counts) > encodedStateLimit(limits.maxEncodedBytes)
   ) {
     state.stateLimit = true;
@@ -646,6 +651,7 @@ export async function advanceBlame(
 ): Promise<BlameAdvance> {
   fileLineLimit(limits.maxFileLines);
   encodedStateLimit(limits.maxEncodedBytes);
+  liveStateLimit(limits.maxLiveStateBytes);
   // Two at once would both apply the step at the head of the queue.
   if (advancing.has(state)) throw new Error("a blame state is already being advanced");
   advancing.add(state);

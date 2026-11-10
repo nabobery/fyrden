@@ -122,6 +122,15 @@ export function pathLiveBytes(path: readonly Uint8Array[]): number {
   return total;
 }
 
+/**
+ * A caller's live state limit. Only a positive whole number is a limit: NaN
+ * compares false with every size, so it would let any state through.
+ */
+export function liveStateLimit(asked: number): number {
+  if (!Number.isInteger(asked) || asked < 1) throw new RangeError(`bad live state limit ${asked}`);
+  return asked;
+}
+
 /** What a state with these counts is charged for, before any of it is built. */
 export function liveBytesOf(counts: {
   readonly path: number;
@@ -274,6 +283,7 @@ export function decodeBlameState(
   bytes: Uint8Array,
   options: { readonly maxLiveStateBytes?: number } = {},
 ): BlameState {
+  if (options.maxLiveStateBytes !== undefined) liveStateLimit(options.maxLiveStateBytes);
   if (bytes.length < HEADER_BYTES || bytes.length > MAX_STATE_BYTES) throw bad("wrong size");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (view.getUint32(0) !== MAGIC) throw bad("not a checkpoint");

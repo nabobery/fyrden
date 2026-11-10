@@ -506,6 +506,30 @@ describe("the encoded state limit", () => {
   });
 });
 
+describe("the live state limit", () => {
+  const history: History = { a: { file: f("x") }, b: { parents: ["a"], file: f("x", "y") } };
+
+  it("refuses a limit that isn't a positive whole number, before reading anything", async () => {
+    // A NaN limit compares false with every size, so any state would pass it.
+    for (const bad of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      const fresh = new FakeSource(history);
+      await expect(
+        startBlame(fresh, oidOfName("b"), PATH, { maxLiveStateBytes: bad }),
+      ).rejects.toThrow(new RangeError(`bad live state limit ${bad}`));
+      expect(fresh.blobReads).toEqual([]);
+      const source = new FakeSource(history);
+      const state = await start(source, "b");
+      const before = encodeBlameState(state);
+      const reads = source.blobReads.length;
+      await expect(
+        advanceBlame(state, source, { ...SLICE, maxLiveStateBytes: bad }),
+      ).rejects.toThrow(new RangeError(`bad live state limit ${bad}`));
+      expect(source.blobReads.length).toBe(reads);
+      expect(encodeBlameState(state)).toEqual(before);
+    }
+  });
+});
+
 describe("the walk's errors", () => {
   it("name themselves, as logs show them", () => {
     expect(new BlameReadsSpent("x").name).toBe("BlameReadsSpent");
