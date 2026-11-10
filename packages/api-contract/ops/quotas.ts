@@ -9,9 +9,19 @@ export const Quota = z.object({
   max_storage_bytes: z
     .number()
     .int()
-    .describe("Bytes its repositories' pushes may store (pack and commands, as received)."),
-  storage_bytes: z.number().int().describe("Bytes stored by committed pushes."),
-  reserved_bytes: z.number().int().describe("Bytes reserved by pushes being received."),
+    .describe(
+      "Bytes its repositories' pushes (pack and commands, as received) and release assets may store.",
+    ),
+  storage_bytes: z
+    .number()
+    .int()
+    .describe(
+      "Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included.",
+    ),
+  reserved_bytes: z
+    .number()
+    .int()
+    .describe("Bytes reserved by pushes and release asset uploads being received."),
 });
 
 export const getUserQuota = defineOperation({

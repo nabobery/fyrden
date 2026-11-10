@@ -8,6 +8,10 @@
  * counts nothing, so nothing is held for ever; the repository keeps a
  * committed upload's confirmation owed until it is taken (and each upload
  * counts once), so a lost one is told again rather than left uncounted.
+ *
+ * Release assets are counted otherwise: each repository states its total
+ * (`setAssets`), and the newest statement replaces the last, so a repeat,
+ * a reordering or a retry of any age changes nothing.
  */
 
 /** Why a push is refused at its commit: the account's storage is used up. */
@@ -39,7 +43,7 @@ export interface QuotaLimits {
 
 export interface StorageStatus {
   readonly limits: QuotaLimits;
-  /** Bytes the account's repositories' committed uploads stored. */
+  /** Bytes the account's repositories' committed uploads and release assets stored. */
   readonly usedBytes: number;
   /** Bytes held by uploads being stored or committed. */
   readonly reservedBytes: number;
@@ -108,7 +112,7 @@ export class AccountQuotas {
     return {
       limits: this.limits(),
       usedBytes: this.#used(),
-      reservedBytes: this.#held(this.now(), null),
+      reservedBytes: this.#held(this.now(), []),
     };
   }
 
@@ -264,9 +268,87 @@ export class AccountQuotas {
     this.storage.sql.exec("DELETE FROM quota_holds WHERE upload_id = ?", uploadId);
   }
 
+  /**
+   * A repository's statement of its release assets' total: `stale` when an
+   * older tuple than the last one taken (newer generation first, then
+   * number); with `mustFit`, `no_room` when the account's other usage, its
+   * holds but `dropReservations`', and `bytes` together exceed the limit (the
+   * total, not the growth, is tested: an unchecked statement may have
+   * carried these bytes already). Otherwise the total replaces the last
+   * one, and `dropReservations`' holds go, in one transaction: the
+   * sessions whose bytes the total counts.
+   */
+  setAssets(input: {
+    readonly repoId: string;
+    readonly bytes: number;
+    readonly epochGen: number;
+    readonly seq: number;
+    readonly mustFit: boolean;
+    readonly dropReservations?: readonly string[];
+  }): "stale" | "no_room" | "ok" {
+    return this.storage.transactionSync(() => {
+      const last = this.#sql<{ bytes: number; epoch_gen: number; seq: number }>(
+        "SELECT bytes, epoch_gen, seq FROM quota_assets WHERE repo_id = ?",
+        input.repoId,
+      )[0];
+      if (
+        last &&
+        (last.epoch_gen > input.epochGen ||
+          (last.epoch_gen === input.epochGen && last.seq > input.seq))
+      )
+        return "stale";
+      if (input.mustFit) {
+        const others =
+          this.#used() - (last?.bytes ?? 0) + this.#held(this.now(), input.dropReservations ?? []);
+        if (others + input.bytes > this.limits().maxStorageBytes) return "no_room";
+      }
+      this.storage.sql.exec(
+        `INSERT INTO quota_assets (repo_id, bytes, epoch_gen, seq) VALUES (?, ?, ?, ?)
+         ON CONFLICT (repo_id) DO UPDATE SET bytes = excluded.bytes,
+           epoch_gen = excluded.epoch_gen, seq = excluded.seq`,
+        input.repoId,
+        input.bytes,
+        input.epochGen,
+        input.seq,
+      );
+      for (const holdId of input.dropReservations ?? []) this.release(holdId);
+      return "ok";
+    });
+  }
+
+  /**
+   * An arriving repository's asset total, as its arrival stored it: taken
+   * unless a newer tuple is here already, so a late, older total changes
+   * nothing. In the transaction that ends the arrival's hold.
+   */
+  adoptAssets(
+    repoId: string,
+    total: { readonly bytes: number; readonly epochGen: number; readonly seq: number },
+  ): void {
+    this.storage.sql.exec(
+      `INSERT INTO quota_assets (repo_id, bytes, epoch_gen, seq) VALUES (?, ?, ?, ?)
+       ON CONFLICT (repo_id) DO UPDATE SET bytes = excluded.bytes,
+         epoch_gen = excluded.epoch_gen, seq = excluded.seq
+       WHERE (excluded.epoch_gen, excluded.seq) > (quota_assets.epoch_gen, quota_assets.seq)`,
+      repoId,
+      total.bytes,
+      total.epochGen,
+      total.seq,
+    );
+  }
+
+  /** The bytes repository `repoId` last stated its release assets hold. */
+  assetBytes(repoId: string): number {
+    return (
+      this.#sql<{ bytes: number }>("SELECT bytes FROM quota_assets WHERE repo_id = ?", repoId)[0]
+        ?.bytes ?? 0
+    );
+  }
+
   /** A deleted repository's storage is free again. */
   forgetRepo(repoId: string): void {
     this.storage.sql.exec("DELETE FROM quota_usage WHERE repo_id = ?", repoId);
+    this.storage.sql.exec("DELETE FROM quota_assets WHERE repo_id = ?", repoId);
     this.storage.sql.exec("DELETE FROM quota_holds WHERE repo_id = ?", repoId);
   }
 
@@ -285,24 +367,28 @@ export class AccountQuotas {
   /** Bytes free now, not counting what `exceptUpload` itself holds. */
   #free(now: number, exceptUpload: string | null): number {
     const { maxStorageBytes } = this.limits();
-    return Math.max(0, maxStorageBytes - this.#used() - this.#held(now, exceptUpload));
+    const except = exceptUpload === null ? [] : [exceptUpload];
+    return Math.max(0, maxStorageBytes - this.#used() - this.#held(now, except));
   }
 
-  /** Bytes of committed uploads: one row per repository. */
+  /** Bytes of committed uploads and release assets: a row of each per repository. */
   #used(): number {
     return (
-      this.#sql<{ n: number }>("SELECT coalesce(sum(bytes), 0) AS n FROM quota_usage")[0]?.n ?? 0
+      this.#sql<{ n: number }>(
+        `SELECT (SELECT coalesce(sum(bytes), 0) FROM quota_usage)
+           + (SELECT coalesce(sum(bytes), 0) FROM quota_assets) AS n`,
+      )[0]?.n ?? 0
     );
   }
 
-  /** Bytes live holds keep (uploads being stored or committed), but `exceptUpload`'s. */
-  #held(now: number, exceptUpload: string | null): number {
+  /** Bytes live holds keep (uploads being stored or committed), but `except`'s. */
+  #held(now: number, except: readonly string[]): number {
     return (
       this.#sql<{ n: number }>(
         `SELECT coalesce(sum(bytes), 0) AS n FROM quota_holds
-         WHERE expires_at > ? AND upload_id IS NOT ?`,
+         WHERE expires_at > ? AND upload_id NOT IN (SELECT value FROM json_each(?))`,
         now,
-        exceptUpload,
+        JSON.stringify(except),
       )[0]?.n ?? 0
     );
   }

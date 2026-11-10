@@ -242,6 +242,22 @@ const CASES: Record<
     expected: { status: 409, code: "repo_not_ready" },
   },
   "releases.delete": { input: {}, expected: { status: 409, code: "repo_not_ready" } },
+  "releases.retained.get": { input: {}, expected: { status: 200 } },
+  "releases.retained.purge": { input: {}, expected: { status: 409, code: "repo_not_ready" } },
+  "releases.assets.get": { input: {}, expected: { status: 404, code: "asset_not_found" } },
+  "releases.assets.delete": { input: {}, expected: { status: 409, code: "repo_not_ready" } },
+  "releases.assets.uploads.create": {
+    input: { name: "checked", size: 1 },
+    expected: { status: 404, code: "release_not_found" },
+  },
+  "releases.assets.uploads.complete": {
+    input: { parts: [{ part_number: 1, etag: "checked" }] },
+    expected: { status: 404, code: "upload_not_found" },
+  },
+  "releases.assets.uploads.abort": {
+    input: {},
+    expected: { status: 404, code: "upload_not_found" },
+  },
   // Labels and milestones serve both kinds: either kind's permission lets a caller through
   // (see EITHER_KIND below).
   "labels.list": { input: {}, expected: MISSING_KIND },
@@ -358,6 +374,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{issue_number}", "1")
     .replace("{milestone_number}", "1")
     .replace("{release_id}", "1")
+    .replace("{asset_id}", "1")
     .replace("{tag+}", "checked")
     .replace("{reaction_id}", "1")
     .replace("{name}", "checked")

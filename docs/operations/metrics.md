@@ -146,6 +146,19 @@ false.
 | `acl.snapshot` | `purpose` (`read` or `write`), `outcome` (`cached`, `pulled`, `denied`: no usable snapshot, and the pull failed or was refused) | One per access decision a repository object makes from its ACL snapshot |
 | `acl.snapshot_age_ms` | `purpose` | Age of the snapshot that decision used, in milliseconds (one point per decision; its maximum is the snapshot staleness bound in practice: at most 60 s for writes, 5 minutes for reads) |
 
+Release assets are in the `fyrden-assets` bucket. Their `r2.class_a` `op`
+values are `create_multipart` (a session begun), `upload_part`,
+`complete_multipart`, `abort_multipart`, `delete_unfinished` (an ended
+session's object), `purge_retained` (one delete of up to 50 replaced or
+deleted objects), `cleanup_list_assets` and `cleanup_delete_assets` (a
+repository's deletion); their `r2.class_b` `op` values are `get_asset` (a
+download; a 304, 412, 416 or `HEAD` reads nothing) and `head_asset` (a
+completion R2 no longer knew). Their rows count under `do.rows_written`
+`op` `release_assets.write`. A download whose asset row names an object
+that is gone, possible only after an early purge and a restore, logs
+`release asset object missing` at error level and answers 404
+`asset_missing`.
+
 `r2.*`, `do.request` and `d1.query` are also what the `internal` budget of
 `subrequests` counts. A D1 batch is counted once per statement here, while the
 platform counts it once, so the `internal` figure can be slightly higher than
