@@ -160,6 +160,8 @@ export interface RepoBlameDeps {
   readonly spentCalls?: () => number;
   /** Slice limits over the defaults; tests walk a run in small slices with it. */
   readonly slice?: Partial<Omit<BlameSliceLimits, "stepIsFresh">>;
+  /** Live packs the room is counted for, in place of the registry's; tests leave no room with it. */
+  readonly livePacks?: () => number;
   /** A walking request's decoding work in place of `BLAME_DECODING_WORK`; tests run it out with it. */
   readonly decodingWork?: {
     readonly limit: number;
@@ -868,9 +870,14 @@ export class RepoBlame {
     );
   }
 
+  /**
+   * What's left of the room for a live state. At least 1 byte, the least a limit
+   * may be: every state needs more, so a view that fills the room refuses every
+   * state as too large, never with a bad limit.
+   */
   #room(): number {
-    const packs = this.deps.git.registry.inState("live").length;
-    return ROOM_BYTES - packs * VIEW_ENTRY_BYTES;
+    const packs = this.deps.livePacks?.() ?? this.deps.git.registry.inState("live").length;
+    return Math.max(1, ROOM_BYTES - packs * VIEW_ENTRY_BYTES);
   }
 
   #expiry(runState: RunState, state: BlameState): number {
