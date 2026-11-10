@@ -4404,42 +4404,86 @@ describe("live work's rows in a feed's object", () => {
       ws?.close(1000, "done");
   });
 
-  it("prices an admission's rows from its most: an agent's feed's first opening, and its last place taken", async () => {
-    // An agent's (its owner a dependency too): its feed's first opening, its pools' first blocks
-    // installed and its turn prepared.
-    const agent = await agentFor(await userWithEpoch(), ["issues:read"]);
-    const bot: Who = { principalId: agent.id, token: agent.own, handle: agent.handle };
-    const sockets: Awaited<ReturnType<typeof open>>[] = [];
-    const first = await rows(bot, async () => {
-      sockets.push(await open(agent.own, ROOMY));
-    });
-    // The last place on its feed one short of its most: each cap's count reads every socket's row.
-    const tokens = [
-      agent.own,
-      ...(await Promise.all([1, 2, 3].map(() => scopedToken(agent.id, [])))),
-    ];
-    for (const token of tokens)
-      for (let i = token === agent.own ? 1 : 0; i < LIVE_POLICY.perCredential; i++)
-        if (sockets.length < LIVE_POLICY.perFeed - 1) sockets.push(await open(token, ROOMY));
-    const last = await rows(bot, async () => {
-      sockets.push(await open(tokens[3] as string, ROOMY));
-    });
-    expect(sockets.map((s) => s.response.status)).toEqual(Array(LIVE_POLICY.perFeed).fill(101));
-    expect(await openSockets(bot)).toBe(LIVE_POLICY.perFeed);
-    for (const s of sockets) s.ws?.close(1000, "done");
+  it("prices an admission's rows from its most: a feed's first opening and its last place, half a minute before midnight, by credentials with every dependency", async () => {
+    // Half a minute before a UTC midnight by both clocks: each opening provides for its end on the
+    // next day too.
+    const at = Math.floor(Date.now() / DAY) * DAY + DAY - 30_000;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    const unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    /**
+     * A token of `agentId` with the most dependencies an opening accepts: itself, the token it was
+     * minted from and that one's own, its agent and the agent's owner.
+     */
+    const deepest = async (agentId: string) => {
+      const [leaf, source, root] = await Promise.all([1, 2, 3].map(() => scopedToken(agentId, [])));
+      const idOf = async (token: string) =>
+        (await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+          .bind(await hashToken(token))
+          .first<string>("id")) as string;
+      const [leafId, sourceId, rootId] = await Promise.all(
+        [leaf, source, root].map((t) => idOf(t as string)),
+      );
+      await env.DIRECTORY.batch([
+        env.DIRECTORY.prepare("UPDATE tokens SET source_id = ? WHERE id = ?").bind(
+          sourceId,
+          leafId,
+        ),
+        env.DIRECTORY.prepare("UPDATE tokens SET source_id = ? WHERE id = ?").bind(
+          rootId,
+          sourceId,
+        ),
+      ]);
+      return leaf as string;
+    };
+    const measure = async (noisy: boolean) => {
+      const owner = await userWithEpoch();
+      const agent = await agentFor(owner, ["issues:read"]);
+      const bot: Who = { principalId: agent.id, token: agent.own, handle: agent.handle };
+      const tokens = await Promise.all([1, 2, 3, 4].map(() => deepest(agent.id)));
+      if (noisy)
+        await runInDurableObject(feedOf(bot), (_: UserDO, state) => {
+          for (let i = 0; i < 500; i++)
+            state.storage.sql.exec(
+              "INSERT INTO live_revoked (dependency, at) VALUES (?, ?)",
+              `credential:tok_gone${i}`,
+              Date.now(),
+            );
+        });
+      const sockets: Awaited<ReturnType<typeof open>>[] = [];
+      // Its feed's first opening: its pools' first blocks installed, its turn prepared.
+      const first = await rows(bot, async () => {
+        sockets.push(await open(tokens[0] as string, ROOMY));
+      });
+      // The last place on its feed one short of its most, by a credential one short of its own:
+      // each cap's count reads every socket's row.
+      for (const token of tokens)
+        for (let i = token === tokens[0] ? 1 : 0; i < LIVE_POLICY.perCredential; i++)
+          if (sockets.length < LIVE_POLICY.perFeed - 1) sockets.push(await open(token, ROOMY));
+      const last = await rows(bot, async () => {
+        sockets.push(await open(tokens[3] as string, ROOMY));
+      });
+      expect(sockets.map((s) => s.response.status)).toEqual(Array(LIVE_POLICY.perFeed).fill(101));
+      expect(await openSockets(bot)).toBe(LIVE_POLICY.perFeed);
+      for (const s of sockets) s.ws?.close(1000, "done");
+      return {
+        first: { read: first.read, written: first.written },
+        last: { read: last.read, written: last.written },
+      };
+    };
+    const deep = await measure(false);
     // Its observed rows exactly these: the most read by the last place, the most written by the
-    // first opening.
+    // first opening; dependencies already revoked elsewhere on the feed (500) make no difference.
     const observed = Object.values((LIVE_PRICES.admission as LiveManifestEntry).observed);
     expect(observed).toHaveLength(1);
-    expect({
-      first: { read: first.read, written: first.written },
-      last: { read: last.read, written: last.written },
-    }).toEqual({
-      first: { read: first.read, written: observed[0]?.do_rows_written },
-      last: { read: observed[0]?.do_rows_read, written: last.written },
+    expect(deep).toEqual({
+      first: { read: deep.first.read, written: observed[0]?.do_rows_written },
+      last: { read: observed[0]?.do_rows_read, written: deep.last.written },
     });
-    expect(first.read).toBeLessThan(last.read);
-    expect(last.written).toBeLessThan(first.written);
+    expect(deep.first.read).toBeLessThan(deep.last.read);
+    expect(deep.last.written).toBeLessThan(deep.first.written);
+    expect(await measure(true)).toEqual(deep);
   });
 
   it("is within each unit's observed rows", async () => {

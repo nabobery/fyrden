@@ -325,12 +325,14 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
     MEASURED_LOCALLY,
   ),
-  // Its object's rows measured locally at their most, on an agent's feed (its owner a dependency
-  // too): the last place on a feed one short of its most sockets reads the most (245: each cap's
-  // count reads every socket's row), the feed's first opening writes the most (42: its pools'
-  // first blocks and its turn).
+  // Its object's rows measured locally at their most, half a minute before a UTC midnight (each
+  // opening provides for its end on the next day too), on an agent's feed by tokens with every
+  // dependency an opening accepts (itself, the token it was minted from and that one's own, the
+  // agent and its owner): the last place on a feed one short of its most sockets reads the most
+  // (262: each cap's count reads every socket's row), the feed's first opening writes the most
+  // (56: its pools' first blocks, its turn, its dependencies and both days' provisions).
   admission: estimated(
-    { do_rows_read: 245, do_rows_written: 42 },
+    { do_rows_read: 262, do_rows_written: 56 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "synchronous",
