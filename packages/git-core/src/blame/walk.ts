@@ -144,6 +144,18 @@ function fileLineLimit(asked = MAX_BLAME_LINES): number {
   return Math.min(asked, MAX_BLAME_LINES);
 }
 
+/**
+ * The caller's encoded state limit, held to what a checkpoint can record, so
+ * every state decodes again. Only a positive whole number is a limit: NaN
+ * compares false with every size, so it would let any state through.
+ */
+function encodedStateLimit(asked: number): number {
+  if (!Number.isInteger(asked) || asked < 1) {
+    throw new RangeError(`bad encoded state limit ${asked}`);
+  }
+  return Math.min(asked, MAX_STATE_BYTES);
+}
+
 const sameOid = (a: Oid, b: Oid) => {
   for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
   return true;
@@ -548,7 +560,7 @@ function apply(
   };
   if (
     liveBytesOf(counts) > limits.maxLiveStateBytes ||
-    encodedBytesOf(state, counts) > limits.maxEncodedBytes
+    encodedBytesOf(state, counts) > encodedStateLimit(limits.maxEncodedBytes)
   ) {
     state.stateLimit = true;
     state.queue = [];
@@ -611,7 +623,7 @@ function refuseEverything(
   totalsOf(state).pairs = 0;
   if (
     liveBytesOf(counts) > limits.maxLiveStateBytes ||
-    encodedBytesOf(state, counts) > limits.maxEncodedBytes
+    encodedBytesOf(state, counts) > encodedStateLimit(limits.maxEncodedBytes)
   ) {
     state.stateLimit = true;
     state.queue = [];
@@ -633,6 +645,7 @@ export async function advanceBlame(
   limits: BlameSliceLimits,
 ): Promise<BlameAdvance> {
   fileLineLimit(limits.maxFileLines);
+  encodedStateLimit(limits.maxEncodedBytes);
   // Two at once would both apply the step at the head of the queue.
   if (advancing.has(state)) throw new Error("a blame state is already being advanced");
   advancing.add(state);
