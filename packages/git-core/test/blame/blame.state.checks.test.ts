@@ -316,4 +316,16 @@ describe("each check of a checkpoint", () => {
     expect(error?.message).toMatch(/^a state of \d+ bytes doesn't fit 1$/);
     expect(new BlameStateError("x").name).toBe("BlameStateError");
   });
+
+  it("a room that isn't a positive whole number, refused before the bytes are read", () => {
+    // A NaN room compares false with every size, so any state would fit it.
+    for (const bad of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      expect(() => decodeBlameState(encoded(), { maxLiveStateBytes: bad })).toThrow(
+        new RangeError(`bad live state limit ${bad}`),
+      );
+      expect(() => decodeBlameState(new Uint8Array(0), { maxLiveStateBytes: bad })).toThrow(
+        new RangeError(`bad live state limit ${bad}`),
+      );
+    }
+  });
 });
