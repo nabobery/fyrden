@@ -487,7 +487,8 @@ describe("the encoded state limit", () => {
     const larger = await encoded(MAX_STATE_BYTES * 4);
     expect(larger.length).toBeLessThanOrEqual(MAX_STATE_BYTES);
     expect(decodeBlameState(larger).stateLimit).toBe(true);
-    expect(larger).toEqual(await encoded(MAX_STATE_BYTES));
+    // Compared as bytes: toEqual walks 1.8 MB element by element, which takes seconds.
+    expect(Buffer.compare(larger, await encoded(MAX_STATE_BYTES))).toBe(0);
   });
 
   it("refuses a limit that isn't a positive whole number, before reading anything", async () => {
