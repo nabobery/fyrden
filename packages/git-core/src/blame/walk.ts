@@ -176,7 +176,8 @@ export async function startBlame(
   const live = liveBytesOf({
     path: pathLiveBytes(path),
     pairs: lines,
-    queue: 1,
+    // An empty file has no line to queue.
+    queue: lines === 0 ? 0 : 1,
     ranges: 0,
     facts: 0,
     factText: 0,

@@ -372,8 +372,12 @@ describe("the state's limits, met exactly", () => {
     },
   );
 
-  it("starts a file whose state fits its room exactly, and not one byte less", async () => {
-    const source = new FakeSource({ a: { file: f("x", "y", "z") } });
+  it.each([
+    ["a file", f("x", "y", "z")],
+    // An empty file starts with nothing queued, so nothing queued is charged.
+    ["an empty file", ""],
+  ])("starts %s whose state fits its room exactly, and not one byte less", async (_, file) => {
+    const source = new FakeSource({ a: { file } });
     const live = liveStateBytes(await start(source, "a"));
     expect(
       "failure" in (await startBlame(source, oidOfName("a"), PATH, { maxLiveStateBytes: live })),
