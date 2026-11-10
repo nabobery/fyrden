@@ -869,6 +869,71 @@ describe("a live socket", () => {
     ).toEqual({ n: 0 });
   });
 
+  for (const cap of ["perCredential", "perFeed"] as const)
+    it(`is refused past its ${cap === "perCredential" ? "credential's" : "feed's"} most sockets, though two openings for its last place met while a stranded turn was adopted`, async () => {
+      const owner = await user();
+      const vars = { ...LIVE, FYRDEN_LIVE_SOCKETS: "500" };
+      // One place left: the credential's most but one, or the feed's (other credentials' sockets).
+      const token =
+        cap === "perCredential" ? owner.token : await scopedToken(owner.principalId, []);
+      const others =
+        cap === "perCredential"
+          ? []
+          : [
+              owner.token,
+              ...(await Promise.all([1, 2].map(() => scopedToken(owner.principalId, [])))),
+            ];
+      const held: Awaited<ReturnType<typeof open>>[] = [];
+      for (const other of others)
+        for (let i = 0; i < LIVE_POLICY.perCredential; i++) held.push(await open(other, vars));
+      const before = LIVE_POLICY[cap] - 1 - held.length;
+      for (let i = 0; i < before; i++) held.push(await open(token, vars));
+      // The feed's turn left looking stranded (dispatched by work gone): each opening adopts it
+      // first, asking the directory of its owner; both held there until both have asked.
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec(
+          "UPDATE live_turn SET operation_id = 'stranded', phase = 'dispatched', owner_id = 'own_gone'",
+        ),
+      );
+      // (Its object reads a row through `all`, so the gate is there.)
+      const statements = Object.getPrototypeOf(env.DIRECTORY.prepare("SELECT 1")) as {
+        all(this: { statement: string }): Promise<unknown>;
+      };
+      const all = statements.all;
+      let asked = 0;
+      let bothAsked = () => {};
+      const gate = new Promise<void>((resolve) => {
+        bothAsked = resolve;
+      });
+      statements.all = async function (this: { statement: string }) {
+        if (this.statement.includes("SELECT owner_id, status FROM live_duration_owners")) {
+          if (++asked === 2) bothAsked();
+          await gate;
+        }
+        return all.call(this);
+      };
+      let openings: Awaited<ReturnType<typeof open>>[];
+      try {
+        openings = await Promise.all([open(token, vars), open(token, vars)]);
+      } finally {
+        statements.all = all;
+      }
+      expect(asked).toBe(2);
+      // Both upgraded; one refused for the cap (closed to try again), the other open.
+      expect(openings.map((o) => o.response.status)).toEqual([101, 101]);
+      expect(
+        await runInDurableObject(
+          feedOf(owner),
+          (_: UserDO, state) =>
+            state.storage.sql
+              .exec<{ n: number }>("SELECT count(*) AS n FROM live_local WHERE phase = 'open'")
+              .one().n,
+        ),
+      ).toBe(LIVE_POLICY[cap]);
+      expect(await Promise.race(openings.map((o) => o.closed))).toEqual({ code: 4412 });
+      for (const s of [...held, ...openings]) s.ws?.close(1000, "done");
+    });
+
   it("is admitted again after its principal is unsuspended, a delivery for the old authority aside", async () => {
     const owner = await user();
     const token = await scopedToken(owner.principalId, []);

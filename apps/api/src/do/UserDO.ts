@@ -1105,15 +1105,20 @@ export class UserDO extends MigratingDO {
       return new Response(null, { status });
     };
     if (this.#retired() || live.anyRevoked(admitted.dependencies)) return refuse(410);
-    const held = live.counts(admitted.credentialId);
-    if (held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential)
-      return refuse(429);
+    // Past a cap (its confirming openings counted): asked again where it is installed, as another
+    // opening may take the last place while a stranded turn is adopted.
+    const full = () => {
+      const held = live.counts(admitted.credentialId);
+      return held.feed >= LIVE_POLICY.perFeed || held.credential >= LIVE_POLICY.perCredential;
+    };
+    if (full()) return refuse(429);
     // A turn left stranded (claimed or dispatched with no work of it running) dealt with first, so
     // the turn this opening supplies can take its place.
     await this.#adoptTurn(null).catch(() => {});
     // Installed only while its grants are current here, stamped with its admission's, its end
     // provided for on each day it may live on, the feed's pools given their first blocks.
     const installed = this.ctx.storage.transactionSync(() => {
+      if (full()) return "full";
       const grants = [admission, terminal, controls, marks].flatMap((f) => (f ? [f.envelope] : []));
       if (!grants.every((g) => this.#current(g))) return false;
       const budget = new LiveBudget(this.ctx.storage.sql);
@@ -1149,6 +1154,7 @@ export class UserDO extends MigratingDO {
       );
       return true;
     });
+    if (installed === "full") return refuse(429);
     if (!installed) return refuse(409);
     // Its recovery is due before anything is awaited: an object stopped mid-confirmation forgets it
     // in the feed's next turn.
