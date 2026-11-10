@@ -325,8 +325,12 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
     },
     MEASURED_LOCALLY,
   ),
+  // Its object's rows measured locally at their most, on an agent's feed (its owner a dependency
+  // too): the last place on a feed one short of its most sockets reads the most (245: each cap's
+  // count reads every socket's row), the feed's first opening writes the most (42: its pools'
+  // first blocks and its turn).
   admission: estimated(
-    { do_rows_read: 105, do_rows_written: 44 },
+    { do_rows_read: 245, do_rows_written: 42 },
     {
       validity: { maxMs: 120_000, days: 2 },
       duration: "synchronous",
@@ -336,6 +340,7 @@ export const LIVE_PRICES: Partial<Record<LiveManifestUnit, LiveManifestEntry>> =
       localCleanupDebt: vector({ do_rows_written: 10 }),
       dayCleanupDebt: ZERO,
     },
+    MEASURED_LOCALLY,
   ),
   terminal: estimated(
     { do_rows_read: 10, do_rows_written: 5 },

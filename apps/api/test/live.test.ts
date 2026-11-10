@@ -4404,6 +4404,44 @@ describe("live work's rows in a feed's object", () => {
       ws?.close(1000, "done");
   });
 
+  it("prices an admission's rows from its most: an agent's feed's first opening, and its last place taken", async () => {
+    // An agent's (its owner a dependency too): its feed's first opening, its pools' first blocks
+    // installed and its turn prepared.
+    const agent = await agentFor(await userWithEpoch(), ["issues:read"]);
+    const bot: Who = { principalId: agent.id, token: agent.own, handle: agent.handle };
+    const sockets: Awaited<ReturnType<typeof open>>[] = [];
+    const first = await rows(bot, async () => {
+      sockets.push(await open(agent.own, ROOMY));
+    });
+    // The last place on its feed one short of its most: each cap's count reads every socket's row.
+    const tokens = [
+      agent.own,
+      ...(await Promise.all([1, 2, 3].map(() => scopedToken(agent.id, [])))),
+    ];
+    for (const token of tokens)
+      for (let i = token === agent.own ? 1 : 0; i < LIVE_POLICY.perCredential; i++)
+        if (sockets.length < LIVE_POLICY.perFeed - 1) sockets.push(await open(token, ROOMY));
+    const last = await rows(bot, async () => {
+      sockets.push(await open(tokens[3] as string, ROOMY));
+    });
+    expect(sockets.map((s) => s.response.status)).toEqual(Array(LIVE_POLICY.perFeed).fill(101));
+    expect(await openSockets(bot)).toBe(LIVE_POLICY.perFeed);
+    for (const s of sockets) s.ws?.close(1000, "done");
+    // Its observed rows exactly these: the most read by the last place, the most written by the
+    // first opening.
+    const observed = Object.values((LIVE_PRICES.admission as LiveManifestEntry).observed);
+    expect(observed).toHaveLength(1);
+    expect({
+      first: { read: first.read, written: first.written },
+      last: { read: last.read, written: last.written },
+    }).toEqual({
+      first: { read: first.read, written: observed[0]?.do_rows_written },
+      last: { read: observed[0]?.do_rows_read, written: last.written },
+    });
+    expect(first.read).toBeLessThan(last.read);
+    expect(last.written).toBeLessThan(first.written);
+  });
+
   it("is within each unit's observed rows", async () => {
     const owner = await user();
     const repo = await repoWithIssue(owner);
