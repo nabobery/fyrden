@@ -430,6 +430,7 @@ describe("createReaderWorkMeter", () => {
     expect(() => free.charge("inflate", Number.POSITIVE_INFINITY)).toThrow(
       /bad work charge Infinity for inflate/,
     );
+    expect(() => free.charge("inflate", Number.NaN)).toThrow(/bad work charge NaN for inflate/);
     expect(free.spent()).toBe(0);
   });
 
