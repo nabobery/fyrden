@@ -237,8 +237,9 @@ copy and delete paths around the blamed file.
 
 The nightly `blame-fixtures` job compares whole blames of `lib/application.js`,
 `lib/router/index.js`, `merge-ort.c` and `read-cache.c` at frozen commits with git
-2.53.0: no differences, and each file's settled lines no fewer than its first run under
-the rename rule, counted exactly (523 of 661, 660 of 673, 5,281 of 5,286 and 3,954 of
+2.53.0: no settled line differs from git's (unresolved lines aren't compared, though every
+line git takes from another path must be one of them), and each file's settled lines no
+fewer than its first run under the rename rule, counted exactly (523 of 661, 660 of 673, 5,281 of 5,286 and 3,954 of
 3,995; the first two lose lines to renames). The frozen
 hashes cover each line's commit, line and path. A failure names only commit ids, line
 numbers and paths. git's own blame and diff sources are never fixtures, and a test keeps
