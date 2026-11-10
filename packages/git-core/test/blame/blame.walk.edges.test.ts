@@ -188,9 +188,9 @@ describe("counting lines", () => {
     const history: History = { a: { file: f("x") }, b: { parents: ["a"], file: f("x", "y") } };
     for (const bad of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
       const fresh = new FakeSource(history);
-      await expect(
-        startBlame(fresh, oidOfName("b"), PATH, { maxFileLines: bad }),
-      ).rejects.toThrow(new RangeError(`bad line limit ${bad}`));
+      await expect(startBlame(fresh, oidOfName("b"), PATH, { maxFileLines: bad })).rejects.toThrow(
+        new RangeError(`bad line limit ${bad}`),
+      );
       expect(fresh.blobReads).toEqual([]);
       const source = new FakeSource(history);
       const state = await start(source, "b");
