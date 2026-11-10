@@ -207,6 +207,9 @@ const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([401, 403, 408, 429]);
 // write refused whole by the read model's barrier).
 // `requeue_failed`: a failed envelope's replay whose send failed, answered once its claim is given back.
 // `tag_moving`: a tag moved while it was being peeled, answered with nothing written; sent again, it peels afresh.
+// `quota_unavailable`, `release_asset_transferring`: a release asset's completion with nothing decided
+// (the account unreachable, the repository moving); sent again, it states its total again. A code
+// of its own, so `repo_transferring` stays final for every other operation.
 const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   "busy",
   "network_busy",
@@ -214,11 +217,16 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   "read_model_maintenance",
   "requeue_failed",
   "tag_moving",
+  "quota_unavailable",
+  "release_asset_transferring",
 ]);
 
 /** Answers that are not final: the same request has more to do when it is sent again. */
 const NOT_FINAL: Readonly<Record<string, (output: unknown) => boolean>> = {
   "uploads.complete": (output) => (output as { state?: unknown }).state === "indexing",
+  // Another request holds the completion, or its outcome isn't decided yet.
+  "releases.assets.uploads.complete": (output) =>
+    (output as { state?: unknown }).state === "completing",
 };
 
 /** What a key keeps of a request's result. */

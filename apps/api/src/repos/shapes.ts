@@ -14,6 +14,7 @@ import type { IssueRecord, Subject, SubjectKind } from "../do/repo/issues.js";
 import type { PullView } from "../do/repo/mergeability.js";
 import type { PullRecord } from "../do/repo/pulls.js";
 import type { OwnReaction, Reacted, ReactionCounts } from "../do/repo/reactions.js";
+import type { AssetRecord } from "../do/repo/release-assets.js";
 import type { ReleaseRecord } from "../do/repo/releases.js";
 import type { ReviewCommentRecord } from "../do/repo/review-comments.js";
 import type { ReviewRecord } from "../do/repo/reviews.js";
@@ -39,7 +40,42 @@ export function labelOutput(label: LabelRecord): Output<typeof getLabel> {
 }
 
 /** A release as the API answers it. Assets arrive with their own slice. */
-export function releaseOutput(release: ReleaseRecord): Output<typeof getRelease> {
+/**
+ * Where an asset downloads from: under the repository's API path when it is
+ * known, else relative to it (a webhook body, written where the owner's
+ * handle isn't). Each segment of the tag is encoded on its own, so a slash
+ * in it stays a slash.
+ */
+export function assetDownloadPath(
+  tag: string,
+  name: string,
+  repo?: { readonly ownerHandle: string; readonly name: string },
+): string {
+  const tail = `releases/download/${tag.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(name)}`;
+  return repo ? `/api/repos/${repo.ownerHandle}/${repo.name}/${tail}` : tail;
+}
+
+export function assetOutput(
+  release: Pick<ReleaseRecord, "tagName">,
+  asset: AssetRecord,
+  repo?: { readonly ownerHandle: string; readonly name: string },
+) {
+  return {
+    id: asset.id,
+    name: asset.name,
+    content_type: asset.contentType,
+    size: asset.bytes,
+    uploader: { id: asset.uploader },
+    created_at: asset.createdAt,
+    updated_at: asset.updatedAt,
+    download_url: assetDownloadPath(release.tagName, asset.name, repo),
+  };
+}
+
+export function releaseOutput(
+  release: ReleaseRecord,
+  repo?: { readonly ownerHandle: string; readonly name: string },
+): Output<typeof getRelease> {
   return {
     id: release.id,
     tag_name: release.tagName,
@@ -56,7 +92,7 @@ export function releaseOutput(release: ReleaseRecord): Output<typeof getRelease>
     created_at: release.createdAt,
     updated_at: release.updatedAt,
     version: release.version,
-    assets: [],
+    assets: release.assets.map((asset) => assetOutput(release, asset, repo)),
   };
 }
 

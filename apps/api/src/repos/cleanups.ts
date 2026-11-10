@@ -1,4 +1,5 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { ASSETS_BUCKET } from "../do/repo/release-assets.js";
 import { readModelFor } from "../events/read-model.js";
 import { IN_INDEX, IN_REPO_INDEX } from "../search/statements.js";
 import { clock } from "../services.js";
@@ -20,19 +21,20 @@ import { clock } from "../services.js";
  * waited for, so no delivery is still being made when its rows and bodies
  * are removed: first until no invocation that claimed one of its webhook
  * effects can still be running (a claim can outlive its lease), then until
- * no effect of it is claimed.
+ * no effect of it is claimed. Release asset uploads, like webhook
+ * producers, are settled before what they store is removed.
  */
 
 /** Proposed values. */
 export const CLEANUP_POLICY = {
   /**
    * Pages one deletion call works through: each takes up to three internal
-   * calls (D1 or R2), plus one to read what is done and one to record each
-   * cleanup finished: at most 29 calls a deletion, 290 for the cron's ten,
-   * of an invocation's 1,000. One page of each cleanup: a repository with
-   * little to clean up is cleaned up in one call.
+   * calls (D1, R2 or the repository object), plus one to read what is done
+   * and one to record each cleanup finished: at most 33 calls a deletion,
+   * 330 for the cron's ten, of an invocation's 1,000. One page of each
+   * cleanup: a repository with little to clean up is cleaned up in one call.
    */
-  pagesPerCall: 7,
+  pagesPerCall: 8,
   /** Journaled effects deleted a page. */
   effectsPage: 500,
   /** Webhook deliveries (and their attempts) deleted a page. */
@@ -317,6 +319,29 @@ const preferences: RepoCleanup = {
   },
 };
 
+/**
+ * Its release assets in R2, every object under its prefix, once its upload
+ * sessions are settled: only the repository object completes an upload,
+ * so none can make an object after that. Restore orphans no row names go
+ * too.
+ */
+const releaseAssets: RepoCleanup = {
+  name: "release_assets",
+  async page(env, { repoId }, metrics) {
+    metrics?.count("do.request", { class: "RepoDO", method: "settleReleaseUploads" });
+    const settled = await env.REPO.getByName(repoId).settleReleaseUploads();
+    if (settled !== "settled") return settled;
+    metrics?.count("r2.class_a", { bucket: ASSETS_BUCKET, op: "cleanup_list_assets" });
+    const listed = await env.ASSETS.list({ prefix: `release-assets/${repoId}/`, limit: 1000 });
+    const keys = listed.objects.map((o) => o.key);
+    if (keys.length > 0) {
+      metrics?.count("r2.class_a", { bucket: ASSETS_BUCKET, op: "cleanup_delete_assets" });
+      await env.ASSETS.delete(keys);
+    }
+    return listed.truncated ? "more" : "done";
+  },
+};
+
 /** In order: effects first, so none makes a delivery while its deliveries are removed. */
 export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   webhookEffects,
@@ -326,6 +351,7 @@ export const REPO_CLEANUPS: readonly RepoCleanup[] = [
   searchProjections,
   preferences,
   webhookBodies,
+  releaseAssets,
 ];
 
 /**

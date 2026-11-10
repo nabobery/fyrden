@@ -574,7 +574,12 @@ describe("release asset storage", () => {
     { stub, repoId }: Account,
     bytes: number,
     seq: number,
-    more: { epochGen?: number; mustFit?: boolean; dropReservation?: string; repoId?: string } = {},
+    more: {
+      epochGen?: number;
+      mustFit?: boolean;
+      dropReservations?: readonly string[];
+      repoId?: string;
+    } = {},
   ) =>
     stub.setReleaseAssetStorage({
       repoId,
@@ -636,7 +641,7 @@ describe("release asset storage", () => {
     expect(await row(a)).toEqual([{ bytes: 40, epoch_gen: 2, seq: 5 }]);
     // A stale total drops no reservation.
     await hold(a, "held", 3);
-    expect(await state(a, 7, 4, { epochGen: 2, dropReservation: "held" })).toBe("stale");
+    expect(await state(a, 7, 4, { epochGen: 2, dropReservations: ["held"] })).toBe("stale");
     expect((await a.stub.quotaStatus()).reservedBytes).toBe(3);
     // A newer generation's numbers start wherever they start.
     expect(await state(a, 8, 1, { epochGen: 3 })).toBe("ok");
@@ -689,7 +694,7 @@ describe("release asset storage", () => {
     expect(await state(a, LIMIT, 1, { mustFit: true })).toBe("no_room");
     // Refused, it holds what it held.
     expect((await a.stub.quotaStatus()).reservedBytes).toBe(LIMIT);
-    expect(await state(a, LIMIT, 1, { mustFit: true, dropReservation: "mine" })).toBe("ok");
+    expect(await state(a, LIMIT, 1, { mustFit: true, dropReservations: ["mine"] })).toBe("ok");
     expect(await a.stub.quotaStatus()).toMatchObject({ usedBytes: LIMIT, reservedBytes: 0 });
   });
 
@@ -697,8 +702,8 @@ describe("release asset storage", () => {
     const a = await account();
     await hold(a, "mine", 50);
     await hold(a, "other", 50);
-    expect(await state(a, 51, 1, { mustFit: true, dropReservation: "mine" })).toBe("no_room");
-    expect(await state(a, 50, 1, { mustFit: true, dropReservation: "mine" })).toBe("ok");
+    expect(await state(a, 51, 1, { mustFit: true, dropReservations: ["mine"] })).toBe("no_room");
+    expect(await state(a, 50, 1, { mustFit: true, dropReservations: ["mine"] })).toBe("ok");
     expect((await a.stub.quotaStatus()).reservedBytes).toBe(50);
     await runInDurableObject(a.stub, (_: unknown, s) => {
       // Long past, though not at the epoch.
@@ -710,7 +715,7 @@ describe("release asset storage", () => {
   it("drops a named reservation with an unchecked total too", async () => {
     const a = await account();
     await hold(a, "mine", 5);
-    expect(await state(a, 0, 1, { dropReservation: "mine" })).toBe("ok");
+    expect(await state(a, 0, 1, { dropReservations: ["mine"] })).toBe("ok");
     expect((await a.stub.quotaStatus()).reservedBytes).toBe(0);
   });
 
@@ -748,5 +753,35 @@ describe("release asset storage", () => {
   it("reads a repository with no assets as none", async () => {
     const a = await account();
     expect(await a.stub.repoForTransfer(a.repoId)).toMatchObject({ assetBytes: 0, usageBytes: 0 });
+  });
+
+  it("holds an arrival's release assets with its pushes, and keeps its total for adoption", async () => {
+    const a = await account();
+    const transferId = uniqueId("trf");
+    const arrive = (assets: number) =>
+      a.stub.reserveArrival({
+        transferId,
+        accountId: uniqueId("acct"),
+        repoId: a.repoId,
+        usageBytes: 10,
+        assets: { bytes: assets, epochGen: 2, seq: 7 },
+        collaborators: [],
+      });
+    // Its pushes fit; with its assets it doesn't.
+    expect(await arrive(LIMIT - 9)).toBe("quota_exceeded");
+    expect(await arrive(LIMIT - 10)).toBe("ok");
+    expect((await a.stub.quotaStatus()).reservedBytes).toBe(LIMIT);
+    // Its total is kept as the frozen repository stated it, for adoption to take.
+    const stored = await runInDurableObject(
+      a.stub,
+      (_: unknown, s) =>
+        s.storage.sql
+          .exec<{ assets: string }>(
+            "SELECT assets FROM transfer_arrivals WHERE transfer_id = ?",
+            transferId,
+          )
+          .one().assets,
+    );
+    expect(JSON.parse(stored)).toEqual({ bytes: LIMIT - 10, epochGen: 2, seq: 7 });
   });
 });

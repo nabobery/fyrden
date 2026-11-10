@@ -11,6 +11,7 @@ import { releaseOutput } from "../../repos/shapes.js";
 import { capturable } from "../../webhooks/captures.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
+import type { AssetRecord, RepoReleaseAssets } from "./release-assets.js";
 
 /** What publishing was prepared with: a tag's object and commit, as read before the change. */
 export interface TagTarget {
@@ -41,6 +42,8 @@ export interface ReleaseRecord {
   /** What became of the tag, worked out at read; null on a draft. */
   readonly tagState: "current" | "moved" | "deleted" | null;
   readonly currentTagOid: string | null;
+  /** Its assets, in name order: at most 100. */
+  readonly assets: readonly AssetRecord[];
 }
 
 export type ReleaseFailure =
@@ -95,6 +98,7 @@ export class RepoReleases {
       readonly events: RepoEvents;
       /** In a deleting transaction: asks for a collection, since no ref moved. */
       readonly collect: () => void;
+      readonly assets: Pick<RepoReleaseAssets, "ofReleases" | "retainRelease">;
     },
   ) {}
 
@@ -290,6 +294,8 @@ export class RepoReleases {
     if (!current) return { ok: false, code: "release_not_found" };
     this.#storage().transactionSync(() => {
       this.#exec("DELETE FROM releases WHERE id = ?", id);
+      // Its assets' objects stay for 30 days, still counted, as a deleted asset's do.
+      this.deps.assets.retainRelease(id);
       this.#emit("release.deleted", current, caller.actor);
       this.deps.events.auditChange("release.delete", caller.actor, {
         release: id,
@@ -369,10 +375,15 @@ export class RepoReleases {
         names,
       ))
         refs.set(row.name, oidToHex(new Uint8Array(row.oid) as Oid));
-    return rows.map((row) => this.#record(row, refs));
+    const assets = this.deps.assets.ofReleases(rows.map((row) => row.id));
+    return rows.map((row) => this.#record(row, refs, assets));
   }
 
-  #record(row: Row, refs?: ReadonlyMap<string, string>): ReleaseRecord {
+  #record(
+    row: Row,
+    refs?: ReadonlyMap<string, string>,
+    assets?: ReadonlyMap<number, readonly AssetRecord[]>,
+  ): ReleaseRecord {
     const tagOid = hexOf(row.tag_oid);
     const now =
       tagOid === null
@@ -398,6 +409,7 @@ export class RepoReleases {
       updatedAt: row.updated_at,
       tagState,
       currentTagOid: tagState === "moved" ? (now as string) : null,
+      assets: (assets ?? this.deps.assets.ofReleases([row.id])).get(row.id) ?? [],
     };
   }
 

@@ -39,6 +39,7 @@ export const JOB_KINDS = [
   "preference_cleanup",
   "digest_seal",
   "digest_credit",
+  "release_assets",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

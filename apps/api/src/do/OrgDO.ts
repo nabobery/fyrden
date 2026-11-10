@@ -1408,6 +1408,14 @@ export class OrgDO extends MigratingDO {
       if (!meta) throw new Error("the account is not recorded");
       if (!this.#firstTime(transferId, "adopt"))
         return { epochGen: meta.epoch_gen, version: meta.acl_version };
+      // Its release assets' total as its arrival held it, never as handed over (which may lag):
+      // room and usage change in one step, so no other upload takes the space meanwhile.
+      const arrived = this.ctx.storage.sql
+        .exec<{ assets: string | null }>(
+          "SELECT assets FROM transfer_arrivals WHERE transfer_id = ? AND state = 'held'",
+          transferId,
+        )
+        .toArray()[0]?.assets;
       // The room its admission made is taken now.
       this.#endArrival(transferId, true);
       // A repository that left before may come back.
@@ -1431,6 +1439,7 @@ export class OrgDO extends MigratingDO {
           repoId,
           from.usageBytes,
         );
+      if (arrived) this.#quotas().adoptAssets(repoId, JSON.parse(arrived));
       return { epochGen: meta.epoch_gen, version: this.#bump() };
     });
   }
@@ -1534,6 +1543,8 @@ export class OrgDO extends MigratingDO {
     readonly usageBytes: number;
     /** Uploads it committed whose confirmations it still owes (told here once it lands). */
     readonly owed?: readonly { readonly uploadId: string; readonly bytes: number }[];
+    /** Its release assets' total, as the frozen repository stated it: held, and taken at adoption. */
+    readonly assets?: { readonly bytes: number; readonly epochGen: number; readonly seq: number };
     readonly collaborators: readonly { readonly principalId: string }[];
   }): "ok" | "quota_exceeded" | "too_many_collaborators" {
     return this.ctx.storage.transactionSync(() => {
@@ -1565,7 +1576,7 @@ export class OrgDO extends MigratingDO {
           uploadId: input.transferId,
           repoId: input.repoId,
           kind: "reserved",
-          bytes: input.usageBytes,
+          bytes: input.usageBytes + (input.assets?.bytes ?? 0),
           expiresAt: HELD_UNTIL_ENDED,
         },
         ...owed.map((o) => ({
@@ -1578,12 +1589,13 @@ export class OrgDO extends MigratingDO {
       ]);
       if (!held) return "quota_exceeded";
       sql.exec(
-        `INSERT INTO transfer_arrivals (transfer_id, repo_id, state, owed, expires_at)
-         VALUES (?, ?, 'held', ?, ?)`,
+        `INSERT INTO transfer_arrivals (transfer_id, repo_id, state, owed, expires_at, assets)
+         VALUES (?, ?, 'held', ?, ?, ?)`,
         input.transferId,
         input.repoId,
         JSON.stringify(owed.map((o) => o.uploadId)),
         HELD_UNTIL_ENDED,
+        input.assets ? JSON.stringify(input.assets) : null,
       );
       for (const c of input.collaborators)
         sql.exec(

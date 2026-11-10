@@ -553,6 +553,10 @@ async function arrivalRoom(
     owed = after;
   }
   const { collaborators, usageBytes } = handedOver;
+  // Its release assets' total, read from the frozen repository with every completion under way
+  // in it: while frozen nothing commits, so it can only fall, which a later statement corrects.
+  metrics?.count("do.request", { class: "RepoDO", method: "releaseAssetUsage" });
+  const assets = await repo.releaseAssetUsage();
   metrics?.count("do.request", { class: "OrgDO", method: "reserveArrival" });
   return env.ORG.getByName(transfer.to_owner).reserveArrival({
     transferId: transfer.transfer_id,
@@ -560,6 +564,7 @@ async function arrivalRoom(
     repoId: transfer.repo_id,
     usageBytes,
     owed,
+    assets,
     collaborators,
   });
 }
