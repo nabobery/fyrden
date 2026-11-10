@@ -15,6 +15,7 @@ import { LIVE_OWNER_LIMITS } from "../src/live/owners.js";
 import { liveRefusalMemo } from "../src/live/refusal-memo.js";
 import { user, type Who } from "./helpers/api.js";
 import { rowCountingD1 } from "./helpers/d1.js";
+import { everyOpeningHoldsATurn } from "./helpers/live-sockets.js";
 
 const ORIGIN = "https://fyrden.test";
 const DAY = 86_400_000;
@@ -36,6 +37,8 @@ const LIVE = {
   RATE_LIMIT_WRITE: unlimited,
   RATE_LIMIT_LIVE: unlimited,
 };
+
+everyOpeningHoldsATurn();
 
 afterEach(async () => {
   listenLimit = unlimited;
@@ -413,15 +416,29 @@ describe("when the ledger closes after the pre-check", () => {
   });
 });
 
+/** What `units` charge of the day's object rows written, at their prices. */
+const need = (units: readonly (keyof typeof LIVE_PRICES)[]) =>
+  units.reduce(
+    (n, unit) => n + (LIVE_PRICES[unit] as LiveManifestEntry).resources.do_rows_written,
+    0,
+  );
+
 describe("an opening refused for what its own feed needs", () => {
-  /** Leaves room for an opening with its feed's blocks held, and not for one needing them. */
+  /**
+   * Leaves room for an opening with its feed's blocks held, and not for one needing them. Its
+   * turn is counted though the feed holds one: the pre-check counts a turn always.
+   */
   const leaveRoom = async () => {
     const day = (
       await env.DIRECTORY.prepare("SELECT CAST(unixepoch() / 86400 AS INTEGER) AS d").first<{
         d: number;
       }>()
     )?.d as number;
-    const room = LIVE_DAILY.do_rows_written - LIVE_PROTECTED.do_rows_written - 200;
+    const room =
+      LIVE_DAILY.do_rows_written -
+      LIVE_PROTECTED.do_rows_written -
+      need(["upgrade_transport", "admission", "terminal", "pump"]) -
+      5;
     await env.DIRECTORY.prepare(
       `INSERT INTO live_budget_days (day, do_rows_written, retain_until, cleanup_debt)
        VALUES (?1, ?2, ?3, '{"do_requests":0,"do_rows_read":0,"do_rows_written":0,"do_duration_ms":0,"d1_rows_read":0,"d1_rows_written":0,"queue_ops":0}')
@@ -455,13 +472,9 @@ describe("a ticket whose socket could not be funded", () => {
         d: number;
       }>()
     )?.d as number;
-    const need = (units: readonly (keyof typeof LIVE_PRICES)[]) =>
-      units.reduce(
-        (n, unit) => n + (LIVE_PRICES[unit] as LiveManifestEntry).resources.do_rows_written,
-        0,
-      );
-    // Room for the ticket and its transport, and for a socket holding its feed's blocks.
-    const room = need(["upgrade_transport", "ticket", "admission", "terminal"]) + 5;
+    // Room for the ticket and its transport, and for a socket holding its feed's blocks (its turn
+    // counted though the feed holds one: the pre-check counts a turn always).
+    const room = need(["upgrade_transport", "ticket", "admission", "terminal", "pump"]) + 5;
     await env.DIRECTORY.prepare(
       `INSERT INTO live_budget_days (day, do_rows_written, retain_until, cleanup_debt)
        VALUES (?1, ?2, ?3, '{"do_requests":0,"do_rows_read":0,"do_rows_written":0,"do_duration_ms":0,"d1_rows_read":0,"d1_rows_written":0,"queue_ops":0}')

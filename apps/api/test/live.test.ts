@@ -29,9 +29,11 @@ import { LiveBudget } from "../src/do/user/live-budget.js";
 import type { TurnRows } from "../src/do/user/turn-meter.js";
 import {
   canonicalVector,
+  expireLiveReceipts,
   LIVE_DAILY,
   LIVE_ESCROW_ENTRIES,
   LIVE_ORDINARY_DEBT_LIMIT,
+  LIVE_PROTECTED,
   LIVE_RECEIPTS_OVERDUE,
   LIVE_TURN_RECEIPT_LOOK,
   LIVE_TURN_RECEIPT_PAGE,
@@ -42,7 +44,7 @@ import {
 import { liveCredential } from "../src/live/credential.js";
 import { LIVE_ADMISSION, sweep } from "../src/live/directory.js";
 import { LIVE_PENDING_MS } from "../src/live/duration.js";
-import { planFor } from "../src/live/funding.js";
+import { LIVE_MANIFEST_REVISION, liveOpeningTarget, planFor } from "../src/live/funding.js";
 import {
   LIVE_BLOCK_MS,
   LIVE_BLOCK_UNITS,
@@ -51,15 +53,16 @@ import {
   LIVE_TURN_STEPS,
   type LiveManifestEntry,
   liveBlockUnit,
+  liveKindOf,
 } from "../src/live/manifest.js";
-import { openOwnedLiveSocket } from "../src/live/routes.js";
+import { openOwnedLiveSocket, socketUnits } from "../src/live/routes.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { newId } from "../src/services.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
 import { countD1Rows, DAY, expiredReceipts, pinLedgerClock, ZERO } from "./helpers/live-budget.js";
-import { handled, runTurns, say } from "./helpers/live-sockets.js";
+import { everyOpeningHoldsATurn, handled, runTurns, say } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -67,6 +70,8 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 /** A while into a socket's renewal period's second half, when a renewal is taken. */
 const RENEW_LATE = Math.ceil(LIVE_POLICY.renewMs * 0.6);
+
+everyOpeningHoldsATurn();
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -101,6 +106,16 @@ async function call(request: Request, vars: Record<string, string> = LIVE): Prom
   const response = await createApp().fetch(request, { ...env, ...vars } as Env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+/** The live credential of `who`'s token, as an MCP listen presents it. */
+async function credentialOf(who: Who) {
+  const id = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+    .bind(await hashToken(who.token))
+    .first<string>("id");
+  const credential = await liveCredential(env.DIRECTORY, id as string, Date.now());
+  if (!credential) throw new Error("no credential");
+  return credential;
 }
 
 const ticketFor = async (token: string, vars: Record<string, string> = LIVE) =>
@@ -235,6 +250,60 @@ const change = (who: Who, repo: { id: string; conversation: string }, version: n
     member: null,
     eventKey: `${repo.id}:${uniqueId("ev")}`,
   });
+
+/**
+ * `count` of `who`'s turns that ran, released but not yet settled, the first valid until
+ * `firstValidUntil` and each `step` ms later: a feed whose turns came that far apart.
+ */
+let ranSeq = Number.MAX_SAFE_INTEGER - 100_000;
+async function releasedTurns(
+  who: Who,
+  firstValidUntil: number,
+  count = 100,
+  step = 1_200,
+): Promise<void> {
+  const { incarnation } = (await env.DIRECTORY.prepare(
+    "SELECT incarnation FROM live_budget_state WHERE id = 1",
+  ).first<{ incarnation: string }>()) as { incarnation: string };
+  const epoch =
+    (
+      await env.DIRECTORY.prepare("SELECT epoch_gen FROM source_epochs WHERE source_id = ?")
+        .bind(feedEpochSource(who.principalId))
+        .first<{ epoch_gen: number }>()
+    )?.epoch_gen ?? 0;
+  const zero = JSON.stringify(canonicalVector(ZERO));
+  await env.DIRECTORY.batch(
+    Array.from({ length: count }, (_, i) => {
+      const validUntil = firstValidUntil + i * step;
+      const validFrom = validUntil - 125 * MINUTE;
+      const plan = JSON.stringify({
+        charges: [...new Set([validFrom, validUntil].map((t) => Math.floor(t / DAY)))].map(
+          (day) => ({ day }),
+        ),
+      });
+      return env.DIRECTORY.prepare(
+        `INSERT INTO live_budget_receipts (seq, operation_id, mint, incarnation, recipient_type,
+           recipient, kind, class, epoch, produces_local, valid_from, valid_until, granted_at,
+           plan, directory_cleanup_debt, settle_until, expires_at, released_owners)
+         VALUES (?, ?, ?, ?, 'UserDO', ?, 'pump', 'ordinary', ?, 1, ?, ?, ?, ?, ?, ?, ?, '["own_ran"]')`,
+      ).bind(
+        ranSeq--,
+        uniqueId("ran"),
+        uniqueId("mint"),
+        incarnation,
+        who.principalId,
+        epoch,
+        validFrom,
+        validUntil,
+        validFrom,
+        plan,
+        zero,
+        validUntil,
+        validUntil + 2 * DAY,
+      );
+    }),
+  );
+}
 
 const revocationsOf = (subject: string) =>
   env.DIRECTORY.prepare("SELECT count(*) AS n FROM revocations WHERE subject = ?")
@@ -800,6 +869,71 @@ describe("a live socket", () => {
     ).toEqual({ n: 0 });
   });
 
+  for (const cap of ["perCredential", "perFeed"] as const)
+    it(`is refused past its ${cap === "perCredential" ? "credential's" : "feed's"} most sockets, though two openings for its last place met while a stranded turn was adopted`, async () => {
+      const owner = await user();
+      const vars = { ...LIVE, FYRDEN_LIVE_SOCKETS: "500" };
+      // One place left: the credential's most but one, or the feed's (other credentials' sockets).
+      const token =
+        cap === "perCredential" ? owner.token : await scopedToken(owner.principalId, []);
+      const others =
+        cap === "perCredential"
+          ? []
+          : [
+              owner.token,
+              ...(await Promise.all([1, 2].map(() => scopedToken(owner.principalId, [])))),
+            ];
+      const held: Awaited<ReturnType<typeof open>>[] = [];
+      for (const other of others)
+        for (let i = 0; i < LIVE_POLICY.perCredential; i++) held.push(await open(other, vars));
+      const before = LIVE_POLICY[cap] - 1 - held.length;
+      for (let i = 0; i < before; i++) held.push(await open(token, vars));
+      // The feed's turn left looking stranded (dispatched by work gone): each opening adopts it
+      // first, asking the directory of its owner; both held there until both have asked.
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql.exec(
+          "UPDATE live_turn SET operation_id = 'stranded', phase = 'dispatched', owner_id = 'own_gone'",
+        ),
+      );
+      // (Its object reads a row through `all`, so the gate is there.)
+      const statements = Object.getPrototypeOf(env.DIRECTORY.prepare("SELECT 1")) as {
+        all(this: { statement: string }): Promise<unknown>;
+      };
+      const all = statements.all;
+      let asked = 0;
+      let bothAsked = () => {};
+      const gate = new Promise<void>((resolve) => {
+        bothAsked = resolve;
+      });
+      statements.all = async function (this: { statement: string }) {
+        if (this.statement.includes("SELECT owner_id, status FROM live_duration_owners")) {
+          if (++asked === 2) bothAsked();
+          await gate;
+        }
+        return all.call(this);
+      };
+      let openings: Awaited<ReturnType<typeof open>>[];
+      try {
+        openings = await Promise.all([open(token, vars), open(token, vars)]);
+      } finally {
+        statements.all = all;
+      }
+      expect(asked).toBe(2);
+      // Both upgraded; one refused for the cap (closed to try again), the other open.
+      expect(openings.map((o) => o.response.status)).toEqual([101, 101]);
+      expect(
+        await runInDurableObject(
+          feedOf(owner),
+          (_: UserDO, state) =>
+            state.storage.sql
+              .exec<{ n: number }>("SELECT count(*) AS n FROM live_local WHERE phase = 'open'")
+              .one().n,
+        ),
+      ).toBe(LIVE_POLICY[cap]);
+      expect(await Promise.race(openings.map((o) => o.closed))).toEqual({ code: 4412 });
+      for (const s of [...held, ...openings]) s.ws?.close(1000, "done");
+    });
+
   it("is admitted again after its principal is unsuspended, a delivery for the old authority aside", async () => {
     const owner = await user();
     const token = await scopedToken(owner.principalId, []);
@@ -1122,41 +1256,67 @@ describe("a feed's live credit", () => {
     ).toEqual({ n: 0 });
   });
 
-  it("ends a socket past midnight on the next day's provision, yesterday's credit unusable", async () => {
-    const owner = await user();
-    const socket = await open(owner.token);
-    // Its provisions, and the ledger's clock as the object judges it.
-    const { offset, provisions } = await runInDurableObject(feedOf(owner), (_: UserDO, state) => ({
-      offset: state.storage.sql
-        .exec<{ o: number }>("SELECT ledger_offset_ms AS o FROM live_budget_fence")
-        .one().o,
-      provisions: state.storage.sql
-        .exec<{ day: number; until: number }>(
-          "SELECT day, budget_valid_until AS until FROM live_budget_terminal ORDER BY day",
-        )
-        .toArray(),
-    }));
-    // Two minutes into the next day (on the ledger's clock), when its provision there still holds;
-    // an admission in a day's first minutes has none past the next midnight, so it is past its
-    // prepaid end there instead.
-    const next = (provisions[0]?.day ?? 0) + 1;
-    const target = next * 86_400_000 + 120_000;
-    const covered = provisions.some((p) => p.day === next && p.until > target + 60_000);
-    vi.setSystemTime(target - offset);
-    socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
-    // Past its renewal deadline: closed, on that day's provision when it has one.
-    expect(await socket.closed).toEqual({ code: 4401 });
-    expect((await credit(owner)).terminal).toBe(covered ? 0 : provisions.length);
-    // No control of any day spent for it: every block it was given whole.
-    const blocks = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
-      state.storage.sql
-        .exec("SELECT remaining FROM live_budget_balances WHERE kind = 'control'")
-        .toArray()
-        .map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests),
-    );
-    expect(blocks.length).toBeGreaterThan(0);
-    expect(blocks.every((units) => units === LIVE_BLOCK_UNITS)).toBe(true);
-  });
+  it.each([
+    ["early in the UTC day", 1 * HOUR],
+    ["mid-day", 12 * HOUR],
+    ["late in the UTC day", 22 * HOUR + 30 * MINUTE],
+  ])(
+    "ends a socket past midnight on the next day's provision, yesterday's credit unusable, opened %s",
+    async (_when, hour) => {
+      // Opened at a fixed hour of today (UTC), on both clocks.
+      const at = Math.floor(Date.now() / DAY) * DAY + hour;
+      vi.useFakeTimers({ toFake: ["Date"], now: at });
+      const unpin = await pinLedgerClock(at);
+      onTestFinished(unpin);
+      // Receipts granted at another hour (another case's) would be overdue at this one.
+      const forget = async () => {
+        await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+      };
+      await forget();
+      onTestFinished(forget);
+      const owner = await user();
+      const socket = await open(owner.token);
+      // Its provisions, and the ledger's clock as the object judges it.
+      const { offset, deadline, provisions } = await runInDurableObject(
+        feedOf(owner),
+        (_: UserDO, state) => ({
+          offset: state.storage.sql
+            .exec<{ o: number }>("SELECT ledger_offset_ms AS o FROM live_budget_fence")
+            .one().o,
+          deadline: state.storage.sql
+            .exec<{ d: number }>("SELECT deadline AS d FROM live_local")
+            .one().d,
+          provisions: state.storage.sql
+            .exec<{ day: number; until: number }>(
+              "SELECT day, budget_valid_until AS until FROM live_budget_terminal ORDER BY day",
+            )
+            .toArray(),
+        }),
+      );
+      // Into the next day (on the ledger's clock) and past its renewal deadline: two minutes past
+      // midnight, or just past its deadline when that is later (one opened within a renewal period
+      // of midnight is not due to close two minutes into the next day). Its provision there still
+      // holds then; an admission in a day's first minutes has none past the next midnight, so it is
+      // past its prepaid end there instead.
+      const next = (provisions[0]?.day ?? 0) + 1;
+      const target = Math.max(next * 86_400_000 + 120_000, deadline + offset + 1_000);
+      const covered = provisions.some((p) => p.day === next && p.until > target + 60_000);
+      vi.setSystemTime(target - offset);
+      socket.ws?.send(JSON.stringify({ t: "ack", n: 0 }));
+      // Past its renewal deadline: closed, on that day's provision when it has one.
+      expect(await socket.closed).toEqual({ code: 4401 });
+      expect((await credit(owner)).terminal).toBe(covered ? 0 : provisions.length);
+      // No control of any day spent for it: every block it was given whole.
+      const blocks = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        state.storage.sql
+          .exec("SELECT remaining FROM live_budget_balances WHERE kind = 'control'")
+          .toArray()
+          .map((r) => (JSON.parse(r.remaining as string) as { do_requests: number }).do_requests),
+      );
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(blocks.every((units) => units === LIVE_BLOCK_UNITS)).toBe(true);
+    },
+  );
 
   it("pays for each mark, stamped with its grant; once marks run out the change still applies", async () => {
     const owner = await user();
@@ -1288,6 +1448,556 @@ describe("a feed's turn", () => {
     // It named its successor: the feed has a socket still.
     expect(await turnOf(owner)).toMatchObject([{ phase: "prepared" }]);
     socket.ws?.close(1000, "done");
+  });
+
+  /** `who`'s feed's newest turn grant in the ledger (the order a held turn's lookup reads in). */
+  const newestTurnGrant = async (who: Who) =>
+    await env.DIRECTORY.prepare(
+      `SELECT operation_id FROM live_budget_receipts
+         WHERE recipient = ? AND kind IN ('pump', 'renewal') AND settled_at IS NULL
+         ORDER BY valid_until DESC, seq DESC LIMIT 1`,
+    )
+      .bind(who.principalId)
+      .first<string>("operation_id");
+
+  // What lets an opening look at only a feed's newest turns for the one it holds: each successor
+  // is granted by the turn running (`finishTurn` prepares it in the same transaction, its start
+  // never before the running turn's, however the object's view of the ledger's clock widened), and
+  // an opening's turn is prepared only when the feed holds none that can run (`prepareTurn`), so
+  // the turn held is the newest granted and installed.
+  it("holds its newest turn grant once each turn has named its successor", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    const holds = async () => {
+      const turns = await turnOf(owner);
+      expect(turns).toHaveLength(1);
+      expect(turns[0]?.operation_id).toBe(await newestTurnGrant(owner));
+    };
+    await holds();
+    // Turns of renewals only with nothing to send, and pumps with a change (one a turn of renewals
+    // names after it, due at once, when that turn was prepared before the change).
+    for (let version = 1; version <= 3; version++) {
+      await runTurnNow(owner);
+      await holds();
+      await feedOf(owner).applyFeed([change(owner, repo, version)]);
+      for (let turn = 0; turn < 2 && socket.frames.length === 0; turn++) {
+        await runTurnNow(owner);
+        await holds();
+      }
+      expect(await socket.next()).toMatchObject({ t: "changed" });
+    }
+    socket.ws?.close(1000, "done");
+  });
+
+  it("still holds its newest turn grant when a late answer widened its view of the ledger's clock", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    // More of the feed's turns run and released than an opening looks at.
+    for (let turn = 0; turn < LIVE_TURN_RECEIPT_LOOK + 1; turn++) await runTurnNow(owner);
+    // A check that read D1 at once but was answered 8 seconds later, heard just before the turn
+    // names its successor: the ledger's earliest possible time is 8 seconds further back.
+    feedHooks.afterTurnWork = async (_feed, state) => {
+      delete feedHooks.afterTurnWork;
+      const sent = Date.now();
+      const ledgerAt = (
+        (await env.DIRECTORY.prepare("SELECT unixepoch() * 1000 AS at").first<{
+          at: number;
+        }>()) as {
+          at: number;
+        }
+      ).at;
+      new LiveBudget(state.storage.sql).noteLedger(ledgerAt, sent, sent + 8_000);
+    };
+    onTestFinished(() => {
+      delete feedHooks.afterTurnWork;
+    });
+    await runTurnNow(owner);
+    const turns = await turnOf(owner);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]?.operation_id).toBe(await newestTurnGrant(owner));
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
+    socket.ws?.close(1000, "done");
+  });
+
+  it("holds the turn an opening hands its feed after a late look at the ledger, though newer turns ran and were released meanwhile", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    // An MCP listen whose look at the ledger is answered 10 seconds late: its feed holds a turn
+    // then, so it grants none with its socket.
+    const looked = Promise.withResolvers<number>();
+    const answer = Promise.withResolvers<void>();
+    type Preparing = { prepare(query: string): D1PreparedStatement };
+    const proto = Object.getPrototypeOf(env.DIRECTORY.withSession("first-primary")) as Preparing;
+    const prepare = proto.prepare;
+    let looks = 0;
+    proto.prepare = function (this: Preparing, query: string) {
+      const statement = prepare.call(this, query);
+      // Its second: the transport's grant reads the first.
+      if (!query.includes("AS turn_held") || ++looks !== 2) return statement;
+      proto.prepare = prepare;
+      const bind = statement.bind;
+      statement.bind = function (this: D1PreparedStatement, ...values: unknown[]) {
+        const bound = bind.apply(this, values);
+        const first = bound.first.bind(bound) as () => Promise<Record<string, unknown>>;
+        bound.first = (async () => {
+          const row = await first();
+          looked.resolve(row.now as number);
+          await answer.promise;
+          return row;
+        }) as typeof bound.first;
+        return bound;
+      };
+      return statement;
+    };
+    onTestFinished(() => {
+      proto.prepare = prepare;
+      answer.resolve();
+    });
+    const opening = openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    const at = await looked.promise;
+    // Meanwhile more of the feed's turns run than an opening looks at, and the last is released as
+    // the only socket closes.
+    const unpin = await pinLedgerClock(at + 10_000);
+    onTestFinished(unpin);
+    vi.setSystemTime(Date.now() + 10_000);
+    for (let version = 1; version <= LIVE_TURN_RECEIPT_LOOK + 1; version++) {
+      await feedOf(owner).applyFeed([change(owner, repo, version)]);
+      await runTurnNow(owner);
+      await runTurnNow(owner);
+    }
+    const closed = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await closed();
+    await runTurnNow(owner);
+    expect(await turnOf(owner)).toEqual([]);
+    // The look answered: the feed's object, holding none it can run, grants itself a turn.
+    answer.resolve();
+    const opened = await opening;
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+    opened.response.webSocket?.accept();
+    onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    expect(await turnOf(owner)).toHaveLength(1);
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(true);
+  });
+
+  it("opens a feed only with a turn it can run, though its Worker's turns are priced too low for it", async () => {
+    const owner = await user();
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    const pump = LIVE_PRICES.pump as LiveManifestEntry;
+    const higher = {
+      ...pump,
+      resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
+    };
+    // The object's price while it works, the Worker's once each call to it returns.
+    feedHooks.beforeEpochRead = async () => {
+      LIVE_PRICES.pump = higher;
+    };
+    const objects = new Proxy(env.USER, {
+      get(namespace, key) {
+        if (key !== "getByName") return Reflect.get(namespace, key, namespace);
+        return (name: string) =>
+          new Proxy(namespace.getByName(name), {
+            get(stub, method) {
+              const call = Reflect.get(stub, method, stub);
+              if (method !== "fetch" && method !== "liveTurnV1") return call;
+              return async (...args: unknown[]) => {
+                try {
+                  return await (call as (...a: unknown[]) => Promise<unknown>).apply(stub, args);
+                } finally {
+                  LIVE_PRICES.pump = pump;
+                }
+              };
+            },
+          });
+      },
+    });
+    onTestFinished(() => {
+      LIVE_PRICES.pump = pump;
+      delete feedHooks.beforeEpochRead;
+    });
+    const attempt = async () => {
+      const opened = await openOwnedLiveSocket(
+        { ...env, ...LIVE, USER: objects } as Env,
+        credential,
+        uniqueId("lt"),
+        undefined,
+      );
+      if (opened.ok) {
+        opened.response.webSocket?.accept();
+        onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+      }
+      return { opened: opened.ok, turns: (await turnOf(owner)).length };
+    };
+    // Refused or opened, and its retry too: never opened with no turn.
+    const first = await attempt();
+    const retry = first.opened ? first : await attempt();
+    expect([first, retry].filter((a) => a.opened && a.turns === 0)).toEqual([]);
+    expect(retry).toEqual({ opened: true, turns: 1 });
+  });
+
+  it("opens a feed only with a turn it can run after adopting a turn whose end was lost", async () => {
+    const owner = await user();
+    const socket = await open(owner.token);
+    const closed = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await closed();
+    // Its last turn's owner accounted, its end lost: the turn left dispatched, nothing held.
+    const finish = LiveBudget.prototype.finishTurn;
+    LiveBudget.prototype.finishTurn = () => {
+      LiveBudget.prototype.finishTurn = finish;
+      throw new Error("lost end");
+    };
+    try {
+      await runTurnNow(owner).catch(() => {});
+    } finally {
+      LiveBudget.prototype.finishTurn = finish;
+    }
+    expect(await turnOf(owner)).toMatchObject([{ phase: "dispatched" }]);
+    expect((await liveOpeningTarget(env.DIRECTORY, owner.principalId)).turnHeld).toBe(false);
+    const tokenId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+      .bind(await hashToken(owner.token))
+      .first<string>("id");
+    const credential = await liveCredential(env.DIRECTORY, tokenId as string, Date.now());
+    if (!credential) throw new Error("no credential");
+    const next = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    if (next.ok) {
+      next.response.webSocket?.accept();
+      onTestFinished(() => next.response.webSocket?.close(1000, "done"));
+    }
+    expect({ opened: next.ok, turns: (await turnOf(owner)).length }).toEqual({
+      opened: true,
+      turns: 1,
+    });
+  });
+
+  it("opens a feed only with a turn it can run, though the turn it held lapsed as the opening was scheduled", async () => {
+    const at = Math.floor(Date.now() / DAY) * DAY + 10 * HOUR;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    let unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    const owner = await user();
+    const first = await open(owner.token);
+    const closed = handled(owner, "close");
+    first.ws?.close(1000, "done");
+    await closed();
+    // Two seconds before the turn it holds lapses: held still, so the opening grants none.
+    const [state, held] = await runInDurableObject(
+      feedOf(owner),
+      (_: UserDO, s) => [s, new LiveBudget(s.storage.sql).turn()] as const,
+    );
+    if (!held) throw new Error("no turn");
+    const almost = held.envelope.plan.validUntil - 2_000;
+    unpin();
+    unpin = await pinLedgerClock(almost);
+    vi.setSystemTime(almost);
+    await expireLiveReceipts(env.DIRECTORY);
+    const credential = await credentialOf(owner);
+    // It lapses while the opened socket's alarm is set.
+    let lapsed = false;
+    // (The opening's second alarm write, in its last checks: its first is as its row is written.)
+    let writes = 0;
+    feedHooks.beforeAlarmWrite = async () => {
+      const confirming = state.storage.sql
+        .exec("SELECT 1 FROM live_local WHERE phase = 'confirming'")
+        .toArray().length;
+      if (!confirming || ++writes < 2) return;
+      delete feedHooks.beforeAlarmWrite;
+      lapsed = true;
+      vi.setSystemTime(Date.now() + 3_000);
+    };
+    onTestFinished(() => {
+      delete feedHooks.beforeAlarmWrite;
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    if (opened.ok) {
+      opened.response.webSocket?.accept();
+      onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    }
+    const runnable = await runInDurableObject(feedOf(owner), (_: UserDO, s) =>
+      new LiveBudget(s.storage.sql).runnableTurn(Date.now()),
+    );
+    expect(lapsed).toBe(true);
+    expect({ opened: opened.ok, runnable: runnable !== null }).not.toEqual({
+      opened: true,
+      runnable: false,
+    });
+  });
+
+  it("refuses an opening whose credential was revoked while its object granted itself a turn", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    const credential = await credentialOf(owner);
+    // Its turn lost, the ledger still holding it: the object grants itself one.
+    const instance = await runInDurableObject(feedOf(owner), (feed: UserDO, state) => {
+      state.storage.sql.exec("DELETE FROM live_turn");
+      return feed;
+    });
+    // Revoked as the object's grant reaches the ledger (the opening's only turn grant).
+    type Preparing = { prepare(query: string): D1PreparedStatement };
+    const proto = Object.getPrototypeOf(env.DIRECTORY) as Preparing;
+    const prepare = proto.prepare;
+    let revoked: Promise<readonly string[]> | undefined;
+    proto.prepare = function (this: Preparing, query: string) {
+      if (query.startsWith("WITH retired AS MATERIALIZED")) {
+        proto.prepare = prepare;
+        revoked = instance.revoked(credential.dependencies);
+      }
+      return prepare.call(this, query);
+    };
+    onTestFinished(() => {
+      proto.prepare = prepare;
+      first.ws?.close(1000, "done");
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    await revoked;
+    if (opened.ok) {
+      opened.response.webSocket?.accept();
+      onTestFinished(() => opened.response.webSocket?.close(1000, "done"));
+    }
+    expect(revoked).toBeDefined();
+    expect(opened.ok).toBe(false);
+  });
+
+  it("keeps a hint for an opening's socket until it is attached, though a turn ran meanwhile", async () => {
+    const at = Math.floor(Date.now() / DAY) * DAY + 10 * HOUR;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    let unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const first = await open(owner.token);
+    const gone = handled(owner, "close");
+    first.ws?.close(1000, "done");
+    await gone();
+    const [instance, state, held] = await runInDurableObject(
+      feedOf(owner),
+      (feed: UserDO, s) => [feed, s, new LiveBudget(s.storage.sql).turn()] as const,
+    );
+    if (!held) throw new Error("no turn");
+    // Two seconds before the turn it holds lapses; a turn to replace it granted already.
+    const almost = held.envelope.plan.validUntil - 2_000;
+    unpin();
+    unpin = await pinLedgerClock(almost);
+    vi.setSystemTime(almost);
+    const target = await liveOpeningTarget(env.DIRECTORY, owner.principalId);
+    const replacement = await reserveLive(
+      env.DIRECTORY,
+      await makeLiveGrant(
+        planFor(
+          LIVE_PRICES.pump as LiveManifestEntry,
+          {
+            incarnation: target.incarnation,
+            epoch: target.epoch,
+            recipientType: "UserDO",
+            recipient: owner.principalId,
+            class: "ordinary",
+            kind: "pump",
+            producesLocal: true,
+          },
+          target.ledger.now,
+        ),
+      ),
+    );
+    if (replacement.status !== "granted") throw new Error("no replacement");
+    const credential = await credentialOf(owner);
+    // The held turn lapses while the opened socket's alarm is set; while the object then grants
+    // itself a turn, the replacement is handed over and runs with a change marked, before the
+    // socket is attached.
+    type Batching = { batch(statements: unknown[]): Promise<unknown> };
+    const session = Object.getPrototypeOf(env.DIRECTORY.withSession("first-primary")) as Batching;
+    const batch = session.batch;
+    let armed = false;
+    let ran: Promise<void> | undefined;
+    let beforeAttached: { attached: number; behind: boolean; sent: number } | undefined;
+    // (The opening's second alarm write, in its last checks: its first is as its row is written.)
+    let writes = 0;
+    feedHooks.beforeAlarmWrite = async () => {
+      const confirming = state.storage.sql
+        .exec("SELECT 1 FROM live_local WHERE phase = 'confirming'")
+        .toArray().length;
+      if (!confirming || ++writes < 2) return;
+      delete feedHooks.beforeAlarmWrite;
+      vi.setSystemTime(Date.now() + 3_000);
+      unpin();
+      unpin = await pinLedgerClock(Date.now());
+      armed = true;
+    };
+    session.batch = async function (this: Batching, statements: unknown[]) {
+      const race = armed;
+      armed = false;
+      const result = await batch.call(this, statements);
+      if (race) {
+        expect(
+          await instance.liveTurnV1({
+            protocol: 1,
+            revision: LIVE_MANIFEST_REVISION,
+            envelope: replacement.grant,
+            quantity: 1,
+            ownerId: null,
+          }),
+        ).toBe(true);
+        const budget = new LiveBudget(state.storage.sql);
+        new Live(state.storage.sql).mark(
+          [{ repoId: repo.id, subject: "issue", explicit: true }],
+          budget.turnStamp(budget.ledgerNow(Date.now())) ?? undefined,
+        );
+        budget.bringTurn(0);
+        const worked = new Promise<void>((resolve) => {
+          feedHooks.afterTurnWork = async () => {
+            delete feedHooks.afterTurnWork;
+            const live = new Live(state.storage.sql);
+            const [socket] = live.sockets();
+            beforeAttached = {
+              attached: state.getWebSockets().length,
+              behind: (socket?.delivered_seq ?? Number.POSITIVE_INFINITY) < live.seq(),
+              sent: socket?.sent ?? -1,
+            };
+            resolve();
+          };
+        });
+        ran = instance.alarm();
+        await worked;
+      }
+      return result;
+    };
+    onTestFinished(() => {
+      session.batch = batch;
+      delete feedHooks.beforeAlarmWrite;
+      delete feedHooks.afterTurnWork;
+    });
+    const opened = await openOwnedLiveSocket(
+      { ...env, ...LIVE } as Env,
+      credential,
+      uniqueId("lt"),
+      undefined,
+    );
+    await ran;
+    if (!opened.ok) throw new Error(JSON.stringify(opened));
+    const ws = opened.response.webSocket as WebSocket;
+    ws.accept();
+    onTestFinished(() => ws.close(1000, "done"));
+    // Nothing sent, nor its cursor moved, with no socket to send to.
+    expect(beforeAttached).toEqual({ attached: 0, behind: true, sent: 0 });
+    // Once attached, its turn tells it.
+    const frames: unknown[] = [];
+    ws.addEventListener("message", (event) => frames.push(JSON.parse(String(event.data))));
+    for (let turn = 0; turn < 3 && frames.length === 0; turn++) await runTurnNow(owner);
+    expect(frames[0]).toMatchObject({ t: "changed" });
+  });
+
+  it("retires a socket left with no connection, and serves the connected one", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const socket = await open(owner.token);
+    // Closed while the object was cold and the directory could not be read: its row stays, with
+    // nothing attached to it.
+    await evictDurableObject(feedOf(owner));
+    feedHooks.beforeEpochRead = async () => {
+      throw new Error("directory unavailable");
+    };
+    const gone = handled(owner, "close");
+    socket.ws?.close(1000, "done");
+    await socket.closed;
+    await gone();
+    delete feedHooks.beforeEpochRead;
+    const rows = () =>
+      runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+        new Live(state.storage.sql)
+          .sockets()
+          .map((s) => ({ attached: state.getWebSockets(s.socket_id).length, sent: s.sent })),
+      );
+    expect(await rows()).toEqual([{ attached: 0, sent: 0 }]);
+    // Another credential's socket, connected.
+    const connected = await open(await scopedToken(owner.principalId, []));
+    onTestFinished(() => connected.ws?.close(1000, "done"));
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    for (let turn = 0; turn < 3 && connected.frames.length === 0; turn++)
+      await runDurableObjectAlarm(feedOf(owner));
+    expect(connected.frames[0]).toMatchObject({ t: "changed" });
+    // The one left with nothing attached is gone, on its end's provision.
+    expect(await rows()).toEqual([{ attached: 1, sent: 1 }]);
+  });
+
+  it("runs one turn when an opening passed over the one the feed holds, and loses no hint", async () => {
+    const owner = await user();
+    const repo = await repoWithIssue(owner);
+    const first = await open(owner.token);
+    const [held] = await turnOf(owner);
+    const receipt = (id: string | undefined) =>
+      env.DIRECTORY.prepare(
+        "SELECT valid_until, released_owners FROM live_budget_receipts WHERE operation_id = ?",
+      )
+        .bind(id)
+        .first<{ valid_until: number; released_owners: string }>();
+    // More of the feed's turns released after it than an opening looks at (none can be while it
+    // is held): the next opening misses it and grants a turn of its own.
+    await releasedTurns(
+      owner,
+      ((await receipt(held?.operation_id))?.valid_until as number) + 1_000,
+      LIVE_TURN_RECEIPT_LOOK,
+      1_000,
+    );
+    const second = await open(owner.token);
+    const extra = (
+      await env.DIRECTORY.prepare(
+        `SELECT operation_id FROM live_budget_receipts WHERE recipient = ? AND kind = 'pump'
+           AND settled_at IS NULL AND json_array_length(released_owners) = 0`,
+      )
+        .bind(owner.principalId)
+        .all<{ operation_id: string }>()
+    ).results
+      .map((r) => r.operation_id)
+      .filter((id) => id !== held?.operation_id);
+    expect(extra).toHaveLength(1);
+    // The feed keeps the turn it held: still one, the same.
+    expect(await turnOf(owner)).toEqual([
+      expect.objectContaining({ phase: "prepared", operation_id: held?.operation_id }),
+    ]);
+    // A change reaches both sockets, by the held turn alone: the opening's never runs.
+    await feedOf(owner).applyFeed([change(owner, repo, 1)]);
+    await runTurnNow(owner);
+    expect(await first.next()).toMatchObject({ t: "changed" });
+    expect(await second.next()).toMatchObject({ t: "changed" });
+    expect((await receipt(held?.operation_id))?.released_owners).not.toBe("[]");
+    expect((await receipt(extra[0]))?.released_owners).toBe("[]");
+    const after = await turnOf(owner);
+    expect(after).toHaveLength(1);
+    expect([held?.operation_id, extra[0]]).not.toContain(after[0]?.operation_id);
+    first.ws?.close(1000, "done");
+    second.ws?.close(1000, "done");
   });
 
   it("renews a socket from when it asked, however late its turn runs", async () => {
@@ -2488,6 +3198,28 @@ describe("a feed's turn", () => {
       socket.ws?.close(1000, "done");
     });
 
+    it("tells a socket of a lapsed turn at most once, though its attachment had no room for the mark", async () => {
+      const owner = await user();
+      const socket = await open(owner.token);
+      await runInDurableObject(feedOf(owner), (_: UserDO, state) => toLapse(state, -1_000));
+      // The platform refusing the attachment with its mark (past its size): the frame must not be
+      // sent again by every later alarm.
+      const serialize = WebSocket.prototype.serializeAttachment;
+      WebSocket.prototype.serializeAttachment = function (this: WebSocket, value: unknown) {
+        if (typeof (value as { paused?: unknown } | null)?.paused === "string")
+          throw new RangeError("attachment too large");
+        return serialize.call(this, value);
+      };
+      try {
+        await runTurnNow(owner);
+        await runTurnNow(owner);
+      } finally {
+        WebSocket.prototype.serializeAttachment = serialize;
+      }
+      expect(pausedFrames(socket).length).toBeLessThanOrEqual(1);
+      socket.ws?.close(1000, "done");
+    });
+
     it("tells nothing of a turn left for want of room that can still run", async () => {
       const owner = await user();
       const socket = await open(owner.token);
@@ -2755,6 +3487,93 @@ describe("a feed's turn", () => {
     expect(await closed).toBe(4412);
     expect(await turnOf(owner)).toEqual([]);
     first.ws?.close(1000, "done");
+  });
+
+  it("refuses an opening before any grant when the day has no room to replace the turn its object lost: closed 4413", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    // Its turn lost while its grant is still unsettled in the ledger: the directory takes it as
+    // held, so the opening is granted none until its object grants itself one, after the others.
+    await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
+      state.storage.sql.exec("DELETE FROM live_turn"),
+    );
+    const issued = (await (await ticketFor(owner.token)).json()) as { ticket: string };
+    const target = await liveOpeningTarget(env.DIRECTORY, owner.principalId);
+    expect(target.turnHeld).toBe(true);
+    const today = target.view.today;
+    const need = socketUnits(target).reduce(
+      (n, unit) =>
+        n +
+        (planFor(
+          LIVE_PRICES[unit] as LiveManifestEntry,
+          {
+            incarnation: target.incarnation,
+            epoch: target.epoch,
+            recipientType: "UserDO",
+            recipient: owner.principalId,
+            class: "ordinary",
+            kind: liveKindOf(unit),
+            producesLocal: true,
+          },
+          target.ledger.now,
+        ).charges.find((c) => c.day === today)?.resources.d1_rows_written ?? 0),
+      0,
+    );
+    // Today's ordinary share left with room for the opening's grants, but not a turn as well.
+    await env.DIRECTORY.prepare(
+      "UPDATE live_budget_days SET d1_rows_written = ?1 + protected_d1_rows_written WHERE day = ?2",
+    )
+      .bind(LIVE_DAILY.d1_rows_written - LIVE_PROTECTED.d1_rows_written - need, today)
+      .run();
+    const charged = () =>
+      env.DIRECTORY.prepare(
+        `SELECT (SELECT count(*) FROM live_budget_receipts WHERE recipient = ?1) AS receipts,
+           (SELECT d1_rows_written FROM live_budget_days WHERE day = ?2) AS written`,
+      )
+        .bind(owner.principalId, today)
+        .first();
+    const before = await charged();
+    const response = await call(
+      new Request(`${ORIGIN}/api/notifications/live?ticket=${encodeURIComponent(issued.ticket)}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer ${owner.token}` },
+      }),
+    );
+    expect(response.status).toBe(101);
+    const ws = response.webSocket as WebSocket;
+    const closed = new Promise<number>((resolve) =>
+      ws.addEventListener("close", (event) => resolve(event.code)),
+    );
+    ws.accept();
+    expect(await closed).toBe(4413);
+    // Nothing granted: no admission, end or turn charged and left standing.
+    expect(await charged()).toEqual(before);
+    first.ws?.close(1000, "done");
+  });
+
+  it("opens a feed that holds its turn without granting another, though its pre-check counts one", async () => {
+    const owner = await user();
+    const first = await open(owner.token);
+    const turns = () =>
+      env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_budget_receipts WHERE recipient = ? AND kind = 'pump'",
+      )
+        .bind(owner.principalId)
+        .first<{ n: number }>()
+        .then((r) => r?.n);
+    const before = await turns();
+    const second = await open(owner.token);
+    expect(second.response.status).toBe(101);
+    expect(
+      await env.DIRECTORY.prepare(
+        "SELECT count(*) AS n FROM live_sockets WHERE feed = ? AND state = 'open'",
+      )
+        .bind(owner.principalId)
+        .first(),
+    ).toEqual({ n: 2 });
+    expect(await turns()).toBe(before);
+    expect(await turnOf(owner)).toHaveLength(1);
+    first.ws?.close(1000, "done");
+    second.ws?.close(1000, "done");
   });
 
   it("leases a socket to its renewal deadline, each renewal extending the lease", async () => {
@@ -3077,9 +3896,11 @@ describe("live work's rows in a feed's object", () => {
    * allow (one fewer than a page, none of them for two hours): each grant's overdue check reads
    * every one of them.
    */
-  async function atLedger(at: number): Promise<void> {
+  /** Holds this object's clock and the ledger's at `at`; moves both on by `ms` when called. */
+  async function atLedger(at: number): Promise<(ms: number) => Promise<void>> {
     vi.useFakeTimers({ toFake: ["Date"], now: at });
-    const unpin = await pinLedgerClock(at);
+    let ledger = at;
+    let unpin = await pinLedgerClock(ledger);
     const forgetReceipts = () => env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
     onTestFinished(async () => {
       try {
@@ -3090,6 +3911,12 @@ describe("live work's rows in a feed's object", () => {
     });
     await forgetReceipts();
     await expiredReceipts(at, LIVE_RECEIPTS_OVERDUE.page - 1);
+    return async (ms) => {
+      unpin();
+      ledger += ms;
+      unpin = await pinLedgerClock(ledger);
+      vi.setSystemTime(Date.now() + ms);
+    };
   }
 
   /**
@@ -3098,7 +3925,7 @@ describe("live work's rows in a feed's object", () => {
    */
   async function meterTurnSteps(hour: number): Promise<void> {
     const at = Math.floor(Date.now() / DAY) * DAY + hour;
-    await atLedger(at);
+    const later = await atLedger(at);
     const steps: Partial<Record<keyof typeof LIVE_TURN_STEPS, Rows>> = {};
     // Only once a scenario's sockets are all open (a turn running while they are being opened
     // counts their admissions' work, done meanwhile, as its own: conservative, but not a step's).
@@ -3164,6 +3991,14 @@ describe("live work's rows in a feed's object", () => {
         wholes.push({ whole, paid: (done.at(-1) as { paid: TurnRows }).paid });
     };
     const wholes: { whole: Rows; paid: TurnRows }[] = [];
+    /**
+     * `who`'s turn with both clocks a second on, as they are between a feed's turns: its successor
+     * starts later than any turn the feed prepared, which its end records.
+     */
+    const turnLater = async (who: Who) => {
+      await later(1_000);
+      await turn(who);
+    };
     /** What a turn used outside its meter (its whole less what its meter counted): its end. */
     const noteEnd = () => {
       const whole = turns.at(-1) as Rows;
@@ -3182,7 +4017,7 @@ describe("live work's rows in a feed's object", () => {
       const idleSocket = await open(idle.token, ROOMY);
       await doneTurnReceipts(idle, at);
       measuring = true;
-      await turn(idle);
+      await turnLater(idle);
       noteEnd();
       // A renewal.
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -3233,7 +4068,7 @@ describe("live work's rows in a feed's object", () => {
       expect(await openSockets(crowd)).toBe(LIVE_POLICY.perFeed);
       await doneTurnReceipts(crowd, at);
       measuring = true;
-      await turn(crowd);
+      await turnLater(crowd);
       noteEnd();
       await advance(crowd, RENEW_LATE);
       const renewing = [crowdSockets[0], crowdSockets[1]];
@@ -3441,7 +4276,8 @@ describe("live work's rows in a feed's object", () => {
   it("is within its ticket's, upgrade's (a browser's or an MCP listen's) and confirmation's D1 past midnight", async () => {
     // Half a minute to midnight: every grant of an opening (a ticket's, a minute) and of a
     // confirmation (a minute) reaches the next day; the ledger with an epoch, both days' rows,
-    // as many expired receipts as grants allow, and the feed's done turns to remove.
+    // as many expired receipts as grants allow, the feed's done turns to remove, and its turns
+    // that ran still valid (passed over by the lookup of a turn it holds).
     const at = Math.floor(Date.now() / DAY) * DAY + DAY - 30_000;
     await atLedger(at);
     // Both days' rows there already (another feed's socket, its end provided for over two days).
@@ -3451,8 +4287,10 @@ describe("live work's rows in a feed's object", () => {
     const owner = await userWithEpoch();
     await repoWithIssue(owner);
     await doneTurnReceipts(owner, at);
-    // The feed's first opening, and one after everything it granted is gone (its turn and
-    // blocks granted again, the feed's object already there).
+    await releasedTurns(owner, at + 27 * MINUTE);
+    // The feed's first opening, and one after everything it granted is gone: its blocks granted
+    // again by the Worker, and its turn by its object (the ledger still holding the one it lost),
+    // the feed's object already there.
     const first = await opening(owner);
     await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
       state.storage.sql.exec("DELETE FROM live_turn");
@@ -3464,6 +4302,7 @@ describe("live work's rows in a feed's object", () => {
     const listener = await userWithEpoch();
     await repoWithIssue(listener);
     await doneTurnReceipts(listener, at);
+    await releasedTurns(listener, at + 27 * MINUTE);
     const credential = (await liveCredential(
       env.DIRECTORY,
       (
@@ -3485,7 +4324,43 @@ describe("live work's rows in a feed's object", () => {
     expect(listened?.ok).toBe(true);
     const listenSocket = listened?.ok ? listened.response.webSocket : null;
     listenSocket?.accept();
-    // Its turn granted again by it.
+    // And as the first of a feed whose Worker grants its turns too cheap for its object (a build
+    // priced lower at the same revision): the object takes none, and grants itself one too. An
+    // agent's, its owner a dependency of its socket too (indexed with it).
+    const cheap = await userWithEpoch();
+    await repoWithIssue(cheap);
+    await doneTurnReceipts(cheap, at);
+    await releasedTurns(cheap, at + 27 * MINUTE);
+    await env.DIRECTORY.prepare("UPDATE principals SET type = 'agent', owner_id = ? WHERE id = ?")
+      .bind(other.principalId, cheap.principalId)
+      .run();
+    const cheapCredential = await credentialOf(cheap);
+    expect(cheapCredential.dependencies).toHaveLength(3);
+    const pump = LIVE_PRICES.pump as LiveManifestEntry;
+    feedHooks.beforeEpochRead = async () => {
+      LIVE_PRICES.pump = {
+        ...pump,
+        resources: { ...pump.resources, do_rows_read: pump.resources.do_rows_read + 3 },
+      };
+    };
+    let cheaply: Awaited<ReturnType<typeof openOwnedLiveSocket>> | undefined;
+    const twoTurns = await rows(cheap, async () => {
+      try {
+        cheaply = await openOwnedLiveSocket(
+          { ...env, ...LIVE } as Env,
+          cheapCredential,
+          `listen:${uniqueId("lsk")}`,
+          undefined,
+        );
+      } finally {
+        LIVE_PRICES.pump = pump;
+        delete feedHooks.beforeEpochRead;
+      }
+    });
+    expect(cheaply?.ok).toBe(true);
+    const cheapSocket = cheaply?.ok ? cheaply.response.webSocket : null;
+    cheapSocket?.accept();
+    // Its turn granted again, by its object.
     expect(
       await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
         state.storage.sql.exec("SELECT 1 FROM live_turn").toArray(),
@@ -3522,10 +4397,93 @@ describe("live work's rows in a feed's object", () => {
     });
     withinObserved({
       ticket: most(first.ticket, again.ticket),
-      upgrade_transport: most(most(first.upgrade, again.upgrade), listen),
+      upgrade_transport: most(most(first.upgrade, again.upgrade), most(listen, twoTurns)),
       org_confirmation: { ...confirmation, read: 0, written: 0 },
     });
-    for (const ws of [warm.ws, first.ws, again.ws, listenSocket]) ws?.close(1000, "done");
+    for (const ws of [warm.ws, first.ws, again.ws, listenSocket, cheapSocket])
+      ws?.close(1000, "done");
+  });
+
+  it("prices an admission's rows from its most: a feed's first opening and its last place, half a minute before midnight, by credentials with every dependency", async () => {
+    // Half a minute before a UTC midnight by both clocks: each opening provides for its end on the
+    // next day too.
+    const at = Math.floor(Date.now() / DAY) * DAY + DAY - 30_000;
+    vi.useFakeTimers({ toFake: ["Date"], now: at });
+    const unpin = await pinLedgerClock(at);
+    onTestFinished(() => unpin());
+    await env.DIRECTORY.prepare("DELETE FROM live_budget_receipts").run();
+    /**
+     * A token of `agentId` with the most dependencies an opening accepts: itself, the token it was
+     * minted from and that one's own, its agent and the agent's owner.
+     */
+    const deepest = async (agentId: string) => {
+      const [leaf, source, root] = await Promise.all([1, 2, 3].map(() => scopedToken(agentId, [])));
+      const idOf = async (token: string) =>
+        (await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+          .bind(await hashToken(token))
+          .first<string>("id")) as string;
+      const [leafId, sourceId, rootId] = await Promise.all(
+        [leaf, source, root].map((t) => idOf(t as string)),
+      );
+      await env.DIRECTORY.batch([
+        env.DIRECTORY.prepare("UPDATE tokens SET source_id = ? WHERE id = ?").bind(
+          sourceId,
+          leafId,
+        ),
+        env.DIRECTORY.prepare("UPDATE tokens SET source_id = ? WHERE id = ?").bind(
+          rootId,
+          sourceId,
+        ),
+      ]);
+      return leaf as string;
+    };
+    const measure = async (noisy: boolean) => {
+      const owner = await userWithEpoch();
+      const agent = await agentFor(owner, ["issues:read"]);
+      const bot: Who = { principalId: agent.id, token: agent.own, handle: agent.handle };
+      const tokens = await Promise.all([1, 2, 3, 4].map(() => deepest(agent.id)));
+      if (noisy)
+        await runInDurableObject(feedOf(bot), (_: UserDO, state) => {
+          for (let i = 0; i < 500; i++)
+            state.storage.sql.exec(
+              "INSERT INTO live_revoked (dependency, at) VALUES (?, ?)",
+              `credential:tok_gone${i}`,
+              Date.now(),
+            );
+        });
+      const sockets: Awaited<ReturnType<typeof open>>[] = [];
+      // Its feed's first opening: its pools' first blocks installed, its turn prepared.
+      const first = await rows(bot, async () => {
+        sockets.push(await open(tokens[0] as string, ROOMY));
+      });
+      // The last place on its feed one short of its most, by a credential one short of its own:
+      // each cap's count reads every socket's row.
+      for (const token of tokens)
+        for (let i = token === tokens[0] ? 1 : 0; i < LIVE_POLICY.perCredential; i++)
+          if (sockets.length < LIVE_POLICY.perFeed - 1) sockets.push(await open(token, ROOMY));
+      const last = await rows(bot, async () => {
+        sockets.push(await open(tokens[3] as string, ROOMY));
+      });
+      expect(sockets.map((s) => s.response.status)).toEqual(Array(LIVE_POLICY.perFeed).fill(101));
+      expect(await openSockets(bot)).toBe(LIVE_POLICY.perFeed);
+      for (const s of sockets) s.ws?.close(1000, "done");
+      return {
+        first: { read: first.read, written: first.written },
+        last: { read: last.read, written: last.written },
+      };
+    };
+    const deep = await measure(false);
+    // Its observed rows exactly these: the most read by the last place, the most written by the
+    // first opening; dependencies already revoked elsewhere on the feed (500) make no difference.
+    const observed = Object.values((LIVE_PRICES.admission as LiveManifestEntry).observed);
+    expect(observed).toHaveLength(1);
+    expect(deep).toEqual({
+      first: { read: deep.first.read, written: observed[0]?.do_rows_written },
+      last: { read: observed[0]?.do_rows_read, written: deep.last.written },
+    });
+    expect(deep.first.read).toBeLessThan(deep.last.read);
+    expect(deep.last.written).toBeLessThan(deep.first.written);
+    expect(await measure(true)).toEqual(deep);
   });
 
   it("is within each unit's observed rows", async () => {
