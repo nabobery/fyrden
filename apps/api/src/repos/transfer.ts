@@ -83,17 +83,19 @@ export async function transferRepoOperation(
   const name = input.new_name ?? entry.name;
   const { maxRepos, maxStorageBytes } = await accountLimits(env, to.id, metrics);
   await checkNewRepo(env, to, name, maxRepos, metrics);
-  // Its storage must fit there too (checked before it freezes; pushes after it are refused).
+  // Its storage must fit there too, release assets included (checked before it freezes; pushes
+  // after it are refused). Only a first refusal: the arrival holds what it brings.
   metrics.count("do.request", { class: "OrgDO", method: "repoForTransfer" }, 2);
   const [usage, status] = await Promise.all([
     env.ORG.getByName(entry.ownerId).repoForTransfer(entry.id),
     env.ORG.getByName(to.id).quotaStatus(),
   ]);
-  if (usage.usageBytes > maxStorageBytes - status.usedBytes - status.reservedBytes)
+  const bytes = usage.usageBytes + usage.assetBytes;
+  if (bytes > maxStorageBytes - status.usedBytes - status.reservedBytes)
     throw new OperationError(
       403,
       "quota_exceeded",
-      `${to.handle}'s storage quota has no room for this repository's ${usage.usageBytes} bytes.`,
+      `${to.handle}'s storage quota has no room for this repository's ${bytes} bytes.`,
     );
   metrics.count("do.request", { class: "OrgDO", method: "canAdopt" });
   if (!(await env.ORG.getByName(to.id).canAdopt(to.id, usage.collaborators)))
@@ -551,6 +553,10 @@ async function arrivalRoom(
     owed = after;
   }
   const { collaborators, usageBytes } = handedOver;
+  // Its release assets' total, read from the frozen repository with every completion under way
+  // in it: while frozen nothing commits, so it can only fall, which a later statement corrects.
+  metrics?.count("do.request", { class: "RepoDO", method: "releaseAssetUsage" });
+  const assets = await repo.releaseAssetUsage();
   metrics?.count("do.request", { class: "OrgDO", method: "reserveArrival" });
   return env.ORG.getByName(transfer.to_owner).reserveArrival({
     transferId: transfer.transfer_id,
@@ -558,6 +564,7 @@ async function arrivalRoom(
     repoId: transfer.repo_id,
     usageBytes,
     owed,
+    assets,
     collaborators,
   });
 }

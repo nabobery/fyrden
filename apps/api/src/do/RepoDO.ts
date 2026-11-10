@@ -23,6 +23,7 @@ import {
   type RequestMeta,
 } from "@fyrden/adapters-cloudflare/obs";
 import {
+  atLeast,
   decideMetadataAction,
   type Envelope,
   FEED_HORIZON_MS,
@@ -242,6 +243,14 @@ import {
 import { REBASE_POLICY, type RebasePolicy } from "./repo/rebase-replay.js";
 import { RebaseSagas } from "./repo/rebase-saga.js";
 import { type IncomingReferences, RepoReferences } from "./repo/references.js";
+import {
+  type AssetCaller,
+  type AssetFailure,
+  type AssetHooks,
+  RELEASE_ASSETS_JOB,
+  RepoReleaseAssets,
+  type UploadAnswer,
+} from "./repo/release-assets.js";
 import { type PreparedTag, RepoReleases } from "./repo/releases.js";
 import { RepoReviewComments } from "./repo/review-comments.js";
 import {
@@ -358,6 +367,18 @@ type LabelPatch = {
 /** The label a form showed: its id, and the version it was at (when given). */
 type LabelExpectation = { readonly id: number; readonly version?: number };
 
+/** A refusal of a release asset change, as the caller answers it. */
+function assetRefusal(code: string): AssetFailure {
+  switch (code) {
+    case "repo_transferring":
+      return { ok: false, status: 409, code, error: REPO_TRANSFERRING };
+    case "forbidden":
+      return { ok: false, status: 403, code, error: "Changing release assets takes write access." };
+    default:
+      return { ok: false, status: 404, code: "repo_not_found", error: REPO_DELETED };
+  }
+}
+
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -469,6 +490,12 @@ export class RepoDO extends MigratingDO {
 
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
+  /** Release assets: upload sessions, assets, retained objects, and the account's total. */
+  readonly releaseAssets: RepoReleaseAssets;
+  /** Where release assets are stored. Tests may wrap it. */
+  assetBucket: R2Bucket;
+  /** Hooks between a release asset completion's steps. For tests. */
+  assetHooks: AssetHooks = {};
   readonly blameRuns: RepoBlame;
 
   /** Reactions to issues, pull requests and their comments. */
@@ -565,7 +592,11 @@ export class RepoDO extends MigratingDO {
         this.git.jobs.ensure(PREFERENCE_RECOVERY_JOB, PREFERENCE_RECOVERY_JOB);
         // An older generation's digest windows are never sealed or read: cleaned up.
         this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB);
+        // Older sessions ended, the restore fence's purges waited for, and the total told again.
+        this.git.jobs.ensure("release_assets", RELEASE_ASSETS_JOB);
       },
+      // Even for a repository being deleted: its deletion settles uploads by this fence.
+      () => this.releaseAssets.restored(),
     );
     this.watching = new RepoWatching({ git: this.git, epochGen: () => this.events.epochGen() });
     this.threads = new RepoThreadPreferences({
@@ -590,6 +621,34 @@ export class RepoDO extends MigratingDO {
         (await resolveRepo(this.env, owner, name, { metrics: this.git.context.metrics }))?.id ??
         null,
     });
+    this.assetBucket = env.ASSETS;
+    this.releaseAssets = new RepoReleaseAssets({
+      git: this.git,
+      events: this.events,
+      bucket: () => this.assetBucket,
+      repoId: () => this.#repoId(),
+      writeRefusal: () => this.#writeRefusal(),
+      state: async (input) => {
+        const account = this.events.account();
+        if (!account) return "not_here";
+        this.git.context.metrics.count("do.request", {
+          class: "OrgDO",
+          method: "setReleaseAssetStorage",
+        });
+        return this.env.ORG.getByName(account.accountId).setReleaseAssetStorage({
+          repoId: this.#repoId(),
+          ...input,
+        });
+      },
+      releaseHold: async (holdId) => {
+        const account = this.events.account();
+        if (!account) return;
+        this.git.context.metrics.count("do.request", { class: "OrgDO", method: "releaseStorage" });
+        await this.env.ORG.getByName(account.accountId).releaseStorage(holdId);
+      },
+      hooks: () => this.assetHooks,
+      log: () => this.#log(),
+    });
     this.blameRuns = new RepoBlame({
       git: this.git,
       storage: this.ctx.storage,
@@ -601,6 +660,7 @@ export class RepoDO extends MigratingDO {
       git: this.git,
       events: this.events,
       collect: () => scheduleGc(this.git, this.git.context.now() + this.maintenance.gcDelayMs),
+      assets: this.releaseAssets,
     });
     this.subjectMeta = new RepoSubjectMeta({
       git: this.git,
@@ -2364,6 +2424,188 @@ export class RepoDO extends MigratingDO {
     );
   }
 
+  /**
+   * Begins an upload session: its multipart upload is created first, as
+   * the change's preparation, and recorded only if the release, the name
+   * and the session count still allow once the change runs; otherwise it
+   * is aborted, best effort.
+   */
+  async beginReleaseAsset(
+    input: Parameters<RepoReleaseAssets["begin"]>[0],
+    actor: RefActor & { readonly tokenId: string },
+  ): Promise<UploadAnswer> {
+    if (this.#closed) return assetRefusal("repo_not_found");
+    let created: { objectId: string; multipartId: string } | undefined;
+    try {
+      const result = await this.#pullChange(
+        "beginReleaseAsset",
+        actor,
+        (caller, prepared: AssetFailure | { objectId: string; multipartId: string }) => {
+          if ("ok" in prepared) return prepared;
+          const answer = this.releaseAssets.begin(
+            input,
+            this.#assetCaller(caller, actor),
+            prepared,
+          );
+          if (answer.ok) created = undefined;
+          return answer;
+        },
+        async () => {
+          const refused = this.#writeRefusal();
+          if (refused) return { ok: false as const, ...refused };
+          const early = this.releaseAssets.beginRefusal(input);
+          if (early) return early;
+          created = await this.releaseAssets.createUpload();
+          return created;
+        },
+      );
+      return "status" in result || result.ok ? result : assetRefusal(result.code);
+    } finally {
+      if (created) await this.releaseAssets.dropUpload(created);
+    }
+  }
+
+  #assetCaller(caller: PullCaller, actor: RefActor & { readonly tokenId: string }): AssetCaller {
+    return {
+      principal: actor.principal,
+      tokenId: actor.tokenId,
+      grantId: actor.grantId ?? null,
+      writes: () => caller.role !== null && atLeast(caller.role, "write"),
+    };
+  }
+
+  /** Where a part of a session goes, if it takes the part now: a read. */
+  async releaseAssetPartTarget(uploadId: string, principal: string, part: number, length: number) {
+    return this.#measured("releaseAssetPartTarget", async () => {
+      await this.checkEpoch();
+      return this.releaseAssets.partTarget(uploadId, principal, part, length);
+    });
+  }
+
+  /** An upload session, for its principal. */
+  async releaseAssetUpload(uploadId: string, principal: string): Promise<UploadAnswer> {
+    return this.#measured("releaseAssetUpload", async () => {
+      await this.checkEpoch();
+      return this.releaseAssets.view(uploadId, principal);
+    });
+  }
+
+  /**
+   * Completes a session (see `RepoReleaseAssets.complete`): `decision` is
+   * the token's check on the primary, and the caller's role is read again,
+   * with no await, before the outcome.
+   */
+  completeReleaseAsset(input: {
+    readonly uploadId: string;
+    readonly actor: RefActor & { readonly tokenId: string };
+    readonly parts: readonly { readonly partNumber: number; readonly etag: string }[];
+    readonly decision: PushDecision;
+  }): Promise<UploadAnswer> {
+    return this.#measured("completeReleaseAsset", async () => {
+      await this.checkEpoch();
+      const { actor } = input;
+      // The owner generation the roles are pulled under: a transfer landing after drops them.
+      const ownerGen = this.events.account()?.ownerGen;
+      const ceilings = await this.#authority.rolesPulled(actor.principal, actor.grantId ?? null);
+      return this.releaseAssets.complete({
+        uploadId: input.uploadId,
+        parts: input.parts,
+        decision: input.decision,
+        caller: {
+          principal: actor.principal,
+          tokenId: actor.tokenId,
+          grantId: actor.grantId ?? null,
+          writes: () => {
+            const role = this.#authority.roleNow(actor.principal, ceilings);
+            return role !== null && atLeast(role, "write");
+          },
+          moved: () => this.events.account()?.ownerGen !== ownerGen,
+        },
+      });
+    });
+  }
+
+  /** Ends an upload session. */
+  abortReleaseAsset(uploadId: string, principal: string): Promise<UploadAnswer> {
+    return this.#measured("abortReleaseAsset", async () => {
+      await this.checkEpoch();
+      return this.releaseAssets.abort(uploadId, principal);
+    });
+  }
+
+  /** One asset; null when the repository is gone. */
+  getReleaseAsset(id: number) {
+    return this.#measured("getReleaseAsset", () =>
+      this.#refusesReads() ? null : (this.releaseAssets.get(id) ?? undefined),
+    );
+  }
+
+  /** Deletes an asset; its object is retained for 30 days. */
+  deleteReleaseAsset(id: number, actor: RefActor) {
+    return this.#pullChange("deleteReleaseAsset", actor, (caller) => {
+      return this.#withIdentity(() =>
+        caller.role === null || !atLeast(caller.role, "write")
+          ? assetRefusal("forbidden")
+          : this.releaseAssets.deleteAsset(id, caller.actor),
+      );
+    });
+  }
+
+  /** What is retained; null when the repository is gone. */
+  retainedReleaseAssets() {
+    return this.#measured("retainedReleaseAssets", () =>
+      this.#refusesReads() ? null : this.releaseAssets.retained(),
+    );
+  }
+
+  /** Purges every object retained before now, past the restore fence (an admin). */
+  purgeRetainedAssets(actor: RefActor) {
+    return this.#pullChange("purgeRetainedAssets", actor, (caller) => {
+      return this.#withIdentity(() =>
+        caller.role === null || !atLeast(caller.role, "admin")
+          ? assetRefusal("forbidden")
+          : this.releaseAssets.purgeEarly(caller.actor),
+      );
+    });
+  }
+
+  /**
+   * An asset to download, by its release's tag and its folded name, from
+   * rows alone; null when the repository is gone, undefined for none.
+   */
+  releaseAssetForDownload(tag: string, fold: string) {
+    return this.#measured("releaseAssetForDownload", async () => {
+      await this.#epochFirst();
+      if (this.#refusesReads()) return null;
+      const release = this.releases.byTag(tag);
+      const asset = release && this.releaseAssets.byName(release.id, fold);
+      return release && asset ? { draft: release.draft, asset } : undefined;
+    });
+  }
+
+  /**
+   * For the repository's deletion: its upload sessions settled, so no
+   * object can appear once its asset keys are listed and deleted (see
+   * `RepoReleaseAssets.settle`).
+   */
+  settleReleaseUploads(): Promise<"more" | "wait" | "settled"> {
+    // Erased (or being erased) here, by a run of the deletion before it was reopened: no session
+    // is left to complete anything.
+    if (this.#closed) return Promise.resolve("settled");
+    return this.#measured("settleReleaseUploads", async () => {
+      await this.#epochFirst();
+      return this.releaseAssets.settle();
+    });
+  }
+
+  /** For a transfer's arrival: the release assets' total, under a tuple of its own. */
+  releaseAssetUsage() {
+    return this.#measured("releaseAssetUsage", async () => {
+      await this.checkEpoch();
+      return this.releaseAssets.usage();
+    });
+  }
+
   async #peeledTag(tag: string): Promise<PreparedTag> {
     const browse = new RepoBrowse({ git: this.git, memoryBlocks: this.#memoryBlocks() });
     try {
@@ -2755,7 +2997,11 @@ export class RepoDO extends MigratingDO {
   ): Promise<number> {
     return this.#measured("completeTransfer", async () => {
       await this.checkEpoch();
-      const { ownerGen, changed } = this.events.completeTransfer(to, actor);
+      // Its release assets' total is told to the new account afresh: what the arrival took may
+      // have fallen since (a session ended), and the old account no longer takes statements.
+      const { ownerGen, changed } = this.events.completeTransfer(to, actor, () =>
+        this.releaseAssets.landed(),
+      );
       // Only when it moved: the old account's snapshot and floor mean nothing now, nor its
       // teams' review requests (settled by a job).
       if (changed) {
@@ -3444,6 +3690,13 @@ export class RepoDO extends MigratingDO {
         },
       },
       [DIGEST_SEAL_JOB]: { runSlice: () => this.#digestSealSlice() },
+      release_assets: {
+        runSlice: async () => {
+          await this.checkEpoch();
+          const result = await this.releaseAssets.slice();
+          return result.done ? result : { ...result, cursor: null };
+        },
+      },
       [DIGEST_CREDIT_JOB]: { runSlice: () => this.#digestCreditSlice() },
       [PREFERENCE_CLEANUP_JOB]: {
         // A page an invocation: its rows are written with no I/O to bound it otherwise.

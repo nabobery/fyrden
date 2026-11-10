@@ -70,6 +70,12 @@ CREATE TABLE pending_audit (
         details TEXT NOT NULL CHECK (json_valid(details)),
         request_id TEXT
       ) STRICT;
+CREATE TABLE quota_assets (
+        repo_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL CHECK (bytes >= 0),
+        epoch_gen INTEGER NOT NULL,
+        seq INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE quota_confirmed (
         upload_id TEXT PRIMARY KEY,
         confirmed_at INTEGER NOT NULL
@@ -127,7 +133,8 @@ CREATE TABLE transfer_arrivals (
         -- The uploads it owes confirmations of, each charged here under its own id.
         owed TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(owed)),
         expires_at INTEGER NOT NULL
-      ) STRICT;
+      , assets TEXT
+        CHECK (assets IS NULL OR json_valid(assets))) STRICT;
 CREATE TABLE transfer_ops (
         transfer_id TEXT NOT NULL,
         op TEXT NOT NULL CHECK (op IN ('adopt', 'release')),

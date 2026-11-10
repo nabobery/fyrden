@@ -53,6 +53,8 @@ CREATE INDEX reflog_at ON reflog (at);
 CREATE INDEX reflog_ref ON reflog (ref, seq);
 CREATE INDEX refollow_bases_due ON refollow_bases (next_at);
 CREATE INDEX refs_oid ON refs (oid);
+CREATE INDEX release_asset_retained_due ON release_asset_retained (purge_after);
+CREATE INDEX release_asset_uploads_due ON release_asset_uploads (state, expires_at);
 CREATE INDEX releases_order ON releases (draft, published_at, id);
 CREATE INDEX resolved_repos_at ON resolved_repos (resolved_at);
 CREATE INDEX review_comments_pr ON review_comments (pr_number, comment_id);
@@ -731,6 +733,54 @@ CREATE TABLE refs (
     CHECK ((kind = 'direct' AND oid IS NOT NULL AND target IS NULL)
         OR (kind = 'symbolic' AND oid IS NULL AND target IS NOT NULL))
   ) STRICT;
+CREATE TABLE release_asset_counters (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        asset_bytes INTEGER NOT NULL CHECK (asset_bytes >= 0),
+        usage_seq INTEGER NOT NULL,
+        told_seq INTEGER NOT NULL,
+        retain_until INTEGER,
+        early_purge_at INTEGER
+      ) STRICT;
+CREATE TABLE release_asset_retained (
+        object_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        purge_after INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE release_asset_uploads (
+        upload_id TEXT PRIMARY KEY,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        replace_existing INTEGER NOT NULL CHECK (replace_existing IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        part_bytes INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        multipart_id TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        token_id TEXT NOT NULL,
+        grant_id TEXT,
+        epoch_gen INTEGER NOT NULL,
+        completion_token TEXT,
+        parts TEXT,
+        settle_after INTEGER,
+        state TEXT NOT NULL CHECK (state IN ('receiving', 'completing', 'completed', 'aborted')),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE release_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        uploader TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (release_id, name_fold)
+      ) STRICT;
 CREATE TABLE releases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tag_name TEXT NOT NULL UNIQUE,

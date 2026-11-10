@@ -218,6 +218,15 @@ import {
   listReviewCommentReactionsOperation,
 } from "../repos/reactions.js";
 import {
+  abortAssetUploadOperation,
+  completeAssetUploadOperation,
+  createAssetUploadOperation,
+  deleteReleaseAssetOperation,
+  getReleaseAssetOperation,
+  getRetainedAssetsOperation,
+  purgeRetainedAssetsOperation,
+} from "../repos/release-assets.js";
+import {
   createReleaseOperation,
   deleteReleaseOperation,
   getLatestReleaseOperation,
@@ -587,6 +596,13 @@ export const handlers: Handlers = {
   "releases.create": createReleaseOperation,
   "releases.update": updateReleaseOperation,
   "releases.delete": deleteReleaseOperation,
+  "releases.retained.get": getRetainedAssetsOperation,
+  "releases.retained.purge": purgeRetainedAssetsOperation,
+  "releases.assets.get": getReleaseAssetOperation,
+  "releases.assets.delete": deleteReleaseAssetOperation,
+  "releases.assets.uploads.create": createAssetUploadOperation,
+  "releases.assets.uploads.complete": completeAssetUploadOperation,
+  "releases.assets.uploads.abort": abortAssetUploadOperation,
   "issues.create": createIssueOperation,
   "issues.get": getIssueOperation,
   "issues.update": updateIssueOperation,

@@ -106,7 +106,7 @@ async function shown(
 ): Promise<Output<typeof getRelease>> {
   if (release === null) throw failure(entry, "repo_not_found");
   if (!release || (release.draft && !(await seesDrafts(ctx, entry)))) throw notFound();
-  return releaseOutput(release);
+  return releaseOutput(release, entry);
 }
 
 /** The `releases.list` operation. */
@@ -122,7 +122,7 @@ export async function listReleasesOperation(
     limit: input.per_page + 1,
   });
   if (releases === null) throw failure(entry, "repo_not_found");
-  const page = pageOf(releases, input.per_page, releaseOutput);
+  const page = pageOf(releases, input.per_page, (release) => releaseOutput(release, entry));
   return {
     releases: page.shown,
     next_cursor: page.more && page.last ? encodeListingCursor(entry.id, page.last) : null,
@@ -173,7 +173,7 @@ export async function createReleaseOperation(
     actorOf(ctx),
   );
   if (!result.ok) throw releaseFailure(entry, result.code);
-  return releaseOutput(result.release);
+  return releaseOutput(result.release, entry);
 }
 
 /** The `releases.update` operation. */
@@ -196,7 +196,7 @@ export async function updateReleaseOperation(
   );
   if (!result.ok && result.code === "stale") throw staleError(refusedVersion(result));
   if (!result.ok) throw releaseFailure(entry, result.code);
-  return releaseOutput(result.release);
+  return releaseOutput(result.release, entry);
 }
 
 /** The `releases.delete` operation. */

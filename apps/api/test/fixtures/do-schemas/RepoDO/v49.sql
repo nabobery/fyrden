@@ -1019,25 +1019,53 @@ CREATE TABLE releases (
             OR (draft = 0 AND tag_oid IS NOT NULL AND commit_oid IS NOT NULL AND published_at IS NOT NULL))
       ) STRICT;
 CREATE INDEX releases_order ON releases (draft, published_at, id);
-CREATE TABLE blame_runs (
-        run_id TEXT PRIMARY KEY,
-        commit_oid BLOB NOT NULL,
-        blob_oid BLOB CHECK (blob_oid IS NULL OR length(blob_oid) = 20),
-        path TEXT NOT NULL,
-        engine_version INTEGER NOT NULL,
-        epoch_gen INTEGER NOT NULL,
-        generation INTEGER NOT NULL,
-        checkpoint_key TEXT,
-        checkpoint_bytes INTEGER NOT NULL,
-        state TEXT NOT NULL CHECK (state IN ('initializing', 'running', 'done', 'lost')),
-        lines INTEGER NOT NULL,
-        settled_ranges INTEGER NOT NULL,
-        unresolved_lines INTEGER NOT NULL,
-        attempt_generation INTEGER,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        touched_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL,
-        UNIQUE (commit_oid, path, engine_version, epoch_gen)
+CREATE TABLE release_asset_counters (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        asset_bytes INTEGER NOT NULL CHECK (asset_bytes >= 0),
+        usage_seq INTEGER NOT NULL,
+        told_seq INTEGER NOT NULL,
+        retain_until INTEGER,
+        early_purge_at INTEGER
       ) STRICT;
-CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
-CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
+CREATE TABLE release_asset_retained (
+        object_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        purge_after INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE INDEX release_asset_retained_due ON release_asset_retained (purge_after);
+CREATE TABLE release_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        uploader TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (release_id, name_fold)
+      ) STRICT;
+CREATE TABLE release_asset_uploads (
+        upload_id TEXT PRIMARY KEY,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        replace_existing INTEGER NOT NULL CHECK (replace_existing IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        part_bytes INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        multipart_id TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        token_id TEXT NOT NULL,
+        grant_id TEXT,
+        epoch_gen INTEGER NOT NULL,
+        completion_token TEXT,
+        parts TEXT,
+        settle_after INTEGER,
+        state TEXT NOT NULL CHECK (state IN ('receiving', 'completing', 'completed', 'aborted')),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE INDEX release_asset_uploads_due ON release_asset_uploads (state, expires_at);

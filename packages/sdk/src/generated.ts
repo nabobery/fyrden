@@ -5070,6 +5070,7 @@ export type ReleasesListOutput = {
     assets: {
       id: number;
       name: string;
+      /** As declared; a download is always `application/octet-stream`. */
       content_type: string;
       size: number;
       uploader: {
@@ -5077,6 +5078,7 @@ export type ReleasesListOutput = {
       };
       created_at: number;
       updated_at: number;
+      /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
       download_url: string;
     }[];
   })[];
@@ -5118,6 +5120,7 @@ export type ReleasesLatestOutput = {
   assets: {
     id: number;
     name: string;
+    /** As declared; a download is always `application/octet-stream`. */
     content_type: string;
     size: number;
     uploader: {
@@ -5125,8 +5128,41 @@ export type ReleasesLatestOutput = {
     };
     created_at: number;
     updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
     download_url: string;
   }[];
+};
+
+/** Input of `releases.retained.get`: Get retained release assets. */
+export type ReleasesRetainedGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `releases.retained.get`. */
+export type ReleasesRetainedGetOutput = {
+  objects: number;
+  bytes: number;
+  next_purge_at: number | null;
+};
+
+/** Input of `releases.retained.purge`: Purge retained release assets. */
+export type ReleasesRetainedPurgeInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `releases.retained.purge`. */
+export type ReleasesRetainedPurgeOutput = {
+  state: "purging";
+  /** Objects it covers. */
+  objects: number;
+  /** Their bytes. */
+  bytes: number;
 };
 
 /** Input of `releases.get_by_tag`: Get a release by its tag. */
@@ -5165,6 +5201,7 @@ export type ReleasesGetByTagOutput = {
   assets: {
     id: number;
     name: string;
+    /** As declared; a download is always `application/octet-stream`. */
     content_type: string;
     size: number;
     uploader: {
@@ -5172,8 +5209,51 @@ export type ReleasesGetByTagOutput = {
     };
     created_at: number;
     updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
     download_url: string;
   }[];
+};
+
+/** Input of `releases.assets.get`: Get a release asset. */
+export type ReleasesAssetsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The asset's id. */
+  asset_id: number;
+};
+
+/** Output of `releases.assets.get`. */
+export type ReleasesAssetsGetOutput = {
+  id: number;
+  name: string;
+  /** As declared; a download is always `application/octet-stream`. */
+  content_type: string;
+  size: number;
+  uploader: {
+    id: string;
+  };
+  created_at: number;
+  updated_at: number;
+  /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
+  download_url: string;
+};
+
+/** Input of `releases.assets.delete`: Delete a release asset. */
+export type ReleasesAssetsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The asset's id. */
+  asset_id: number;
+};
+
+/** Output of `releases.assets.delete`. */
+export type ReleasesAssetsDeleteOutput = {
+  id: number;
+  state: "deleted";
 };
 
 /** Input of `releases.get`: Get a release. */
@@ -5212,6 +5292,7 @@ export type ReleasesGetOutput = {
   assets: {
     id: number;
     name: string;
+    /** As declared; a download is always `application/octet-stream`. */
     content_type: string;
     size: number;
     uploader: {
@@ -5219,6 +5300,7 @@ export type ReleasesGetOutput = {
     };
     created_at: number;
     updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
     download_url: string;
   }[];
 };
@@ -5263,6 +5345,7 @@ export type ReleasesCreateOutput = {
   assets: {
     id: number;
     name: string;
+    /** As declared; a download is always `application/octet-stream`. */
     content_type: string;
     size: number;
     uploader: {
@@ -5270,6 +5353,7 @@ export type ReleasesCreateOutput = {
     };
     created_at: number;
     updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
     download_url: string;
   }[];
 };
@@ -5320,6 +5404,7 @@ export type ReleasesUpdateOutput = {
   assets: {
     id: number;
     name: string;
+    /** As declared; a download is always `application/octet-stream`. */
     content_type: string;
     size: number;
     uploader: {
@@ -5327,6 +5412,7 @@ export type ReleasesUpdateOutput = {
     };
     created_at: number;
     updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
     download_url: string;
   }[];
 };
@@ -5345,6 +5431,146 @@ export type ReleasesDeleteInput = {
 export type ReleasesDeleteOutput = {
   id: number;
   state: "deleted";
+};
+
+/** Input of `releases.assets.uploads.create`: Start uploading a release asset. */
+export type ReleasesAssetsUploadsCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The release's id. */
+  release_id: number;
+  /** The file's name: no slash, backslash or control character. */
+  name: string;
+  /** Its exact length in bytes. */
+  size: number;
+  /** Metadata only. */
+  content_type?: string;
+  replace?: boolean;
+};
+
+/** Output of `releases.assets.uploads.create`. */
+export type ReleasesAssetsUploadsCreateOutput = {
+  /** The upload session's id. */
+  id: string;
+  release_id: number;
+  name: string;
+  content_type: string;
+  size: number;
+  /** Every part's length but the last's. */
+  part_size: number;
+  part_count: number;
+  /** `completing`: another request holds the completion, or it is still being decided; complete it again. */
+  state: "receiving" | "completing" | "completed" | "aborted";
+  /** `PUT <parts_url>/<n>` with part n's bytes and its exact `Content-Length` answers `{part_number, etag}`; keep each etag for completing. */
+  parts_url: string;
+  expires_at: number;
+  /** The asset it made, once completed. */
+  asset?: {
+    id: number;
+    name: string;
+    /** As declared; a download is always `application/octet-stream`. */
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
+    download_url: string;
+  };
+};
+
+/** Input of `releases.assets.uploads.complete`: Complete a release asset upload. */
+export type ReleasesAssetsUploadsCompleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The upload session's id. */
+  upload_id: string;
+  parts: {
+    part_number: number;
+    etag: string;
+  }[];
+};
+
+/** Output of `releases.assets.uploads.complete`. */
+export type ReleasesAssetsUploadsCompleteOutput = {
+  /** The upload session's id. */
+  id: string;
+  release_id: number;
+  name: string;
+  content_type: string;
+  size: number;
+  /** Every part's length but the last's. */
+  part_size: number;
+  part_count: number;
+  /** `completing`: another request holds the completion, or it is still being decided; complete it again. */
+  state: "receiving" | "completing" | "completed" | "aborted";
+  /** `PUT <parts_url>/<n>` with part n's bytes and its exact `Content-Length` answers `{part_number, etag}`; keep each etag for completing. */
+  parts_url: string;
+  expires_at: number;
+  /** The asset it made, once completed. */
+  asset?: {
+    id: number;
+    name: string;
+    /** As declared; a download is always `application/octet-stream`. */
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
+    download_url: string;
+  };
+};
+
+/** Input of `releases.assets.uploads.abort`: Abort a release asset upload. */
+export type ReleasesAssetsUploadsAbortInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The upload session's id. */
+  upload_id: string;
+};
+
+/** Output of `releases.assets.uploads.abort`. */
+export type ReleasesAssetsUploadsAbortOutput = {
+  /** The upload session's id. */
+  id: string;
+  release_id: number;
+  name: string;
+  content_type: string;
+  size: number;
+  /** Every part's length but the last's. */
+  part_size: number;
+  part_count: number;
+  /** `completing`: another request holds the completion, or it is still being decided; complete it again. */
+  state: "receiving" | "completing" | "completed" | "aborted";
+  /** `PUT <parts_url>/<n>` with part n's bytes and its exact `Content-Length` answers `{part_number, etag}`; keep each etag for completing. */
+  parts_url: string;
+  expires_at: number;
+  /** The asset it made, once completed. */
+  asset?: {
+    id: number;
+    name: string;
+    /** As declared; a download is always `application/octet-stream`. */
+    content_type: string;
+    size: number;
+    uploader: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    /** Where it downloads from, by tag and name; signed in, as every request. In a webhook body, relative to the repository. */
+    download_url: string;
+  };
 };
 
 /** Input of `milestones.list`: List milestones. */
@@ -6805,11 +7031,11 @@ export type QuotasUserGetOutput = {
   max_repos: number;
   /** Its active repositories now. */
   repos: number;
-  /** Bytes its repositories' pushes may store (pack and commands, as received). */
+  /** Bytes its repositories' pushes (pack and commands, as received) and release assets may store. */
   max_storage_bytes: number;
-  /** Bytes stored by committed pushes. */
+  /** Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included. */
   storage_bytes: number;
-  /** Bytes reserved by pushes being received. */
+  /** Bytes reserved by pushes and release asset uploads being received. */
   reserved_bytes: number;
 };
 
@@ -6827,11 +7053,11 @@ export type QuotasOrgGetOutput = {
   max_repos: number;
   /** Its active repositories now. */
   repos: number;
-  /** Bytes its repositories' pushes may store (pack and commands, as received). */
+  /** Bytes its repositories' pushes (pack and commands, as received) and release assets may store. */
   max_storage_bytes: number;
-  /** Bytes stored by committed pushes. */
+  /** Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included. */
   storage_bytes: number;
-  /** Bytes reserved by pushes being received. */
+  /** Bytes reserved by pushes and release asset uploads being received. */
   reserved_bytes: number;
 };
 
@@ -6851,11 +7077,11 @@ export type AdminQuotasSetOutput = {
   max_repos: number;
   /** Its active repositories now. */
   repos: number;
-  /** Bytes its repositories' pushes may store (pack and commands, as received). */
+  /** Bytes its repositories' pushes (pack and commands, as received) and release assets may store. */
   max_storage_bytes: number;
-  /** Bytes stored by committed pushes. */
+  /** Bytes stored by committed pushes and by release assets, replaced or deleted ones kept for 30 days included. */
   storage_bytes: number;
-  /** Bytes reserved by pushes being received. */
+  /** Bytes reserved by pushes and release asset uploads being received. */
   reserved_bytes: number;
 };
 
@@ -8466,11 +8692,18 @@ export const OPERATIONS = {
   "orgs.default_labels.set": { method: "PUT", path: "/orgs/{org}/default-labels", pathParams: ["org"], idempotent: true },
   "releases.list": { method: "GET", path: "/repos/{owner}/{repo}/releases", pathParams: ["owner","repo"], idempotent: false, items: "releases" },
   "releases.latest": { method: "GET", path: "/repos/{owner}/{repo}/releases/latest", pathParams: ["owner","repo"], idempotent: false },
+  "releases.retained.get": { method: "GET", path: "/repos/{owner}/{repo}/releases/retained", pathParams: ["owner","repo"], idempotent: false },
+  "releases.retained.purge": { method: "POST", path: "/repos/{owner}/{repo}/releases/retained/purge", pathParams: ["owner","repo"], idempotent: true },
   "releases.get_by_tag": { method: "GET", path: "/repos/{owner}/{repo}/releases/tags/{tag+}", pathParams: ["owner","repo","tag"], idempotent: false },
+  "releases.assets.get": { method: "GET", path: "/repos/{owner}/{repo}/releases/assets/{asset_id}", pathParams: ["owner","repo","asset_id"], idempotent: false },
+  "releases.assets.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/releases/assets/{asset_id}", pathParams: ["owner","repo","asset_id"], idempotent: true },
   "releases.get": { method: "GET", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: false },
   "releases.create": { method: "POST", path: "/repos/{owner}/{repo}/releases", pathParams: ["owner","repo"], idempotent: true },
   "releases.update": { method: "PATCH", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: true },
   "releases.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/releases/{release_id}", pathParams: ["owner","repo","release_id"], idempotent: true },
+  "releases.assets.uploads.create": { method: "POST", path: "/repos/{owner}/{repo}/releases/{release_id}/assets/uploads", pathParams: ["owner","repo","release_id"], idempotent: true },
+  "releases.assets.uploads.complete": { method: "POST", path: "/repos/{owner}/{repo}/releases/assets/uploads/{upload_id}/complete", pathParams: ["owner","repo","upload_id"], idempotent: true },
+  "releases.assets.uploads.abort": { method: "DELETE", path: "/repos/{owner}/{repo}/releases/assets/uploads/{upload_id}", pathParams: ["owner","repo","upload_id"], idempotent: true },
   "milestones.list": { method: "GET", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: false, items: "milestones" },
   "milestones.get": { method: "GET", path: "/repos/{owner}/{repo}/milestones/{milestone_number}", pathParams: ["owner","repo","milestone_number"], idempotent: false },
   "milestones.create": { method: "POST", path: "/repos/{owner}/{repo}/milestones", pathParams: ["owner","repo"], idempotent: true },
@@ -8817,8 +9050,16 @@ export interface Operations {
   "releases.list": { input: ReleasesListInput; output: ReleasesListOutput };
   /** Get the latest release. The newest published release by publication that isn't a prerelease. Takes the `contents:read` permission. */
   "releases.latest": { input: ReleasesLatestInput; output: ReleasesLatestOutput };
+  /** Get retained release assets. Objects of replaced or deleted assets, kept for 30 days on the account's storage quota (longer after a restore, which can bring them back): how many, their bytes, and when the next one goes. Takes the `contents:read` permission. */
+  "releases.retained.get": { input: ReleasesRetainedGetInput; output: ReleasesRetainedGetOutput };
+  /** Purge retained release assets. Removes every object retained before now, past the restore fence: a restore can't bring them back afterwards, and one to a state naming such an asset finds it missing. Started, not finished: the bytes leave the quota as the objects go; `releases.retained.get` shows them fall. Takes the `administration:write` permission; users only. */
+  "releases.retained.purge": { input: ReleasesRetainedPurgeInput; output: ReleasesRetainedPurgeOutput };
   /** Get a release by its tag. The release of a tag name, draft or published. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
   "releases.get_by_tag": { input: ReleasesGetByTagInput; output: ReleasesGetByTagOutput };
+  /** Get a release asset. One asset of a release. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
+  "releases.assets.get": { input: ReleasesAssetsGetInput; output: ReleasesAssetsGetOutput };
+  /** Delete a release asset. Deletes an asset. Its object is kept for 30 days, on the account's storage quota, unless purged sooner. Answers what was deleted (GitHub answers 204). Takes the `contents:write` permission. */
+  "releases.assets.delete": { input: ReleasesAssetsDeleteInput; output: ReleasesAssetsDeleteOutput };
   /** Get a release. One release, with what became of its tag. Takes the `contents:read` permission; a draft shows only with `contents:write`. */
   "releases.get": { input: ReleasesGetInput; output: ReleasesGetOutput };
   /** Create a release. Creates a draft, which needs no tag, or publishes at once, which needs the tag to exist (422 `tag_not_found`; push it first) and to be or peel to a commit (422 `tag_not_a_commit`). Publishing records the tag object and its commit for good. Answers 409 `tag_moving`, with nothing changed, when the tag moved meanwhile; send it again. Takes the `contents:write` permission. */
@@ -8827,6 +9068,12 @@ export interface Operations {
   "releases.update": { input: ReleasesUpdateInput; output: ReleasesUpdateOutput };
   /** Delete a release. Deletes a release. Its tag stays. Answers what was deleted (GitHub answers 204). Takes the `contents:write` permission. */
   "releases.delete": { input: ReleasesDeleteInput; output: ReleasesDeleteOutput };
+  /** Start uploading a release asset. Starts an upload of an asset of exactly `size` bytes, holding that much of the account's storage until it ends. Send the parts to `parts_url`, then complete it with their etags. A name taken is 422 `asset_name_taken` unless `replace` is set; the replaced object is kept for 30 days, on the quota. Takes the `contents:write` permission. */
+  "releases.assets.uploads.create": { input: ReleasesAssetsUploadsCreateInput; output: ReleasesAssetsUploadsCreateOutput };
+  /** Complete a release asset upload. Assembles the parts in order and makes the asset, once the account's quota has room for it. Only the token that started the upload may complete it (409 `wrong_token`). The first completion's list is the one used; a retry's is ignored. `state: completing` means another request holds it or it is still being decided: complete it again. Takes the `contents:write` permission. */
+  "releases.assets.uploads.complete": { input: ReleasesAssetsUploadsCompleteInput; output: ReleasesAssetsUploadsCompleteOutput };
+  /** Abort a release asset upload. Ends an upload and frees what it holds. Takes the `contents:write` permission. */
+  "releases.assets.uploads.abort": { input: ReleasesAssetsUploadsAbortInput; output: ReleasesAssetsUploadsAbortOutput };
   /** List milestones. The repository's milestones by due date, then number; one without a due date counts as due after every date (last ascending, first descending). GitHub's `completeness` order is not offered. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
   "milestones.list": { input: MilestonesListInput; output: MilestonesListOutput };
   /** Get a milestone. One milestone, with its open and closed counts as they stand. Takes the `issues:read` or `pull_requests:read` permission (milestones serve both). */
