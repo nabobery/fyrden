@@ -5,6 +5,8 @@ import {
   encodeBlameState,
   liveStateBytes,
   MAX_BLAME_LINES,
+  MAX_FACT_FIELD_BYTES,
+  MAX_STATE_BYTES,
   UNRESOLVED_REASONS,
 } from "../../src/blame/state.js";
 import {
@@ -556,6 +558,55 @@ describe("the reasons, by position", () => {
       "rename_possible",
       "step_lost",
     ]);
+  });
+});
+
+/** A source whose every commit has facts as long as a checkpoint holds: four fields of 65,535 bytes. */
+class LongFactsSource extends FakeSource {
+  override async commitInfo(oid: Oid): Promise<BlameCommitInfo> {
+    await super.commitInfo(oid);
+    const text = "s".repeat(MAX_FACT_FIELD_BYTES);
+    return { summary: text, name: text, email: text, date: text };
+  }
+}
+
+describe("the encoded state limit", () => {
+  // Ten commits, each adding a line: settled, their facts take about 2.6 MB, more
+  // than a checkpoint holds.
+  const history: History = Object.fromEntries(
+    Array.from({ length: 10 }, (_, i) => [
+      `c${i}`,
+      {
+        ...(i > 0 ? { parents: [`c${i - 1}`] } : {}),
+        file: f(...Array.from({ length: i + 1 }, (_, k) => `l${k}`)),
+      },
+    ]),
+  );
+
+  it("holds a larger limit to what a checkpoint can hold, so every state decodes again", async () => {
+    const encoded = async (maxEncodedBytes: number) => {
+      const source = new LongFactsSource(history);
+      return encodeBlameState(await finished(source, "c9", { ...SLICE, maxEncodedBytes }));
+    };
+    const larger = await encoded(MAX_STATE_BYTES * 4);
+    expect(larger.length).toBeLessThanOrEqual(MAX_STATE_BYTES);
+    expect(decodeBlameState(larger).stateLimit).toBe(true);
+    expect(larger).toEqual(await encoded(MAX_STATE_BYTES));
+  });
+
+  it("refuses a limit that isn't a positive whole number, before reading anything", async () => {
+    // A NaN limit compares false with every size, so any state would pass it.
+    for (const bad of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      const source = new FakeSource(history);
+      const state = await start(source, "c9");
+      const before = encodeBlameState(state);
+      const reads = source.blobReads.length;
+      await expect(advanceBlame(state, source, { ...SLICE, maxEncodedBytes: bad })).rejects.toThrow(
+        new RangeError(`bad encoded state limit ${bad}`),
+      );
+      expect(source.blobReads.length).toBe(reads);
+      expect(encodeBlameState(state)).toEqual(before);
+    }
   });
 });
 

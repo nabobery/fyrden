@@ -19,7 +19,7 @@ import { GitBlameSource, latin1Path, parsePorcelain } from "./blame-git-source.j
  * plain `git blame`. No third party's text is committed or printed: a failure
  * names only commit ids, line numbers and paths, and what's committed is a
  * hash of the oracle's vector: commit, line and path for each line. Each
- * file's share of settled lines is frozen too, so it can't fall unnoticed.
+ * file's count of settled lines is frozen too, so it can't fall unnoticed.
  * The engine is written from git's behaviour, not its code, so git's own blame
  * and diff sources stay out of these comparisons even as fixtures.
  * Needs full clones, so it's nightly, and on request:
@@ -41,14 +41,15 @@ const VECTORS = join(import.meta.dirname, "vectors/frozen.json");
 const dir = process.env.FYRDEN_BLAME_FIXTURES;
 const write = process.env.FYRDEN_BLAME_VECTORS === "write";
 /**
- * Each file's settled share may not fall below its first run under the rename rule
- * (2026-11-09): 523 of 661, 660 of 673, 5,281 of 5,286 and 3,954 of 3,995.
+ * Each file's settled lines may not fall below its first run under the rename
+ * rule (2026-11-09), counted exactly: a share rounded down would let a large
+ * file lose dozens of lines unnoticed.
  */
-const MIN_RESOLVED: Record<string, number> = {
-  "lib/application.js": 0.79,
-  "lib/router/index.js": 0.98,
-  "merge-ort.c": 0.99,
-  "read-cache.c": 0.98,
+const MIN_SETTLED: Record<string, number> = {
+  "lib/application.js": 523,
+  "lib/router/index.js": 660,
+  "merge-ort.c": 5281,
+  "read-cache.c": 3954,
 };
 const run = promisify(execFile);
 const ENV = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
@@ -143,7 +144,7 @@ describe.skipIf(dir === undefined)("blame of frozen public files", () => {
         console.log(
           `${path}: ${resolved} of ${state.lines} resolved, ${state.steps} steps, ${requests} slices, largest ${largestSlice} units of engine work, unresolved ${JSON.stringify(reasons)}`,
         );
-        expect(resolved / state.lines).toBeGreaterThanOrEqual(MIN_RESOLVED[path] ?? 1);
+        expect(resolved).toBeGreaterThanOrEqual(MIN_SETTLED[path] ?? state.lines);
       } finally {
         source.close();
       }
