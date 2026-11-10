@@ -174,8 +174,9 @@ their own tests.
 
 ## Blame's limits and how they were measured
 
-The benches below measure locally, on an Apple arm64 Mac in workerd 1.20261101.1, and
-the limits are Proposed. Deployed figures are named as deployed where they appear.
+The benches below measure locally, on an Apple arm64 Mac, and the limits are Proposed.
+The three `run.ts` benches run in workerd 1.20261101.1; the two Vitest benches run in
+Node, as all of git-core's tests do. Deployed figures are named as deployed where they appear.
 Benches run only under `FYRDEN_BENCH=1`, on the pinned Node.
 
 | Bench | Command | Shows |
@@ -204,11 +205,12 @@ Measured on 2026-11-07 in local workerd 1.20261101.1, through the inspector, aga
 new reader after a warming pass, with the recent-locations map included.
 
 The limits: `BLAME_DECODING_WORK`, 512 Mi units with weights delta-program 30 and
-tree-scan 3, and engine work of 8,000,000 a slice. Worst primitives, locally: inflate
-1.6 ns a unit, a dense delta program 17.9 a byte, a tree scan 3.8, alignment 137. A slice
-doing the worst of everything is 3.9 s by that arithmetic. Deployed, in one colo, the
-final engine read 2.3 to 3.6 times local per case, which puts the same slice at about
-12.1 s against the 30 s limit. Not deployed: a whole slice through the real reader with
+tree-scan 3, and engine work of 8,000,000 a slice, checked between commit steps: the step that
+reaches it still finishes, so a slice can do more. Worst primitives, locally: inflate
+1.6 ns a unit, a dense delta program 17.9 a byte, a tree scan 3.8, alignment 137.
+8,000,000 units of the worst of everything is 3.9 s by that arithmetic: an estimate, not
+a bound on a slice. Deployed, in one colo, the final engine read 2.3 to 3.6 times local
+per case, which puts the same work at about 12.1 s against the 30 s limit. Not deployed: a whole slice through the real reader with
 R2 under it. Memory isn't settled: garbage isn't bounded by the charges, and deployed
 instances reset intermittently after dense delta work, with the cause unverified. The
 deployed runs were made on 7 and 8 November 2026, in one colo, on bench and probe deployments;
@@ -216,10 +218,12 @@ their raw results are kept outside the repository.
 
 Alignment's rules come from black-box probing, so generated pairs check them too. `blame.git-oracle.test.ts`
 runs each generator at `FYRDEN_BLAME_SEARCH` pairs, 5,000 by default, against the
-pinned git. Whatever the engine settles has to be git's answer. Pairs a larger search
+pinned git's line diff (`git diff-tree -p -U0`, many pairs at once), not its blame.
+Whatever the engine settles has to be git's answer. Pairs a larger search
 found wrong stay in the test, shrunk.
 
-The oracle is plain `git blame`, which follows whole-file renames; the engine doesn't.
+For whole histories the oracle is plain `git blame`, which follows whole-file renames;
+the engine doesn't.
 So a settled line must be git's commit and source line from the same path, and a line
 git takes from another path must be unresolved, for any reason. The `filename` git prints
 is evidence only one way: git can follow a rename and come back to the name (f to g to
