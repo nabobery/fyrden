@@ -134,8 +134,15 @@ function countLines(bytes: Uint8Array): number {
   return count;
 }
 
-/** The caller's line limit, held to what a checkpoint can record, so every state decodes again. */
-const fileLineLimit = (asked = MAX_BLAME_LINES) => Math.min(asked, MAX_BLAME_LINES);
+/**
+ * The caller's line limit, held to what a checkpoint can record, so every state
+ * decodes again. Only a positive whole number is a limit: NaN compares false
+ * with every count, so it would let any file through.
+ */
+function fileLineLimit(asked = MAX_BLAME_LINES): number {
+  if (!Number.isInteger(asked) || asked < 1) throw new RangeError(`bad line limit ${asked}`);
+  return Math.min(asked, MAX_BLAME_LINES);
+}
 
 const sameOid = (a: Oid, b: Oid) => {
   for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
@@ -156,6 +163,7 @@ export async function startBlame(
     readonly maxLiveStateBytes?: number;
   } = {},
 ): Promise<BlameState | BlameStartFailure> {
+  const lineLimit = fileLineLimit(options.maxFileLines);
   const info = await source.commit(commit);
   if (!info) return { failure: "commit_missing" };
   const file = await source.fileAt(info.tree, path);
@@ -164,7 +172,7 @@ export async function startBlame(
   const bytes = await source.blob(file.oid, maxBytes);
   if (bytes === "too_large") return { failure: "file_too_large" };
   const lines = countLines(bytes);
-  if (lines > fileLineLimit(options.maxFileLines)) return { failure: "file_too_large" };
+  if (lines > lineLimit) return { failure: "file_too_large" };
   const live = liveBytesOf({
     path: pathLiveBytes(path),
     pairs: lines,
@@ -623,6 +631,7 @@ export async function advanceBlame(
   source: BlameSource,
   limits: BlameSliceLimits,
 ): Promise<BlameAdvance> {
+  fileLineLimit(limits.maxFileLines);
   // Two at once would both apply the step at the head of the queue.
   if (advancing.has(state)) throw new Error("a blame state is already being advanced");
   advancing.add(state);
