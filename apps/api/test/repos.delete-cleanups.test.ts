@@ -267,8 +267,8 @@ describe("repository deletion cleanups", () => {
     }
     expect(await traces(repo.id)).toEqual(NONE);
     // Settling: two pages; effects: two; deliveries: two; payloads: two; search: one; watch
-    // preferences: one; bodies: one listing of up to 1,000 keys.
-    expect(calls).toBe(11);
+    // preferences: one; bodies: one listing of up to 1,000 keys; release assets: one.
+    expect(calls).toBe(12);
     expect(await cleanupsDone(repo.id)).toEqual(REPO_CLEANUPS.map((c) => c.name).sort());
   });
 
@@ -416,7 +416,8 @@ describe("repository deletion cleanups", () => {
       attempts: 1,
       last_error: "R2 list failed",
     });
-    expect((await cleanupsDone(repo.id)).length).toBe(REPO_CLEANUPS.length - 1);
+    // The bodies' cleanup failed, and the release assets' after it hasn't run.
+    expect((await cleanupsDone(repo.id)).length).toBe(REPO_CLEANUPS.length - 2);
 
     expect(await advanceDeletion(failing, repo.id)).toBe("deleted");
     expect(await traces(repo.id)).toEqual(NONE);

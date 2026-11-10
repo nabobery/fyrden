@@ -219,6 +219,11 @@ export class RepoEvents {
     private readonly repoId: () => string,
     /** In the transaction taking a new restore generation: recovers what the restore may have lost. */
     private readonly restored: () => void = () => {},
+    /**
+     * In that transaction too, even for a repository being deleted (which
+     * runs nothing of `restored`): what its deletion depends on.
+     */
+    private readonly generationTaken: () => void = () => {},
   ) {}
 
   get #storage() {
@@ -402,6 +407,7 @@ export class RepoEvents {
             this.git.context.now(),
           );
         this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+        this.generationTaken();
         if (!deleted) this.restored();
       }
     });
@@ -586,6 +592,8 @@ export class RepoEvents {
       readonly nameGen: number;
     },
     actor: JobActor | string | null,
+    /** In the landing's transaction, only when it lands now. */
+    alongside: () => void = () => {},
   ): { ownerGen: number; changed: boolean } {
     return this.#storage.transactionSync(() => {
       const meta = this.#meta();
@@ -618,6 +626,7 @@ export class RepoEvents {
         to: to.ownerId,
         name: to.name,
       });
+      alongside();
       return { ownerGen: after.owner_gen, changed: true };
     });
   }

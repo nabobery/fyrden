@@ -23,6 +23,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   did (each once, with what a release handed over), and repositories
  *   that left it for another account, so a late grant, storage charge or
  *   confirmation is not taken here.
+ * - `quota_assets` (v10): each repository's own statement of the bytes its
+ *   release assets hold, with the tuple (`epoch_gen`, `seq`) that orders
+ *   its statements; counted in the account's usage.
  * - `default_labels` (v7): an organization's default labels, copied into
  *   its new repositories; GitHub's set until `org_meta.default_labels_set`.
  * - `pending_audit`: audit rows of access changes, written in the change's
@@ -257,6 +260,23 @@ export const orgSchema: readonly DoMigration[] = [
     sql: `
       ALTER TABLE org_meta ADD COLUMN reconcile_cursor TEXT;
       ALTER TABLE org_meta ADD COLUMN reconcile_pending TEXT;
+    `,
+  },
+  {
+    version: 10,
+    // A repository's release assets, stated as a total (the newest tuple
+    // wins); and, for an arriving repository, the total it brings (JSON;
+    // null until a transfer stores one).
+    name: "quota_assets",
+    sql: `
+      CREATE TABLE quota_assets (
+        repo_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL CHECK (bytes >= 0),
+        epoch_gen INTEGER NOT NULL,
+        seq INTEGER NOT NULL
+      ) STRICT;
+      ALTER TABLE transfer_arrivals ADD COLUMN assets TEXT
+        CHECK (assets IS NULL OR json_valid(assets));
     `,
   },
 ];

@@ -1,4 +1,4 @@
-// The blame run rows (schema v49, blame_runs). A run is one blame of one
+// The blame run rows (schema v50, blame_runs). A run is one blame of one
 // file at one commit, shared by everyone asking for it. Its row is the only
 // pointer to its latest checkpoint in R2, and moves only by compare-and-set
 // on the generation and restore generation a slice read, so a lost race

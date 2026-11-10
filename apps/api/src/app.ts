@@ -18,6 +18,7 @@ import { READ_MODEL_PROTOCOL } from "./read-model/executor.js";
 import { mountArchives } from "./rest/archive.js";
 import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
+import { mountReleaseAssets } from "./rest/release-assets.js";
 import { bootstrap } from "./routes/admin/bootstrap.js";
 
 export type AppEnv = { Bindings: Env; Variables: AuthVariables };
@@ -58,6 +59,7 @@ export function createApp() {
   mountLive(app);
   mountRest(app);
   mountRaw(app);
+  mountReleaseAssets(app);
   mountArchives(app);
   mountMcp(app);
   mountUnsubscribe(app);

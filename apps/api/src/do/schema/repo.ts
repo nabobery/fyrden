@@ -1547,6 +1547,72 @@ export const repoSchema: readonly DoMigration[] = [
   },
   {
     version: 49,
+    // Release assets. An asset row names its object (`object_id`, under
+    // `release-assets/<repo>/<object_id>` in R2) and its bytes; an object
+    // replaced or deleted is retained for 30 days, past any restore fence
+    // (`retain_until`), unless an early purge covers it. `asset_bytes` is
+    // the sum over assets and retained objects, kept in the transaction that
+    // changes them. `usage_seq` numbers the totals stated to the account,
+    // `told_seq` the newest it took. An upload session holds its multipart
+    // upload; it is `completing` from the first completion to its outcome,
+    // and `settle_after` is when an R2 completion it sent can no longer land.
+    name: "release_assets",
+    sql: `
+      CREATE TABLE release_asset_counters (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        asset_bytes INTEGER NOT NULL CHECK (asset_bytes >= 0),
+        usage_seq INTEGER NOT NULL,
+        told_seq INTEGER NOT NULL,
+        retain_until INTEGER,
+        early_purge_at INTEGER
+      ) STRICT;
+      INSERT INTO release_asset_counters VALUES (1, 0, 0, 0, NULL, NULL);
+      CREATE TABLE release_asset_retained (
+        object_id TEXT PRIMARY KEY,
+        bytes INTEGER NOT NULL,
+        purge_after INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX release_asset_retained_due ON release_asset_retained (purge_after);
+      CREATE TABLE release_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        uploader TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (release_id, name_fold)
+      ) STRICT;
+      CREATE TABLE release_asset_uploads (
+        upload_id TEXT PRIMARY KEY,
+        release_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        name_fold TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        replace_existing INTEGER NOT NULL CHECK (replace_existing IN (0, 1)),
+        bytes INTEGER NOT NULL,
+        part_bytes INTEGER NOT NULL,
+        object_id TEXT NOT NULL,
+        multipart_id TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        token_id TEXT NOT NULL,
+        grant_id TEXT,
+        epoch_gen INTEGER NOT NULL,
+        completion_token TEXT,
+        parts TEXT,
+        settle_after INTEGER,
+        state TEXT NOT NULL CHECK (state IN ('receiving', 'completing', 'completed', 'aborted')),
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX release_asset_uploads_due ON release_asset_uploads (state, expires_at);
+    `,
+  },
+  {
+    version: 50,
     // Blame runs: one row a run, shared by everyone blaming one file at one
     // commit, pointing at its latest checkpoint in R2. The attempt mark
     // (attempt_generation, attempts) is written before a slice works and

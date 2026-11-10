@@ -8,6 +8,7 @@ import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeAll, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { epochHooks, readDirectoryEpoch } from "../src/do/repo/epoch.js";
+import { RELEASE_ASSET_POLICY } from "../src/do/repo/release-assets.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import {
   advanceDeletion,
@@ -120,6 +121,18 @@ async function restoredFromBefore(stub: DurableObjectStub<RepoDO>, repoId: strin
   return env.REPO.getByName(repoId);
 }
 
+/**
+ * Its restore as if more than two minutes ago: a deletion waits that long after a restore,
+ * for a release asset completion sent before it that may still land (there is no test clock).
+ */
+const restoredLongAgo = (stub: DurableObjectStub<RepoDO>) =>
+  runInDurableObject(stub, (_: RepoDO, state) => {
+    state.storage.sql.exec(
+      "UPDATE release_asset_counters SET retain_until = retain_until - ? WHERE retain_until IS NOT NULL",
+      RELEASE_ASSET_POLICY.settleMs,
+    );
+  });
+
 const storageLeft = (stub: DurableObjectStub<RepoDO>) =>
   runInDurableObject(stub, (_: RepoDO, state) =>
     state.storage.sql
@@ -139,6 +152,7 @@ describe("a deleted repository's object restored from before its deletion", () =
     expect(await inRepo(restored, (r) => r.events.isDeleted())).toBe(true);
     // Reopened from the start, in a new generation; the earlier pass's cleanups count no more.
     expect(await job(repo.id)).toMatchObject({ step: "prepare", gen: 1, state: "deleting" });
+    await restoredLongAgo(restored);
     await advanceDeletions(env, { limit: 100 });
     expect(await job(repo.id)).toMatchObject({ step: "done", gen: 1, state: "deleted" });
     expect((await receipts(repo.id)).every((r) => r.gen === 1)).toBe(true);
@@ -158,6 +172,7 @@ describe("a deleted repository's object restored from before its deletion", () =
     const restored = await restoredFromBefore(repo.stub, repo.id);
     expect(await restored.readableBy(user.principalId)).toBe(false);
     expect(await job(repo.id)).toMatchObject({ step: "prepare", gen: 1, state: "deleted" });
+    await restoredLongAgo(restored);
     await advanceDeletions(env, { limit: 100 });
     expect(await job(repo.id)).toMatchObject({ step: "done", gen: 1, state: "deleted" });
     expect(await storageLeft(restored)).toBe(0);
@@ -201,6 +216,7 @@ describe("a deleted repository's object restored from before its deletion", () =
     const restored = env.REPO.getByName(repo.id);
     expect(await restored.readableBy(user.principalId)).toBe(false);
     expect(await job(repo.id)).toMatchObject({ step: "prepare", gen: 1 });
+    await restoredLongAgo(restored);
     await advanceDeletions(env, { limit: 100 });
     expect(await job(repo.id)).toMatchObject({ step: "done", gen: 1 });
     expect(await storageLeft(restored)).toBe(0);
