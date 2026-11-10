@@ -438,7 +438,12 @@
           "maxLiveStateBytes": 300
         },
         "expected": {
-          "failure": "state_too_large"
+          "ranges": "",
+          "page": " | ",
+          "state": "c21e20cfddb251a6b05b6c678d0169aaa7c49cad4d5258f4d89849cbd01a6071",
+          "steps": 0,
+          "stateLimit": false,
+          "stops": "0/done"
         }
       },
       {

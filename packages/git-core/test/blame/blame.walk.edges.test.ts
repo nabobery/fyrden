@@ -185,6 +185,28 @@ describe("counting lines", () => {
     expect(answer(source, state)).toEqual(["parent_too_large"]);
   });
 
+  it("refuses a line limit that isn't a positive whole number, before reading anything", async () => {
+    // A NaN limit compares false with every count, so it would let any file through,
+    // past what a checkpoint can record.
+    const history: History = { a: { file: f("x") }, b: { parents: ["a"], file: f("x", "y") } };
+    for (const bad of [Number.NaN, 0, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      const fresh = new FakeSource(history);
+      await expect(startBlame(fresh, oidOfName("b"), PATH, { maxFileLines: bad })).rejects.toThrow(
+        new RangeError(`bad line limit ${bad}`),
+      );
+      expect(fresh.blobReads).toEqual([]);
+      const source = new FakeSource(history);
+      const state = await start(source, "b");
+      const before = encodeBlameState(state);
+      const reads = source.blobReads.length;
+      await expect(advanceBlame(state, source, { ...SLICE, maxFileLines: bad })).rejects.toThrow(
+        new RangeError(`bad line limit ${bad}`),
+      );
+      expect(source.blobReads.length).toBe(reads);
+      expect(encodeBlameState(state)).toEqual(before);
+    }
+  });
+
   it("a root commit takes its lines without reading its file again", async () => {
     const source = new FakeSource({ a: { file: f("x") } });
     await finished(source, "a");
@@ -353,8 +375,12 @@ describe("the state's limits, met exactly", () => {
     },
   );
 
-  it("starts a file whose state fits its room exactly, and not one byte less", async () => {
-    const source = new FakeSource({ a: { file: f("x", "y", "z") } });
+  it.each([
+    ["a file", f("x", "y", "z")],
+    // An empty file starts with nothing queued, so nothing queued is charged.
+    ["an empty file", ""],
+  ])("starts %s whose state fits its room exactly, and not one byte less", async (_, file) => {
+    const source = new FakeSource({ a: { file } });
     const live = liveStateBytes(await start(source, "a"));
     expect(
       "failure" in (await startBlame(source, oidOfName("a"), PATH, { maxLiveStateBytes: live })),
