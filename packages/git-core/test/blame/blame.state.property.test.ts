@@ -232,12 +232,24 @@ describe("blame state encoding", () => {
     const live = liveStateBytes(state);
     expect(live).toBeGreaterThan(65_535 * 208);
     expect(decodeBlameState(bytes, { maxLiveStateBytes: live }).path).toHaveLength(65_535);
-    const built = vi.spyOn(Uint8Array.prototype, "slice");
-    expect(() => decodeBlameState(bytes, { maxLiveStateBytes: live - 1 })).toThrow(
-      BlameStateTooLarge,
-    );
-    expect(built).not.toHaveBeenCalled();
-    built.mockRestore();
+    // Building a segment takes a view or a copy of the checkpoint's bytes. Fewer of
+    // both than the path has segments means none was built: a few views are the
+    // decoder's own (the commit's id, among others), so their exact count isn't the claim.
+    const views = vi.spyOn(Uint8Array.prototype, "subarray");
+    const copies = vi.spyOn(Uint8Array.prototype, "slice");
+    let thrown: unknown;
+    let taken = 0;
+    try {
+      decodeBlameState(bytes, { maxLiveStateBytes: live - 1 });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      taken = views.mock.calls.length + copies.mock.calls.length;
+      views.mockRestore();
+      copies.mockRestore();
+    }
+    expect(thrown).toBeInstanceOf(BlameStateTooLarge);
+    expect(taken).toBeLessThan(1_000);
   });
 
   describe("a fact's text", () => {
