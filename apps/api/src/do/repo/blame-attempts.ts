@@ -6,14 +6,9 @@
 // A second attempt on the same checkpoint runs one step, so the steps before
 // the one that dies aren't lost with it; a third refuses that step as
 // step_lost, visibly, and the walk moves on. No step is retried forever.
-import {
-  advanceBlame,
-  type BlameAdvance,
-  type BlameSliceLimits,
-  type BlameSource,
-  type BlameState,
-  refuseHead,
-} from "@fyrden/git-core";
+// RepoBlame applies this: it records the attempt, then decodes, then walks.
+import type { BlameSliceLimits } from "@fyrden/git-core";
+import type { BlameRuns } from "./blame-runs.js";
 
 /**
  * Where a run's slice attempts are kept. A mark must outlive the slice that
@@ -26,7 +21,14 @@ export interface AttemptLedger {
    * again at 1.
    */
   begin(run: string, generation: number): Promise<number>;
-  /** Forgets the run's attempts: its slice ended, however it ended. */
+  /** The attempts recorded on `generation`, without recording one. */
+  peek(run: string, generation: number): number;
+  /**
+   * Takes back the attempt just begun on `generation`: it ended in a failure
+   * the request reported, not a death. Earlier deaths still count.
+   */
+  release(run: string, generation: number): void;
+  /** Forgets the run's attempts. */
   clear(run: string): void;
 }
 
@@ -41,8 +43,52 @@ export class MemoryAttemptLedger implements AttemptLedger {
     return attempts;
   }
 
+  peek(run: string, generation: number): number {
+    const mark = this.#marks.get(run);
+    return mark?.generation === generation ? mark.attempts : 0;
+  }
+
+  release(run: string, generation: number): void {
+    const mark = this.#marks.get(run);
+    if (mark?.generation === generation && mark.attempts > 0)
+      this.#marks.set(run, { generation, attempts: mark.attempts - 1 });
+  }
+
   clear(run: string): void {
     this.#marks.delete(run);
+  }
+}
+
+/**
+ * The ledger on the run's row: the mark is written, then `begin` waits for
+ * the storage to be durable (`ctx.storage.sync()`, which resolves once the
+ * pending writes complete), so a reset after it still finds the mark.
+ */
+export class RunRowAttemptLedger implements AttemptLedger {
+  constructor(
+    private readonly runs: Pick<
+      BlameRuns,
+      "beginAttempt" | "peekAttempt" | "releaseAttempt" | "clearAttempts"
+    >,
+    private readonly storage: Pick<DurableObjectStorage, "sync">,
+  ) {}
+
+  async begin(run: string, generation: number): Promise<number> {
+    const attempts = this.runs.beginAttempt(run, generation);
+    await this.storage.sync();
+    return attempts;
+  }
+
+  peek(run: string, generation: number): number {
+    return this.runs.peekAttempt(run, generation);
+  }
+
+  release(run: string, generation: number): void {
+    this.runs.releaseAttempt(run, generation);
+  }
+
+  clear(run: string): void {
+    this.runs.clearAttempts(run);
   }
 }
 
@@ -57,28 +103,17 @@ export function sliceAttempt(attempt: number, limits: BlameSliceLimits): SliceAt
   return { kind: "refuse" };
 }
 
-export type SliceAttemptResult =
-  | { readonly outcome: "advanced"; readonly advance: BlameAdvance }
-  | { readonly outcome: "refused" };
-
-/** One slice on checkpoint `generation` of `run`, under the ledger's mark. */
-export async function runSliceAttempt(input: {
-  readonly ledger: AttemptLedger;
-  readonly run: string;
-  readonly generation: number;
-  readonly state: BlameState;
-  readonly source: BlameSource;
-  readonly limits: BlameSliceLimits;
-}): Promise<SliceAttemptResult> {
-  const { ledger, run, state, limits } = input;
-  const plan = sliceAttempt(await ledger.begin(run, input.generation), limits);
-  try {
-    if (plan.kind === "refuse") {
-      refuseHead(state, "step_lost", limits);
-      return { outcome: "refused" };
-    }
-    return { outcome: "advanced", advance: await advanceBlame(state, input.source, plan.limits) };
-  } finally {
-    ledger.clear(run);
-  }
+/**
+ * Whether a slice's attempt is taken back when it ends without publishing.
+ * A recovery attempt (2 or more) that made no step while lines are pending is
+ * treated as a death: its mark stays, so the next attempt counts on and
+ * reaches the refusal. A recovery runs only on a whole allowance, whose first
+ * step can't end short, so this only catches a freshness rule that's wrong.
+ */
+export function afterSlice(at: {
+  attempt: number;
+  steps: number;
+  pending: boolean;
+}): "keep" | "release" {
+  return at.attempt >= 2 && at.steps === 0 && at.pending ? "keep" : "release";
 }

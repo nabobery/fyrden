@@ -120,6 +120,8 @@ import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
 import { RepoAuthority } from "./repo/authority.js";
+import { type BlameRequest, RepoBlame } from "./repo/blame.js";
+import { blamePruneHandler } from "./repo/blame-prune.js";
 import {
   type Browsed,
   type BrowsePolicy,
@@ -494,6 +496,7 @@ export class RepoDO extends MigratingDO {
   assetBucket: R2Bucket;
   /** Hooks between a release asset completion's steps. For tests. */
   assetHooks: AssetHooks = {};
+  readonly blameRuns: RepoBlame;
 
   /** Reactions to issues, pull requests and their comments. */
   readonly reactions: RepoReactions;
@@ -585,6 +588,7 @@ export class RepoDO extends MigratingDO {
         // anyone sets one again.
         this.watching.restored(this.events.epochGen());
         this.threads.restored(this.events.epochGen());
+        this.blameRuns.restored();
         this.git.jobs.ensure(PREFERENCE_RECOVERY_JOB, PREFERENCE_RECOVERY_JOB);
         // An older generation's digest windows are never sealed or read: cleaned up.
         this.git.jobs.ensure(DIGEST_SEAL_JOB, DIGEST_SEAL_JOB);
@@ -644,6 +648,13 @@ export class RepoDO extends MigratingDO {
       },
       hooks: () => this.assetHooks,
       log: () => this.#log(),
+    });
+    this.blameRuns = new RepoBlame({
+      git: this.git,
+      storage: this.ctx.storage,
+      memoryBlocks: this.#memoryBlocks(),
+      repoId: () => this.#repoId(),
+      epochGen: () => this.events.epochGen(),
     });
     this.releases = new RepoReleases({
       git: this.git,
@@ -2341,6 +2352,13 @@ export class RepoDO extends MigratingDO {
   }
 
   /** A page of the repository's releases (see `RepoReleases.list`); null when gone. */
+  /** One request's blame of a file: a page of a run, or a refusal; null when gone. */
+  blame(input: BlameRequest) {
+    return this.#measured("blame", () =>
+      this.#refusesReads() ? null : this.blameRuns.answer(input),
+    );
+  }
+
   listReleases(query: Parameters<RepoReleases["list"]>[0]) {
     return this.#measured("listReleases", () =>
       this.#refusesReads() ? null : this.releases.list(query),
@@ -3713,6 +3731,11 @@ export class RepoDO extends MigratingDO {
             : { done: true };
         },
       },
+      blame_prune: blamePruneHandler({
+        git: this.git,
+        active: () => this.blameRuns.activeRuns(),
+        repoId: () => this.#repoId(),
+      }),
       feed_pages_prune: {
         runSlice: async () => {
           const now = this.git.context.now();

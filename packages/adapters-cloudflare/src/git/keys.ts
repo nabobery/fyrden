@@ -75,6 +75,49 @@ export function scratchPrefix(networkId: string, uploadId: string): string {
   return `net/${networkId}/scratch/${uploadId}/`;
 }
 
+/**
+ * The prefix of a repository's blame checkpoints. It names the repository
+ * alone, not a network: a restored database can't know which networks the
+ * repository has been in since its backup, so a key under one could be found
+ * by nothing.
+ */
+export function blameCheckpointPrefix(repoId: string): string {
+  if (!isId(repoId, "rep")) throw new RangeError("not a repository id");
+  return `repo/${repoId}/blame/`;
+}
+
+/** One blame checkpoint: the run's folder, then its generation and a ULID of when it was written. */
+export function blameCheckpointKey(at: {
+  readonly repoId: string;
+  readonly runId: string;
+  readonly generation: number;
+  readonly ulid: string;
+}): string {
+  const prefix = blameCheckpointPrefix(at.repoId);
+  if (!isUlid(at.runId)) throw new RangeError("not a run id");
+  if (!Number.isSafeInteger(at.generation) || at.generation < 0)
+    throw new RangeError("not a generation");
+  if (!isUlid(at.ulid)) throw new RangeError("not a ULID");
+  return `${prefix}${at.runId}/${at.generation}-${at.ulid}`;
+}
+
+const CHECKPOINT =
+  /^([0-7][0-9A-HJKMNP-TV-Z]{25})\/(0|[1-9]\d{0,15})-([0-7][0-9A-HJKMNP-TV-Z]{25})$/;
+
+/** The run, generation and ULID of a checkpoint key under the repository's prefix, or undefined. */
+export function parseBlameCheckpointKey(
+  repoId: string,
+  key: string,
+): { runId: string; generation: number; ulid: string } | undefined {
+  const prefix = blameCheckpointPrefix(repoId);
+  if (!key.startsWith(prefix)) return undefined;
+  const match = CHECKPOINT.exec(key.slice(prefix.length));
+  if (!match) return undefined;
+  const generation = Number(match[2]);
+  if (!Number.isSafeInteger(generation)) return undefined;
+  return { runId: match[1] as string, generation, ulid: match[3] as string };
+}
+
 /** A new pack id: a ULID, so ids sort by creation time. */
 export function newPackId(now: number = Date.now()): PackId {
   return asPackId(ulid(now, secureRandomBytes));

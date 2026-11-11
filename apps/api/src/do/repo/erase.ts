@@ -1,9 +1,11 @@
 import {
+  blameCheckpointPrefix,
   isUlid,
   packR2Keys,
   type RepoGitStorage,
   scratchPrefix,
 } from "@fyrden/adapters-cloudflare/git";
+import { isId } from "@fyrden/domain";
 import { decodeJson } from "../../git/maintenance/storage.js";
 
 /**
@@ -152,6 +154,23 @@ export async function eraseRepository(
     sql.exec("DELETE FROM archive_segments WHERE run_id = ?", archive.run_id);
     sql.exec("DELETE FROM archives WHERE run_id = ?", archive.run_id);
   }
+  // Blame checkpoints live under the repository's own prefix, not a network's, so a
+  // restored database's forgotten runs are found too; then the runs' rows.
+  if (isId(repoId, "rep")) {
+    const prefix = blameCheckpointPrefix(repoId);
+    for (;;) {
+      if (spent()) return "partial";
+      r2("list_blame", "class_a");
+      const page = await git.bucket.list({ prefix, limit: DELETE_BATCH });
+      const keys = page.objects.map((o) => o.key);
+      if (keys.length > 0) {
+        r2("delete_blame", "class_a");
+        await git.bucket.delete(keys);
+      }
+      if (!page.truncated) break;
+    }
+  }
+  sql.exec("DELETE FROM blame_runs");
   const jobs = sql.exec<{ job_id: string; cursor: ArrayBuffer | null }>(
     "SELECT job_id, cursor FROM jobs WHERE cursor IS NOT NULL",
   );

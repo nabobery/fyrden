@@ -7,6 +7,8 @@ CREATE INDEX audit_segments_archived ON audit_segments (archived_at) WHERE state
 CREATE INDEX audit_segments_from ON audit_segments (from_seq);
 CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = 'pending';
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
+CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
 CREATE UNIQUE INDEX code_owner_evaluations_key
         ON code_owner_evaluations (merge_base, head, file_blob, version);
 CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
@@ -151,6 +153,26 @@ CREATE TABLE audit_segments (
         state TEXT NOT NULL CHECK (state IN ('pending', 'archived')),
         created_at INTEGER NOT NULL,
         archived_at INTEGER
+      ) STRICT;
+CREATE TABLE blame_runs (
+        run_id TEXT PRIMARY KEY,
+        commit_oid BLOB NOT NULL,
+        blob_oid BLOB CHECK (blob_oid IS NULL OR length(blob_oid) = 20),
+        path TEXT NOT NULL,
+        engine_version INTEGER NOT NULL,
+        epoch_gen INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        checkpoint_key TEXT,
+        checkpoint_bytes INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('initializing', 'running', 'done', 'lost')),
+        lines INTEGER NOT NULL,
+        settled_ranges INTEGER NOT NULL,
+        unresolved_lines INTEGER NOT NULL,
+        attempt_generation INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        touched_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        UNIQUE (commit_oid, path, engine_version, epoch_gen)
       ) STRICT;
 CREATE TABLE change_lists (
         seq INTEGER PRIMARY KEY,

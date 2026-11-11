@@ -24,6 +24,7 @@ import { HEX_OID } from "../../git/cache/object-access.js";
 import { pathSegments } from "../../git/cache/object-check.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import { peelOid } from "../../git/peel.js";
+import { resolveRef } from "../../git/resolve-ref.js";
 import type { PreparedTag } from "./releases.js";
 import { checkSignature, type SignatureCheck } from "./signature.js";
 
@@ -437,24 +438,14 @@ export class RepoBrowse {
    */
   async #resolve(ref: string | undefined): Promise<Browsed<Oid>> {
     const snapshot = this.deps.git.refStore.readRefsSync();
-    if (ref === undefined || ref === "") {
-      const head = snapshot.head ? snapshot.refs.get(snapshot.head) : undefined;
-      return head ? { ok: true, value: head } : EMPTY;
-    }
-    if (HEX_OID.test(ref)) {
-      const oid = oidFromHex(ref);
-      // A branch or tag may be named like a commit id this repository lacks.
-      if (this.#verified([oid])[0]) return { ok: true, value: oid };
-    }
-    const names = [`refs/heads/${ref}`, `refs/tags/${ref}`];
-    if (ref.startsWith("refs/")) names.push(ref);
-    for (const name of names) {
-      const oid = snapshot.refs.get(name);
-      if (!oid) continue;
-      const commit = await this.#commitOf(oid);
-      return commit ? { ok: true, value: commit } : refNotFound(ref);
-    }
-    return refNotFound(ref);
+    const resolved = await resolveRef(ref, {
+      head: () => (snapshot.head ? snapshot.refs.get(snapshot.head) : undefined),
+      ref: (name) => snapshot.refs.get(name),
+      isVerified: (oid) => this.#verified([oid])[0] === true,
+      commitOf: (oid) => this.#commitOf(oid),
+    });
+    if (resolved.ok) return { ok: true, value: resolved.commit };
+    return resolved.reason === "repo_empty" ? EMPTY : refNotFound(ref ?? "");
   }
 
   /**
