@@ -161,6 +161,22 @@ saving is one stack's start, not measured.
 - The nightly mutation matrix runs at most six scopes at a time: all fourteen
   at once held most of the 20 concurrent jobs while pull requests waited.
 
+### Measured on CI after the shuffle split
+
+- Run [43015646753](https://github.com/nabobery/fyrden/actions/runs/43015646753)
+  (`f71275e`, API inputs unchanged, so its coverage shards replayed): every
+  required check passed 8.4 minutes after the run was created, waits for
+  runners included (baseline median for a whole run: 25.1 minutes). The
+  twelve shuffle shards ran 3.5 to 4.8 minutes each and were done by 7.3
+  minutes; end to end, unsplit, took 8.3 minutes and finished last.
+- Run [43016858979](https://github.com/nabobery/fyrden/actions/runs/43016858979)
+  (`79d41fb`, which changes `biome.json`, a global Turbo input, so nothing
+  replayed): required checks passed at 13.3 minutes. The two end-to-end
+  shards took 5.7 and 6.8 minutes (8.3 unsplit). With about 24 jobs against
+  the 20 that run at once, the median wait for a runner was 0.4 minutes but
+  one API coverage shard waited 6.3, and that wait set the run's length.
+  More parallel jobs now cost waiting as much as they save.
+
 ## Candidate next steps
 
 - Enforce job selection behind the existing required checks once the reports
