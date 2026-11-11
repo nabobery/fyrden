@@ -184,11 +184,17 @@ jobs:
   # network timeouts and retries (its package transaction is never cut
   # short), and the browser, cached by its pinned revisions, is downloaded again
   # when an attempt stalls.
+  # Its files split across two jobs (Vitest's split, by path); each file still
+  # starts its own fresh stack.
   e2e:
-    name: Both Workers together locally (end to end)
+    name: Both Workers together locally (end to end), shard ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
     # About 6 minutes, plus Firefox and WebKit; room for the installs to recover (up to 20).
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -228,9 +234,11 @@ jobs:
           exit 1
       - uses: ./.github/actions/turbo-cache
         with:
-          partition: e2e
+          partition: e2e-${{ matrix.shard }}
       - name: Both Workers together locally, through the service binding
-        run: pnpm turbo run test:e2e
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm turbo run test:e2e -- --shard="$SHARD/2"
       - uses: ./.github/actions/turbo-cache/save
 
   # The check the main branch's ruleset requires, by this name: passed only
