@@ -17,7 +17,8 @@
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
 Pull requests and pushes to `main` run the unit, workerd, shuffle (three
-seeds, one a job side by side, gathered in one required check), dry-run
+seeds, each seed's pass of the API's suite split across four jobs by Vitest's
+`--shard`, gathered in one required check), dry-run
 and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
 `contract`, which deploys also wait for), and the interoperability subset with
 the current pinned git. Pull requests also run mutation testing
@@ -29,6 +30,23 @@ frozen public files against the pinned git.
 
 `git-core` and `domain` run under plain Node on purpose: it proves they do not
 depend on the Workers runtime.
+
+### What CI reuses
+
+- **Turbo task results.** The lint, typecheck, dry-run, package coverage and
+  API coverage jobs restore their Turbo cache from their last passing run (this
+  pull request's, else `main`'s), so a task whose inputs did not change replays
+  its logs and outputs (an API shard's blob report included) instead of
+  running (`.github/actions/turbo-cache`). The shuffle guard, end-to-end and
+  mutation runs are never cached. A test that reads, or a compiled file that
+  imports, a file outside its own package and its workspace dependencies must
+  name that file in the package's `turbo.json` `inputs` for each task that
+  reads it (`test`, `test:coverage`, `typecheck`), or a change to it would
+  replay a stale pass.
+- **Mutation results.** See [Coverage and mutation testing](#coverage-and-mutation-testing).
+- **Pull request job selection** is reported, not yet enforced: the `detect`
+  job's summary shows which jobs a change needs, from its paths and Turbo's
+  package graph (`tools/ci/src/select-ci.ts`), while every job still runs.
 
 ### Test workers on a local machine
 
@@ -42,6 +60,12 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
 
 ## Writing workerd tests
 
+- **Fixtures a global setup provides go to every file of their Vitest
+  project, serialized, once per file.** `apps/api` keeps its large chunked
+  upload and import fixtures (23 MiB) in a project of their own,
+  `api-chunked`: a new test reading `inject("chunkedFixtures")` goes in that
+  project's file list in `vitest.config.ts`, and a new large fixture gets a
+  project of its own the same way.
 - **Storage is isolated per file, not per test.** Use `uniqueId()` from
   `@fyrden/testing` for every Durable Object name, R2 key and D1 row, so tests
   pass in any order. The shuffle guard catches tests that depend on order.
@@ -107,7 +131,7 @@ Coverage is Istanbul (V8 coverage does not work inside workerd). `git-core` and
 `domain` have an 80% line floor.
 
 Stryker mutation testing runs one scope, a directory under `git-core/src/`, per
-run (`FYRDEN_MUTATION_SCOPE`, default `protocol`; `stryker.config.mjs` lists
+run (`FYRDEN_MUTATION_SCOPE`, default `protocol`; `stryker/scopes.mjs` lists
 the scopes). It runs the scope's tests once per mutant through Stryker's
 command runner: its Vitest runner does not switch mutants under Vitest 5, and
 the TypeScript 7 compiler has no API for its tsconfig rewriting. Because the
@@ -127,13 +151,21 @@ table). Stryker's timeout is 60 s: a mutant that makes a test wait forever
 fails at Vitest's 30 s test timeout and counts as killed, so only a loop that
 never yields times out (with Stryker's default, slow runs on a busy machine
 were counted as timed out, that is detected, even for string-literal
-mutants). Pull requests run
-`--incremental` from the results the nightly full run caches: without per-test
-coverage (command runner) Stryker reuses every mutant whose own code did not
-change, so only the full nightly run sees a change elsewhere that weakens the
-tests. When no cached results exist (before the first nightly run, or after
-the cache was evicted), the pull request runs every mutant of each changed
-scope instead, so the gate is never skipped.
+mutants). A pull request gets a mutation job only for the scopes it changed
+(their source directory, or every scope when the mutation setup changed;
+`tools/ci/src/select-mutation.ts`). Each runs `--incremental` from the
+cached results of that pull request's last passing run of the scope, else of
+the nightly full run: without per-test coverage (command runner) Stryker
+reuses every mutant whose own code did not change, so only the full nightly
+run sees a change elsewhere that weakens the tests. Results are keyed by the
+mutation setup they were made under (Stryker's config and scopes, git-core's
+Vitest config), and only results made under the pull request's own setup are
+restored: after a change to it, on `main` before the next nightly run or in
+the pull request itself, a scope runs every mutant and saves its results for
+the next push. When neither exists (a new
+scope, or the caches were evicted), the scope runs every mutant instead, so
+the gate is never skipped, and a passing run saves its results for the pull
+request's next push.
 
 Stryker 10 cannot instrument two TypeScript patterns safely (measured): an
 `as` expression as the left operand of `|` or `&` loses its parentheses when

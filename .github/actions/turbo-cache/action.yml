@@ -1,0 +1,36 @@
+name: Turbo task cache (restore)
+description: >-
+  Restores this job's Turbo task results from its last successful run (this
+  pull request's, or main's), so a task whose inputs did not change replays
+  its logs and outputs instead of running again. Turbo's task hashes decide
+  what applies; the key only keeps toolchains apart. Pair it with
+  ./.github/actions/turbo-cache/save as the job's last step. Use it after the
+  dependencies are installed, and only for tasks whose results depend on
+  their recorded inputs (never shuffle, end to end or mutation runs).
+inputs:
+  partition:
+    description: >-
+      The job's own name in the key (static, packages, api-1, ...): each job
+      saves its own archive, so parallel jobs never race for one key.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache key and run summaries
+      shell: bash
+      env:
+        PARTITION: ${{ inputs.partition }}
+      run: |
+        # The prefix a restore matches: one toolchain, one job. Each save is
+        # a new immutable entry (run id and attempt); the newest restores.
+        prefix="turbo-v1-$ImageOS-$RUNNER_ARCH-node$(node --version)-$PARTITION-"
+        echo "TURBO_CACHE_PREFIX=$prefix" >> "$GITHUB_ENV"
+        echo "TURBO_CACHE_KEY=$prefix$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+        # Every Turbo run writes .turbo/runs/<id>.json, naming the task
+        # hashes the save step keeps.
+        echo "TURBO_RUN_SUMMARY=true" >> "$GITHUB_ENV"
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .turbo/cache
+        key: ${{ env.TURBO_CACHE_KEY }}
+        restore-keys: ${{ env.TURBO_CACHE_PREFIX }}

@@ -9,10 +9,11 @@
 // page it visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm
 // --filter @fyrden/web build` first (turbo does it).
 import { createHmac, randomBytes } from "node:crypto";
-import { mentionsToken } from "@fyrden/domain";
+import { generateToken, mentionsToken, secureRandomBytes } from "@fyrden/domain";
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FJORD } from "../../../apps/web/app/lib/fjord.js";
+import { runSmoke, webChecks } from "../src/smoke.ts";
 import { accessible as axe, startWebStack, type WebStack } from "./web-stack.js";
 
 /** `#rrggbb` as `getComputedStyle` reports it. */
@@ -47,15 +48,32 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  const output = stack?.output() ?? "";
   await stack?.stop();
-  // Neither Worker logs a token (wrangler's own access log lines aside).
-  expect(
-    output
-      .split("\n")
-      .filter((l) => !l.startsWith("[wrangler:info]"))
-      .filter(mentionsToken),
-  ).toEqual([]);
+  // Neither Worker logs a token (wrangler's own access log lines aside),
+  // lines written late, after the test that caused them, included.
+  expect(stack?.workerLines().filter(mentionsToken) ?? []).toEqual([]);
+});
+
+// The service binding and the logs, apart from the browser: plain requests,
+// signed out, that leave the page and the repositories alone.
+describe("fyrden-web and fyrden-api running together", () => {
+  it("serves the page and health check through the API service binding", async () => {
+    const results = await runSmoke(webChecks(`${origin}/`));
+    expect(results.filter((r) => !r.ok)).toEqual([]);
+  });
+
+  it("never logs a token from a URL React Router cannot match", async () => {
+    const live = stack as WebStack;
+    const token = generateToken("pat", secureRandomBytes);
+    const before = live.output().length;
+    const res = await fetch(`${origin}/no/such/page/${token}`);
+    expect(res.status).toBe(404);
+    await res.text();
+    // This request's own error line: proves the log was written before checking it.
+    await live.waitForLine(/"msg":"web server error".*no\/such\/page/, before);
+    const written = live.workerLines(before);
+    expect(written.filter(mentionsToken).map((l) => l.replaceAll(token, "<TOKEN>"))).toEqual([]);
+  });
 });
 
 describe("the web UI", () => {
