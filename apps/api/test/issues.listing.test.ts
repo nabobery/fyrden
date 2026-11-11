@@ -31,8 +31,9 @@ type Held = { kind: SubjectKind; number: number; state: string; updatedAt: numbe
  * at `AT` (`tied`), or in groups of ten timestamps whose order differs from
  * the numbers'. Returns what it holds.
  */
-async function holding(tied: boolean): Promise<{ stub: DurableObjectStub<RepoDO>; held: Held[] }> {
-  const stub = env.REPO.getByName(uniqueId("rep"));
+async function holding(tied: boolean): Promise<Fixture> {
+  const name = uniqueId("rep");
+  const stub = env.REPO.getByName(name);
   const at = (n: number) => (tied ? AT : AT + ((n * 7919) % 10));
   const held: Held[] = [];
   for (let i = 1; i <= N; i++) {
@@ -72,30 +73,59 @@ async function holding(tied: boolean): Promise<{ stub: DurableObjectStub<RepoDO>
           h.updatedAt,
         );
   });
-  return { stub, held };
+  return { name, stub, held };
+}
+
+type Fixture = { name: string; stub: DurableObjectStub<RepoDO>; held: Held[] };
+
+/**
+ * A repository built once per `shape`, by whichever test asks first, and shared by every test of
+ * this file that asks for the same shape. Only tests that never change it share one: listing
+ * reads storage and writes nothing, so in any order each finds it as built. A test that changes
+ * its repository builds its own. Each use takes a stub of its own.
+ */
+const builds = new Map<string, Promise<Fixture>>();
+async function shared(shape: string, build: () => Promise<Fixture>): Promise<Fixture> {
+  let built = builds.get(shape);
+  if (!built) {
+    built = build();
+    builds.set(shape, built);
+  }
+  const { name, held } = await built;
+  return { name, stub: env.REPO.getByName(name), held };
+}
+
+/**
+ * `list(query)` inside the repository object, with the rows its queries read (every cursor's, once
+ * the listing is done with it: iterated or read whole). The cursors are let go before returning:
+ * kept, the object's later queries slow down with every cursor still held, and a shared fixture's
+ * walks grew several times slower test after test.
+ */
+function counted(r: RepoDO, query: SubjectQuery) {
+  const sql = r.git.context.storage.sql;
+  const exec = sql.exec;
+  const cursors: { rowsRead: number }[] = [];
+  sql.exec = ((q: string, ...bindings: unknown[]) => {
+    const cursor = exec.call(sql, q, ...bindings);
+    cursors.push(cursor);
+    return cursor;
+  }) as typeof sql.exec;
+  try {
+    const page = r.issues.list(query);
+    return {
+      numbers: page.subjects.map((s) => (s.kind === "issue" ? s.issue.number : s.pull.number)),
+      next: page.next,
+      rowsRead: cursors.reduce((sum, c) => sum + c.rowsRead, 0),
+    };
+  } finally {
+    sql.exec = exec;
+    cursors.length = 0;
+  }
 }
 
 /** The listing's page for `query`, with the rows its queries read. */
 function listed(stub: DurableObjectStub<RepoDO>, query: SubjectQuery) {
-  return inRepo(stub, (r: RepoDO) => {
-    const sql = r.git.context.storage.sql;
-    const exec = sql.exec.bind(sql);
-    const cursors: { rowsRead: number }[] = [];
-    sql.exec = ((query: string, ...bindings: unknown[]) => {
-      const cursor = exec(query, ...bindings);
-      cursors.push(cursor);
-      return cursor;
-    }) as typeof sql.exec;
-    try {
-      const page = r.issues.list(query).subjects;
-      return {
-        numbers: page.map((s) => (s.kind === "issue" ? s.issue.number : s.pull.number)),
-        rowsRead: cursors.reduce((sum, c) => sum + c.rowsRead, 0),
-      };
-    } finally {
-      sql.exec = exec;
-    }
-  });
+  return inRepo(stub, (r: RepoDO) => counted(r, query));
 }
 
 /** What the page should be, worked out from what the repository holds. */
@@ -126,7 +156,7 @@ describe("the issue listing", () => {
   it.each([true, false])(
     "answers every combination in order, a page reading a few pages of rows (tied: %s)",
     async (tied) => {
-      const { stub, held } = await holding(tied);
+      const { stub, held } = await shared(`holding ${tied}`, () => holding(tied));
       // An anchor in the middle: deep in the tie, or inside a timestamp group.
       const middle = held.find((h) => h.number === N) as Held;
       for (const kinds of KINDS)
@@ -156,7 +186,7 @@ describe("the issue listing", () => {
   );
 
   it("reads every listing range from an index, without a temporary sort", async () => {
-    const { stub } = await holding(true);
+    const { stub } = await shared("holding true", () => holding(true));
     const plans = await inRepo(stub, (r: RepoDO) => {
       const sql = r.git.context.storage.sql;
       const explain = (query: string, ...bindings: unknown[]) =>
@@ -230,10 +260,8 @@ const milestoneOf = (n: number) => (n % 4 === 0 ? 1 : null);
 const authorOf = (n: number) => (n % 11 === 0 ? "usr_b" : "usr_a");
 
 /** A repository as `holding` makes it, its subjects given labels, assignees, milestones and authors. */
-async function holdingSorted(
-  tied = false,
-): Promise<{ stub: DurableObjectStub<RepoDO>; held: Held[] }> {
-  const { stub, held } = await holding(tied);
+async function holdingSorted(tied = false): Promise<Fixture> {
+  const { name, stub, held } = await holding(tied);
   await inRepo(stub, (r: RepoDO) => {
     const sql = r.git.context.storage.sql;
     sql.exec(
@@ -270,7 +298,7 @@ async function holdingSorted(
         );
     }
   });
-  return { stub, held };
+  return { name, stub, held };
 }
 
 /** Whether held subject `n` matches `filter` (label names as the fixture names them). */
@@ -307,29 +335,7 @@ async function walk(stub: DurableObjectStub<RepoDO>, query: SubjectQuery) {
   let pages = 0;
   let mostRead = 0;
   do {
-    const page = await inRepo(stub, (r: RepoDO) => {
-      const sql = r.git.context.storage.sql;
-      const exec = sql.exec.bind(sql);
-      // Every cursor's rows read, once the listing is done with it (iterated or read whole).
-      const cursors: { rowsRead: number }[] = [];
-      sql.exec = ((q: string, ...bindings: unknown[]) => {
-        const cursor = exec(q, ...bindings);
-        cursors.push(cursor);
-        return cursor;
-      }) as typeof sql.exec;
-      try {
-        const listed = r.issues.list({ ...query, after });
-        return {
-          numbers: listed.subjects.map((s) =>
-            s.kind === "issue" ? s.issue.number : s.pull.number,
-          ),
-          next: listed.next,
-          rowsRead: cursors.reduce((sum, c) => sum + c.rowsRead, 0),
-        };
-      } finally {
-        sql.exec = exec;
-      }
-    });
+    const page = await inRepo(stub, (r: RepoDO) => counted(r, { ...query, after }));
     expect(page.numbers.length).toBeLessThanOrEqual(query.limit);
     numbers.push(...page.numbers);
     after = page.next;
@@ -371,7 +377,7 @@ describe("the issue listing's filters", () => {
     "walks %s to the end in order, each page reading a bounded number of rows",
     async (_, filter) => {
       for (const tied of [false, true]) {
-        const { stub, held } = await holdingSorted(tied);
+        const { stub, held } = await shared(`sorted ${tied}`, () => holdingSorted(tied));
         for (const kinds of KINDS)
           for (const state of ["open", "closed", "all"] as const)
             for (const sort of ["created", "updated"] as const)
@@ -432,7 +438,7 @@ describe("the issue listing's filters", () => {
   });
 
   it("answers nothing for a label name the repository lacks, reading only the labels", async () => {
-    const { stub } = await holdingSorted();
+    const { stub } = await shared("sorted false", () => holdingSorted(false));
     const walked = await walk(stub, {
       kinds: ["issue", "pull"],
       state: "all",
@@ -447,7 +453,7 @@ describe("the issue listing's filters", () => {
   });
 
   it("lists as before with an empty filter", async () => {
-    const { stub, held } = await holdingSorted();
+    const { stub, held } = await shared("sorted false", () => holdingSorted(false));
     const query: SubjectQuery = {
       kinds: ["issue", "pull"],
       state: "open",
