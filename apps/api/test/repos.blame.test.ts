@@ -55,11 +55,9 @@ function lines(pages: Answer[]): string[] {
   const out = new Array<string>(pages.at(-1)?.lines ?? 0).fill("?");
   for (const page of pages)
     for (const r of page.ranges)
-      out.fill(
-        "unresolved" in r ? r.unresolved : `${r.commit}@${r.source_start_line}`,
-        r.start_line - 1,
-        r.start_line - 1 + r.line_count,
-      );
+      for (let k = 0; k < r.line_count; k++)
+        out[r.start_line - 1 + k] =
+          "unresolved" in r ? r.unresolved : `${r.commit}@${r.source_start_line + k}`;
   return out;
 }
 
@@ -73,24 +71,28 @@ describe("GET /repos/{owner}/{repo}/blame", () => {
     expect(CONTRACT_REASONS).toEqual(UNRESOLVED_REASONS);
   });
 
-  it("blames a file to the end, page by page, as git does", async () => {
-    const { token, path } = await pushedRepo();
-    const pages: Answer[] = [];
-    let continuation: string | undefined;
-    for (let guard = 0; guard < 50; guard++) {
-      const page = await get(path, token, {
-        path: "f.txt",
-        per_page: 1,
-        ...(continuation && { continuation }),
-      });
-      expect(page.status).toBe(200);
-      pages.push(page.body);
-      if (page.body.next_continuation === null) break;
-      continuation = page.body.next_continuation;
-    }
-    expect(lines(pages)).toEqual(fromGit("f.txt"));
-    expect(pages.at(-1)).toMatchObject({ commit: fx.tip, state: "complete" });
-  });
+  // block.txt has one commit's range of five lines, so each line's own number counts.
+  it.each(["f.txt", "block.txt"])(
+    "blames %s to the end, page by page, as git does",
+    async (file) => {
+      const { token, path } = await pushedRepo();
+      const pages: Answer[] = [];
+      let continuation: string | undefined;
+      for (let guard = 0; guard < 50; guard++) {
+        const page = await get(path, token, {
+          path: file,
+          per_page: 1,
+          ...(continuation && { continuation }),
+        });
+        expect(page.status).toBe(200);
+        pages.push(page.body);
+        if (page.body.next_continuation === null) break;
+        continuation = page.body.next_continuation;
+      }
+      expect(lines(pages)).toEqual(fromGit(file));
+      expect(pages.at(-1)).toMatchObject({ commit: fx.tip, state: "complete" });
+    },
+  );
 
   it("answers lines git takes through a rename as rename_possible, never settled", async () => {
     const { token, path } = await pushedRepo();

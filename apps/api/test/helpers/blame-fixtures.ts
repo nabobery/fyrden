@@ -45,6 +45,7 @@ export const BLAME_PATHS = [
   "dir/inner.txt",
   "o16.txt",
   "big.txt",
+  "block.txt",
   "legacydir/link",
   "facts.txt",
   "renamed.txt",
