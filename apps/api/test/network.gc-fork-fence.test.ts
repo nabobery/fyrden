@@ -48,19 +48,24 @@ async function network(): Promise<{ p: TestRepo; f0: TestRepo; networkId: string
 
 /**
  * Pauses the collection when it is about to snapshot its first member;
- * `fenced` opens once a fork request waits at the collection's fence.
+ * `fenced` opens once a fork request has waited at the collection's fence
+ * twice: it reached the fence and, one poll later, the fence still held it.
  */
 async function pauseMark(networkId: string) {
   const entered = signal();
   const release = signal();
   const fenced = signal();
+  let fenceWaits = 0;
   await inNetwork(networkId, (n) => {
     n.hooks = {
       onMarkMember: async () => {
         entered.open();
         await release.wait(20_000);
       },
-      onFenceWait: () => fenced.open(),
+      onFenceWait: () => {
+        fenceWaits += 1;
+        if (fenceWaits === 2) fenced.open();
+      },
     };
   });
   return { entered, release, fenced };
@@ -82,9 +87,10 @@ const tracked = <T>(promise: Promise<T>) => {
 };
 
 /**
- * Resolves once the fork waits at the fence, or once it settles: a fork that
- * skipped the fence settles while the mark is held and fails the caller's
- * `done` assertion instead of a timeout.
+ * Resolves once the fork has stayed at the fence for a second wait, or once
+ * it settles: a fork that skipped the fence, or that one wait let through,
+ * settles while the mark is held and fails the caller's `done` assertion
+ * instead of a timeout.
  */
 const reachesFence = (forked: ReturnType<typeof tracked>, fenced: ReturnType<typeof signal>) =>
   Promise.race([fenced.wait(), forked.settled]);
