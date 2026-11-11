@@ -182,7 +182,7 @@ jobs:
   # the pinned Playwright, with the system libraries it needs. A stalled
   # mirror or download once held this job to its timeout: apt gets its own
   # network timeouts and retries (its package transaction is never cut
-  # short), and the browser, cached by the lockfile, is downloaded again
+  # short), and the browser, cached by its pinned revisions, is downloaded again
   # when an attempt stalls.
   e2e:
     name: Both Workers together locally (end to end)

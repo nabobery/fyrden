@@ -133,8 +133,8 @@ export function outputLines(selection: CiSelection): string[] {
 }
 
 if (import.meta.main) {
-  // Outside a pull request (or with no event named) every job runs, without
-  // asking git or Turbo.
+  // Outside a pull request (or with no event named) every job runs: no diff
+  // and no affected-package query, only Turbo's list of the workspace's packages.
   const event = process.env.GITHUB_EVENT_NAME ?? "unknown";
   const [base, head] = process.argv.slice(2);
   let selection: CiSelection;
