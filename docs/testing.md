@@ -157,10 +157,11 @@ mutants). A pull request gets a mutation job only for the scopes it changed
 cached results of that pull request's last passing run of the scope, else of
 the nightly full run: without per-test coverage (command runner) Stryker
 reuses every mutant whose own code did not change, so only the full nightly
-run sees a change elsewhere that weakens the tests, a change to the mutation
-setup or git-core's Vitest config included (it reruns every scope, but each
-reuses those results; the pull request's own results are keyed by the setup,
-so they never carry across such a change). When neither exists (a new
+run sees a change elsewhere that weakens the tests. A pull request that
+changes the mutation setup (Stryker's config or scopes, git-core's Vitest
+config) runs every mutant of every scope on its first push, since results
+made under the old setup cannot stand, and saves them keyed by the new setup;
+its later pushes reuse those. When neither exists (a new
 scope, or the caches were evicted), the scope runs every mutant instead, so
 the gate is never skipped, and a passing run saves its results for the pull
 request's next push.
