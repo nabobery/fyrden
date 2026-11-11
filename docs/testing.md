@@ -101,9 +101,12 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   parallel run, timings stretch several times. Deployed Durable Objects run other
   requests during R2 awaits, but the local pool does not, so race tests pause
   code at explicit hooks. `setTimeout`, `setInterval` and the `sleep` helper are
-  lint errors in test files (`biome.json`); a deliberate exception (a test of a
-  timeout itself, a yield whose length does not change the outcome) carries a
-  `biome-ignore` saying why.
+  lint errors in test files, `tools/ci`'s suites and their helpers included
+  (`biome.json`); a deliberate exception (a test of a timeout itself, a yield
+  whose length does not change the outcome, a deadline for failing, a process's
+  exit, the end-to-end tests' `eventually` for a running server's background
+  work) carries a `biome-ignore` saying why. In a browser, Playwright's clock
+  moves the page's timers on (`live-ui.test.ts`).
 - Never assert on elapsed time. A cost bound is asserted as work done: rows
   read or written, commits walked (a walk's `maxCommits`), steps a function
   reports. A benchmark prints times only when `FYRDEN_BENCH=1` and asserts

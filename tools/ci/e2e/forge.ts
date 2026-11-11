@@ -216,6 +216,7 @@ export async function eventually<T>(
     const value = await probe();
     if (value !== undefined) return value;
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    // biome-ignore lint/style/noRestrictedGlobals: the server's background work under wrangler dev (an alarm, a queue consumer) gives a test outside it no signal to wait on, so it is asked again.
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 }

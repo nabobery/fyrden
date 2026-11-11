@@ -149,6 +149,7 @@ export async function startServer(options: ServerOptions): Promise<Server> {
         if (until(output)) finish(true);
         else if (exited) finish(false);
       };
+      // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: the output itself finishes the watch.
       const timer = setTimeout(() => finish(until(output)), timeoutMs);
       watchers.add(watch);
       watch();

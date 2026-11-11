@@ -103,6 +103,7 @@ export async function startWebStack(
   const waitForLine = (match: RegExp, from: number, deadlineMs = 15_000) =>
     new Promise<void>((done, fail) => {
       // A deadline for failing, not a wait: the line itself resolves the promise.
+      // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: the line itself resolves the promise.
       const deadline = setTimeout(() => {
         waiters.delete(check);
         fail(new Error(`no Worker log line matched ${match}`));
