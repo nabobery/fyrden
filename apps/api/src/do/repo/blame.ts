@@ -296,6 +296,9 @@ export class RepoBlame {
     const path = segments(input.path);
     if (!path) return fail(422, "invalid_path", "That isn't a path in a repository.");
 
+    // While the share is held, 24 MiB of the pool is left: a fetch plan (25 MiB
+    // and up) or a push's indexing phase (33 MiB) waits for this request to end,
+    // in arrival order, and fails once its wait reaches DO_MEMORY.maxWaitMs (60 s).
     const signal = AbortSignal.timeout(SHARE_WAIT_MS);
     let share: { release(): void };
     try {
