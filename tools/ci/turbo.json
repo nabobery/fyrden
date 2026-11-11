@@ -1,0 +1,30 @@
+{
+  "$schema": "../../node_modules/turbo/schema.json",
+  "extends": ["//"],
+  // The selectors' tests read the mutation scope table and ask Turbo for the
+  // workspace graph, which every package's dependencies make up. The end to
+  // end tests (compiled, not run, by typecheck) import the web app's Fjord theme.
+  "tasks": {
+    "typecheck": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/web/app/lib/fjord.ts"]
+    },
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/git-core/stryker/scopes.mjs",
+        "$TURBO_ROOT$/apps/*/package.json",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/tools/*/package.json"
+      ]
+    },
+    "test:coverage": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/git-core/stryker/scopes.mjs",
+        "$TURBO_ROOT$/apps/*/package.json",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/tools/*/package.json"
+      ]
+    }
+  }
+}
