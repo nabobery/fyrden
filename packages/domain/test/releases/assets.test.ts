@@ -9,6 +9,15 @@ import {
 
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 
+/**
+ * Strings of any code points, lone surrogates included, one unit each. Not `fc.string({ unit:
+ * "binary" })`: the first such string arbitrary in a process builds a reverse map of every code
+ * point, about 1.1 million entries, to seed its examples, which took 236 ms on a laptop and
+ * 4.4 s on a loaded CI runner under coverage (measured), inside a test's 5 s limit.
+ */
+const codePoints = (maxLength: number) =>
+  fc.string({ unit: fc.nat({ max: 0x10ffff }).map((n) => String.fromCodePoint(n)), maxLength });
+
 describe("asset names", () => {
   it("takes an ordinary name, folded for comparison", () => {
     expect(assetName("Fyrden-1.0.tar.gz")).toEqual({
@@ -70,7 +79,7 @@ describe("asset names", () => {
 
   it("never takes a name that could split a header or a path", () => {
     fc.assert(
-      fc.property(fc.string({ unit: "binary", maxLength: 300 }), (raw) => {
+      fc.property(codePoints(300), (raw) => {
         const result = assetName(raw);
         if (!result.ok) return;
         expect(result.name).toBe(result.name.normalize("NFC"));
@@ -129,7 +138,7 @@ describe("asset content types", () => {
 
   it("never takes a value that could split a header", () => {
     fc.assert(
-      fc.property(fc.string({ unit: "binary", maxLength: 80 }), (raw) => {
+      fc.property(codePoints(80), (raw) => {
         const result = assetContentType(raw);
         if (result.ok) expect(result.type).toMatch(/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/);
       }),
