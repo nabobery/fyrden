@@ -181,11 +181,11 @@ Benches run only under `FYRDEN_BENCH=1`, on the pinned Node.
 
 | Bench | Command | Shows |
 |---|---|---|
-| CPU per primitive | `node tools/bench/blame/run.ts --only=cpu` | ns per counted unit, in one idle workerd isolate |
-| Delta-base cache retention | `node tools/bench/blame/run.ts --only=retention` | What the 8 MiB charge holds in workerd: 8.01 MiB at most |
-| Churn | `node tools/bench/blame/run.ts --only=memory` | The high-water with no forced collection |
-| Allocation boundaries | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
-| Charge against bytes built | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
+| CPU per primitive | `FYRDEN_BENCH=1 node tools/bench/blame/run.ts --only=cpu` | ns per counted unit, in one idle workerd isolate |
+| Delta-base cache retention | `FYRDEN_BENCH=1 node tools/bench/blame/run.ts --only=retention` | What the 8 MiB charge holds in workerd: 8.01 MiB at most |
+| Churn | `FYRDEN_BENCH=1 node tools/bench/blame/run.ts --only=memory` | The high-water with no forced collection |
+| Allocation boundaries | `FYRDEN_BENCH=1 pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
+| Charge against bytes built | `FYRDEN_BENCH=1 pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
 
 Retention with heap counted depends on the runtime: Node 24 held up to 10.66 MiB
 where Node 26 held 7.54 and workerd 8.01. So the Node bench holds only buffers to
