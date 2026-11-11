@@ -45,7 +45,8 @@ export interface BlameSource {
   ): Promise<{ readonly oid: Oid; readonly kind: "file" | "symlink" } | null>;
   /** The bytes, or "too_large" with no body read. */
   blob(oid: Oid, maxBytes: number): Promise<Uint8Array | "too_large">;
-  commitInfo(oid: Oid): Promise<BlameCommitInfo>;
+  /** The commit's facts, or "too_large" for a commit object too large to read for them. */
+  commitInfo(oid: Oid): Promise<BlameCommitInfo | "too_large">;
   /** A tree's body, or "too_large" with no body read. Throws `BlameObjectUnreadable` if it's missing or not a tree. */
   tree(oid: Oid, maxBytes: number): Promise<Uint8Array | "too_large">;
 }
@@ -390,7 +391,7 @@ async function runStep(
   if (left.length > 0) {
     const fact = await source.commitInfo(entry.oid);
     // Refused whole rather than cut: git shows the whole field, and a cut one would disagree.
-    if (!factFitsCheckpoint(fact)) {
+    if (fact === "too_large" || !factFitsCheckpoint(fact)) {
       for (let k = 0; k < left.length; k += 2)
         refuse(staged, "commit_info_too_large", left[k + 1] as number);
       return staged;
@@ -636,6 +637,22 @@ function refuseEverything(
   }
   state.queue = [];
   appendRanges(state, records);
+}
+
+/**
+ * Refuses the head commit's pending lines as one step, the way a step that
+ * can't run is refused, for a step the caller gave up on: one whose slices
+ * kept dying before it finished. Nothing when nothing is pending.
+ */
+export function refuseHead(
+  state: BlameState,
+  reason: UnresolvedReason,
+  limits: BlameSliceLimits,
+): void {
+  const entry = state.queue[0];
+  if (!entry) return;
+  apply(state, entry, terminal(entry, reason), limits);
+  state.steps++;
 }
 
 /**

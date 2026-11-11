@@ -86,7 +86,11 @@ export { RepoGitStorage, type RepoGitStorageOptions } from "./repo-git-storage.j
 export { type PackUploadState, ResumablePackUpload } from "./resumable-pack-upload.js";
 export { GIT_STORAGE_TABLES_V1 } from "./schema.js";
 export type { GitSqlStorage, GitStorageContext } from "./sql.js";
-export { promotePendingCommits, SqliteCommitGraph } from "./sqlite-commit-graph.js";
+export {
+  type BoundedCommit,
+  promotePendingCommits,
+  SqliteCommitGraph,
+} from "./sqlite-commit-graph.js";
 export {
   type CommitContext,
   DERIVED_REF_PREFIX,

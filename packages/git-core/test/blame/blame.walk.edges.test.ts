@@ -7,6 +7,7 @@ import {
   MAX_BLAME_LINES,
   MAX_FACT_FIELD_BYTES,
   MAX_STATE_BYTES,
+  UNRESOLVED_REASONS,
 } from "../../src/blame/state.js";
 import {
   advanceBlame,
@@ -15,8 +16,10 @@ import {
   type BlameRange,
   BlameReadsSpent,
   type BlameSliceLimits,
+  type BlameSource,
   blameRanges,
   DEFAULT_BLAME_SLICE,
+  refuseHead,
   startBlame,
 } from "../../src/blame/walk.js";
 import type { Oid } from "../../src/object/oid.js";
@@ -454,6 +457,107 @@ describe("a commit fact too long for a checkpoint", () => {
     const text = "\u00e9".repeat(0x8000);
     const source = new LongFieldSource(history, { commit: "b", field: "name", text });
     expect(answer(source, await finished(source, "b"))).toEqual(["a@1", "commit_info_too_large"]);
+  });
+
+  it("refuses only the commit's own lines when its object is too large to read", async () => {
+    const fake = new FakeSource(history);
+    const source: BlameSource = {
+      commit: (oid) => fake.commit(oid),
+      fileAt: (tree) => fake.fileAt(tree),
+      blob: (oid, maxBytes) => fake.blob(oid, maxBytes),
+      commitInfo: async (oid) =>
+        fake.names.get(oidToHex(oid)) === "b" ? "too_large" : fake.commitInfo(oid),
+      tree: (oid, maxBytes) => fake.tree(oid, maxBytes),
+    };
+    const state = await startBlame(source, oidOfName("b"), PATH);
+    if ("failure" in state) throw new Error(state.failure);
+    while ((await advanceBlame(state, source, SLICE)).stop !== "done");
+    expect(answer(fake, state)).toEqual(["a@1", "commit_info_too_large"]);
+    expect(state.factOrder.map((oid) => fake.names.get(oidToHex(oid)))).toEqual(["a"]);
+    expect(decodeBlameState(encodeBlameState(state)).ranges).toEqual(
+      state.ranges.subarray(0, 4 * state.rangeCount),
+    );
+  });
+});
+
+describe("a head step refused from outside the walk", () => {
+  const [history, tip] = [
+    {
+      base: { file: f("k", "m", "n") },
+      a: { parents: ["base"], file: f("k", "m", "a", "n") },
+      b: { parents: ["base"], file: f("k", "b", "m", "n") },
+      m: { parents: ["a", "b"], file: f("k", "b", "m", "a", "n", "own") },
+      tip: { parents: ["m"], file: f("k", "b", "m", "a", "n", "own", "last") },
+    },
+    "tip",
+  ] as const;
+
+  async function afterOneStep(source: FakeSource): Promise<BlameState> {
+    const state = await start(source, tip);
+    await advanceBlame(state, source, { ...SLICE, maxSteps: 1 });
+    return state;
+  }
+
+  it("refuses exactly the head commit's pending lines, as one step, and the walk goes on", async () => {
+    const source = new FakeSource(history);
+    const state = await afterOneStep(source);
+    const steps = state.steps;
+    refuseHead(state, "step_lost", SLICE);
+    expect(state.steps).toBe(steps + 1);
+    while ((await advanceBlame(state, source, SLICE)).stop !== "done");
+    expect(answer(source, state)).toEqual([...new Array(6).fill("step_lost"), "tip@7"]);
+    expect(decodeBlameState(encodeBlameState(state)).ranges).toEqual(
+      state.ranges.subarray(0, 4 * state.rangeCount),
+    );
+  });
+
+  it("fits at its size, and one byte less flags the state", async () => {
+    const source = new FakeSource(history);
+    const snapshot = encodeBlameState(await afterOneStep(source));
+    const after = decodeBlameState(snapshot);
+    refuseHead(after, "step_lost", SLICE);
+    const live = liveStateBytes(after);
+    const encoded = encodeBlameState(after).length;
+    const exact = decodeBlameState(snapshot);
+    refuseHead(exact, "step_lost", { ...SLICE, maxLiveStateBytes: live, maxEncodedBytes: encoded });
+    expect(encodeBlameState(exact)).toEqual(encodeBlameState(after));
+    for (const less of [{ maxLiveStateBytes: live - 1 }, { maxEncodedBytes: encoded - 1 }]) {
+      const flagged = decodeBlameState(snapshot);
+      refuseHead(flagged, "step_lost", { ...SLICE, ...less });
+      expect({ less, flagged: flagged.stateLimit, queue: flagged.queue }).toEqual({
+        less,
+        flagged: true,
+        queue: [],
+      });
+    }
+  });
+
+  it("does nothing once nothing is pending", async () => {
+    const source = new FakeSource(history);
+    const state = await finished(source, tip);
+    const before = encodeBlameState(state);
+    refuseHead(state, "step_lost", SLICE);
+    expect(encodeBlameState(state)).toEqual(before);
+  });
+});
+
+describe("the reasons, by position", () => {
+  it("only ever grow at the end, since a checkpoint stores a reason's position", () => {
+    expect(UNRESOLVED_REASONS).toEqual([
+      "parent_too_large",
+      "too_many_parents",
+      "diff_budget",
+      "slide_unsettled",
+      "object_limit",
+      "work_limit",
+      "history_unreadable",
+      "history_missing",
+      "history_limit",
+      "state_limit",
+      "commit_info_too_large",
+      "rename_possible",
+      "step_lost",
+    ]);
   });
 });
 
