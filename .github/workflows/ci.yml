@@ -451,9 +451,9 @@ jobs:
           # (whose prefix can match another scope's file: Stryker then reuses
           # nothing and runs the scope in full, as with no results). Once a
           # newer entry matches, the old entries go unread and expire.
-          key: mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**') }}-${{ github.sha }}
+          key: mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}-${{ github.sha }}
           restore-keys: |
-            mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**') }}-
+            mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}-
             mutation-nightly-v1-${{ matrix.scope }}:
             mutation-incremental-${{ matrix.scope }}-
       - name: Stryker, incremental (break below the recorded baseline)
@@ -476,7 +476,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
-          key: mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # Paid staging and the Free smoke account. Each target is a
   # GitHub environment holding CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and
