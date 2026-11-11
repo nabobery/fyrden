@@ -7,7 +7,9 @@
 
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { afterEach, beforeEach, expect } from "vitest";
 import { feedHooks, type UserDO } from "../../src/do/UserDO.js";
+import { LiveBudget } from "../../src/do/user/live-budget.js";
 import type { Who } from "./api.js";
 
 const ROUND_TRIPS = 200;
@@ -83,4 +85,25 @@ export async function runTurns(who: Who): Promise<void> {
     if (!due) return;
     await runDurableObjectAlarm(feedOf(who));
   }
+}
+
+/**
+ * Checks, in each test of the file that calls it, that every opening a feed's object acknowledged
+ * had a turn running or runnable then: a socket opened with none would have nothing to renew it
+ * or send it hints.
+ */
+export function everyOpeningHoldsATurn(): void {
+  const turnless: string[] = [];
+  beforeEach(() => {
+    // As the object judges it: a turn of its own running, or one prepared that can run (a row
+    // claimed or dispatched with nothing of it running is stranded, not running).
+    feedHooks.acknowledged = (state, running) => {
+      if (!running && new LiveBudget(state.storage.sql).runnableTurn(Date.now()) === null)
+        turnless.push(state.id.name ?? "?");
+    };
+  });
+  afterEach(() => {
+    delete feedHooks.acknowledged;
+    expect(turnless.splice(0), "openings acknowledged with no turn to run").toEqual([]);
+  });
 }
