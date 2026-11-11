@@ -180,6 +180,11 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
         <Link className="button" to={`${base}/commits/${at}`}>
           History
         </Link>
+        {kind === "file" && (
+          <Link className="button" to={`${base}/blame/${at}`}>
+            Blame
+          </Link>
+        )}
         {size !== null && <span className="muted">{size} bytes</span>}
       </div>
       {codeOwners && <CodeOwnersNotes notes={codeOwners} owner={owner} repo={repo} gitRef={ref} />}

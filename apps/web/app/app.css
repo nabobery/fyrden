@@ -296,6 +296,61 @@ mark.file-line > a {
 .file-goto input {
   width: 6rem;
 }
+/* Blame's plain table: each group's row above its lines, numbered as blame counts them. */
+.blame-scroll {
+  overflow-x: auto;
+}
+table.blame {
+  width: max-content;
+  min-width: 100%;
+  line-height: 20px;
+}
+table.blame td,
+table.blame th {
+  padding: 0;
+  border: 0;
+}
+table.blame .blame-group th {
+  position: sticky;
+  left: 0;
+  padding: 0.4rem 1ch;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-weight: normal;
+}
+table.blame tbody:first-of-type .blame-group th {
+  border-top: 0;
+}
+table.blame .blame-num {
+  position: sticky;
+  left: 0;
+  padding-inline: 2ch 1ch;
+  text-align: right;
+  background: var(--bg);
+  user-select: none;
+}
+table.blame .blame-num a {
+  color: var(--muted);
+  text-decoration: none;
+  scroll-margin-top: 16px;
+}
+table.blame .blame-num a:hover {
+  text-decoration: underline;
+}
+table.blame .blame-text {
+  padding-inline: 1ch;
+}
+table.blame .blame-text code {
+  white-space: pre;
+  font-family:
+    "SF Mono", Monaco, Consolas, "Ubuntu Mono", "Liberation Mono", "Courier New", monospace;
+}
+table.blame .selected td {
+  background: var(--diff-selected);
+}
+table.blame .selected .blame-num a {
+  color: var(--accent);
+}
 /* Highlighted code: each token's colour for the scheme in use (lib/highlight-palette.ts). */
 pre.highlights span {
   color: var(--hls-light, var(--fg));
