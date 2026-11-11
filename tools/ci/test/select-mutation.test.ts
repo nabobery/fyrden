@@ -50,6 +50,7 @@ describe("selectMutationScopes", () => {
       "packages/git-core/stryker.config.mjs",
       "packages/git-core/stryker/scopes.mjs",
       "packages/git-core/stryker/run-tests.mjs",
+      "packages/git-core/vitest.config.ts",
     ])
       expect(selectMutationScopes([path], scopes)).toEqual(scopes);
   });

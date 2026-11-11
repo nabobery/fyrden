@@ -9,7 +9,12 @@ import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const GIT_CORE = "packages/git-core/";
-const SETUP = [`${GIT_CORE}stryker.config.mjs`, `${GIT_CORE}stryker/`];
+// Stryker's setup, and the Vitest config its test command runs every mutant's tests under.
+const SETUP = [
+  `${GIT_CORE}stryker.config.mjs`,
+  `${GIT_CORE}stryker/`,
+  `${GIT_CORE}vitest.config.ts`,
+];
 const NAME = /^[a-z][a-z-]*$/;
 
 export interface MutationScope {
