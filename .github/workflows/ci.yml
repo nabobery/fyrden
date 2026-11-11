@@ -405,6 +405,10 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
+      # Mutation is not a required check and a cold scope runs for hours: at
+      # most four at a time, so they never hold the runners the required jobs
+      # wait for (20 concurrent jobs on the Free plan).
+      max-parallel: 4
       matrix: ${{ fromJSON(needs.detect.outputs.mutation-matrix) }}
     env:
       SCOPE: ${{ matrix.scope }}
@@ -420,11 +424,16 @@ jobs:
           path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
           # The scope ends at the colon: no scope's key prefix is another's
           # (pack, pack-write). This pull request's results first, under the
-          # same mutation setup; then the nightly run's.
+          # same mutation setup; then the nightly run's; then, until a nightly
+          # run saves under its new key, the nightly results under the old one
+          # (whose prefix can match another scope's file: Stryker then reuses
+          # nothing and runs the scope in full, as with no results). Once a
+          # newer entry matches, the old entries go unread and expire.
           key: mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**') }}-${{ github.sha }}
           restore-keys: |
             mutation-pr-v1-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**') }}-
             mutation-nightly-v1-${{ matrix.scope }}:
+            mutation-incremental-${{ matrix.scope }}-
       - name: Stryker, incremental (break below the recorded baseline)
         env:
           RESTORED: ${{ steps.baseline.outputs.cache-matched-key }}
