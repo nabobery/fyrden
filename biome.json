@@ -74,7 +74,15 @@
       }
     },
     {
-      "includes": ["apps/*/test/**", "packages/*/test/**"],
+      "includes": [
+        "apps/*/test/**",
+        "packages/*/test/**",
+        "tools/ci/test/**",
+        "tools/ci/e2e/**",
+        "tools/ci/interop/**",
+        "tools/ci/conformance/**",
+        "tools/ci/schemathesis/**"
+      ],
       "linter": {
         "rules": {
           "style": {

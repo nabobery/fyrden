@@ -40,6 +40,9 @@ async function rest<T>(
 beforeAll(async () => {
   stack = await startWebStack(handle, { vars: { FYRDEN_LIVE: "on" } });
   page = stack.page;
+  // The page's own clock, from its next load: time still flows as usual, and a
+  // test moves it ahead to a timer instead of waiting it out.
+  await page.clock.install();
   await rest("POST", "/user/repos", { name });
   await rest("POST", `/repos/${handle}/${name}/issues`, { title: "Heard live" });
 }, 180_000);
@@ -81,9 +84,12 @@ describe("live hints", () => {
       },
       timeout: 90_000,
     });
-    const acked = socket.waitForEvent("framesent", {
-      predicate: (frame) => String(frame.payload).includes('"t":"ack"'),
-      timeout: 120_000,
+    // Every ack from now on: the page's clock still runs on its own, so on a
+    // slow run its minute can pass before the test moves it.
+    const acked = new Promise<string>((done) => {
+      socket.on("framesent", (frame) => {
+        if (String(frame.payload).includes('"t":"ack"')) done(String(frame.payload));
+      });
     });
     const bo = await rest<{ id: string }>("POST", "/admin/users", { handle: "bo" });
     const { token } = await rest<{ token: string }>("POST", `/admin/users/${bo.id}/tokens`, {
@@ -104,8 +110,18 @@ describe("live hints", () => {
       timeout: 60_000,
     });
     expect(reads.some((at) => at >= heardAt)).toBe(true);
-    // A lone frame is acknowledged a minute after it came.
-    const ack = JSON.parse(String((await acked).payload)) as { t: string; n: number };
+    // A lone frame is acknowledged a minute after it came: the page's clock
+    // moves that minute on, and the frame the page sends is the real one.
+    await page.clock.fastForward(60_000);
+    let deadline: NodeJS.Timeout | undefined;
+    const sent = await Promise.race([
+      acked,
+      new Promise<never>((_, fail) => {
+        // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, from the moment the minute has passed, not a wait: the frame itself settles the race.
+        deadline = setTimeout(() => fail(new Error("no ack within 30 s of the minute")), 30_000);
+      }),
+    ]).finally(() => clearTimeout(deadline));
+    const ack = JSON.parse(sent) as { t: string; n: number };
     expect(ack.n).toBeGreaterThanOrEqual(hint.n);
   }, 180_000);
 

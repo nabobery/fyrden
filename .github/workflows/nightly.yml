@@ -197,6 +197,9 @@ jobs:
     timeout-minutes: 300
     strategy:
       fail-fast: false
+      # Six scopes at a time: all fourteen at once held most of the account's
+      # 20 concurrent jobs for hours, queueing the pull requests' required checks.
+      max-parallel: 6
       matrix:
         scope:
           [

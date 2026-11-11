@@ -150,6 +150,38 @@ suite passes (19 tests), and with the error handler made to print the raw path
 the token check fails. The end-to-end run starts 22 stacks instead of 23; the
 saving is one stack's start, not measured.
 
+### End to end split in two, and two real-time waits gone
+
+- The end-to-end files run as two jobs (`vitest --shard=<n>/2`, 11 files
+  each, checked through Vitest's sequencer); each file keeps its own stack.
+- `live-ui.test.ts` waited a real minute for the page's acknowledgement. The
+  page's clock (Playwright's) now moves that minute on and the test waits for
+  the real frame on the real socket: 62 s to 10.4 s locally. With the
+  acknowledgement delay changed to two minutes, the test fails.
+- `agent-workflow.test.ts` set an expiry 20 s ahead and waited for the reaper
+  to delete the repository (21.7 s on CI). It now sets the expiry through MCP
+  and checks it is stored and that the reaper leaves the repository before
+  then (1.4 s locally); the deletion's timing is `expiry.test.ts`'s, on a
+  clock it controls.
+- The nightly mutation matrix runs at most six scopes at a time: all fourteen
+  at once held most of the 20 concurrent jobs while pull requests waited.
+
+### Measured on CI after the shuffle split
+
+- Run [43015646753](https://github.com/nabobery/fyrden/actions/runs/43015646753)
+  (`f71275e`, API inputs unchanged, so its coverage shards replayed): every
+  required check passed 8.4 minutes after the run was created, waits for
+  runners included (baseline median for a whole run: 25.1 minutes). The
+  twelve shuffle shards ran 3.5 to 4.8 minutes each and were done by 7.3
+  minutes; end to end, unsplit, took 8.3 minutes and finished last.
+- Run [43016858979](https://github.com/nabobery/fyrden/actions/runs/43016858979)
+  (`79d41fb`, which changes `biome.json`, a global Turbo input, so nothing
+  replayed): required checks passed at 13.3 minutes. The two end-to-end
+  shards took 5.7 and 6.8 minutes (8.3 unsplit). With about 24 jobs against
+  the 20 that run at once, the median wait for a runner was 0.4 minutes but
+  one API coverage shard waited 6.3, and that wait set the run's length.
+  More parallel jobs now cost waiting as much as they save.
+
 ## Candidate next steps
 
 - Enforce job selection behind the existing required checks once the reports

@@ -154,6 +154,7 @@ export function spawnOwned(
     await closed;
     // A process can outlive the pipes, the launcher's exit or its SIGKILL's delivery.
     while (pid !== undefined && groupRunning(pid)) {
+      // biome-ignore lint/style/noRestrictedGlobals: a process group's exit has no event to wait on, so it is checked again.
       await new Promise((r) => setTimeout(r, GONE_POLL_MS));
     }
   };
@@ -164,6 +165,7 @@ export function spawnOwned(
       const ended = await Promise.race([
         all.then(() => true),
         new Promise<boolean>((give) => {
+          // biome-ignore lint/style/noRestrictedGlobals: SIGTERM's grace period before SIGKILL, a deadline: the exit itself ends the race.
           grace = setTimeout(() => give(false), graceMs);
         }),
       ]);
@@ -222,6 +224,7 @@ export async function startWranglerDev(options: {
     );
     let output = "";
     const started = await new Promise<"ready" | "port_taken" | Error>((settle) => {
+      // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: wrangler dev's "Ready on" line settles the start.
       const timer = setTimeout(
         () => settle(new Error(`wrangler dev did not start:\n${output}`)),
         options.timeoutMs ?? 60_000,
