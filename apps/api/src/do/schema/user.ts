@@ -690,4 +690,14 @@ export const userSchema: readonly DoMigration[] = [
         WHERE remaining <> '{"do_requests":0,"do_rows_read":0,"do_rows_written":0,"do_duration_ms":0,"d1_rows_read":0,"d1_rows_written":0,"queue_ops":0}';
     `,
   },
+  {
+    version: 14,
+    name: "live_turn_from",
+    // The latest start of a turn grant the feed has prepared, kept while it holds none: no turn
+    // granted it after starts earlier (the ledger's time or earlier when granted, so never ahead
+    // of the ledger's).
+    sql: `
+      ALTER TABLE live_budget_fence ADD COLUMN turn_from INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];

@@ -521,6 +521,40 @@ describe("a run for expired receipts", () => {
           await removeTargets(feeds);
         }
       }));
+
+    it("moves a page, and settles once none of another are left, reading a page however many targets there are", () =>
+      isolated(async () => {
+        await clear();
+        const now = await ledgerNow();
+        const db = clockedD1(env.DIRECTORY, { now });
+        const older = Array.from({ length: 3 }, () => `usr_${uniqueId("older")}`);
+        await targets(now, await incarnationNow(), older);
+        await restored();
+        const current = Array.from({ length: 200 }, () => `usr_${uniqueId("current")}`);
+        const reads = async () => {
+          const rows = { read: 0, written: 0 };
+          await adoptLiveRecoveryTargets(rowCountingD1(db, rows), 1);
+          return rows.read;
+        };
+        try {
+          // A page moved with none of the current incarnation yet, then with 200 of them.
+          const few = await reads();
+          await targets(now, await incarnationNow(), current);
+          const many = await reads();
+          // The last page, which also settles the marker.
+          const last = await reads();
+          const settled = await env.DIRECTORY.prepare(
+            "SELECT incarnation = targets_incarnation AS same FROM live_budget_state WHERE id = 1",
+          ).first<{ same: number }>();
+          expect({ many: many - few <= 2, last: last - few <= 4, settled: settled?.same }).toEqual({
+            many: true,
+            last: true,
+            settled: 1,
+          });
+        } finally {
+          await removeTargets([...older, ...current]);
+        }
+      }));
   });
 
   it("pays the light price and runs only its pages when nothing else is due", () =>
