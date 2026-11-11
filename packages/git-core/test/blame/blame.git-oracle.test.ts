@@ -60,6 +60,8 @@ interface Node {
 }
 
 const ENV = { GIT_CONFIG_NOSYSTEM: "1" };
+/** The test source runs git outside the sandbox's helpers, so it drops the user's config itself. */
+const SOURCE_ENV = { ...process.env, ...ENV, GIT_CONFIG_GLOBAL: "/dev/null" };
 
 describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
   let sandbox: GitSandbox;
@@ -140,7 +142,7 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     slice = SLICE,
     begin: { maxFileBytes?: number } = {},
   ) {
-    const source = await GitBlameSource.open(sandbox.dir, { ...process.env, ...ENV }, tip);
+    const source = await GitBlameSource.open(sandbox.dir, SOURCE_ENV, tip);
     try {
       const state = await startBlame(
         source,
@@ -903,7 +905,7 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     const root = (await sandbox.git(["rev-parse", `${tip}^{tree}`])).stdout.trim();
     const blob = (await sandbox.git(["rev-parse", `${tip}:f`])).stdout.trim();
     const size = Number((await sandbox.git(["cat-file", "-s", root])).stdout.trim());
-    const source = await GitBlameSource.open(sandbox.dir, { ...process.env, ...ENV }, tip);
+    const source = await GitBlameSource.open(sandbox.dir, SOURCE_ENV, tip);
     try {
       expect(await source.tree(oidFromHex(root), size - 1)).toBe("too_large");
       expect(source.bodiesRead).toBe(0);
