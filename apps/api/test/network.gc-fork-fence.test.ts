@@ -24,8 +24,7 @@ import {
   runNetworkJob,
 } from "./helpers/network.js";
 import { principalWithToken } from "./helpers/principals.js";
-// biome-ignore lint/style/noRestrictedImports: the waits give a fork that wrongly skipped the fence time to finish while the mark is held; a slow runner can only let it pass, never fail it falsely.
-import { inRepo, signal, sleep } from "./helpers/repo-git.js";
+import { inRepo, signal } from "./helpers/repo-git.js";
 
 const fx = inject("gcFixtures");
 const CLOCK_AHEAD = 100 * 365 * DAY;
@@ -47,19 +46,24 @@ async function network(): Promise<{ p: TestRepo; f0: TestRepo; networkId: string
   return { p, f0, networkId };
 }
 
-/** Pauses the collection when it is about to snapshot its first member. */
+/**
+ * Pauses the collection when it is about to snapshot its first member;
+ * `fenced` opens once a fork request waits at the collection's fence.
+ */
 async function pauseMark(networkId: string) {
   const entered = signal();
   const release = signal();
+  const fenced = signal();
   await inNetwork(networkId, (n) => {
     n.hooks = {
       onMarkMember: async () => {
         entered.open();
         await release.wait(20_000);
       },
+      onFenceWait: () => fenced.open(),
     };
   });
-  return { entered, release };
+  return { entered, release, fenced };
 }
 
 const tracked = <T>(promise: Promise<T>) => {
@@ -77,10 +81,18 @@ const tracked = <T>(promise: Promise<T>) => {
   return { state, settled };
 };
 
+/**
+ * Resolves once the fork waits at the fence, or once it settles: a fork that
+ * skipped the fence settles while the mark is held and fails the caller's
+ * `done` assertion instead of a timeout.
+ */
+const reachesFence = (forked: ReturnType<typeof tracked>, fenced: ReturnType<typeof signal>) =>
+  Promise.race([fenced.wait(), forked.settled]);
+
 describe("network collection vs fork creation", () => {
   it("a fork requested during the mark phase waits for it, then joins; nothing it borrows is condemned", async () => {
     const { f0, networkId } = await network();
-    const { entered, release } = await pauseMark(networkId);
+    const { entered, release, fenced } = await pauseMark(networkId);
     const gc = tracked(runNetworkJob(networkId, "gc"));
     await entered.wait();
     expect((await inNetwork(networkId, (n) => n.status())).gc).toMatchObject({
@@ -88,7 +100,7 @@ describe("network collection vs fork creation", () => {
       fence: true,
     });
     const forked = tracked(fork(owner, f0, owner));
-    await sleep(300);
+    await reachesFence(forked, fenced);
     expect(forked.state.done).toBe(false);
     // Fork creation waits at the fence: it has not even joined yet.
     const during = await inNetwork(networkId, (n) => n.status());
@@ -213,11 +225,11 @@ describe("network collection vs fork creation", () => {
     expect(shared?.claims).toEqual([f0.id]);
 
     // A mark starts; meanwhile F is forked from F0, whose feature is still at X.
-    const { entered, release } = await pauseMark(networkId);
+    const { entered, release, fenced } = await pauseMark(networkId);
     const gc = tracked(runNetworkJob(networkId, "gc"));
     await entered.wait();
     const forked = tracked(fork(owner, f0, owner));
-    await sleep(200);
+    await reachesFence(forked, fenced);
     expect(forked.state.done).toBe(false);
     release.open();
     await gc.settled;

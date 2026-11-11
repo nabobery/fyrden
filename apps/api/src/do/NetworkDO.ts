@@ -95,6 +95,7 @@ export class NetworkDO extends MigratingDO {
     const runtime = this.runtime;
     while (fenced(runtime)) {
       if (this.context.now() >= deadline) return false;
+      await runtime.hooks.onFenceWait?.();
       await new Promise((resolve) => setTimeout(resolve, FENCE_POLL_MS));
     }
     return true;
