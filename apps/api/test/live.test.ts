@@ -62,7 +62,7 @@ import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { countingExec, entry } from "./helpers/feed.js";
 import { countD1Rows, DAY, expiredReceipts, pinLedgerClock, ZERO } from "./helpers/live-budget.js";
-import { everyOpeningHoldsATurn, handled, runTurns, say } from "./helpers/live-sockets.js";
+import { everyOpeningHoldsATurn, handled, runTurns, say, until } from "./helpers/live-sockets.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
@@ -1840,7 +1840,8 @@ describe("a feed's turn", () => {
     const session = Object.getPrototypeOf(env.DIRECTORY.withSession("first-primary")) as Batching;
     const batch = session.batch;
     let armed = false;
-    let ran: Promise<void> | undefined;
+    // The turn's run, as the object settled it (an error, or true once it ended).
+    let ran: unknown;
     let beforeAttached: { attached: number; behind: boolean; sent: number } | undefined;
     // (The opening's second alarm write, in its last checks: its first is as its row is written.)
     let writes = 0;
@@ -1888,7 +1889,10 @@ describe("a feed's turn", () => {
             resolve();
           };
         });
-        ran = instance.alarm();
+        void instance.alarm().then(
+          () => (ran = true),
+          (error: unknown) => (ran = error ?? new Error("the turn failed")),
+        );
         await worked;
       }
       return result;
@@ -1904,7 +1908,11 @@ describe("a feed's turn", () => {
       uniqueId("lt"),
       undefined,
     );
-    await ran;
+    // Waited for by round trips, not by awaiting the object's promise: a test awaiting it carries on
+    // in the object's I/O context when the object settles it, where this test's socket is not its
+    // own to accept (which happens or not by when the turn ends).
+    await until(owner, () => ran !== undefined, "ended the turn that ran meanwhile");
+    if (ran !== true) throw ran;
     if (!opened.ok) throw new Error(JSON.stringify(opened));
     const ws = opened.response.webSocket as WebSocket;
     ws.accept();
