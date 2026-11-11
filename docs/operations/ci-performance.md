@@ -99,7 +99,7 @@ run; `tools/ci` was not.
 
 | Job | Baseline median | This run |
 | --- | ---: | ---: |
-| One shuffle seed | 19.7 min | 16.8 and 17.5 min |
+| One shuffle seed | 19.7 min | 16.8, 17.5 and 20.9 min (seed 1's tests all passed; a later push cancelled its job) |
 | One API coverage shard (Turbo replay) | 6.8 min | 0.4 to 0.6 min |
 | Merged API coverage (from replayed reports) | | 0.4 min |
 | Package tests with coverage | | 0.8 min (2.7 min with an empty cache) |
@@ -126,8 +126,13 @@ from the run id, so rerunning a shard repeats its order, and each shard prints
 its reproduce command. The nightly ten seeds stay whole passes, so files of
 different shards still run together there.
 
-This raises the shuffle jobs from 3 to 12. Not yet measured: their duration
-and the queueing the extra jobs cause under the concurrent job limit.
+This raises the shuffle jobs from 3 to 12. Run
+[43013999125](https://github.com/nabobery/fyrden/actions/runs/43013999125)
+(`b56b9d5`; a later push cancelled four of its jobs): the shards that ran to
+the end took 2.5 to 5.8 minutes each, after waits of up to 4 minutes for a
+runner. The fixture split alone did not show a clear gain on CI: one seed
+in the run before took 20.9 minutes, two took 16.8 and 17.5. With shuffle
+split, end to end (about 7 to 8 minutes) is the longest job.
 
 ### One fewer wrangler dev start in the end-to-end tests
 
