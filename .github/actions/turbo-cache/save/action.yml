@@ -1,0 +1,21 @@
+name: Turbo task cache (save)
+description: >-
+  Saves the Turbo task results this job used, pruned to them, under the key
+  ./.github/actions/turbo-cache chose. Run it as the job's last step, only
+  when every earlier step passed (the default), so a failed or cancelled job
+  saves nothing.
+runs:
+  using: composite
+  steps:
+    - name: Keep only the results this job's runs used
+      shell: bash
+      run: |
+        if [ -z "$TURBO_CACHE_KEY" ]; then
+          echo "::error::turbo-cache/save without ./.github/actions/turbo-cache earlier in the job"
+          exit 1
+        fi
+        node tools/ci/src/prune-turbo-cache.ts .turbo/cache .turbo/runs
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .turbo/cache
+        key: ${{ env.TURBO_CACHE_KEY }}

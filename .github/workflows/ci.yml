@@ -71,6 +71,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - uses: ./.github/actions/turbo-cache
+        with:
+          partition: static
       - name: Known vulnerabilities (high and critical fail the build)
         run: pnpm audit --audit-level=high
       - name: Lint and format (includes the core import boundary)
@@ -79,6 +82,7 @@ jobs:
         run: pnpm turbo run typecheck
       - name: Dry-run deploy of both Workers
         run: pnpm turbo run deploy:dry-run
+      - uses: ./.github/actions/turbo-cache/save
 
   # Every package but the API, with Istanbul coverage; every package runs to
   # the end, so one run reports every failure.
@@ -94,6 +98,9 @@ jobs:
       - uses: ./.github/actions/pinned-git
         with:
           version: "2.53.0"
+      - uses: ./.github/actions/turbo-cache
+        with:
+          partition: packages
       - name: Unit and workerd integration tests with Istanbul coverage
         run: pnpm turbo run test:coverage --filter='!@fyrden/api' --continue=dependencies-successful
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -103,6 +110,7 @@ jobs:
           path: "**/coverage/coverage-final.json"
           if-no-files-found: ignore
           retention-days: 14
+      - uses: ./.github/actions/turbo-cache/save
 
   # The API's unit and workerd integration suite (about 29 minutes in one
   # job), a quarter of its files a shard (Vitest's own split), each with
@@ -123,6 +131,11 @@ jobs:
       - uses: ./.github/actions/pinned-git
         with:
           version: "2.53.0"
+      # A shard whose inputs did not change replays its result, blob report
+      # included (an output of the task), so the merge below still has all four.
+      - uses: ./.github/actions/turbo-cache
+        with:
+          partition: api-${{ matrix.shard }}
       - name: Unit and workerd integration tests with Istanbul coverage
         env:
           SHARD: ${{ matrix.shard }}
@@ -135,6 +148,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 3
+      - uses: ./.github/actions/turbo-cache/save
 
   # The shards' reports merged: the API's whole coverage, as one run of it gives.
   api-coverage:
@@ -168,7 +182,7 @@ jobs:
   # the pinned Playwright, with the system libraries it needs. A stalled
   # mirror or download once held this job to its timeout: apt gets its own
   # network timeouts and retries (its package transaction is never cut
-  # short), and the browser, cached by the lockfile, is downloaded again
+  # short), and the browser, cached by its pinned revisions, is downloaded again
   # when an attempt stalls.
   e2e:
     name: Both Workers together locally (end to end)
@@ -180,12 +194,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      # The browser revisions the pinned Playwright installs, so a dependency
+      # change elsewhere in the lockfile keeps the cached browsers.
+      - name: Playwright's browser revisions
+        id: browsers
+        run: |
+          revisions=(node_modules/.pnpm/playwright-core@*/node_modules/playwright-core/browsers.json)
+          test -f "${revisions[0]}"
+          echo "digest=$(cat "${revisions[@]}" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Playwright's browser cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           # Names the browsers: a hit on an entry without one of them would never gain it.
-          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ runner.arch }}-${{ steps.browsers.outputs.digest }}
       - name: The browsers' system libraries
         timeout-minutes: 10
         run: |
@@ -204,14 +226,18 @@ jobs:
             sleep 5
           done
           exit 1
+      - uses: ./.github/actions/turbo-cache
+        with:
+          partition: e2e
       - name: Both Workers together locally, through the service binding
         run: pnpm turbo run test:e2e
+      - uses: ./.github/actions/turbo-cache/save
 
   # The check the main branch's ruleset requires, by this name: passed only
   # when every job above passed (one cancelled or skipped fails it too).
   check:
     name: Lint, typecheck, test, dry-run
-    needs: [static, packages, api, api-coverage, e2e]
+    needs: [static, packages, api, api-coverage, e2e, detect]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -263,36 +289,53 @@ jobs:
           "$FYRDEN_GIT_BINARY" --version
           pnpm --filter @fyrden/ci-tools test:interop
 
-  # The workerd suites again in random file and test order, several seeds:
-  # an order-dependent test fails here, with its seed, instead of flaking
-  # later. One seed a job, the jobs side by side: one full pass of the API's
-  # suite takes about 11 minutes on a runner, so passes in one job outgrew
-  # any budget kept for it as the suite grew.
+  # The workerd suites again in random file and test order, three seeds: an
+  # order-dependent test fails here, with its seed, instead of flaking later.
+  # Each seed's pass of the API's suite is split across four jobs (Vitest's
+  # own split, which assigns files by path before it shuffles them, so every
+  # file runs once a pass whatever the seed); one pass in one job took about
+  # 20 minutes. The nightly workflow runs whole, unsplit passes, so files of
+  # different shards still meet there.
   shuffle-run:
-    name: Shuffle guard, seed ${{ matrix.run }}
+    name: Shuffle guard, seed ${{ matrix.pass }}, shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # 10 to 24 minutes on main and pull requests for one run of the API suite, and it grows.
-    timeout-minutes: 40
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3]
-    env:
-      SHUFFLE_RUNS: 1
+        pass: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run test:shuffle --continue=dependencies-successful
+      - uses: ./.github/actions/setup
+      # One seed a pass, the same in its four shards: derived from the run, so
+      # a rerun of a failed shard repeats its order.
+      - name: The pass's seed
+        id: seed
+        env:
+          PASS: ${{ matrix.pass }}
+          SHARD: ${{ matrix.shard }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          seed=$(( (RUN_ID * 3 + PASS * 1000003) % 2147483646 + 1 ))
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "Seed $seed. Reproduce: pnpm --filter @fyrden/api exec vitest run --shard=$SHARD/4 --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed=$seed"
+      - name: The API's suite, shuffled, this shard
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter @fyrden/api exec vitest run --shard="$SHARD/4" --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED"
+      # The adapters' suite is small (about a minute): whole, once a pass.
+      - name: The adapters' suite, shuffled
+        if: matrix.shard == 1
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: pnpm --filter @fyrden/adapters-cloudflare exec vitest run --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED"
 
   # The check the main branch's ruleset requires, by this name: passed only
-  # when every seed's job passed (one cancelled or skipped fails it too).
+  # when every seed's every shard passed (one cancelled or skipped fails it too).
   shuffle:
     name: Shuffle guard (order-dependent workerd tests)
     needs: [shuffle-run]
@@ -338,90 +381,109 @@ jobs:
       - name: REST API fuzzing (Schemathesis)
         run: pnpm --filter @fyrden/ci-tools test:schemathesis
 
-  # Mutation testing of the scopes a pull request changes, incrementally:
-  # results for unchanged code come from the last nightly full run (cached).
-  # Without that baseline (no nightly run yet, or the cache was evicted) the
-  # changed scope runs in full, as the nightly job does, so the gate never
-  # passes without checking; hence the nightly job's timeout (receive-pack, the
-  # largest scope, takes about three hours on a 4-vCPU runner).
+  # Which mutation scopes this pull request changed (its source directory, or
+  # the mutation setup), so the mutation matrix below allocates a runner only
+  # for those. Part of the required check: if it fails, no scope is skipped
+  # silently. It also reports which other jobs the change needs (from the
+  # paths and Turbo's package graph), only reported while that selection is
+  # checked against real pull requests: every job still runs.
+  detect:
+    name: Select CI work
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mutation-matrix: ${{ steps.mutation.outputs.matrix }}
+      has-mutation: ${{ steps.mutation.outputs.any }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The history to the base, without file contents: diffs need only trees.
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # Against the merge commit's first parent: exactly the change CI tests,
+      # even when the base branch moved after the pull request's event.
+      - name: Changed mutation scopes
+        id: mutation
+        if: github.event_name == 'pull_request'
+        run: node tools/ci/src/select-mutation.ts HEAD^1 HEAD
+      - name: Jobs this change needs (report only, in the job summary)
+        continue-on-error: true
+        run: node tools/ci/src/select-ci.ts HEAD^1 HEAD
+
+  # Mutation testing of the scopes a pull request changed, incrementally.
+  # Results come from this pull request's last successful run of the scope,
+  # else from the last nightly full run (both cached). Without either (a new
+  # scope, or the caches were evicted) the scope runs in full, as the nightly
+  # job does, so the gate never passes without checking; hence the nightly
+  # job's timeout (receive-pack, the largest scope, takes about three hours on
+  # a 4-vCPU runner). A passing run saves its results for the next push.
   mutation:
     name: Mutation (${{ matrix.scope }}, incremental)
-    if: github.event_name == 'pull_request'
+    needs: [detect]
+    if: github.event_name == 'pull_request' && needs.detect.outputs.has-mutation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
-      matrix:
-        scope:
-          [
-            protocol,
-            object,
-            hash,
-            refs,
-            pack,
-            pack-write,
-            graph,
-            reader,
-            blame,
-            receive-pack,
-            push-fsck,
-            upload-pack,
-            diff,
-            merge,
-          ]
-        # A scope whose code is part of another directory (stryker.config.mjs).
-        include:
-          - scope: push-fsck
-            dir: receive-pack
+      # Mutation is not a required check and a cold scope runs for hours: at
+      # most four at a time, so they never hold the runners the required jobs
+      # wait for (20 concurrent jobs on the Free plan).
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.detect.outputs.mutation-matrix) }}
     env:
       SCOPE: ${{ matrix.scope }}
-      SCOPE_DIR: ${{ matrix.dir || matrix.scope }}
-      BASE: ${{ github.event.pull_request.base.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Did this pull request change the scope's code or the mutation setup?
-        id: changed
+      - uses: ./.github/actions/setup
+      # Results are keyed by the scope and by the mutation setup they were made
+      # under (Stryker's config and scopes, git-core's Vitest config): the
+      # command runner cannot tell which tests an outcome came from, so
+      # Stryker reuses every unchanged mutant's earlier outcome, and only
+      # results made under this setup can stand.
+      - name: The key prefixes of results made under this setup
+        id: key
+        env:
+          SETUP: ${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}
         run: |
-          if git diff --quiet "$BASE" HEAD -- "packages/git-core/src/$SCOPE_DIR" \
-            packages/git-core/stryker.config.mjs packages/git-core/stryker; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        if: steps.changed.outputs.changed == 'true'
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: steps.changed.outputs.changed == 'true'
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - if: steps.changed.outputs.changed == 'true'
-        run: pnpm install --frozen-lockfile
-      - name: Last nightly results for this scope
+          echo "setup=$SETUP" >> "$GITHUB_OUTPUT"
+          echo "pr=mutation-pr-v2-$SCOPE:$SETUP-" >> "$GITHUB_OUTPUT"
+      - name: This pull request's, or the last nightly, results for this scope
         id: baseline
-        if: steps.changed.outputs.changed == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
-          key: mutation-incremental-${{ matrix.scope }}-${{ github.sha }}
-          restore-keys: mutation-incremental-${{ matrix.scope }}-
+          # The scope ends at the colon: no scope's key prefix is another's
+          # (pack, pack-write). This pull request's results first, then the
+          # nightly run's, both made under this setup; nothing else.
+          key: ${{ steps.key.outputs.pr }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.key.outputs.pr }}
+            mutation-nightly-v2-${{ matrix.scope }}:${{ steps.key.outputs.setup }}-
       - name: Stryker, incremental (break below the recorded baseline)
-        if: steps.changed.outputs.changed == 'true'
         env:
           RESTORED: ${{ steps.baseline.outputs.cache-matched-key }}
         working-directory: packages/git-core
         run: |
           if [ -z "$RESTORED" ]; then
-            # Every mutant, one fewer at a time than the runner has vCPUs
-            # (4 on public repositories, 2 on private ones), each running Vitest.
-            echo "::warning::No nightly mutation results for $SCOPE; running every mutant of the scope."
-            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --concurrency "$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))"
-          else
-            FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental
+            echo "::warning::No earlier mutation results for $SCOPE under this mutation setup; running every mutant of the scope."
           fi
+          # Without a results file, --incremental runs every mutant and writes
+          # one. One process fewer than the runner has vCPUs (4 on public
+          # repositories, 2 on private ones), each running Vitest.
+          FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental \
+            --concurrency "$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))"
+      # Only a passing run (every step before succeeded), so a failed or
+      # cancelled run never becomes the next push's baseline. A new key per
+      # run: cache entries are immutable.
+      - name: Keep this run's results for the pull request's next push
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
+          key: ${{ steps.key.outputs.pr }}${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   # Paid staging and the Free smoke account. Each target is a
   # GitHub environment holding CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and

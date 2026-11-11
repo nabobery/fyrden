@@ -235,7 +235,10 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
-          key: mutation-incremental-${{ matrix.scope }}-${{ github.sha }}-${{ github.run_id }}
+          # Keyed by the scope (ending at the colon: no scope's prefix is another's,
+          # pack and pack-write) and by the mutation setup the results were made
+          # under, so a pull request restores only results its setup can reuse.
+          key: mutation-nightly-v2-${{ matrix.scope }}:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}-${{ github.sha }}-${{ github.run_id }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success() || failure()
         with:

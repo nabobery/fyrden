@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/turbo/schema.json",
+  "extends": ["//"],
+  // paths.wide-30k.test.ts imports its tree from the path-finder benchmark, so
+  // the tests and the compiler both read it.
+  "tasks": {
+    "typecheck": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+    },
+    "test:coverage": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+    }
+  }
+}
