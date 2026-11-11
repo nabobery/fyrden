@@ -3373,11 +3373,12 @@ describe("a feed's turn", () => {
     let watching = false;
     const restore = await runInDurableObject(feedOf(owner), (_: UserDO, state) => {
       const sql = state.storage.sql;
-      const real = sql.exec.bind(sql);
+      const real = sql.exec;
       (sql as { exec: unknown }).exec = (query: string, ...bindings: never[]) => {
         if (watching) statements.push(query);
-        return real(query, ...bindings);
+        return real.call(sql, query, ...bindings);
       };
+      // The original itself, not a bound copy: a copy would wrap again on the next test's change.
       return () => {
         (sql as { exec: unknown }).exec = real;
       };

@@ -76,6 +76,8 @@ export class SliceCalls {
 export interface NetworkHooks {
   /** Before the collection snapshots member `repoId` in its mark phase. */
   readonly onMarkMember?: (epoch: number, repoId: string) => Promise<void> | void;
+  /** Each time fork creation or a pack share finds the collection's fence up and waits. */
+  readonly onFenceWait?: () => Promise<void> | void;
   /** Before member `repoId` is asked to acknowledge condemned packs; throwing leaves it unacknowledged. */
   readonly beforeAck?: (repoId: string, packIds: readonly string[]) => Promise<void> | void;
   /** After a shared pack is chosen for deletion and before the claims are checked a last time. */

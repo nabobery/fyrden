@@ -356,6 +356,9 @@ describe("teams and code owners, acceptance", () => {
 });
 
 describe("a busy thread's recipients, each once an item", () => {
+  // Its own limit: fixed work, nearly all of it the first delivery making about 310 new feed
+  // objects (each its schema and directory reads), takes about 4 s locally and took 9 to 33 s
+  // on CI runners (nightly, 2026-11-06 to 11), past the suite's 30 s on the slowest.
   it("tells two teams' members, a comment's mentions and its participants once each, deliveries repeated", async () => {
     const fake = (tag: string, i: number) =>
       `usr_${tag}${uniqueId("x").slice(-6)}${String(i).padStart(3, "0")}`;
@@ -530,5 +533,5 @@ describe("a busy thread's recipients, each once an item", () => {
       ].sort();
       expect({ id, kinds: kinds(id) }).toEqual({ id, kinds: want });
     }
-  });
+  }, 90_000);
 });

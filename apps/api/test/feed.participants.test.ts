@@ -166,15 +166,23 @@ describe("thread participants", () => {
   it("decide an audience of the cap's participants from one read of who reads the repository", async () => {
     await fillParticipants();
     const counted = { n: 0 };
-    await inRepo(stub(), (r: RepoDO) => {
+    const restore = await inRepo(stub(), (r: RepoDO) => {
       const sql = r.git.context.storage.sql;
-      const exec = sql.exec.bind(sql);
+      const exec = sql.exec;
       (sql as { exec: typeof sql.exec }).exec = ((...args: Parameters<typeof sql.exec>) => {
         counted.n++;
-        return exec(...args);
+        return exec.apply(sql, args);
       }) as typeof sql.exec;
+      return () => {
+        (sql as { exec: typeof sql.exec }).exec = exec;
+      };
     });
-    expect((await comment(owner, "Thanks, all")).status).toBe(201);
+    try {
+      expect((await comment(owner, "Thanks, all")).status).toBe(201);
+    } finally {
+      // The file's later tests count nothing: the repository's own exec again.
+      restore();
+    }
     // Every statement of the comment's change, its 1,000-participant audience included.
     expect(counted.n).toBeGreaterThan(0);
     expect(counted.n).toBeLessThan(150);
