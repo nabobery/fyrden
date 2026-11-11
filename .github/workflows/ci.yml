@@ -394,7 +394,6 @@ jobs:
     outputs:
       mutation-matrix: ${{ steps.mutation.outputs.matrix }}
       has-mutation: ${{ steps.mutation.outputs.any }}
-      mutation-setup-changed: ${{ steps.mutation.outputs.setup-changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -440,51 +439,42 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      # This pull request's results for the scope, under this exact mutation
-      # setup (Stryker's config and scopes, git-core's Vitest config).
-      - name: The key prefix of this pull request's results
+      # Results are keyed by the scope and by the mutation setup they were made
+      # under (Stryker's config and scopes, git-core's Vitest config): the
+      # command runner cannot tell which tests an outcome came from, so
+      # Stryker reuses every unchanged mutant's earlier outcome, and only
+      # results made under this setup can stand.
+      - name: The key prefixes of results made under this setup
         id: key
-        run: echo "pr=mutation-pr-v2-$SCOPE:${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}-" >> "$GITHUB_OUTPUT"
+        env:
+          SETUP: ${{ hashFiles('packages/git-core/stryker.config.mjs', 'packages/git-core/stryker/**', 'packages/git-core/vitest.config.ts') }}
+        run: |
+          echo "setup=$SETUP" >> "$GITHUB_OUTPUT"
+          echo "pr=mutation-pr-v2-$SCOPE:$SETUP-" >> "$GITHUB_OUTPUT"
       - name: This pull request's, or the last nightly, results for this scope
         id: baseline
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: packages/git-core/reports/mutation/${{ matrix.scope }}.incremental.json
           # The scope ends at the colon: no scope's key prefix is another's
-          # (pack, pack-write). This pull request's results first, under the
-          # same mutation setup; then the nightly run's; then, until a nightly
-          # run saves under its new key, the nightly results under the old one
-          # (whose prefix can match another scope's file: Stryker then reuses
-          # nothing and runs the scope in full, as with no results). Once a
-          # newer entry matches, the old entries go unread and expire.
+          # (pack, pack-write). This pull request's results first, then the
+          # nightly run's, both made under this setup; nothing else.
           key: ${{ steps.key.outputs.pr }}${{ github.sha }}
           restore-keys: |
             ${{ steps.key.outputs.pr }}
-            mutation-nightly-v1-${{ matrix.scope }}:
-            mutation-incremental-${{ matrix.scope }}-
+            mutation-nightly-v2-${{ matrix.scope }}:${{ steps.key.outputs.setup }}-
       - name: Stryker, incremental (break below the recorded baseline)
         env:
           RESTORED: ${{ steps.baseline.outputs.cache-matched-key }}
-          SAME_SETUP: ${{ steps.key.outputs.pr }}
-          SETUP_CHANGED: ${{ needs.detect.outputs.mutation-setup-changed }}
         working-directory: packages/git-core
         run: |
-          # The command runner cannot tell which tests a mutant's outcome came
-          # from, so Stryker reuses every unchanged mutant's earlier outcome:
-          # after a change to the mutation setup, only results made under the
-          # new setup (this pull request's own) can stand. --force runs every
-          # mutant and writes fresh results.
-          force=()
           if [ -z "$RESTORED" ]; then
-            echo "::warning::No earlier mutation results for $SCOPE; running every mutant of the scope."
-          elif [ "$SETUP_CHANGED" = true ] && [[ "$RESTORED" != "$SAME_SETUP"* ]]; then
-            echo "::notice::This pull request changes the mutation setup; running every mutant of $SCOPE."
-            force=(--force)
+            echo "::warning::No earlier mutation results for $SCOPE under this mutation setup; running every mutant of the scope."
           fi
           # Without a results file, --incremental runs every mutant and writes
           # one. One process fewer than the runner has vCPUs (4 on public
           # repositories, 2 on private ones), each running Vitest.
-          FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental "${force[@]}" \
+          FYRDEN_MUTATION_SCOPE="$SCOPE" pnpm exec stryker run --incremental \
             --concurrency "$(( $(nproc) > 1 ? $(nproc) - 1 : 1 ))"
       # Only a passing run (every step before succeeded), so a failed or
       # cancelled run never becomes the next push's baseline. A new key per

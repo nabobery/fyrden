@@ -2,8 +2,7 @@
 // matrix, so a pull request that changes no scope allocates no runner:
 //   node tools/ci/src/select-mutation.ts <base> <head>
 // A scope runs when its source directory changed; every scope runs when the
-// mutation setup itself changed. Prints `matrix=<json>`, `any=<bool>` and
-// `setup-changed=<bool>` (results from before a setup change are not reused),
+// mutation setup itself changed. Prints `matrix=<json>` and `any=<bool>`,
 // into $GITHUB_OUTPUT when CI sets it.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -78,13 +77,8 @@ if (import.meta.main) {
     console.error("usage: select-mutation.ts <base> <head>");
     process.exit(2);
   }
-  const paths = changedPaths(base, head);
-  const selected = selectMutationScopes(paths, await loadScopes());
-  const lines = [
-    `matrix=${JSON.stringify({ include: selected })}`,
-    `any=${selected.length > 0}`,
-    `setup-changed=${mutationSetupChanged(paths)}`,
-  ];
+  const selected = selectMutationScopes(changedPaths(base, head), await loadScopes());
+  const lines = [`matrix=${JSON.stringify({ include: selected })}`, `any=${selected.length > 0}`];
   console.log(
     selected.length > 0
       ? `Mutation scopes changed: ${selected.map(({ scope }) => scope).join(", ")}`

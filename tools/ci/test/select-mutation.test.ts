@@ -125,6 +125,5 @@ describe("select-mutation (the script CI runs)", () => {
     });
     expect(stdout).toContain('matrix={"include":[]}');
     expect(stdout).toContain("any=false");
-    expect(stdout).toContain("setup-changed=false");
   });
 });

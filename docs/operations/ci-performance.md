@@ -79,8 +79,14 @@ request that changes no scope uses no mutation runner instead of 14. A passing
 scope saves its incremental results for the pull request's next push. A
 restore prefers those, then the nightly run's results.
 
-The nightly key changed to `mutation-nightly-v1-<scope>:`. The old prefix
-`mutation-incremental-pack-` also matched `pack-write`'s entries.
+Results are keyed by scope and by the mutation setup they were made under
+(`mutation-nightly-v2-<scope>:<setup>-`, `mutation-pr-v2-<scope>:<setup>-`),
+and a pull request restores only results made under its own setup: Stryker's
+command runner reuses every unchanged mutant's outcome, so results from
+another setup would pass without testing it. The scope ends at a colon because
+the old prefix `mutation-incremental-pack-` also matched `pack-write`'s
+entries. Until the first nightly run under these keys, a pull request that
+changes a scope runs it in full.
 
 ### Job selection, report only
 
@@ -108,8 +114,7 @@ run; `tools/ci` was not.
 
 The first run of the changed-scope mutation matrix found no results under the
 renamed nightly key: all 14 scopes started in full and held 14 runners, which
-queued required jobs. Mutation now falls back to the old key until a nightly
-run saves under the new one, and runs at most four scopes at a time. Jobs still
+queued required jobs. Mutation now runs at most four scopes at a time. Jobs still
 waited 4 to 6 minutes for a runner while a nightly run overlapped.
 
 ### Shuffle seeds split across four jobs each
