@@ -14,9 +14,11 @@ import {
   measureInvocation,
 } from "@fyrden/adapters-cloudflare/obs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { feedEpochSource } from "../src/do/user/feed.js";
 import {
   expireLiveReceipts,
   LIVE_RECEIPTS_DUE,
+  LIVE_RECEIPTS_OVERDUE,
   type LiveDayCharge,
   type LiveEnvelope,
   makeLiveGrant,
@@ -28,6 +30,7 @@ import {
   LIVE_MAINTENANCE,
   LIVE_REVOCATION_PAGE,
   liveMaintenanceWork,
+  recoveryGrant,
   runLiveMaintenance,
   settleStrandedOwners,
 } from "../src/live/maintenance.js";
@@ -140,29 +143,61 @@ describe("a maintenance run's pages, full", () => {
       out.debt = await measure(now, (db) => serviceLiveDurationDebt(db));
       await clear(now);
 
-      // Targets of another incarnation, a page and one more.
+      // Targets of another incarnation, a full page each time, the ledger's marker still naming
+      // that incarnation: a page with one more left after it, and a last page, which also marks
+      // none left. The most of the two.
       const targetDebt = `json_object('do_requests', 0, 'do_rows_read', 0, 'do_rows_written', 2,
         'do_duration_ms', 0, 'd1_rows_read', 0, 'd1_rows_written', 0, 'queue_ops', 0)`;
-      for (let i = 0; i <= LIVE_MAINTENANCE.recoveries; i++)
+      const adoptPage = async (targets: number) => {
         await env.DIRECTORY.prepare(
-          `INSERT INTO live_recovery_targets (feed, incarnation, through_seq, next_attempt_at,
-             attempts, local_cleanup_debt) VALUES (?, ?, 1, ?, 0, ${targetDebt})`,
+          "UPDATE live_budget_state SET targets_incarnation = ? WHERE id = 1",
         )
-          .bind(`usr_adopt_${i}`, "0".repeat(32), now + DAY)
+          .bind("0".repeat(32))
           .run();
-      out.adopt = await measure(now, (db) =>
-        adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries),
-      );
-      await env.DIRECTORY.prepare("DELETE FROM live_recovery_targets").run();
+        for (let i = 0; i < targets; i++)
+          await env.DIRECTORY.prepare(
+            `INSERT INTO live_recovery_targets (feed, incarnation, through_seq, next_attempt_at,
+               attempts, local_cleanup_debt) VALUES (?, ?, 1, ?, 0, ${targetDebt})`,
+          )
+            .bind(`usr_adopt_${i}`, "0".repeat(32), now + DAY)
+            .run();
+        const rows = await measure(now, (db) =>
+          adoptLiveRecoveryTargets(db, LIVE_MAINTENANCE.recoveries),
+        );
+        await env.DIRECTORY.prepare("DELETE FROM live_recovery_targets").run();
+        return rows;
+      };
+      const [more, last] = [
+        await adoptPage(LIVE_MAINTENANCE.recoveries + 1),
+        await adoptPage(LIVE_MAINTENANCE.recoveries),
+      ];
+      expect(
+        await env.DIRECTORY.prepare(
+          "SELECT targets_incarnation = incarnation AS marked FROM live_budget_state WHERE id = 1",
+        ).first(),
+      ).toEqual({ marked: 1 });
+      out.adopt = {
+        read: Math.max(more.read, last.read),
+        written: Math.max(more.written, last.written),
+      };
 
-      // Recoveries coordinated (their funded pages are recovery's own): targets due, captured,
-      // each reply's duration settled over two days, retired.
-      const coverage: Record<string, LiveEnvelope> = {};
-      for (let i = LIVE_MAINTENANCE.recoveries; i >= 0; i--)
-        coverage[`usr_due_${i}`] = await overMidnight(now / DAY + i, `usr_due_${i}`, {
-          class: "cleanup",
-        });
+      // Recoveries coordinated (their funded pages are recovery's own): targets due, each paid for
+      // by its cleanup grant as a run makes it (the feed's target and the grant read half a minute
+      // before a midnight: both days' rows, the feed's epoch and as many expired receipts as
+      // grants allow), captured, each reply's duration settled over two days, retired.
       now = (now / DAY + LIVE_MAINTENANCE.recoveries + 1) * DAY;
+      const recoverAt = now - 2 * DAY - 30_000;
+      const epochs = Array.from({ length: LIVE_MAINTENANCE.recoveries + 1 }, (_, i) =>
+        feedEpochSource(`usr_due_${i}`),
+      );
+      await env.DIRECTORY.batch(
+        epochs.map((source) =>
+          env.DIRECTORY.prepare(
+            "INSERT INTO source_epochs (source_id, epoch_gen) VALUES (?, 1)",
+          ).bind(source),
+        ),
+      );
+      await expiredReceipts(recoverAt, LIVE_RECEIPTS_OVERDUE.page - 1);
       // Their targets' debt as their grants would have added it.
       await env.DIRECTORY.prepare(
         `UPDATE live_budget_state SET debt_do_rows_written = debt_do_rows_written + ?
@@ -182,14 +217,10 @@ describe("a maintenance run's pages, full", () => {
         )
           .bind(`usr_due_${i}`, incarnation, now - 3 * DAY)
           .run();
-      out.recover = await measure(now - 3 * DAY + MINUTE, (db) =>
+      out.recover = await measure(recoverAt, (db) =>
         recoverLiveTargets(db, {
           limit: LIVE_MAINTENANCE.recoveries,
-          reserveTarget: async (feed) => ({
-            status: "granted",
-            replay: false,
-            grant: coverage[feed] as LiveEnvelope,
-          }),
+          reserveTarget: (feed) => recoveryGrant(db, feed),
           tell: async (request: LiveRecoveryRequest) => {
             const plan = request.coverage.plan;
             return {
@@ -212,6 +243,18 @@ describe("a maintenance run's pages, full", () => {
             };
           },
         }),
+      );
+      // Each paid for by a grant of its own, not refused (a refusal reads less).
+      expect(
+        await env.DIRECTORY.prepare(
+          `SELECT count(*) AS n FROM live_budget_receipts
+           WHERE kind = 'recovery' AND class = 'cleanup' AND recipient LIKE 'usr_due_%'`,
+        ).first(),
+      ).toEqual({ n: LIVE_MAINTENANCE.recoveries });
+      await env.DIRECTORY.batch(
+        epochs.map((source) =>
+          env.DIRECTORY.prepare("DELETE FROM source_epochs WHERE source_id = ?").bind(source),
+        ),
       );
       await clear(now);
 

@@ -61,7 +61,7 @@ export const LIVE_RECEIPT_PAGE = 32;
 export const LIVE_DAY_PAGE = 8;
 
 /** A feed's turns: their state is one turn at a time, their receipts removed by later turns. */
-const LIVE_TURN_KINDS = ["pump", "renewal"];
+export const LIVE_TURN_KINDS = ["pump", "renewal"];
 /** A feed's done turn receipts a turn's grant removes at most (the newest first). */
 export const LIVE_TURN_RECEIPT_PAGE = 2;
 /** The newest receipts of each turn kind past their validity a turn's grant looks at. */

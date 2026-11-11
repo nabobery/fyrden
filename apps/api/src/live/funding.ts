@@ -6,6 +6,8 @@ import { clock } from "../services.js";
 import {
   isLiveVector,
   LIVE_NOW,
+  LIVE_TURN_KINDS,
+  LIVE_TURN_RECEIPT_LOOK,
   type LiveDayCharge,
   type LiveEnvelope,
   type LiveGrantPlan,
@@ -56,10 +58,12 @@ const DAY = 86_400_000;
 /**
  * The manifest live work is priced by: a funding of another revision is
  * refused. Raised whenever its prices change (3: an owner's table lost two indexes,
- * and an owner's release shortens its receipt's life), so a funding in flight across a deploy
+ * and an owner's release shortens its receipt's life; 4: an opening's lookup of the turn its feed
+ * holds reads its newest few turns, whatever ran before them, and maintenance and recovery are
+ * priced from their real grants' and quarantines' D1), so a funding in flight across a deploy
  * never pays old prices for new work.
  */
-export const LIVE_MANIFEST_REVISION = 3;
+export const LIVE_MANIFEST_REVISION = 4;
 
 export type FundedResult<T> =
   | {
@@ -355,7 +359,17 @@ export interface LiveTarget {
   readonly tomorrow: number;
   /**
    * Whether the feed holds a turn's grant still to run: unsettled, its
-   * owner never released (a turn that ran released it), valid five minutes on.
+   * owner never released (a turn that ran released it), valid five minutes
+   * on. Only the newest few of each turn kind are looked at (an index range
+   * each), however many that ran are still valid: the turn a feed holds is
+   * its newest granted, and none later is released while it is held: each
+   * turn the feed's object is granted starts no earlier than the latest it
+   * prepared (kept while it holds none), whether a successor or one it grants
+   * itself as it opens a socket, and an opening's turn is prepared only when the feed holds
+   * none that can run. One an opening granted with its socket, from a look
+   * older than turns run since, can start before them: it is due a minute
+   * on (later when its owner must be tried again), and the turn after it is
+   * floored again.
    */
   readonly turnHeld: boolean;
   /** Whether the feed holds a block of controls still valid past its next renewal; of marks, half an hour on. */
@@ -434,12 +448,17 @@ async function readTarget(
          coalesce((SELECT issued FROM live_ticket_days WHERE principal_id = ?2 AND day = ${day}), 0)
            AS tickets,
          (${day} + 1) * ${DAY} AS tomorrow,
-         EXISTS (SELECT 1 FROM live_budget_receipts INDEXED BY live_budget_receipts_recipient
-           WHERE recipient = ?2 AND kind IN ('pump', 'renewal') AND settled_at IS NULL
-             AND valid_until > ${LIVE_NOW} + 300000
-             AND json_array_length(released_owners) = 0
-             AND incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
-             AND epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
+         EXISTS (SELECT 1 FROM (${LIVE_TURN_KINDS.map(
+           (kind) => `SELECT * FROM (SELECT seq FROM live_budget_receipts
+             INDEXED BY live_budget_receipts_recipient
+             WHERE recipient = ?2 AND kind = '${kind}' AND settled_at IS NULL
+               AND valid_until > ${LIVE_NOW} + 300000
+             ORDER BY valid_until DESC, seq DESC LIMIT ${LIVE_TURN_RECEIPT_LOOK})`,
+         ).join(" UNION ALL ")}) c
+           JOIN live_budget_receipts r ON r.seq = c.seq
+           WHERE json_array_length(r.released_owners) = 0
+             AND r.incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1)
+             AND r.epoch = coalesce((SELECT epoch_gen FROM source_epochs WHERE source_id = ?1), 0))
            AS turn_held,
          ${(
            [

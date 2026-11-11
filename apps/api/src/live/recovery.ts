@@ -68,23 +68,27 @@ export interface LiveRecoveryTarget {
  * and retires the target with its debt. How many moved.
  */
 export async function adoptLiveRecoveryTargets(db: D1Database, limit: number): Promise<number> {
+  // Another incarnation's targets: those below the ledger's own and those above it, each an
+  // index range, so the targets of its own are never read.
+  const other = (op: "<" | ">", n: string, current: string) =>
+    `SELECT feed FROM live_recovery_targets INDEXED BY live_recovery_targets_incarnation
+     WHERE incarnation ${op} ${current} ORDER BY incarnation, feed LIMIT ${n}`;
+  const own = "(SELECT incarnation FROM live_budget_state WHERE id = 1)";
   const [moved] = await db.batch([
     db
       .prepare(
         `UPDATE live_recovery_targets
-         SET incarnation = (SELECT incarnation FROM live_budget_state WHERE id = 1),
-           through_seq = 1, next_attempt_at = 0, attempts = 0
-         WHERE feed IN (SELECT feed FROM live_recovery_targets
-           WHERE incarnation <> (SELECT incarnation FROM live_budget_state WHERE id = 1)
-           ORDER BY feed LIMIT ?)`,
+         SET incarnation = ${own}, through_seq = 1, next_attempt_at = 0, attempts = 0
+         WHERE feed IN (SELECT feed FROM (SELECT * FROM (${other("<", "?1", own)})
+           UNION ALL SELECT * FROM (${other(">", "?1", own)})) LIMIT ?1)`,
       )
       .bind(limit),
     // None left of another: maintenance's check need no longer call for a run for them.
     db.prepare(
       `UPDATE live_budget_state SET targets_incarnation = incarnation
        WHERE id = 1 AND targets_incarnation <> incarnation
-         AND NOT EXISTS (SELECT 1 FROM live_recovery_targets
-           WHERE incarnation <> live_budget_state.incarnation)`,
+         AND NOT EXISTS (${other("<", "1", "live_budget_state.incarnation")})
+         AND NOT EXISTS (${other(">", "1", "live_budget_state.incarnation")})`,
     ),
   ]);
   return moved?.meta.changes ?? 0;
