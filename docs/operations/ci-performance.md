@@ -90,14 +90,54 @@ Every job still runs. Compare its reports with real pull requests
 (documentation, web, API, shared package, dependency and CI changes) before
 any job is skipped on its word.
 
+### Measured on CI (draft PR #62)
+
+Run [43007739558](https://github.com/nabobery/fyrden/actions/runs/43007739558),
+at `a2a6662`, after the fixture split and with Turbo results saved by an
+earlier run of the same pull request. API inputs were unchanged since that
+run; `tools/ci` was not.
+
+| Job | Baseline median | This run |
+| --- | ---: | ---: |
+| One shuffle seed | 19.7 min | 16.8 and 17.5 min |
+| One API coverage shard (Turbo replay) | 6.8 min | 0.4 to 0.6 min |
+| Merged API coverage (from replayed reports) | | 0.4 min |
+| Package tests with coverage | | 0.8 min (2.7 min with an empty cache) |
+| Lint, typecheck, audit, dry-run | 48 s | 0.5 min |
+| End to end | 8.3 min | 8.0 min |
+
+The first run of the changed-scope mutation matrix found no results under the
+renamed nightly key: all 14 scopes started in full and held 14 runners, which
+queued required jobs. Mutation now falls back to the old key until a nightly
+run saves under the new one, and runs at most four scopes at a time. Jobs still
+waited 4 to 6 minutes for a runner while a nightly run overlapped.
+
+### Shuffle seeds split across four jobs each
+
+The shuffle seed was the slowest job even after the fixture split. One seed's
+pass of the API's suite (278 files) now runs as four jobs, `vitest run
+--shard=<n>/4` with the pass's seed. Vitest assigns files to shards by a hash
+of their path before shuffling (vitest 5.0.3, `executeTests` then
+`BaseSequencer.shard`), so every file runs once a pass whatever the seed.
+Checked through Vitest's own sequencer: shards of 70, 70, 69 and 69 files,
+278 distinct, both projects included. The adapters' suite (30 files, 62 s
+measured on CI) runs whole in each pass's first shard. A pass's seed comes
+from the run id, so rerunning a shard repeats its order, and each shard prints
+its reproduce command. The nightly ten seeds stay whole passes, so files of
+different shards still run together there.
+
+This raises the shuffle jobs from 3 to 12. Not yet measured: their duration
+and the queueing the extra jobs cause under the concurrent job limit.
+
 ## Candidate next steps
 
 - Enforce job selection behind the existing required checks once the reports
   agree with real pull requests (plan task 5).
-- Re-measure shuffle seeds on CI after the fixture change, then decide whether
-  shuffle needs sharding (plan task 8).
-- Vitest reports module transforms at a third of the API run's tracked time,
-  redone each run. `fsModuleCache` (vitest 5.0.3, off by default) could keep
-  them between runs if CI saves its directory. Not yet tried.
+- Measure Vitest's worker count on the 4-vCPU runners (its default there is
+  3) for the shuffle shards.
+- `fsModuleCache` (vitest 5.0.3) was tried on three API files, one run each:
+  34.9 s without it and 33.6 s warm; with coverage, 41.7 s and 36.1 s warm,
+  and a 65 MB cache. Not adopted: no gain for shuffle runs, and coverage runs
+  that Turbo cannot replay would pay the restore.
 - `browseFixtures` (2.06 MiB, measured) is the next largest fixture every API
   file receives. Six files read it.

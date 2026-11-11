@@ -194,12 +194,20 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      # The browser revisions the pinned Playwright installs, so a dependency
+      # change elsewhere in the lockfile keeps the cached browsers.
+      - name: Playwright's browser revisions
+        id: browsers
+        run: |
+          revisions=(node_modules/.pnpm/playwright-core@*/node_modules/playwright-core/browsers.json)
+          test -f "${revisions[0]}"
+          echo "digest=$(cat "${revisions[@]}" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
       - name: Playwright's browser cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           # Names the browsers: a hit on an entry without one of them would never gain it.
-          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ runner.arch }}-${{ steps.browsers.outputs.digest }}
       - name: The browsers' system libraries
         timeout-minutes: 10
         run: |
@@ -281,36 +289,53 @@ jobs:
           "$FYRDEN_GIT_BINARY" --version
           pnpm --filter @fyrden/ci-tools test:interop
 
-  # The workerd suites again in random file and test order, several seeds:
-  # an order-dependent test fails here, with its seed, instead of flaking
-  # later. One seed a job, the jobs side by side: one full pass of the API's
-  # suite takes about 11 minutes on a runner, so passes in one job outgrew
-  # any budget kept for it as the suite grew.
+  # The workerd suites again in random file and test order, three seeds: an
+  # order-dependent test fails here, with its seed, instead of flaking later.
+  # Each seed's pass of the API's suite is split across four jobs (Vitest's
+  # own split, which assigns files by path before it shuffles them, so every
+  # file runs once a pass whatever the seed); one pass in one job took about
+  # 20 minutes. The nightly workflow runs whole, unsplit passes, so files of
+  # different shards still meet there.
   shuffle-run:
-    name: Shuffle guard, seed ${{ matrix.run }}
+    name: Shuffle guard, seed ${{ matrix.pass }}, shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
-    # 10 to 24 minutes on main and pull requests for one run of the API suite, and it grows.
-    timeout-minutes: 40
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        run: [1, 2, 3]
-    env:
-      SHUFFLE_RUNS: 1
+        pass: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version-file: .nvmrc
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm turbo run test:shuffle --continue=dependencies-successful
+      - uses: ./.github/actions/setup
+      # One seed a pass, the same in its four shards: derived from the run, so
+      # a rerun of a failed shard repeats its order.
+      - name: The pass's seed
+        id: seed
+        env:
+          PASS: ${{ matrix.pass }}
+          SHARD: ${{ matrix.shard }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          seed=$(( (RUN_ID * 3 + PASS * 1000003) % 2147483646 + 1 ))
+          echo "seed=$seed" >> "$GITHUB_OUTPUT"
+          echo "Seed $seed. Reproduce: pnpm --filter @fyrden/api exec vitest run --shard=$SHARD/4 --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed=$seed"
+      - name: The API's suite, shuffled, this shard
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter @fyrden/api exec vitest run --shard="$SHARD/4" --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED"
+      # The adapters' suite is small (about a minute): whole, once a pass.
+      - name: The adapters' suite, shuffled
+        if: matrix.shard == 1
+        env:
+          SEED: ${{ steps.seed.outputs.seed }}
+        run: pnpm --filter @fyrden/adapters-cloudflare exec vitest run --sequence.shuffle.files --sequence.shuffle.tests --sequence.seed="$SEED"
 
   # The check the main branch's ruleset requires, by this name: passed only
-  # when every seed's job passed (one cancelled or skipped fails it too).
+  # when every seed's every shard passed (one cancelled or skipped fails it too).
   shuffle:
     name: Shuffle guard (order-dependent workerd tests)
     needs: [shuffle-run]
@@ -377,18 +402,15 @@ jobs:
           filter: blob:none
           persist-credentials: false
       - uses: ./.github/actions/setup
+      # Against the merge commit's first parent: exactly the change CI tests,
+      # even when the base branch moved after the pull request's event.
       - name: Changed mutation scopes
         id: mutation
         if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: node tools/ci/src/select-mutation.ts "$BASE" HEAD
+        run: node tools/ci/src/select-mutation.ts HEAD^1 HEAD
       - name: Jobs this change needs (report only, in the job summary)
-        if: github.event_name == 'pull_request'
         continue-on-error: true
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: node tools/ci/src/select-ci.ts "$BASE" HEAD
+        run: node tools/ci/src/select-ci.ts HEAD^1 HEAD
 
   # Mutation testing of the scopes a pull request changed, incrementally.
   # Results come from this pull request's last successful run of the scope,

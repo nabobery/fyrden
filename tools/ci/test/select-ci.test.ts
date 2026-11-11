@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   type CiSelection,
   coveragePackages,
+  outputLines,
   type SelectionInput,
   selectCi,
 } from "../src/select-ci.ts";
@@ -124,6 +125,24 @@ describe("selectCi", () => {
     expect(() => select({ paths: ["apps/web/app/x.ts"], affected: ["@evil/pkg"] })).toThrow(
       /unknown package/,
     );
+  });
+});
+
+describe("outputLines", () => {
+  it("gives every job a literal boolean and the packages as compact JSON", () => {
+    const selection = select({
+      paths: ["apps/web/app/routes/home.tsx"],
+      affected: ["@fyrden/web"],
+    });
+    expect(outputLines(selection)).toEqual([
+      "api=false",
+      "e2e=true",
+      "contract=false",
+      "interop=false",
+      "shuffleApi=false",
+      "shuffleAdapters=false",
+      'coverage-packages=["@fyrden/web"]',
+    ]);
   });
 });
 

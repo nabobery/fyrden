@@ -123,23 +123,44 @@ function turboDryRun(args: string[], env: NodeJS.ProcessEnv): unknown {
   return JSON.parse(out) as unknown;
 }
 
+/** One `name=value` line a job, for $GITHUB_OUTPUT: literal booleans a job's `if` can compare. */
+export function outputLines(selection: CiSelection): string[] {
+  const { reason: _reason, coveragePackages: packages, ...jobs } = selection;
+  return [
+    ...Object.entries(jobs).map(([job, selected]) => `${job}=${selected}`),
+    `coverage-packages=${JSON.stringify(packages)}`,
+  ];
+}
+
 if (import.meta.main) {
+  // Outside a pull request (or with no event named) every job runs, without
+  // asking git or Turbo.
+  const event = process.env.GITHUB_EVENT_NAME ?? "unknown";
   const [base, head] = process.argv.slice(2);
-  const event = process.env.GITHUB_EVENT_NAME ?? "pull_request";
-  if (!base || !head) {
-    console.error("usage: select-ci.ts <base> <head>");
-    process.exit(2);
+  let selection: CiSelection;
+  if (event !== "pull_request") {
+    selection = selectCi({
+      event,
+      paths: [],
+      affected: [],
+      workspace: coveragePackages(turboDryRun([], process.env)),
+    });
+  } else {
+    if (!base || !head) {
+      console.error("usage: select-ci.ts <base> <head>");
+      process.exit(2);
+    }
+    const workspace = coveragePackages(turboDryRun([], process.env));
+    const affected = coveragePackages(
+      turboDryRun(["--affected"], { ...process.env, TURBO_SCM_BASE: base, TURBO_SCM_HEAD: head }),
+    );
+    selection = selectCi({ event, paths: changedPaths(base, head), affected, workspace });
   }
-  const workspace = coveragePackages(turboDryRun([], process.env));
-  const affected = coveragePackages(
-    turboDryRun(["--affected"], { ...process.env, TURBO_SCM_BASE: base, TURBO_SCM_HEAD: head }),
-  );
-  const selection = selectCi({ event, paths: changedPaths(base, head), affected, workspace });
   const report = JSON.stringify(selection, null, 2);
   console.log(report);
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (summary)
     appendFileSync(summary, `### CI selection (report only)\n\n\`\`\`json\n${report}\n\`\`\`\n`);
   const output = process.env.GITHUB_OUTPUT;
-  if (output) appendFileSync(output, `selection=${JSON.stringify(selection)}\n`);
+  if (output) appendFileSync(output, `${outputLines(selection).join("\n")}\n`);
 }
