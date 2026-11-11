@@ -43,15 +43,19 @@ export async function loadScopes(): Promise<MutationScope[]> {
   return parseScopes(module.SCOPES);
 }
 
+/** Whether a changed path is part of the mutation setup, which every scope's result depends on. */
+export function mutationSetupChanged(changedPaths: readonly string[]): boolean {
+  return changedPaths.some((path) =>
+    SETUP.some((setup) => (setup.endsWith("/") ? path.startsWith(setup) : path === setup)),
+  );
+}
+
 /** The scopes whose source, or the mutation setup, is among the changed paths. */
 export function selectMutationScopes(
   changedPaths: readonly string[],
   scopes: readonly MutationScope[],
 ): MutationScope[] {
-  const setupChanged = changedPaths.some((path) =>
-    SETUP.some((setup) => (setup.endsWith("/") ? path.startsWith(setup) : path === setup)),
-  );
-  if (setupChanged) return [...scopes];
+  if (mutationSetupChanged(changedPaths)) return [...scopes];
   return scopes.filter(({ dir }) =>
     changedPaths.some((path) => path.startsWith(`${GIT_CORE}src/${dir}/`)),
   );

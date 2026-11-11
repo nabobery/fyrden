@@ -8,6 +8,7 @@ import {
   changedPaths,
   loadScopes,
   type MutationScope,
+  mutationSetupChanged,
   parseScopes,
   selectMutationScopes,
 } from "../src/select-mutation.ts";
@@ -53,6 +54,16 @@ describe("selectMutationScopes", () => {
       "packages/git-core/vitest.config.ts",
     ])
       expect(selectMutationScopes([path], scopes)).toEqual(scopes);
+  });
+});
+
+describe("mutationSetupChanged", () => {
+  it("is true only for the setup every scope's result depends on", () => {
+    expect(mutationSetupChanged(["packages/git-core/vitest.config.ts"])).toBe(true);
+    expect(mutationSetupChanged(["packages/git-core/stryker/scopes.mjs"])).toBe(true);
+    expect(mutationSetupChanged(["packages/git-core/src/pack/delta.ts"])).toBe(false);
+    expect(mutationSetupChanged(["packages/git-core/vitest.fuzz.config.ts"])).toBe(false);
+    expect(mutationSetupChanged([])).toBe(false);
   });
 });
 
