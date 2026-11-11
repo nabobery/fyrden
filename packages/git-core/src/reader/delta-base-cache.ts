@@ -13,6 +13,15 @@ export interface CachedObject {
 export const DELTA_BASE_ENTRY_OVERHEAD = 64;
 
 /**
+ * The same charge for a cache that must cover what its entries hold: the Map
+ * entry, the key and the array object. Proposed; in local workerd, with
+ * exact-sized buffers, 8 MiB charged this way held at most 8.01 MiB, the
+ * recent-locations map included (measured). Node 24 with its heap held up to
+ * 10.66 MiB, cause unknown; workerd is what runs.
+ */
+export const DELTA_BASE_STRICT_ENTRY_OVERHEAD = 512;
+
+/**
  * Objects already rebuilt during one operation, keyed by where their entry
  * sits (pack position in the view, pack offset), least recently used
  * evicted first, bounded by bytes (as JGit's DeltaBaseCache). Delta chains
@@ -21,15 +30,20 @@ export const DELTA_BASE_ENTRY_OVERHEAD = 64;
  */
 export class DeltaBaseCache {
   readonly capacity: number;
+  readonly #entryOverhead: number;
   #bytes = 0;
   // A Map iterates in insertion order: re-inserting on use keeps it in recency order.
   readonly #entries = new Map<string, CachedObject>();
 
-  constructor(capacity: number) {
+  constructor(capacity: number, entryOverhead = DELTA_BASE_ENTRY_OVERHEAD) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) {
       throw new RangeError(`bad delta-base cache capacity ${capacity}`);
     }
+    if (!Number.isSafeInteger(entryOverhead) || entryOverhead < 0) {
+      throw new RangeError(`bad delta-base cache entry overhead ${entryOverhead}`);
+    }
     this.capacity = capacity;
+    this.#entryOverhead = entryOverhead;
   }
 
   /** Bytes charged for the entries held. */
@@ -60,7 +74,7 @@ export class DeltaBaseCache {
   put(pack: number, offset: number, value: CachedObject): boolean {
     const key = keyOf(pack, offset);
     this.#remove(key);
-    const cost = costOf(value);
+    const cost = this.#costOf(value);
     if (cost > this.capacity) return false;
     this.#entries.set(key, value);
     this.#bytes += cost;
@@ -80,14 +94,14 @@ export class DeltaBaseCache {
     const old = this.#entries.get(key);
     if (old === undefined) return;
     this.#entries.delete(key);
-    this.#bytes -= costOf(old);
+    this.#bytes -= this.#costOf(old);
+  }
+
+  #costOf(value: CachedObject): number {
+    return value.data.length + this.#entryOverhead;
   }
 }
 
 function keyOf(pack: number, offset: number): string {
   return `${pack}:${offset}`;
-}
-
-function costOf(value: CachedObject): number {
-  return value.data.length + DELTA_BASE_ENTRY_OVERHEAD;
 }

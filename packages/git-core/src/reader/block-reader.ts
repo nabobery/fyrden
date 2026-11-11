@@ -3,6 +3,7 @@ import { BLOCK_SIZE, type BlockCache } from "../ports/block-cache.js";
 import type { PackStore } from "../ports/pack-store.js";
 import type { ReadStats } from "./stats.js";
 import type { ViewPack } from "./view.js";
+import type { ReaderWork } from "./work.js";
 
 /**
  * Bytes of a pack at `start`, at least up to `minEnd` (or the end of the
@@ -26,17 +27,20 @@ export class BlockReader {
   readonly #store: Pick<PackStore, "openRange">;
   readonly #cache: BlockCache | undefined;
   readonly #stats: ReadStats;
+  readonly #work: ReaderWork | undefined;
 
   constructor(
     scope: string,
     store: Pick<PackStore, "openRange">,
     cache: BlockCache | undefined,
     stats: ReadStats,
+    work?: ReaderWork,
   ) {
     this.#scope = scope;
     this.#store = store;
     this.#cache = cache;
     this.#stats = stats;
+    this.#work = work;
   }
 
   /** The bytes from `start` to the end of the block holding `minEnd - 1`. */
@@ -47,6 +51,8 @@ export class BlockReader {
     }
     const first = Math.floor(start / BLOCK_SIZE);
     const last = Math.floor((end - 1) / BLOCK_SIZE);
+    // Warm blocks are copied from the tier and joined too, so a hit costs the same.
+    this.#work?.charge("block-run", (last - first + 1) * BLOCK_SIZE);
     const blocks = await this.#blocks(pack, first, last);
     const out = new Uint8Array(blocks.reduce((n, b) => n + b.length, 0));
     let at = 0;

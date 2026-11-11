@@ -46,6 +46,10 @@ export class Workerd {
   /** Wall time from spawn until the socket listens, in ms. */
   readonly startMs: number;
 
+  get pid(): number {
+    return this.child.pid as number;
+  }
+
   private constructor(child: ChildProcess, url: string, startMs: number) {
     this.child = child;
     this.url = url;
@@ -57,9 +61,13 @@ export class Workerd {
    * control fd). A process that fails to start is killed before the promise
    * rejects.
    */
-  static start(binary: string, config: string): Promise<Workerd> {
+  static start(
+    binary: string,
+    config: string,
+    extraArgs: readonly string[] = [],
+  ): Promise<Workerd> {
     const started = performance.now();
-    const child = spawn(binary, ["serve", "--control-fd=3", config], {
+    const child = spawn(binary, ["serve", "--control-fd=3", ...extraArgs, config], {
       stdio: ["ignore", "ignore", "pipe", "pipe"],
     });
     running.add(child);
@@ -96,8 +104,9 @@ export class Workerd {
     binary: string,
     config: string,
     use: (w: Workerd) => Promise<T>,
+    extraArgs: readonly string[] = [],
   ): Promise<T> {
-    const w = await Workerd.start(binary, config);
+    const w = await Workerd.start(binary, config, extraArgs);
     try {
       return await use(w);
     } finally {

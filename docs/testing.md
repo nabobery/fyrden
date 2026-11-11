@@ -24,7 +24,8 @@ the current pinned git. Pull requests also run mutation testing
 (incremental) for the `git-core` scopes they change. The nightly workflow runs
 every interoperability case on every pinned git, long fuzzing budgets, the
 shuffle guard with ten seeds per package (ten parallel jobs of one randomly
-seeded pass each), and a full mutation run of every scope.
+seeded pass each), a full mutation run of every scope, and whole blames of
+frozen public files against the pinned git.
 
 `git-core` and `domain` run under plain Node on purpose: it proves they do not
 depend on the Workers runtime.
@@ -157,6 +158,7 @@ assertion or a local variable does). They are listed below.
 | `src/upload-pack` | 56.0% | 55.6% | 932 | `commits.ts`, `reach.ts`, `shallow.ts` | 56 | 2026-10-11 |
 | `src/diff` (its git-oracle tests left out: too slow per mutant) | 82.1% | 80.0% | 987 | | 80 | 2026-10-15 |
 | `src/merge` (its git-oracle tests left out: too slow per mutant) | 79.7% | 77.2% | 518 | | 77 | 2026-10-15 |
+| `src/blame` (its git-oracle, fixture and vector-generating tests left out) | 92.8% | 87.3% | 2,102 | | 92 | 2026-11-08 ‡ |
 
 The baseline counts timed-out mutants as detected, as Stryker does.
 \* Measured on a busy machine with Stryker's default timeout, under which
@@ -167,6 +169,81 @@ re-records them. The other rows were measured with the 60 s timeout.
 2026-10-11) grew past what one CI job can run (3,409 mutants, about six hours)
 and was split: the push object checks became `push-fsck`, which runs only
 their own tests.
+‡ Measured in CI, on the pull request that added the scope, with every mutant run
+(no cached results yet) and the 60 s timeout.
+
+## Blame's limits and how they were measured
+
+The benches below measure locally, on an Apple arm64 Mac, and the limits are Proposed.
+The three `run.ts` benches run in workerd 1.20261101.1; the two Vitest benches run in
+Node, as all of git-core's tests do. Deployed figures are named as deployed where they appear.
+Benches run only under `FYRDEN_BENCH=1`, on the pinned Node.
+
+| Bench | Command | Shows |
+|---|---|---|
+| CPU per primitive | `node tools/bench/blame/run.ts --only=cpu` | ns per counted unit, in one idle workerd isolate |
+| Delta-base cache retention | `node tools/bench/blame/run.ts --only=retention` | What the 8 MiB charge holds in workerd: 8.01 MiB at most |
+| Churn | `node tools/bench/blame/run.ts --only=memory` | The high-water with no forced collection |
+| Allocation boundaries | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-memory.bench.test.ts` | Live buffers at each boundary, and what a decoded state holds against its charge |
+| Charge against bytes built | `pnpm --filter @fyrden/git-core exec vitest run test/reader/blame-work.bench.test.ts` | Units a long delta chain charges |
+
+Retention with heap counted depends on the runtime: Node 24 held up to 10.66 MiB
+where Node 26 held 7.54 and workerd 8.01. So the Node bench holds only buffers to
+the charge, and **workerd's figure is the evidence** for the 512 bytes an entry. It
+isn't in CI: nothing fails if it moves, so rerun it when the reader, its cache or
+workerd's version changes.
+
+```sh
+FYRDEN_BENCH=1 node tools/bench/blame/run.ts --only=retention
+```
+
+| Object | 1 B | 64 B | 1 KiB | 4 KiB | 16 KiB | 64 KiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Retained, MiB: JS heap and backing stores, after forced collection, against 8 MiB charged | 3.72 | 4.28 | 6.74 | 7.73 | 7.97 | 8.01 |
+
+Measured on 2026-11-07 in local workerd 1.20261101.1, through the inspector, against a
+new reader after a warming pass, with the recent-locations map included.
+
+The limits: `BLAME_DECODING_WORK`, 512 Mi units with weights delta-program 30 and
+tree-scan 3, and engine work of 8,000,000 a slice, checked between commit steps: the step that
+reaches it still finishes, so a slice can do more. Worst primitives, locally: inflate
+1.6 ns a unit, a dense delta program 17.9 a byte, a tree scan 3.8, alignment 137.
+8,000,000 units of the worst of everything is 3.9 s by that arithmetic: an estimate, not
+a bound on a slice. Deployed, in one colo, the final engine read 2.3 to 3.6 times local
+per case, which puts the same work at about 12.1 s against the 30 s limit. Not deployed: a whole slice through the real reader with
+R2 under it. Memory isn't settled: garbage isn't bounded by the charges, and deployed
+instances reset intermittently after dense delta work, with the cause unverified. The
+deployed runs were made on 7 and 8 November 2026, in one colo, on bench and probe deployments;
+their raw results are kept outside the repository.
+
+Alignment's rules come from black-box probing, so generated pairs check them too. `blame.git-oracle.test.ts`
+runs each generator at `FYRDEN_BLAME_SEARCH` pairs, 5,000 by default, against the
+pinned git's line diff (`git diff-tree -p -U0`, many pairs at once), not its blame.
+Whatever the engine settles has to be git's answer. Pairs a larger search
+found wrong stay in the test, shrunk.
+
+For whole histories the oracle is plain `git blame`, which follows whole-file renames;
+the engine doesn't.
+So a settled line must be git's commit and source line from the same path, and a line
+git takes from another path must be unresolved, for any reason. The `filename` git prints
+is evidence only one way: git can follow a rename and come back to the name (f to g to
+f). It's compared as bytes, with git's quoting of unusual names undone. Where git might follow a rename, the engine refuses as `rename_possible`: a parent
+with no file of this kind at the path whose change removes another path, or, in a merge,
+a parent that may hold an identical copy under another name, or a check that passes its
+budget of 256 trees or 8 MiB of trees. Each rename probe in `blame.git-oracle.test.ts`
+states git's own answer for every line as well as the engine's, so a change in what git
+follows fails even where the engine refuses everything. Eight seeded histories rename,
+copy and delete paths around the blamed file.
+
+The nightly `blame-fixtures` job compares whole blames of `lib/application.js`,
+`lib/router/index.js`, `merge-ort.c` and `read-cache.c` at frozen commits with git
+2.53.0: no settled line differs from git's (unresolved lines aren't compared, though every
+line git takes from another path must be one of them), and each file's settled lines no
+fewer than its first run under the rename rule, counted exactly (523 of 661, 660 of 673, 5,281 of 5,286 and 3,954 of
+3,995; the first two lose lines to renames). The frozen
+hashes cover each line's commit, line and path. A failure names only commit ids, line
+numbers and paths. git's own blame and diff sources are never fixtures, and a test keeps
+them out.
 
 ## Writing git-core tests
 

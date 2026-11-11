@@ -1,6 +1,7 @@
 import { OID_BYTES, type Oid, oidFromBytes } from "../object/oid.js";
 import {
   checkOidAt,
+  compareAt,
   fanoutBucket,
   IDX_FANOUT_ENTRIES,
   IDX_LARGE_OFFSET_FLAG,
@@ -37,6 +38,8 @@ export interface OpenRangedIdxOptions {
    * happen to form an offset of at least 2^31.
    */
   readonly byteLength?: number;
+  /** The most one read of the oid table asks for: see `RangedPackIdx.withFanout`. */
+  readonly maxReadBytes?: number;
 }
 
 /**
@@ -52,7 +55,7 @@ export async function openRangedIdx(
   options: OpenRangedIdxOptions = {},
 ): Promise<RangedPackIdx> {
   const fanout = options.fanout ?? readIdxHeader(await readExactly(readRange, 0, IDX_OIDS_START));
-  return RangedPackIdx.withFanout(readRange, fanout, options.byteLength);
+  return RangedPackIdx.withFanout(readRange, fanout, options.byteLength, options.maxReadBytes);
 }
 
 export class RangedPackIdx {
@@ -60,23 +63,40 @@ export class RangedPackIdx {
   readonly fanout: Uint32Array;
   readonly #read: IdxRangeReader;
   readonly #layout: IdxLayout;
+  /** Most oids one read of the table may cover in `find` and `lookup`. */
+  readonly #pageOids: number;
 
-  private constructor(readRange: IdxRangeReader, fanout: Uint32Array, layout: IdxLayout) {
+  private constructor(
+    readRange: IdxRangeReader,
+    fanout: Uint32Array,
+    layout: IdxLayout,
+    pageOids: number,
+  ) {
     this.#read = readRange;
     this.fanout = fanout;
     this.count = layout.count;
     this.#layout = layout;
+    this.#pageOids = pageOids;
   }
 
   /**
    * Opens with a fanout already in memory (the registry's copy): no read.
    * See `OpenRangedIdxOptions` for `byteLength`.
+   *
+   * With `maxReadBytes`, `find` and `lookup` never ask for more than that in
+   * one read of the oid table: a larger bucket is searched by pages, about
+   * eight reads for a 20 MiB one at 128 KiB. A pusher chooses a pack's ids,
+   * so a bucket can be most of a pack. `lookupMany` still reads whole buckets.
    */
   static withFanout(
     readRange: IdxRangeReader,
     fanout: Uint32Array,
     byteLength?: number,
+    maxReadBytes?: number,
   ): RangedPackIdx {
+    if (maxReadBytes !== undefined && !(maxReadBytes >= OID_BYTES)) {
+      throw new RangeError(`one read must cover an id, so ${OID_BYTES} bytes: ${maxReadBytes}`);
+    }
     if (fanout.length !== IDX_FANOUT_ENTRIES) {
       throw new RangeError(`a fanout has ${IDX_FANOUT_ENTRIES} entries, not ${fanout.length}`);
     }
@@ -89,7 +109,9 @@ export class RangedPackIdx {
       byteLength === undefined
         ? idxLayout(fanout[255] as number, Number.POSITIVE_INFINITY)
         : layoutForLength(fanout, byteLength);
-    return new RangedPackIdx(readRange, fanout, layout);
+    const pageOids =
+      maxReadBytes === undefined ? Number.POSITIVE_INFINITY : Math.floor(maxReadBytes / OID_BYTES);
+    return new RangedPackIdx(readRange, fanout, layout, pageOids);
   }
 
   /** The position of the 20 bytes at `at` in `oid` (first copy), or -1. */
@@ -99,15 +121,32 @@ export class RangedPackIdx {
 
   async #find(read: IdxRangeReader, oid: Uint8Array, at: number): Promise<number> {
     checkOidAt(oid, at);
-    const [lo, hi] = fanoutBucket(this.fanout, oid[at] as number);
-    if (lo === hi) return -1;
-    const slice = await readExactly(
-      read,
-      this.#layout.oidsAt + lo * OID_BYTES,
-      (hi - lo) * OID_BYTES,
-    );
-    const found = searchOids(slice, 0, hi - lo, oid, at);
-    return found < 0 ? -1 : lo + found;
+    let [lo, hi] = fanoutBucket(this.fanout, oid[at] as number);
+    const page = this.#pageOids;
+    // A copy at a page's start: an earlier one may lie before that page.
+    let copy = -1;
+    while (hi - lo > page) {
+      const start = lo + ((hi - lo - page) >>> 1);
+      const slice = await this.#oids(read, start, page);
+      const first = compareAt(slice, 0, oid, at);
+      if (first >= 0) {
+        if (first === 0) copy = start;
+        hi = start;
+      } else if (compareAt(slice, (page - 1) * OID_BYTES, oid, at) < 0) {
+        lo = start + page;
+      } else {
+        // The page starts below the id, so a copy in it is the first of all.
+        const found = searchOids(slice, 0, page, oid, at);
+        return found < 0 ? -1 : start + found;
+      }
+    }
+    if (lo === hi) return copy;
+    const found = searchOids(await this.#oids(read, lo, hi - lo), 0, hi - lo, oid, at);
+    return found < 0 ? copy : lo + found;
+  }
+
+  #oids(read: IdxRangeReader, position: number, count: number): Promise<Uint8Array> {
+    return readExactly(read, this.#layout.oidsAt + position * OID_BYTES, count * OID_BYTES);
   }
 
   /**

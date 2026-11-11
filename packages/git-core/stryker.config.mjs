@@ -42,7 +42,12 @@ const SCOPES = {
     exclude: ["**/git-differential.test.ts", "**/*.perf.test.ts"],
     break: 59,
   },
-  reader: { tests: ["test/reader/"], break: 61 },
+  reader: { tests: ["test/reader/"], exclude: ["**/*.bench.test.ts"], break: 61 },
+  blame: {
+    tests: ["test/blame/"],
+    exclude: ["**/*.git-oracle.test.ts", "**/*.fixtures.test.ts", "**/*.generate.test.ts"],
+    break: 92,
+  },
   diff: { tests: ["test/diff/"], exclude: ["**/*.git-oracle.test.ts"], break: 80 },
   merge: { tests: ["test/merge/"], exclude: ["**/*.git-oracle.test.ts"], break: 77 },
   "receive-pack": {

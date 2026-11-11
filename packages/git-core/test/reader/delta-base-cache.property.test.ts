@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { DELTA_BASE_ENTRY_OVERHEAD, DeltaBaseCache } from "../../src/reader/delta-base-cache.js";
+import {
+  DELTA_BASE_ENTRY_OVERHEAD,
+  DELTA_BASE_STRICT_ENTRY_OVERHEAD,
+  DeltaBaseCache,
+} from "../../src/reader/delta-base-cache.js";
 
 /*
  * The delta-base cache is an LRU bounded by bytes. Against a model (a list
@@ -25,43 +29,46 @@ const ops = fc.array(
 );
 
 describe("delta-base cache", () => {
-  it("behaves as a byte-bounded LRU", () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 1, max: 2000 }), ops, (capacity, sequence: Op[]) => {
-        const cache = new DeltaBaseCache(capacity);
-        let model: { key: number; size: number }[] = [];
-        const cost = (size: number) => size + DELTA_BASE_ENTRY_OVERHEAD;
-        for (const step of sequence) {
-          const pack = step.key % 2;
-          const offset = 12 + step.key;
-          if (step.op === "put") {
-            const data = new Uint8Array(step.size).fill(step.key);
-            const stored = cache.put(pack, offset, { type: "blob", data });
-            model = model.filter((e) => e.key !== step.key);
-            expect(stored).toBe(cost(step.size) <= capacity);
-            if (stored) {
-              model.push({ key: step.key, size: step.size });
-              let held = model.reduce((n, e) => n + cost(e.size), 0);
-              while (held > capacity) held -= cost((model.shift() as { size: number }).size);
+  it.each([[DELTA_BASE_ENTRY_OVERHEAD], [DELTA_BASE_STRICT_ENTRY_OVERHEAD]])(
+    "behaves as a byte-bounded LRU, at %i bytes an entry",
+    (overhead) => {
+      fc.assert(
+        fc.property(fc.integer({ min: 1, max: 2000 }), ops, (capacity, sequence: Op[]) => {
+          const cache = new DeltaBaseCache(capacity, overhead);
+          let model: { key: number; size: number }[] = [];
+          const cost = (size: number) => size + overhead;
+          for (const step of sequence) {
+            const pack = step.key % 2;
+            const offset = 12 + step.key;
+            if (step.op === "put") {
+              const data = new Uint8Array(step.size).fill(step.key);
+              const stored = cache.put(pack, offset, { type: "blob", data });
+              model = model.filter((e) => e.key !== step.key);
+              expect(stored).toBe(cost(step.size) <= capacity);
+              if (stored) {
+                model.push({ key: step.key, size: step.size });
+                let held = model.reduce((n, e) => n + cost(e.size), 0);
+                while (held > capacity) held -= cost((model.shift() as { size: number }).size);
+              }
+            } else {
+              const found = cache.get(pack, offset);
+              const at = model.findIndex((e) => e.key === step.key);
+              expect(found !== undefined).toBe(at >= 0);
+              if (at >= 0) {
+                const [entry] = model.splice(at, 1);
+                model.push(entry as { key: number; size: number });
+                expect(found?.data.length).toBe(entry?.size);
+                expect(found?.data.every((b) => b === step.key)).toBe(true);
+              }
             }
-          } else {
-            const found = cache.get(pack, offset);
-            const at = model.findIndex((e) => e.key === step.key);
-            expect(found !== undefined).toBe(at >= 0);
-            if (at >= 0) {
-              const [entry] = model.splice(at, 1);
-              model.push(entry as { key: number; size: number });
-              expect(found?.data.length).toBe(entry?.size);
-              expect(found?.data.every((b) => b === step.key)).toBe(true);
-            }
+            expect(cache.bytes).toBeLessThanOrEqual(capacity);
+            expect(cache.bytes).toBe(model.reduce((n, e) => n + cost(e.size), 0));
+            expect(cache.count).toBe(model.length);
           }
-          expect(cache.bytes).toBeLessThanOrEqual(capacity);
-          expect(cache.bytes).toBe(model.reduce((n, e) => n + cost(e.size), 0));
-          expect(cache.count).toBe(model.length);
-        }
-      }),
-    );
-  });
+        }),
+      );
+    },
+  );
 
   it("peek does not change the order", () => {
     const cache = new DeltaBaseCache(3 * (10 + DELTA_BASE_ENTRY_OVERHEAD));
@@ -78,5 +85,11 @@ describe("delta-base cache", () => {
   it("rejects a bad capacity", () => {
     expect(() => new DeltaBaseCache(0)).toThrow(RangeError);
     expect(() => new DeltaBaseCache(1.5)).toThrow(RangeError);
+  });
+
+  it("rejects a bad entry overhead", () => {
+    expect(() => new DeltaBaseCache(1, -1)).toThrow("bad delta-base cache entry overhead -1");
+    expect(() => new DeltaBaseCache(1, 1.5)).toThrow("bad delta-base cache entry overhead 1.5");
+    expect(new DeltaBaseCache(1, 0).capacity).toBe(1);
   });
 });
