@@ -106,7 +106,9 @@ export const API_MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 /**
  * Sends `method path` (under `/api`) with an optional JSON body, already
  * serialized: the API's response, its body unread (for a caller that tells
- * a failure to send from an answer it cannot read).
+ * a failure to send from an answer it cannot read). A write goes with a new
+ * `Idempotency-Key`, or with `key`, the one its caller keeps to retry that
+ * same request (the API answers a retry with the first answer).
  */
 export function apiFetch(
   context: Readonly<RouterContextProvider>,
@@ -114,11 +116,12 @@ export function apiFetch(
   method: string,
   path: string,
   json?: string,
+  key?: string,
 ): Promise<Response> {
   const headers = forwarded(request);
   if (method !== "GET") {
     headers.set("Content-Type", "application/json");
-    headers.set("Idempotency-Key", crypto.randomUUID());
+    headers.set("Idempotency-Key", key ?? crypto.randomUUID());
   }
   return binding(context).fetch(
     new Request(`${new URL(request.url).origin}/api${path}`, {
@@ -314,10 +317,10 @@ export function assertSameOrigin(request: Request): void {
 export const FORM_MAX_BYTES = 64 * 1024;
 
 /**
- * A form post's fields, read up to `maxBytes` (counted as the bytes arrive:
- * a body may say any Content-Length, or none); a longer one answers 413.
+ * A request's body, read up to `maxBytes` (counted as the bytes arrive: a
+ * body may say any Content-Length, or none); a longer one answers 413.
  */
-export async function readForm(request: Request, maxBytes = FORM_MAX_BYTES): Promise<FormData> {
+async function readBody(request: Request, maxBytes: number): Promise<Uint8Array<ArrayBuffer>> {
   const tooLarge = () => data("This form is too large.", { status: 413 });
   if (Number(request.headers.get("Content-Length")) > maxBytes) throw tooLarge();
   const chunks: Uint8Array[] = [];
@@ -339,8 +342,24 @@ export async function readForm(request: Request, maxBytes = FORM_MAX_BYTES): Pro
     body.set(chunk, at);
     at += chunk.length;
   }
+  return body;
+}
+
+/** A form post's fields, read up to `maxBytes`; a longer one answers 413. */
+export async function readForm(request: Request, maxBytes = FORM_MAX_BYTES): Promise<FormData> {
+  const body = await readBody(request, maxBytes);
   const type = request.headers.get("Content-Type") ?? "application/x-www-form-urlencoded";
   return new Response(body, { headers: { "Content-Type": type } }).formData();
+}
+
+/** A JSON body, read up to `maxBytes`: a longer one answers 413, one that isn't JSON 400. */
+export async function readJson(request: Request, maxBytes: number): Promise<unknown> {
+  const body = await readBody(request, maxBytes);
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
+  } catch {
+    throw data("Send JSON.", { status: 400 });
+  }
 }
 
 /** Where to sign in and come back to `request`'s page (the page's, for a navigation's data request). */

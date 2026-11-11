@@ -3,11 +3,12 @@
  * only), where a release lives, and how the state of its tag reads.
  */
 
-import type { getRelease, listReleases, Output } from "@fyrden/api-contract";
+import type { getRelease, getRetainedAssets, listReleases, Output } from "@fyrden/api-contract";
 import { encodePath } from "./types.js";
 
 export type Release = Output<typeof getRelease>;
 export type ReleasesPage = Output<typeof listReleases>;
+export type Retained = Output<typeof getRetainedAssets>;
 
 /**
  * Bytes of a release form read at most: notes of 65,536 characters
@@ -26,6 +27,27 @@ export const releaseEditor = (owner: string, repo: string, tag: string) =>
 /** The API's release of a tag. */
 export const releaseByTagApi = (base: string, tag: string) =>
   `${base}/releases/tags/${encodePath(tag)}`;
+
+/**
+ * Where an asset downloads from on this site, by its release's tag and its name: the web
+ * route, which a link can follow with the session. Never the API's `download_url`, which a
+ * navigation can't reach (it needs the session header no link can send).
+ */
+export const assetDownload = (owner: string, repo: string, tag: string, name: string) =>
+  `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/download/${encodePath(tag)}/${encodeURIComponent(name)}`;
+
+/** A size for people: bytes up to 1 KiB, then KiB, MiB and GiB to one decimal. */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} ${bytes === 1 ? "byte" : "bytes"}`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
 
 /** The source archive of what a release recorded, whatever became of its tag. */
 export const sourceArchive = (owner: string, repo: string, format: "tar.gz" | "zip", sha: string) =>

@@ -1,4 +1,5 @@
 import { Form, redirect, useActionData, useNavigation } from "react-router";
+import { AssetsTable, AssetUploader } from "../components/release-assets.js";
 import { ReleaseFields } from "../components/release-fields.js";
 import { RepoHeader } from "../components/repo-header.js";
 import { apiGet, assertSameOrigin, checkSession, readForm } from "../lib/api.server.js";
@@ -150,6 +151,13 @@ export default function EditRelease({ loaderData }: Route.ComponentProps) {
           </button>
         </p>
       </Form>
+      <section aria-labelledby="assets-heading">
+        <h3 id="assets-heading">Assets</h3>
+        <AssetsTable owner={repo.owner} repo={repo.name} release={release} />
+        {viewer !== null && repo.permissions?.push === true && (
+          <AssetUploader owner={repo.owner} repo={repo.name} release={release} />
+        )}
+      </section>
     </main>
   );
 }

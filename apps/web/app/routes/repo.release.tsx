@@ -1,5 +1,6 @@
 import { Form, Link, redirect, useActionData, useNavigation } from "react-router";
 import { Markdown } from "../components/markdown.js";
+import { AssetsTable } from "../components/release-assets.js";
 import { RepoHeader } from "../components/repo-header.js";
 import { apiGet, assertSameOrigin, checkSession, readForm } from "../lib/api.server.js";
 import type { EditResult, Scope } from "../lib/edits.js";
@@ -93,6 +94,10 @@ export default function ReleasePage({ loaderData }: Route.ComponentProps) {
       )}
       <section className="panel" aria-label="Release notes">
         {release.body ? <Markdown source={release.body} /> : <p className="muted">No notes.</p>}
+      </section>
+      <section aria-labelledby="assets-heading">
+        <h3 id="assets-heading">Assets</h3>
+        <AssetsTable owner={repo.owner} repo={repo.name} release={release} />
       </section>
       {release.commit_sha && (
         <section aria-label="Source code">
