@@ -129,6 +129,17 @@ different shards still run together there.
 This raises the shuffle jobs from 3 to 12. Not yet measured: their duration
 and the queueing the extra jobs cause under the concurrent job limit.
 
+### One fewer wrangler dev start in the end-to-end tests
+
+The two checks of `local-workers.test.ts` (the web Worker's page and health
+check through the API service binding; no token in the logs for a URL React
+Router cannot match) now run on the web UI suite's stack, and the file is
+gone. Its wait for the error log line polled every 100 ms; `WebStack`'s
+`waitForLine` resolves as the output arrives. Verified locally: the web UI
+suite passes (19 tests), and with the error handler made to print the raw path
+the token check fails. The end-to-end run starts 22 stacks instead of 23; the
+saving is one stack's start, not measured.
+
 ## Candidate next steps
 
 - Enforce job selection behind the existing required checks once the reports

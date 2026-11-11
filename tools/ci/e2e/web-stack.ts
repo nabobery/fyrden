@@ -37,6 +37,17 @@ export interface WebStack {
   readonly refused: string[];
   /** Everything both Workers wrote. */
   output(): string;
+  /**
+   * The lines the Workers wrote after `from` (an offset into `output()`),
+   * without wrangler dev's own access log (`[wrangler:info]`), which echoes
+   * request URLs and is not Worker output.
+   */
+  workerLines(from?: number): string[];
+  /**
+   * Resolves when a Worker line written after `from` matches: as the output
+   * arrives, not by polling. Rejects after `deadlineMs` without one.
+   */
+  waitForLine(match: RegExp, from: number, deadlineMs?: number): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -82,6 +93,29 @@ export async function startWebStack(
     ? join(root, `apps/api/wrangler.e2e-${crypto.randomUUID()}.jsonc`)
     : apiConfig;
   let output = "";
+  // Checks, run on each piece of output, of the waitForLine calls still pending.
+  const waiters = new Set<() => void>();
+  const workerLines = (from = 0) =>
+    output
+      .slice(from)
+      .split("\n")
+      .filter((line) => !line.startsWith("[wrangler:info]"));
+  const waitForLine = (match: RegExp, from: number, deadlineMs = 15_000) =>
+    new Promise<void>((done, fail) => {
+      // A deadline for failing, not a wait: the line itself resolves the promise.
+      const deadline = setTimeout(() => {
+        waiters.delete(check);
+        fail(new Error(`no Worker log line matched ${match}`));
+      }, deadlineMs);
+      const check = () => {
+        if (!workerLines(from).some((line) => match.test(line))) return;
+        waiters.delete(check);
+        clearTimeout(deadline);
+        done();
+      };
+      waiters.add(check);
+      check();
+    });
   let server: WranglerDev | undefined;
   let browser: Browser | undefined;
   const stop = async () => {
@@ -121,6 +155,7 @@ export async function startWebStack(
       cwd: join(root, "apps/web"),
       onOutput: (text) => {
         output += text;
+        for (const check of waiters) check();
       },
     });
     const origin = `http://localhost:${server.port}`;
@@ -156,6 +191,8 @@ export async function startWebStack(
       emailKey,
       refused,
       output: () => output,
+      workerLines,
+      waitForLine,
       stop,
     };
   } catch (error) {
