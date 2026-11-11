@@ -7439,7 +7439,7 @@ export type ReposBlameGetInput = {
   ref?: string;
   /** A previous answer's `next_continuation`. */
   continuation?: string;
-  /** Most ranges in one answer, 1-5000. */
+  /** Most ranges in one answer, 1-5000, for paged answers. A window's answer isn't paged: its span (at most 5,000 lines) bounds it instead. */
   per_page?: number;
   /** A window's first line, from 1. */
   line_start?: number;
@@ -7485,7 +7485,7 @@ export type ReposBlameGetOutput = {
       date: string;
     };
   }>;
-  /** Pass as `continuation`; null only when the blame is complete and read to the end. */
+  /** Pass as `continuation`. Without a window, null only when the blame is complete and read to the end. Always null for a window: while `state` is `partial`, ask for the same window again. */
   next_continuation: string | null;
   /** Too little of this request was left to walk on: ask again after this many seconds. */
   retry_after_seconds?: number;
@@ -9194,7 +9194,7 @@ export interface Operations {
   "repos.commits.get": { input: ReposCommitsGetInput; output: ReposCommitsGetOutput };
   /** Compare two commits. Compares `base...head` (branches, tags or SHAs): how far head is ahead of and behind base, their merge base, and the commits in head and not in base, oldest first (the newest 100). File differences are not included. */
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };
-  /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, with no continuation; follow-up windows should name the returned `commit`, not the ref. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
+  /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
   "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };
   /** List the repository's root directory. The root directory's entries at a branch, tag or commit, a page at a time. */
   "repos.contents.root": { input: ReposContentsRootInput; output: ReposContentsRootOutput };

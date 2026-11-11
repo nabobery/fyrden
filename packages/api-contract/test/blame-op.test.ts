@@ -40,6 +40,13 @@ describe("repos.blame.get", () => {
       expect([phrase, told.includes(phrase)]).toEqual([phrase, true]);
   });
 
+  it("tells an agent a window never continues: it asks for the window again while partial", () => {
+    const next = getBlame.output.shape.next_continuation.description ?? "";
+    for (const told of [getBlame.description, mcp?.description ?? "", next])
+      expect([told, told.includes("window") && told.includes("partial")]).toEqual([told, true]);
+    expect(getBlame.input.shape.per_page.description).toContain("window");
+  });
+
   it("takes a path, a ref, a continuation and a page size within their bounds", () => {
     expect(input().success).toBe(true);
     expect(input().data).toMatchObject({ per_page: 1000 });
