@@ -45,6 +45,7 @@ const CASES: Record<
   "repos.codeowners.errors": { input: {}, expected: { status: 404, code: "not_found" } },
   "repos.tags.list": { input: {}, expected: { status: 200 } },
   "repos.commits.list": { input: {}, expected: { status: 409, code: "repo_empty" } },
+  "repos.blame.get": { input: { path: "f" }, expected: { status: 409, code: "repo_empty" } },
   "repos.commits.get": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.compare": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "repos.contents.get": { input: {}, expected: { status: 409, code: "repo_empty" } },
@@ -392,7 +393,12 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{delivery_id}", `msg_${"0".repeat(32)}`);
   const input = CASES[op.id]?.input ?? SECONDARY[op.id]?.input ?? {};
   const get = op.method === "GET";
-  return exports.default.fetch(`${ORIGIN}/api${path}`, {
+  // A GET's input is its query: blame's path is one it needs.
+  const query =
+    get && Object.keys(input).length > 0
+      ? `?${new URLSearchParams(Object.entries(input).map(([k, v]) => [k, String(v)]))}`
+      : "";
+  return exports.default.fetch(`${ORIGIN}/api${path}${query}`, {
     method: op.method,
     headers: {
       Authorization: `Bearer ${token}`,

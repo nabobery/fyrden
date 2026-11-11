@@ -43,6 +43,8 @@ export class FyrdenError extends Error {
     readonly resync?: string,
     /** For `stale` (Fyrden's): the version it is at now. */
     readonly currentVersion?: number,
+    /** With a 429 or a 503: seconds to wait before asking again (`retry_after`, or the `Retry-After` header). */
+    readonly retryAfter?: number,
   ) {
     super(`${code}: ${detail}`);
   }
@@ -60,6 +62,8 @@ export interface ClientOptions {
   readonly dpop?: DpopKey;
   /** Defaults to the global `fetch`. */
   readonly fetch?: typeof fetch;
+  /** The clock a `Retry-After` date is read against, in milliseconds; `Date.now` by default. */
+  readonly now?: () => number;
 }
 
 export interface CallOptions {
@@ -147,6 +151,7 @@ export class FyrdenClient {
         typeof problem.missing_permission === "string" ? problem.missing_permission : undefined,
         typeof problem.resync === "string" ? problem.resync : undefined,
         typeof problem.current_version === "number" ? problem.current_version : undefined,
+        retryAfterOf(problem, response, this.options.now ?? Date.now),
       );
     }
     // An operation that answers nothing (204, 205) gives null, as its output type says.
@@ -199,6 +204,36 @@ export function refuseRedirect(response: Response): void {
       undefined,
       undefined,
     );
+}
+
+/**
+ * Whole seconds to wait: the problem's `retry_after` when it's a whole,
+ * nonnegative number; else the `Retry-After` header, as seconds or as an
+ * HTTP date read against `now` (RFC 9110, 10.2.3). A date already past is 0.
+ * Anything else, a fraction, a negative, a number too large to hold exactly,
+ * gives no wait.
+ */
+function retryAfterOf(
+  problem: Record<string, unknown>,
+  response: Response,
+  now: () => number,
+): number | undefined {
+  const fromBody = problem.retry_after;
+  if (typeof fromBody === "number" && Number.isSafeInteger(fromBody) && fromBody >= 0)
+    return fromBody;
+  const header = response.headers.get("Retry-After")?.trim();
+  if (!header) return undefined;
+  if (/^\d+$/.test(header)) {
+    const seconds = Number(header);
+    return Number.isSafeInteger(seconds) ? seconds : undefined;
+  }
+  // An HTTP date starts with the day of the week, in any of its three forms; a number with
+  // a sign or a point doesn't. asctime's form names no zone, and is GMT.
+  if (!/^[A-Za-z]{3}/.test(header)) return undefined;
+  const asctime = /^[A-Za-z]{3} [A-Za-z]{3} [ \d]\d \d\d:\d\d:\d\d \d{4}$/.test(header);
+  const at = Date.parse(asctime ? `${header} GMT` : header);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - now()) / 1000));
 }
 
 /** `text` as a JSON object, or undefined when it is not one. */

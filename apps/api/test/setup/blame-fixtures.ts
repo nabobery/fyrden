@@ -201,9 +201,14 @@ export default function setup(project: TestProject): () => void {
     "five main",
     "six latin",
   );
+  // block.txt comes whole with the first commit below, and the tip adds a line on top:
+  // one commit's range of five lines, each a line lower than in that commit.
+  const blockLines = ["block 1", "block 2", "block 3", "block 4", "block 5"];
+  const block = (...words: string[]): Entry => ["100644", blob(lines(...words)), "block.txt"];
   // A symlink of the legacy mode 120755, then the same bytes as a regular file: git
   // credits the conversion, since a symlink and a file are different kinds.
-  const later = (...entries: Entry[]) => withF(mainF, [...octo, big("a\nb\n"), ...entries]);
+  const later = (...entries: Entry[]) =>
+    withF(mainF, [...octo, big("a\nb\n"), block(...blockLines), ...entries]);
   const target = blob("f.txt");
   const legacyLink = out(
     ["hash-object", "-t", "tree", "-w", "--literally", "--stdin"],
@@ -271,7 +276,13 @@ export default function setup(project: TestProject): () => void {
     "Merge with a copy\n",
   );
   commits.tip = commit(
-    withF(tipF, [...octo, big("a\nb\n"), ...afterAdded, entry("merged.txt", lines("a", "b", "c"))]),
+    withF(tipF, [
+      ...octo,
+      big("a\nb\n"),
+      block("block 0", ...blockLines),
+      ...afterAdded,
+      entry("merged.txt", lines("a", "b", "c")),
+    ]),
     [commits.merged],
     "Tip\n",
   );

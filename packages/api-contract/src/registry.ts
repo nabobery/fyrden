@@ -30,6 +30,7 @@ import {
 import { getArchive } from "../ops/archives.js";
 import {
   compareCommits,
+  getBlame,
   getBranch,
   getCommit,
   listBranches,
@@ -457,6 +458,7 @@ export const registry = defineRegistry([
   listCommits,
   getCommit,
   compareCommits,
+  getBlame,
   getRootContents,
   getContents,
   getReadme,

@@ -212,3 +212,139 @@ export const compareCommits = defineOperation({
     readOnly: true,
   },
 });
+
+/** Why a line has no answer, in the blame engine's order (a checkpoint stores the position). */
+export const UNRESOLVED_REASONS = [
+  "parent_too_large",
+  "too_many_parents",
+  "diff_budget",
+  "slide_unsettled",
+  "object_limit",
+  "work_limit",
+  "history_unreadable",
+  "history_missing",
+  "history_limit",
+  "state_limit",
+  "commit_info_too_large",
+  "rename_possible",
+  "step_lost",
+] as const;
+
+const MAX_WINDOW_LINES = 5_000;
+const LineNumber = z.coerce.number().int().min(1);
+
+const BlameRange = z.union([
+  z.object({
+    start_line: z.number().int().describe("The range's first line in this file, from 1."),
+    line_count: z.number().int(),
+    commit: Sha.describe("The commit that introduced these lines."),
+    source_start_line: z
+      .number()
+      .int()
+      .describe("The first line's number in that commit's version of the file, from 1."),
+  }),
+  z.object({
+    start_line: z.number().int(),
+    line_count: z.number().int(),
+    unresolved: z
+      .enum(UNRESOLVED_REASONS)
+      .describe("Why these lines have no answer. Not a failure: the rest of the blame stands."),
+  }),
+]);
+
+const BlameCommit = z.object({
+  summary: z
+    .string()
+    .describe("The commit message's first line that isn't blank, as git blame gives it."),
+  author: z.object({
+    name: z.string(),
+    email: z.string(),
+    date: z
+      .string()
+      .describe(
+        "The author time as git prints it: epoch seconds and offset, such as `1700000000 +0100`. Exact for any time git holds.",
+      ),
+  }),
+});
+
+export const getBlame = defineOperation({
+  id: "repos.blame.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/blame",
+  summary: "Blame a file",
+  description:
+    "Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path.",
+  input: z
+    .object({
+      owner: Owner,
+      repo: Repo,
+      path: z.string().min(1).max(4096).describe("The file's path in the repository."),
+      ref: Ref.optional().describe("A branch, tag or commit SHA; the default branch without it."),
+      continuation: z
+        .string()
+        .max(1024)
+        .optional()
+        .describe("A previous answer's `next_continuation`."),
+      per_page: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(5000)
+        .default(1000)
+        .describe(
+          "Most ranges in one answer, 1-5000, for paged answers. A window's answer isn't paged: its span (at most 5,000 lines) bounds it instead.",
+        ),
+      line_start: LineNumber.optional().describe("A window's first line, from 1."),
+      line_end: LineNumber.optional().describe("A window's last line."),
+    })
+    .refine(
+      (input) =>
+        (input.line_start === undefined) === (input.line_end === undefined) &&
+        (input.line_start === undefined ||
+          input.line_end === undefined ||
+          (input.line_end >= input.line_start &&
+            input.line_end - input.line_start < MAX_WINDOW_LINES)),
+      {
+        message: "A window needs both line_start and line_end, in order, at most 5,000 lines.",
+        path: ["line_end"],
+      },
+    ),
+  output: z.object({
+    commit: Sha.describe("The commit blamed: the ref, resolved."),
+    path: z.string(),
+    blob: Sha.describe("The file's blob at that commit."),
+    lines: z.number().int(),
+    state: z
+      .enum(["complete", "partial"])
+      .describe("`complete` once every line is settled or refused; a partial blame continues."),
+    resolved_lines: z.number().int(),
+    unresolved_lines: z.number().int(),
+    pending_lines: z.number().int(),
+    ranges: z.array(BlameRange),
+    commits: z.record(Sha, BlameCommit).describe("The facts of the commits these ranges name."),
+    next_continuation: z
+      .string()
+      .nullable()
+      .describe(
+        "Pass as `continuation`. Without a window, null only when the blame is complete and read to the end. Always null for a window: while `state` is `partial`, ask for the same window again.",
+      ),
+    retry_after_seconds: z
+      .number()
+      .int()
+      .optional()
+      .describe(
+        "Too little of this request was left to walk on: ask again after this many seconds.",
+      ),
+  }),
+  permission: "contents:read",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "none",
+  mcp: {
+    tool: "get_blame",
+    title: "Blame a file",
+    description:
+      "Which commit introduced each line of a file. Pass `next_continuation` back until it is null; a window never continues, so while `state` is partial ask for the same window again, naming the returned `commit`; `unresolved` lines aren't failures; on `blame_busy` wait `retry_after` seconds.",
+    readOnly: true,
+  },
+});

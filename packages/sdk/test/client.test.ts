@@ -4,7 +4,7 @@ import { FyrdenClient, FyrdenError } from "../src/index.js";
 
 type Sent = { url: string; method: string; headers: Record<string, string>; body?: string };
 
-function fake(responses: { status?: number; body: unknown }[]) {
+function fake(responses: { status?: number; body: unknown; headers?: Record<string, string> }[]) {
   const sent: Sent[] = [];
   const fetchFn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     sent.push({
@@ -17,7 +17,10 @@ function fake(responses: { status?: number; body: unknown }[]) {
     // A 204 or 205 has no body.
     if (next.status === 204 || next.status === 205)
       return new Response(null, { status: next.status });
-    return new Response(JSON.stringify(next.body), { status: next.status ?? 200 });
+    return new Response(JSON.stringify(next.body), {
+      status: next.status ?? 200,
+      ...(next.headers && { headers: next.headers }),
+    });
   }) as unknown as typeof fetch;
   return { sent, fetchFn };
 }
@@ -160,6 +163,55 @@ describe("FyrdenClient", () => {
     expect(first).toMatchObject({ status: 409, code: "stale", currentVersion: 7 });
     const second = await client.call("issues.update", input).catch((e: unknown) => e);
     expect(second).toMatchObject({ code: "stale", currentVersion: undefined });
+  });
+
+  it("carries how long to wait before asking again, from the problem or its Retry-After", async () => {
+    const busy = { status: 503, code: "blame_busy", detail: "busy" };
+    const { fetchFn } = fake([
+      { status: 503, body: { ...busy, retry_after: 2 }, headers: { "Retry-After": "2" } },
+      { status: 503, body: busy, headers: { "Retry-After": "30" } },
+      { status: 404, body: { status: 404, code: "path_not_found", detail: "d" } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const input = { owner: "me", repo: "r", path: "f.txt" };
+    const seen = [];
+    for (let k = 0; k < 3; k++) {
+      const error = await client.call("repos.blame.get", input).catch((e: unknown) => e);
+      seen.push((error as FyrdenError).retryAfter);
+    }
+    expect(seen).toEqual([2, 30, undefined]);
+  });
+
+  it("reads a Retry-After date against its clock, and ignores waits it can't trust", async () => {
+    const now = Date.UTC(2026, 10, 9, 12, 0, 0);
+    const date = (ms: number) => new Date(ms).toUTCString();
+    const busy = { status: 503, code: "blame_busy", detail: "busy" };
+    const cases: [Record<string, unknown>, Record<string, string>, number | undefined][] = [
+      [busy, { "Retry-After": date(now + 30_000) }, 30],
+      [busy, { "Retry-After": date(now - 60_000) }, 0],
+      // The two older forms RFC 9110 says a recipient must also take, 30 s ahead.
+      [busy, { "Retry-After": "Monday, 09-Nov-26 12:00:30 GMT" }, 30],
+      [busy, { "Retry-After": "Mon Nov  9 12:00:30 2026" }, 30],
+      [{ ...busy, retry_after: 2 }, { "Retry-After": "30" }, 2],
+      [{ ...busy, retry_after: -1 }, {}, undefined],
+      [{ ...busy, retry_after: 1.5 }, {}, undefined],
+      [{ ...busy, retry_after: -1 }, { "Retry-After": "7" }, 7],
+      [busy, { "Retry-After": "-5" }, undefined],
+      [busy, { "Retry-After": "1.5" }, undefined],
+      [busy, { "Retry-After": "9".repeat(400) }, undefined],
+      [busy, { "Retry-After": "soon" }, undefined],
+    ];
+    const { fetchFn } = fake(cases.map(([body, headers]) => ({ status: 503, body, headers })));
+    const client = new FyrdenClient({
+      baseUrl: "https://f.test/api",
+      fetch: fetchFn,
+      now: () => now,
+    });
+    const input = { owner: "me", repo: "r", path: "f.txt" };
+    for (const [body, headers, want] of cases) {
+      const error = await client.call("repos.blame.get", input).catch((e: unknown) => e);
+      expect([body, headers, (error as FyrdenError).retryAfter]).toEqual([body, headers, want]);
+    }
   });
 
   it("iterates every item of a paginated operation, following next_cursor", async () => {
