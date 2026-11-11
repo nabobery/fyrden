@@ -4,7 +4,8 @@
 // repository, gets a short-lived git token and pushes with stock git,
 // browses it and reads a file as an MCP resource at a commit, commits a file
 // change (signed by the platform, so verified), downloads an archive, forks,
-// sets an expiry, and the reaper deletes the repository after it. Then an
+// and sets an expiry the reaper leaves the repository alone before (the
+// deletion itself is expiry.test.ts's, on a clock it controls). Then an
 // agent acting for that user under a grant: a scratch repository that
 // expires, a ruleset that holds the agent to pull requests but not its
 // user, and a revoked grant that stops its git token.
