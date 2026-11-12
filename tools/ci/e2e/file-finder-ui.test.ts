@@ -16,7 +16,7 @@ import {
   webkit,
 } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js";
+import { accessibleInEveryTheme, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
 let page: Page;
@@ -76,22 +76,8 @@ async function openFinder(...replies: unknown[]) {
   return asked;
 }
 
-/** No axe finding in the six pairs of OS scheme and forced theme, with `what` on the page. */
-async function accessibleEverywhere(what: string) {
-  const set = (theme: string | null) =>
-    page.locator("html").evaluate(
-      `(html, theme) => {
-        if (theme) html.dataset.theme = theme;
-        else delete html.dataset.theme;
-      }`,
-      theme,
-    );
-  for (const forced of [null, "light", "dark"]) {
-    await set(forced);
-    await accessible(page, `${what}, forced ${forced ?? "no theme"}`);
-  }
-  await set(null);
-}
+/** No axe finding in the six pairs of OS scheme and picked theme, with `what` on the page. */
+const accessibleEverywhere = (what: string) => accessibleInEveryTheme(page, what);
 
 beforeAll(async () => {
   stack = await startWebStack("ada");

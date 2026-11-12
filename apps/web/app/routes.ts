@@ -36,6 +36,8 @@ export default [
   route(":owner/:repo/releases/new", "routes/repo.release-new.tsx"),
   route(":owner/:repo/releases/tag/*", "routes/repo.release.tsx"),
   route(":owner/:repo/releases/edit/*", "routes/repo.release-edit.tsx"),
+  route(":owner/:repo/releases/download/*", "routes/repo.release-download.ts"),
+  route(":owner/:repo/releases/uploads", "routes/repo.release-uploads.ts"),
   route(":owner/:repo/pulls", "routes/repo.pulls.tsx"),
   route(":owner/:repo/pull/:number", "routes/repo.pull.tsx"),
   route(":owner/:repo/pull/:number/files", "routes/repo.pull.files.tsx"),
