@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRevalidator } from "react-router";
 import {
   abandonUpload,
+  holdsSession,
   newUpload,
   runUpload,
   type Upload,
@@ -121,8 +122,11 @@ export function AssetUploader({
     // cache) shows the others' outcomes too; one taken off by the app has no one to show.
     const endAll = (shown: boolean) => {
       for (const item of all.values()) {
+        // A lost start's session (see `holdsSession`) is ended only by a page that stays: one
+        // being unloaded would run nothing to end what asking the start again finds.
         const ending =
-          item.status !== "done" && item.upload.session !== null
+          item.status !== "done" &&
+          (shown ? item.upload.session !== null : holdsSession(item.upload))
             ? abandonUpload(item.upload, BROWSER)
             : null;
         if (item.stop) {
@@ -225,7 +229,7 @@ export function AssetUploader({
 
   /** Takes a stopped upload off the page; an ending not confirmed is asked once more first. */
   const dismiss = (item: Item) => {
-    if (item.status === "failed" && item.upload.session !== null)
+    if (item.status === "failed" && holdsSession(item.upload))
       void abandonUpload(item.upload, BROWSER);
     remove(item);
   };
@@ -321,7 +325,7 @@ export function AssetUploader({
                       item.status === "completing" ||
                       // Stopped with its session open, or whose ending wasn't confirmed.
                       (item.status === "failed" &&
-                        (item.retryable || item.upload.session !== null))) && (
+                        (item.retryable || holdsSession(item.upload)))) && (
                       <button type="button" onClick={() => void cancel(item)}>
                         Cancel
                       </button>

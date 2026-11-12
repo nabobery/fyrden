@@ -474,6 +474,41 @@ describe("release assets", () => {
     await takesNoParts(id);
   });
 
+  it("ends the session a start made when its answer was lost and the upload is cancelled", async () => {
+    await visit(page, editUrl());
+    // The API makes the session; its answer never reaches the page.
+    let made = "";
+    await page.route(`**${REPO}/releases/uploads`, async (r) => {
+      if (made !== "" || JSON.parse(r.request().postData() ?? "{}").intent !== "begin")
+        return r.continue();
+      const answer = await r.fetch();
+      made = ((await answer.json()) as { id: string }).id;
+      return r.abort("internetdisconnected");
+    });
+    try {
+      await page.getByLabel("Add files").setInputFiles({
+        name: "unanswered.bin",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.from("unanswered"),
+      });
+      const item = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+      await see(item.getByRole("button", { name: "Retry" })).toBeVisible();
+      expect(made).not.toBe("");
+      const ended = page.waitForResponse((res) => uploadPost("abort")(res.request()));
+      // Handled at once: a click that fails first is the failure to report.
+      ended.catch(() => undefined);
+      await item.getByRole("button", { name: "Cancel" }).click();
+      const { upload_id } = JSON.parse((await ended).request().postData() ?? "{}") as {
+        upload_id: string;
+      };
+      expect(upload_id).toBe(made);
+      await see(item).toHaveCount(0);
+      await takesNoParts(made);
+    } finally {
+      await page.unroute(`**${REPO}/releases/uploads`);
+    }
+  });
+
   it("holds a running upload left by the page until its ending is known", async () => {
     await visit(page, editUrl());
     let release = () => {};

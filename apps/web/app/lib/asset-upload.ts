@@ -196,22 +196,10 @@ export async function runUpload(
       if (upload.file.size === 0) throw new Stopped("fatal", "An empty file can't be uploaded.");
       const name = assetName(upload.name);
       if (!name.ok) throw new Stopped("fatal", `The file's name ${name.reason}.`);
-      const type = assetContentType(upload.file.type || undefined);
       checkCancelled();
       upload.beginKey ??= deps.newKey();
       // Not cancellable: a session the API makes must be learnt, so a Cancel can end it.
-      const res = await ask(
-        {
-          intent: "begin",
-          release_id: upload.target.releaseId,
-          name: name.name,
-          size: upload.file.size,
-          ...(type.ok && upload.file.type !== "" ? { content_type: type.type } : {}),
-          replace: upload.replace,
-          key: upload.beginKey,
-        },
-        false,
-      );
+      const res = await ask(startOf(upload, name.name, upload.beginKey), false);
       if (!res.ok) {
         const problem = res.status === 401 ? {} : await problemOf(res);
         // The lost start this key was kept for is still running: the same key gets its answer.
@@ -249,6 +237,26 @@ export async function runUpload(
     throw error;
   }
 }
+
+/** The start of `upload`'s session, as sent with `key`: the same each time it is asked. */
+function startOf(upload: Upload, name: string, key: string): Record<string, unknown> {
+  const type = assetContentType(upload.file.type || undefined);
+  return {
+    intent: "begin",
+    release_id: upload.target.releaseId,
+    name,
+    size: upload.file.size,
+    ...(type.ok && upload.file.type !== "" ? { content_type: type.type } : {}),
+    replace: upload.replace,
+    key,
+  };
+}
+
+/**
+ * Whether `upload` may hold a session to end: one it knows, or one a start whose answer was
+ * lost may have made (its key kept).
+ */
+export const holdsSession = (upload: Upload) => upload.session !== null || upload.beginKey !== null;
 
 /** What a refusal to begin says, for the person uploading. */
 function refusal(status: number, problem: { code?: string; detail?: string }): string {
@@ -331,16 +339,68 @@ function cancelled(ending: Ending): UploadResult {
  * page being left still ends it, though the result is then never seen.
  */
 export async function abandonUpload(upload: Upload, deps: UploadDeps): Promise<UploadResult> {
-  const ending = await end(upload, (body) =>
+  const ask = (body: Record<string, unknown>) =>
     deps.fetch(releaseUploads(upload.target), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       keepalive: true,
-    }),
-  );
-  return cancelled(ending);
+    });
+  if (upload.session === null && upload.beginKey !== null) {
+    // A start whose answer was lost: the same start again answers the session it made.
+    if ((await relearn(upload, upload.beginKey, ask)) === "unknown") return cancelled("unknown");
+  }
+  return cancelled(await end(upload, ask));
 }
+
+/**
+ * Asks `upload`'s lost start again with its `key`, taking the session it made: `learnt`, or
+ * `none` when it made none (it was refused), or `unknown`. Not for a page being unloaded: no
+ * script would run to end what it learns, and a start that never arrived would then make one.
+ */
+async function relearn(
+  upload: Upload,
+  key: string,
+  ask: (body: Record<string, unknown>) => Promise<Response>,
+): Promise<"learnt" | "none" | "unknown"> {
+  const name = assetName(upload.name);
+  if (!name.ok) {
+    upload.beginKey = null;
+    return "none";
+  }
+  let res: Response;
+  try {
+    res = await ask(startOf(upload, name.name, key));
+  } catch {
+    return "unknown";
+  }
+  if (res.ok) {
+    try {
+      upload.session = (await res.json()) as Session;
+    } catch {
+      return "unknown";
+    }
+    upload.beginKey = null;
+    return "learnt";
+  }
+  // Answered before the key was looked at (signed out, refused, timed out, rate limited) or
+  // failing: nothing said of the lost start, which is still to learn with the same key.
+  if (res.status >= 500 || NOT_KEPT.has(res.status)) {
+    await res.body?.cancel();
+    return "unknown";
+  }
+  const problem = await problemOf(res);
+  // Still running or busy, or a refusal that can't be read: still to learn, the same way.
+  if (problem.code === undefined || STILL_TO_LEARN.has(problem.code)) return "unknown";
+  // Refused, so it made nothing; or its outcome can no longer be learnt by this key.
+  upload.beginKey = null;
+  return problem.code === "idempotent_outcome_unknown" ? "unknown" : "none";
+}
+
+/** Statuses the API answers without keeping them for the key (`limits.md`, idempotent requests). */
+const NOT_KEPT = new Set([401, 403, 408, 429]);
+/** Answers that say the key's request is still to be decided, or was undone to run again. */
+const STILL_TO_LEARN = new Set(["idempotency_key_in_use", "busy", "network_busy"]);
 
 /** Sends every part the API lacks, `PARTS_AT_ONCE` at a time. */
 async function sendParts(

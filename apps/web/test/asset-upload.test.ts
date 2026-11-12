@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 import {
   abandonUpload,
+  holdsSession,
   newUpload,
   partUrl,
   runUpload,
@@ -661,6 +662,74 @@ describe("an asset's upload", () => {
       ["complete", false],
     ]);
     expect(done.partCalls().map((p) => p.request.keepalive)).toEqual([false, false, false]);
+  });
+
+  it("ends the session a start whose answer was lost made, when let go, by asking the same start again", async () => {
+    const fake = server({ route: [new TypeError("network")] });
+    const upload = newUpload(AT, file(), { replace: false });
+    await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+    expect(holdsSession(upload)).toBe(true);
+    expect(await abandonUpload(upload, fake.deps)).toEqual({
+      ok: false,
+      kind: "cancelled",
+      message: "Cancelled.",
+    });
+    const [lost, again, abort] = fake.routeCalls();
+    expect(again).toEqual(lost);
+    expect(abort).toEqual({ intent: "abort", upload_id: ID });
+    expect(fake.routeCalls()).toHaveLength(3);
+    expect(holdsSession(upload)).toBe(false);
+  });
+
+  it("lets a lost start go without ending anything when asking it again says it was refused", async () => {
+    const fake = server({
+      route: [new TypeError("network"), json({ code: "too_many_uploads", detail: "Full." }, 409)],
+    });
+    const upload = newUpload(AT, file(), { replace: false });
+    await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+    expect(await abandonUpload(upload, fake.deps)).toMatchObject({ kind: "cancelled" });
+    expect(fake.routeCalls().map((c) => c.intent)).toEqual(["begin", "begin"]);
+    expect(holdsSession(upload)).toBe(false);
+  });
+
+  it("doesn't take an answer that doesn't say what the lost start did for a refusal of it", async () => {
+    for (const unsaid of [
+      json({ code: "rate_limited", detail: "Slow down." }, 429, { "Retry-After": "1" }),
+      json({ code: "invalid_token" }, 401),
+      new Response("not json", { status: 409 }),
+    ]) {
+      const fake = server({ route: [new TypeError("network"), unsaid] });
+      const upload = newUpload(AT, file(), { replace: false });
+      await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+      const result = await abandonUpload(upload, fake.deps);
+      expect(result.ok ? "" : result.message, String(unsaid.status)).toMatch(/may not have ended/);
+      expect(holdsSession(upload)).toBe(true);
+      // Asked again, the start answers its session, which is then ended.
+      expect(await abandonUpload(upload, fake.deps)).toMatchObject({ kind: "cancelled" });
+      const calls = fake.routeCalls();
+      expect(calls.map((c) => c.intent)).toEqual(["begin", "begin", "begin", "abort"]);
+      expect(new Set(calls.slice(0, 3).map((c) => c.key)).size).toBe(1);
+    }
+  });
+
+  it("doesn't say cancelled while a lost start is still running, and keeps its key to ask again", async () => {
+    const fake = server({
+      route: [
+        new TypeError("network"),
+        json({ code: "idempotency_key_in_use", detail: "Still running." }, 409),
+        new TypeError("offline"),
+      ],
+    });
+    const upload = newUpload(AT, file(), { replace: false });
+    await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+    for (let i = 0; i < 2; i++) {
+      const result = await abandonUpload(upload, fake.deps);
+      expect(result.ok ? "" : result.message).toMatch(/may not have ended/);
+      expect(holdsSession(upload)).toBe(true);
+    }
+    const begins = fake.routeCalls();
+    expect(begins.map((c) => c.intent)).toEqual(["begin", "begin", "begin"]);
+    expect(new Set(begins.map((c) => c.key)).size).toBe(1);
   });
 
   it("keeps the start's key while the start it lost is still running, so Retry gets its session", async () => {
