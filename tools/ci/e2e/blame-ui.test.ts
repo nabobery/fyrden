@@ -175,13 +175,20 @@ async function freshPage<T>(use: (fresh: Page) => Promise<T>): Promise<T> {
 /**
  * Axe for a page as it was served with no script: axe needs script to run, so the HTML is
  * checked in a page of the same origin (its stylesheets load) with every script taken out.
+ * The browser's own parser takes them out (it runs nothing it parses), so none is missed
+ * however it is written.
  */
 async function accessibleAsServed(plain: Page, name: string): Promise<void> {
-  const html = (await plain.content())
-    .replace(/<script\b[\s\S]*?<\/script>/g, "")
-    .replace(/<link\b[^>]*rel="modulepreload"[^>]*>/g, "");
+  const served = await plain.content();
   await freshPage(async (checked) => {
     await checked.goto(`${stack.origin}/healthz`);
+    const html = await checked.locator("html").evaluate((root, source) => {
+      const view = root.ownerDocument.defaultView;
+      if (!view) throw new Error("no window");
+      const doc = new view.DOMParser().parseFromString(source, "text/html");
+      for (const node of doc.querySelectorAll('script, link[rel="modulepreload"]')) node.remove();
+      return `<!doctype html>${doc.documentElement.outerHTML}`;
+    }, served);
     await checked.setContent(html, { waitUntil: "load" });
     await see(checked.locator("script")).toHaveCount(0);
     await accessible(checked, `${name}, with no script`);
@@ -401,7 +408,8 @@ describe("with JavaScript", () => {
     await see(file(page)).toHaveAttribute("data-drawn", "text");
     await see(page.locator("diffs-container")).toHaveCount(0);
     await see(page.locator("#L1")).toBeVisible();
-    await accessible(page, "past the annotation cutoff");
+    // No axe here: this is the lone carriage return's table (checked there), at 2,000 lines,
+    // where axe alone takes about 16 seconds locally and over a minute on CI's runners.
   });
 
   it("opens the table at the line the reader had reached when the groups pass the cutoff", async () => {
