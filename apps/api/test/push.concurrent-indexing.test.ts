@@ -9,6 +9,7 @@ import { PushIndexer, pushIndexMemoryBytes } from "@fyrden/git-core";
 import { describe, expect, inject, it, vi } from "vitest";
 import { PACK_CAP_DEFAULTS } from "../src/git/maintenance/tail-merge-plan.js";
 import { RepoPush } from "../src/git/push/repo-push.js";
+import { recordingMetrics } from "./helpers/fetch-repo.js";
 import { setOffset } from "./helpers/maintenance.js";
 import { pushBody, reportLines, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo, newRepo } from "./helpers/repo-git.js";
@@ -49,15 +50,51 @@ describe("push: concurrent indexing", () => {
       const { totalBytes, reservedBytes } = repo.git.memory.stats();
       const free = Math.floor(1.5 * pushIndexMemoryBytes());
       const hog = repo.git.memory.tryReserve(totalBytes - reservedBytes - free);
+      const metrics = recordingMetrics();
+      repo.metricsDataset = metrics.dataset;
+      // The first phase to start holds its share until another phase asks for
+      // one, which then has to queue for it.
+      let opened!: () => void;
+      const asked = new Promise<void>((resolve) => {
+        opened = resolve;
+      });
+      let begins = 0;
+      const begin = repo.git.memory.begin;
+      repo.git.memory.begin = (bytes, options) => {
+        const started = begin(bytes, options);
+        if (++begins === 2) opened();
+        return started;
+      };
+      const step = PushIndexer.prototype.step;
+      const held = vi.spyOn(PushIndexer.prototype, "step").mockImplementationOnce(async function (
+        this: PushIndexer,
+        ...args
+      ) {
+        await asked;
+        return step.apply(this, args);
+      });
       try {
-        return await Promise.all(["a", "b", "c"].map((name) => run(`refs/heads/${name}`)));
+        const reports = await Promise.all(["a", "b", "c"].map((name) => run(`refs/heads/${name}`)));
+        return { reports, points: metrics.points };
       } finally {
+        held.mockRestore();
+        repo.git.memory.begin = begin;
         hog?.release();
       }
     });
-    expect(reports).toEqual(
+    expect(reports.reports).toEqual(
       ["a", "b", "c"].map((name) => ["unpack ok\n", `ok refs/heads/${name}\n`, "0000"]),
     );
+    // Phases queued for their shares, and every one was granted.
+    const admissions = reports.points
+      .filter((p) => p.name === "memory.share_wait_ms")
+      .map((p) => p.blobs.join(" "));
+    expect(new Set(admissions)).toEqual(
+      new Set(["push_index granted false", "push_index granted true"]),
+    );
+    const shares = reports.points.filter((p) => p.name === "memory.share_bytes");
+    expect(shares.length).toBe(admissions.length);
+    for (const share of shares) expect(share.value).toBe(pushIndexMemoryBytes());
   });
 
   it("indexes nothing once its lock lapsed while it waited for memory", async () => {

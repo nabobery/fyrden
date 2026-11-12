@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   createDoMemoryBudget,
   DO_MEMORY,
+  type MemoryAdmission,
   MemoryWaitTimeoutError,
 } from "../../src/git/memory-budget.js";
+
+/** Who started an operation, for tests that don't look at admissions. */
+const OP = { consumer: "fetch_plan" } as const;
 
 describe("Durable Object memory pool", () => {
   it("splits the usable memory into the block and index caches and the operation pool", () => {
@@ -99,7 +103,7 @@ describe("operations started with their share of the pool", () => {
 
     const budget = createDoMemoryBudget(100, { maxWaitMs: 20 });
     const run = async () => {
-      const memory = await budget.begin(70);
+      const memory = await budget.begin(70, OP);
       try {
         const first = await memory.reserve(40);
         const second = await memory.reserve(30);
@@ -115,10 +119,10 @@ describe("operations started with their share of the pool", () => {
 
   it("serves work under way, in arrival order, before operations not yet started", async () => {
     const budget = createDoMemoryBudget(100);
-    const operation = await budget.begin(50);
+    const operation = await budget.begin(50, OP);
     const own = await operation.reserve(50);
     const other = await budget.reserve(40);
-    const later = budget.begin(30);
+    const later = budget.begin(30, OP);
     // What is free goes to work under way, though an operation waits to start.
     const past = await operation.reserve(10);
     const plain = budget.reserve(5);
@@ -139,7 +143,7 @@ describe("operations started with their share of the pool", () => {
 
   it("serves a reservation of other work queued before an operation's, which it may need to finish", async () => {
     const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
-    const operation = await budget.begin(40);
+    const operation = await budget.begin(40, OP);
     const own = await operation.reserve(40);
     const other = await budget.reserve(40);
     const brief = await budget.reserve(20);
@@ -158,7 +162,7 @@ describe("operations started with their share of the pool", () => {
 
   it("answers an operation's later waiter from its share once an earlier one came from the pool", async () => {
     const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
-    const operation = await budget.begin(60);
+    const operation = await budget.begin(60, OP);
     const own = await operation.reserve(50);
     const others = [await budget.reserve(20), await budget.reserve(20)];
     const first = operation.reserve(20);
@@ -175,7 +179,7 @@ describe("operations started with their share of the pool", () => {
 
   it("answers an operation's waiter from its own share once the operation frees some", async () => {
     const budget = createDoMemoryBudget(100);
-    const operation = await budget.begin(60);
+    const operation = await budget.begin(60, OP);
     const other = await budget.reserve(40);
     const first = await operation.reserve(50);
     const second = operation.reserve(20);
@@ -191,8 +195,8 @@ describe("operations started with their share of the pool", () => {
 
   it("takes an operation's waiter at the front from its share before the pool", async () => {
     const budget = createDoMemoryBudget(100, { maxWaitMs: 1_000 });
-    const a = await budget.begin(40);
-    const b = await budget.begin(30);
+    const a = await budget.begin(40, OP);
+    const b = await budget.begin(30, OP);
     const held = [await a.reserve(30), await b.reserve(30)];
     const brief = await budget.reserve(30);
     const [a20, a10, b10] = [a.reserve(20), a.reserve(10), b.reserve(10)];
@@ -210,7 +214,7 @@ describe("operations started with their share of the pool", () => {
 
   it("ends an operation: its share goes back, its waiters fail and it reserves no more", async () => {
     const budget = createDoMemoryBudget(100);
-    const operation = await budget.begin(60);
+    const operation = await budget.begin(60, OP);
     const own = await operation.reserve(60);
     const past = await operation.reserve(30);
     const waits = operation.reserve(20);
@@ -224,6 +228,126 @@ describe("operations started with their share of the pool", () => {
     expect(budget.stats().reservedBytes).toBe(0);
     await expect(operation.reserve(1)).rejects.toThrow("the operation has ended");
     expect(() => operation.tryReserve(1)).toThrow("the operation has ended");
+    operation.release();
+    expect(budget.stats().reservedBytes).toBe(0);
+  });
+});
+
+describe("admissions of operations to the pool", () => {
+  /** A pool whose clock moves only when the test says, recording every admission. */
+  function recorded(total: number, maxWaitMs = 60_000) {
+    const clock = { now: 1_000 };
+    const admissions: MemoryAdmission[] = [];
+    const budget = createDoMemoryBudget(total, {
+      maxWaitMs,
+      now: () => clock.now,
+      onAdmission: (admission) => admissions.push(admission),
+    });
+    return { budget, clock, admissions };
+  }
+
+  it("records an operation granted at once as not queued, with no wait", async () => {
+    const { budget, admissions } = recorded(100);
+    const operation = await budget.begin(40, { consumer: "blame" });
+    expect(admissions).toEqual([
+      { consumer: "blame", bytes: 40, outcome: "granted", queued: false, waitMs: 0 },
+    ]);
+    operation.release();
+  });
+
+  it("records the wait of an operation that queued behind a reservation until it was freed", async () => {
+    const { budget, clock, admissions } = recorded(100);
+    const held = await budget.reserve(90);
+    const waiting = budget.begin(60, { consumer: "fetch_plan" });
+    expect(budget.stats().waiting).toBe(1);
+    expect(admissions).toEqual([]);
+    clock.now += 250;
+    held.release();
+    (await waiting).release();
+    expect(admissions).toEqual([
+      { consumer: "fetch_plan", bytes: 60, outcome: "granted", queued: true, waitMs: 250 },
+    ]);
+  });
+
+  it("records an operation queued behind another's start though its bytes were free", async () => {
+    const { budget, clock, admissions } = recorded(100);
+    const held = await budget.reserve(50);
+    const big = budget.begin(60, { consumer: "fetch_plan" });
+    const small = budget.begin(10, { consumer: "push_index" });
+    expect(budget.stats()).toMatchObject({ reservedBytes: 50, waiting: 2 });
+    clock.now += 40;
+    held.release();
+    (await big).release();
+    (await small).release();
+    expect(admissions).toEqual([
+      { consumer: "fetch_plan", bytes: 60, outcome: "granted", queued: true, waitMs: 40 },
+      { consumer: "push_index", bytes: 10, outcome: "granted", queued: true, waitMs: 40 },
+    ]);
+  });
+
+  it("records a wait that reached the caller's limit as timed out, the limit kept within the pool's", async () => {
+    const { budget, clock, admissions } = recorded(100, 20);
+    const held = await budget.reserve(90);
+    const short = budget.begin(60, { consumer: "blame", waitMs: 5 });
+    clock.now += 5;
+    await expect(short).rejects.toThrow(
+      "60 bytes of working memory did not become free within 5 ms",
+    );
+    const long = budget.begin(60, { consumer: "push_index", waitMs: 120_000 });
+    clock.now += 20;
+    await expect(long).rejects.toThrow(
+      "60 bytes of working memory did not become free within 20 ms",
+    );
+    expect(admissions).toEqual([
+      { consumer: "blame", bytes: 60, outcome: "timed_out", queued: true, waitMs: 5 },
+      { consumer: "push_index", bytes: 60, outcome: "timed_out", queued: true, waitMs: 20 },
+    ]);
+    expect(budget.stats()).toMatchObject({ reservedBytes: 90, waiting: 0 });
+    held.release();
+  });
+
+  it("records a wait its caller's signal ended as cancelled, and nothing for one never queued", async () => {
+    const { budget, clock, admissions } = recorded(100);
+    const held = await budget.reserve(90);
+    const reason = new Error("request ended");
+    await expect(
+      budget.begin(60, { consumer: "fetch_plan", signal: AbortSignal.abort(reason) }),
+    ).rejects.toBe(reason);
+    await expect(budget.begin(0, { consumer: "fetch_plan" })).rejects.toThrow(RangeError);
+    expect(admissions).toEqual([]);
+    const controller = new AbortController();
+    const pending = budget.begin(60, { consumer: "fetch_plan", signal: controller.signal });
+    clock.now += 7;
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(admissions).toEqual([
+      { consumer: "fetch_plan", bytes: 60, outcome: "cancelled", queued: true, waitMs: 7 },
+    ]);
+    expect(budget.stats().waiting).toBe(0);
+    held.release();
+  });
+
+  it("records one admission each, however its wait ends after it", async () => {
+    const { budget, admissions } = recorded(100);
+    const held = await budget.reserve(90);
+    const controller = new AbortController();
+    const waiting = budget.begin(60, { consumer: "blame", signal: controller.signal });
+    held.release();
+    const operation = await waiting;
+    controller.abort(new Error("too late"));
+    operation.release();
+    operation.release();
+    expect(admissions.map((a) => a.outcome)).toEqual(["granted"]);
+  });
+
+  it("admits an operation even when recording the admission fails", async () => {
+    const budget = createDoMemoryBudget(100, {
+      onAdmission: () => {
+        throw new Error("recording failed");
+      },
+    });
+    const operation = await budget.begin(40, { consumer: "blame" });
+    expect(budget.stats().reservedBytes).toBe(40);
     operation.release();
     expect(budget.stats().reservedBytes).toBe(0);
   });

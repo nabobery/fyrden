@@ -331,17 +331,32 @@ describe("fetch plans at once", () => {
       const { totalBytes, reservedBytes } = r.git.memory.stats();
       const free = Math.floor(1.5 * fetchPlanMemoryBytes());
       const hog = r.git.memory.tryReserve(totalBytes - reservedBytes - free);
+      const metrics = recordingMetrics();
+      r.metricsDataset = metrics.dataset;
       try {
-        return await Promise.all(
+        const replies = await Promise.all(
           [1, 2, 3].map((n) =>
             r.planFetch({ repoId: repo.id, args, plan: "free", holder: `plan-${n}` }),
           ),
         );
+        return { replies, points: metrics.points };
       } finally {
         hog?.release();
       }
     });
-    expect(replies.map((reply) => reply.ok)).toEqual([true, true, true]);
+    expect(replies.replies.map((reply) => reply.ok)).toEqual([true, true, true]);
+    // The first plan started at once; the others queued behind it, and every one was granted.
+    const admissions = replies.points.filter((p) => p.name === "memory.share_wait_ms");
+    expect(admissions.map((p) => p.blobs)).toEqual([
+      ["fetch_plan", "granted", "false"],
+      ["fetch_plan", "granted", "true"],
+      ["fetch_plan", "granted", "true"],
+    ]);
+    const shares = replies.points.filter((p) => p.name === "memory.share_bytes");
+    // Each share is the plan's base and the live packs' indexes: the same for all three.
+    expect(new Set(shares.map((p) => p.value)).size).toBe(1);
+    expect(shares.length).toBe(3);
+    expect(shares[0]?.value).toBeGreaterThanOrEqual(fetchPlanMemoryBytes());
   });
 
   it("reserve a share that covers the live packs' indexes, which they read whole", async () => {
@@ -356,9 +371,9 @@ describe("fetch plans at once", () => {
       }
       const shares: number[] = [];
       const begin = r.git.memory.begin;
-      r.git.memory.begin = (bytes, signal) => {
+      r.git.memory.begin = (bytes, options) => {
         shares.push(bytes);
-        return begin(bytes, signal);
+        return begin(bytes, options);
       };
       try {
         const reply = await r.planFetch({ repoId: repo.id, args, plan: "free", holder: "plan" });

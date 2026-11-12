@@ -169,7 +169,7 @@ describe("GET /repos/{owner}/{repo}/blame", () => {
   it("answers 503 blame_busy with retry_after and Retry-After while another blame holds the object", async () => {
     const { token, path, stub } = await pushedRepo();
     await inRepo(stub, async (repo) => {
-      held = await repo.git.memory.begin(BLAME_SHARE_BYTES);
+      held = await repo.git.memory.begin(BLAME_SHARE_BYTES, { consumer: "blame" });
     });
     try {
       const res = await api("GET", `${path}/blame?path=f.txt`, token);
@@ -248,7 +248,7 @@ describe("the get_blame MCP tool", () => {
     expect(answered).toContain(fx.tip);
     expect(answered).toContain("ranges");
     await inRepo(stub, async (r) => {
-      held = await r.git.memory.begin(BLAME_SHARE_BYTES);
+      held = await r.git.memory.begin(BLAME_SHARE_BYTES, { consumer: "blame" });
     });
     try {
       const busy = await call();

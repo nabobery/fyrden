@@ -60,11 +60,24 @@ export interface DoMemoryBudget extends MemoryBudget {
    * grows with its input, then the operation reserves from them: one that
    * fits what is left of them is granted at once. One past them waits in
    * arrival order with every other reservation, ahead of operations not
-   * yet started, until the pool's limit: operations that all need more
-   * than their share at once can still wait on one another.
+   * yet started, until the pool's limit (or the caller's shorter
+   * `waitMs`): operations that all need more than their share at once can
+   * still wait on one another. Each call that gets as far as asking is
+   * told to `onAdmission` once, under its `consumer`, when it settles.
    */
-  begin(bytes: number, signal?: AbortSignal): Promise<OperationMemory>;
+  begin(bytes: number, options: BeginOptions): Promise<OperationMemory>;
   stats(): MemoryBudgetStats;
+}
+
+/** The work that starts operations on the pool: each admission is recorded under one of these. */
+export type MemoryConsumer = "blame" | "fetch_plan" | "push_index";
+
+export interface BeginOptions {
+  readonly consumer: MemoryConsumer;
+  /** Ends the wait, rejected with its reason. */
+  readonly signal?: AbortSignal;
+  /** The longest this start waits (at most the pool's own limit, its default). */
+  readonly waitMs?: number;
 }
 
 /** A started operation's memory (`DoMemoryBudget.begin`). */
@@ -92,9 +105,27 @@ interface Waiter {
   fail(error: Error): void;
 }
 
+/**
+ * One `begin` settled: granted, or its wait ended by its limit (`timed_out`)
+ * or by its caller's signal (`cancelled`). `queued` when it could not start
+ * at once: the bytes weren't free, or others were already waiting. `waitMs`
+ * is from the call to its end, by the pool's clock; 0 when not queued.
+ */
+export interface MemoryAdmission {
+  readonly consumer: MemoryConsumer;
+  readonly bytes: number;
+  readonly outcome: "granted" | "timed_out" | "cancelled";
+  readonly queued: boolean;
+  readonly waitMs: number;
+}
+
 export interface DoMemoryBudgetOptions {
   /** The longest a `reserve` waits (default `DO_MEMORY.maxWaitMs`). */
   readonly maxWaitMs?: number;
+  /** The clock a wait is measured by (default `Date.now`). */
+  readonly now?: () => number;
+  /** Told of every `begin` once it settles; what it throws is ignored. */
+  readonly onAdmission?: (admission: MemoryAdmission) => void;
 }
 
 /**
@@ -116,6 +147,7 @@ export function createDoMemoryBudget(
   options: DoMemoryBudgetOptions = {},
 ): DoMemoryBudget {
   const maxWaitMs = options.maxWaitMs ?? DO_MEMORY.maxWaitMs;
+  const now = options.now ?? Date.now;
   if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0)
     throw new RangeError(`bad memory budget ${totalBytes}`);
   let reserved = 0;
@@ -279,8 +311,24 @@ export function createDoMemoryBudget(
 
   /** Whether `bytes` can be granted from the pool now, ahead of operations not yet started. */
   const fitsNow = (bytes: number) => waiting.length === 0 && bytes <= totalBytes - reserved;
-  const timedOut = (bytes: number) => () => {
-    throw new MemoryWaitTimeoutError(bytes, maxWaitMs);
+  const timedOut =
+    (bytes: number, waitMs = maxWaitMs) =>
+    () => {
+      throw new MemoryWaitTimeoutError(bytes, waitMs);
+    };
+  /** Recording an admission never fails it: the operation already holds its share. */
+  const admitted = (admission: MemoryAdmission) => {
+    try {
+      options.onAdmission?.(admission);
+    } catch {
+      // Metrics are best effort; see the option.
+    }
+  };
+  /** A caller's wait, kept within the pool's. */
+  const waitLimit = (waitMs: number | undefined): number => {
+    if (waitMs === undefined) return maxWaitMs;
+    if (!(waitMs > 0)) throw new RangeError(`bad wait ${waitMs}`);
+    return Math.min(waitMs, maxWaitMs);
   };
 
   /** The memory of an operation whose share is `base`. */
@@ -334,13 +382,35 @@ export function createDoMemoryBudget(
       if (waitMs <= 0) return undefined;
       return enqueue(waiting, bytes, Math.min(waitMs, maxWaitMs), () => undefined);
     },
-    async begin(bytes, signal) {
+    async begin(bytes, { consumer, signal, waitMs }) {
       check(bytes);
+      const limit = waitLimit(waitMs);
       signal?.throwIfAborted();
-      if (starting.length === 0 && fitsNow(bytes)) return operation(grantNow(bytes));
-      return operation(
-        (await enqueue(starting, bytes, maxWaitMs, timedOut(bytes), signal)) as MemoryReservation,
-      );
+      if (starting.length === 0 && fitsNow(bytes)) {
+        const started = operation(grantNow(bytes));
+        admitted({ consumer, bytes, outcome: "granted", queued: false, waitMs: 0 });
+        return started;
+      }
+      // Measured here, once the wait settles, in the caller's invocation.
+      const from = now();
+      const waited = () => Math.max(0, now() - from);
+      let base: MemoryReservation;
+      try {
+        base = (await enqueue(
+          starting,
+          bytes,
+          limit,
+          timedOut(bytes, limit),
+          signal,
+        )) as MemoryReservation;
+      } catch (error) {
+        const outcome = error instanceof MemoryWaitTimeoutError ? "timed_out" : "cancelled";
+        admitted({ consumer, bytes, outcome, queued: true, waitMs: waited() });
+        throw error;
+      }
+      const started = operation(base);
+      admitted({ consumer, bytes, outcome: "granted", queued: true, waitMs: waited() });
+      return started;
     },
     stats() {
       return {

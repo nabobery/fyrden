@@ -84,6 +84,32 @@ The latest point of a group is its current value.
 | `discarded` | Failed or abandoned uploads, waiting for cleanup |
 | `fetch` | Stored fetch responses (regenerated or framed packs) |
 
+### Memory
+
+A repository object holds a 72 MiB pool of working memory. Three kinds of
+work take a share of it before they start, waiting in arrival order when it
+isn't free: a blame request (48 MiB), a fetch plan (its base plus the
+estimated size of the live packs' indexes, at most the whole pool) and each
+slice of a push's indexing (about 33 MiB). Blame waits at most 2 seconds, then
+answers `503 blame_busy`; the others wait up to 60 seconds, then a fetch answers that
+the repository is busy and an indexing slice is tried again later.
+
+| Metric | Dimensions | Value |
+|---|---|---|
+| `memory.share_wait_ms` | `consumer` (`blame`, `fetch_plan`, `push_index`), `outcome` (`granted`, `timed_out`, `cancelled`), `queued` (`true`, `false`) | Milliseconds one start waited for its share: 0 when granted at once |
+| `memory.share_bytes` | as `memory.share_wait_ms` | Bytes that start asked for |
+
+Both are samples, one point each time work asks for its share, written by the
+invocation that asked when its wait ends. `queued` is `true` when the share
+couldn't be granted at once: the bytes weren't free, or other work was already
+waiting. A `queued` point therefore shows that other work overlapped it,
+though not which. Read `queued` rather than a non-zero wait as the sign of
+contention: the runtime's clock advances only on I/O, so a short wait can read
+0. `timed_out` is a wait that reached its limit; `cancelled` is one its caller
+gave up on (no caller does so today). A retried request, a retried indexing
+slice and the next slice of the same push each ask again and each count.
+Points are lost when an object is reset while it waits.
+
 ### Git operations
 
 | Metric | Dimensions | Value |

@@ -517,7 +517,9 @@ export class RepoPush {
         // Its share of the memory first, holding nothing: phases of
         // concurrent pushes that each held part of the pool could otherwise
         // wait on one another for the rest.
-        const memory = await this.git.memory.begin(pushIndexMemoryBytes());
+        const memory = await this.git.memory.begin(pushIndexMemoryBytes(), {
+          consumer: "push_index",
+        });
         try {
           // The wait for memory spent part of the lock: the step gets all of it.
           if (!this.git.locks.renew(lock, INDEX_LOCK_MS)) return "busy";

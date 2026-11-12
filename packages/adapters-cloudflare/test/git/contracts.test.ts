@@ -70,5 +70,5 @@ describeMemoryBudgetContract("Durable Object memory pool", async (total) =>
 );
 
 describeMemoryBudgetContract("A started operation's memory", async (total) =>
-  createDoMemoryBudget(total).begin(total),
+  createDoMemoryBudget(total).begin(total, { consumer: "fetch_plan" }),
 );

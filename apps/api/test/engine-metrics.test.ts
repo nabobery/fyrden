@@ -4,6 +4,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { repoStorage } from "@fyrden/adapters-cloudflare/git";
+import { fetchPlanMemoryBytes, pushIndexMemoryBytes } from "@fyrden/git-core";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { fetchBody, parseFetchResponse, recordingMetrics } from "./helpers/fetch-repo.js";
@@ -114,6 +115,17 @@ describe("engine metrics", () => {
     });
     expect(gauge("git.repo.bytes").live_own).toBe(fx.packC2.length / 2);
     expect(sum(repoObject.points, "git.push", ["committed", "pushes"])).toBe(1);
+
+    // Each indexing phase was admitted to the object's memory at once: one point
+    // each for its wait and its share, from the invocation that ran it.
+    const waits = points(repoObject.points, "memory.share_wait_ms");
+    expect(waits.length).toBeGreaterThan(0);
+    for (const p of waits)
+      expect([...p.blobs, p.value]).toEqual(["push_index", "granted", "false", 0]);
+    const shares = points(repoObject.points, "memory.share_bytes");
+    expect(shares.map((p) => [...p.blobs, p.value])).toEqual(
+      waits.map(() => ["push_index", "granted", "false", pushIndexMemoryBytes()]),
+    );
   });
 
   it("a clone writes its subrequests once the body has been sent", async () => {
@@ -157,6 +169,15 @@ describe("engine metrics", () => {
     expect(sum(repoObject.points, "subrequests", ["do", "internal", "planFetch"])).toBe(
       sum(worker.points, "git.fetch.calls", ["do", "r2"]),
     );
+
+    // The plan's admission to the object's memory, granted at once.
+    const waits = points(repoObject.points, "memory.share_wait_ms");
+    expect(waits.map((p) => [...p.blobs, p.value])).toEqual([
+      ["fetch_plan", "granted", "false", 0],
+    ]);
+    const shares = points(repoObject.points, "memory.share_bytes");
+    expect(shares.map((p) => p.blobs)).toEqual([["fetch_plan", "granted", "false"]]);
+    expect(shares[0]?.value).toBeGreaterThanOrEqual(fetchPlanMemoryBytes());
   });
 
   it("groups the repository's packs by state, origin and kind, leaving deleted packs out", async () => {
