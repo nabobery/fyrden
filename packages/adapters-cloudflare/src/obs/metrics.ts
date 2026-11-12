@@ -29,6 +29,10 @@ export const METRICS = {
   // couldn't be read, so the run started over) | prune_failed (cleanup
   // met an R2 failure and backed off).
   "blame.run": ["event"],
+  // Lines blame settled as unresolved (the value is the amount), by reason =
+  // one of git-core's UNRESOLVED_REASONS: counted once, when the publish
+  // that settled them moved the run's row; never for delivering them.
+  "blame.refused": ["reason"],
   "r2.class_a": ["bucket", "op"],
   "r2.class_b": ["bucket", "op"],
   "do.rows_written": ["class", "op"],
