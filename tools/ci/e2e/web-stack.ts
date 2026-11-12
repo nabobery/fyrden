@@ -299,7 +299,11 @@ async function pickScheme(page: Page, pick: Pick): Promise<void> {
   // Ended, answered or not: the page posts with `redirect: "manual"`, and while any request is
   // routed (a test answering the API itself) Playwright reports that answer as a failure though
   // the server took it (measured with Playwright 1.63.0's Chromium). The cookie says which.
-  await post.response().catch(() => null);
+  // An answer that did arrive says, and a refusal is one whatever the cookie (System keeps
+  // none, so a refused System pick from System would look kept).
+  const answer = await post.response().catch(() => null);
+  if (answer !== null)
+    expect(answer.status(), `the server answered ${pick}'s post`).toBeLessThan(400);
   const cookie = (await page.context().cookies()).find((c) => c.name === "fyrden_theme");
   // System keeps no cookie.
   expect(cookie?.value ?? "system", `the server kept ${pick}`).toBe(pick);

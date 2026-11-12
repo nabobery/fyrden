@@ -148,6 +148,7 @@ export async function runUpload(
     if (signal?.aborted) throw new Cancelled();
   };
   const wait = async (ms: number) => {
+    checkCancelled();
     try {
       await deps.wait(ms, signal);
     } catch (error) {
@@ -188,18 +189,32 @@ export async function runUpload(
       if (!name.ok) throw new Stopped("fatal", `The file's name ${name.reason}.`);
       const type = assetContentType(upload.file.type || undefined);
       checkCancelled();
-      const res = await ask({
-        intent: "begin",
-        release_id: upload.target.releaseId,
-        name: name.name,
-        size: upload.file.size,
-        ...(type.ok && upload.file.type !== "" ? { content_type: type.type } : {}),
-        replace: upload.replace,
-      });
-      if (!res.ok) throw new Stopped("fatal", await refusal(res));
+      // Not cancellable: a session the API makes must be learnt, so a Cancel can end it.
+      const res = await ask(
+        {
+          intent: "begin",
+          release_id: upload.target.releaseId,
+          name: name.name,
+          size: upload.file.size,
+          ...(type.ok && upload.file.type !== "" ? { content_type: type.type } : {}),
+          replace: upload.replace,
+        },
+        false,
+      );
+      if (!res.ok) {
+        const problem = res.status === 401 ? {} : await problemOf(res);
+        // A Cancel asked for meanwhile is what the person sees: nothing was begun to end.
+        checkCancelled();
+        // The repository's open uploads are at their limit: one may finish or end soon.
+        throw new Stopped(
+          problem.code === "too_many_uploads" ? "retryable" : "fatal",
+          refusal(res.status, problem),
+        );
+      }
       upload.session = (await res.json()) as Session;
       upload.etags = [];
       upload.completeKey = null;
+      checkCancelled();
     }
     report("sending");
     await sendParts(upload, deps, signal, wait, () => report("sending"));
@@ -218,13 +233,12 @@ export async function runUpload(
   }
 }
 
-/** What a refusal says, for the person uploading. */
-async function refusal(res: Response): Promise<string> {
-  if (res.status === 401) return "Sign in again, then start the upload again.";
-  const problem = await problemOf(res);
+/** What a refusal to begin says, for the person uploading. */
+function refusal(status: number, problem: { code?: string; detail?: string }): string {
+  if (status === 401) return "Sign in again, then start the upload again.";
   if (problem.code === "wrong_token")
     return "You signed in again since this upload began; start it again.";
-  return problem.detail ?? `The upload was refused (${res.status}).`;
+  return problem.detail ?? `The upload was refused (${status}).`;
 }
 
 /**

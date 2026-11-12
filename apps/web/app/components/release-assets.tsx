@@ -62,6 +62,10 @@ const BROWSER: UploadDeps = {
   fetch: (input, init) => globalThis.fetch(input, init),
   wait: (ms, signal) =>
     new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new DOMException("Cancelled", "AbortError"));
+        return;
+      }
       const timer = setTimeout(resolve, ms);
       signal?.addEventListener(
         "abort",
@@ -103,14 +107,18 @@ export function AssetUploader({
   const [, setDrawn] = useState(0);
   const [said, setSaid] = useState("");
   const counter = useRef(0);
-  const live = useRef(new Set<Item>());
   const { revalidate } = useRevalidator();
   useEffect(() => {
     setReady(true);
-    const running = live.current;
-    // Leaving the page ends what is still sending (its session too).
+    const all = items.current;
+    // Leaving the page ends each upload's session that would otherwise hold the file's size on
+    // the quota until it expires: a running one's as it stops, a stopped one's here.
     return () => {
-      for (const item of running) item.stop?.abort();
+      for (const item of all.values()) {
+        if (item.stop) item.stop.abort();
+        else if (item.status === "failed" && item.upload.session !== null)
+          void abandonUpload(item.upload, BROWSER);
+      }
     };
   }, []);
 
@@ -145,7 +153,6 @@ export function AssetUploader({
     item.status = "sending";
     item.message = "";
     changed();
-    live.current.add(item);
     setSaid(`Uploading ${item.upload.name}.`);
     let result: UploadResult;
     try {
@@ -160,7 +167,6 @@ export function AssetUploader({
     } catch (error) {
       result = { ok: false, kind: "retryable", message: String(error) };
     } finally {
-      live.current.delete(item);
       item.stop = null;
     }
     settle(item, result);

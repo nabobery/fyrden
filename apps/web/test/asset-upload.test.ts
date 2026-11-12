@@ -489,4 +489,85 @@ describe("an asset's upload", () => {
       expect(result.ok ? "" : result.message).toMatch(/may not have ended/);
     }
   });
+
+  it("ends a session the API began while a Cancel was on its way", async () => {
+    const stop = new AbortController();
+    const fake = server({
+      route: [
+        // The API makes the session; the Cancel comes before the page reads the answer.
+        (request) => {
+          stop.abort();
+          if (request.signal.aborted) throw new DOMException("", "AbortError");
+          return json(session(), 201);
+        },
+      ],
+    });
+    const result = await runUpload(newUpload(AT, file(), { replace: false }), fake.deps, {
+      signal: stop.signal,
+    });
+    expect(result).toEqual({ ok: false, kind: "cancelled", message: "Cancelled." });
+    expect(fake.routeCalls()).toEqual([
+      expect.objectContaining({ intent: "begin" }),
+      { intent: "abort", upload_id: ID },
+    ]);
+    expect(fake.partCalls()).toEqual([]);
+  });
+
+  it("says cancelled when a Cancel came while the start was refused", async () => {
+    const stop = new AbortController();
+    const fake = server({
+      route: [
+        () => {
+          stop.abort();
+          return json({ code: "too_many_uploads", detail: "Too many." }, 409);
+        },
+      ],
+    });
+    const result = await runUpload(newUpload(AT, file(), { replace: false }), fake.deps, {
+      signal: stop.signal,
+    });
+    expect(result).toEqual({ ok: false, kind: "cancelled", message: "Cancelled." });
+    expect(fake.routeCalls().map((c) => c.intent)).toEqual(["begin"]);
+  });
+
+  it("waits for nothing once cancelled", async () => {
+    const stop = new AbortController();
+    const fake = server({
+      parts: {
+        1: [
+          () => {
+            stop.abort();
+            return json({ code: "internal" }, 503);
+          },
+        ],
+      },
+    });
+    const result = await runUpload(newUpload(AT, file(), { replace: false }), fake.deps, {
+      signal: stop.signal,
+    });
+    expect(result).toEqual({ ok: false, kind: "cancelled", message: "Cancelled." });
+    expect(fake.waits).toEqual([]);
+  });
+
+  it("lets Retry begin again when the repository had too many uploads open", async () => {
+    const fake = server({
+      route: [
+        json(
+          {
+            code: "too_many_uploads",
+            detail: "The repository has 20 uploads open. Finish or abort one first.",
+          },
+          409,
+        ),
+      ],
+    });
+    const upload = newUpload(AT, file(), { replace: false });
+    expect(await runUpload(upload, fake.deps)).toEqual({
+      ok: false,
+      kind: "retryable",
+      message: "The repository has 20 uploads open. Finish or abort one first.",
+    });
+    expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: true });
+    expect(fake.routeCalls().map((c) => c.intent)).toEqual(["begin", "begin", "complete"]);
+  });
 });

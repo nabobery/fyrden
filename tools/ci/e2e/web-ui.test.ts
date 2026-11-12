@@ -354,7 +354,9 @@ describe("the web UI", () => {
       };
       page.on("request", noted);
       // On a failure the start is put back without waiting for the server (the failure is
-      // what to report), so this waits for that post itself: the second Light one.
+      // what to report), so this waits for that post itself: the second Light one, after the
+      // loop's own, once the failure is seen to be the one under Dark. Handled at once, so a
+      // failure found sooner is what the test reports.
       let lights = 0;
       const restored = page.waitForEvent("requestfinished", {
         predicate: (request) =>
@@ -362,14 +364,15 @@ describe("the web UI", () => {
           new URLSearchParams(request.postData() ?? "").get("mode") === "light" &&
           ++lights === 2,
       });
+      restored.catch(() => undefined);
       const failure = await accessibleInEveryTheme(page, "a page with a fault").then(
         () => "no violation found",
         (error: Error) => error.message,
       );
-      await restored;
-      page.off("request", noted);
       expect(failure).toContain("dark picked, the system in light");
       expect(failure).toContain("color-contrast");
+      await restored;
+      page.off("request", noted);
       // Each pick went through the server, as a visitor's does, then the starting one again.
       expect(posted).toEqual(["system", "light", "dark", "light"]);
       await see(page.getByRole("button", { name: "Light", exact: true })).toHaveAttribute(
@@ -422,6 +425,34 @@ describe("the web UI", () => {
       release();
       await page.unroute("**/appearance");
       await page.emulateMedia({ colorScheme: "light" });
+      await pickScheme("System");
+    }
+  });
+
+  it("doesn't take a pick the server refused for one it kept", async () => {
+    await page.goto(`${origin}/ada/demo/commits`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    // Starts in System, which keeps no cookie: a refused System pick leaves none either.
+    await see(page.getByRole("button", { name: "System", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.route("**/appearance", (route) =>
+      new URLSearchParams(route.request().postData() ?? "").get("mode") === "system"
+        ? route.fulfill({ status: 503, body: "" })
+        : route.continue(),
+    );
+    try {
+      const failure = await accessibleInEveryTheme(page, "commits").then(
+        () => "no failure",
+        (error: Error) => error.message,
+      );
+      expect(failure).toContain("system");
+      expect(failure).toContain("503");
+    } finally {
+      await page.unroute("**/appearance");
+      await page.emulateMedia({ colorScheme: "light" });
+      await pickScheme("Light");
       await pickScheme("System");
     }
   });

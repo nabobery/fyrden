@@ -390,6 +390,47 @@ describe("release assets", () => {
     }
   });
 
+  it("ends a stopped upload's session when the page is left for another", async () => {
+    await visit(page, editUrl());
+    await page.route("**/parts/1", (r) => r.fulfill({ status: 502, body: "" }));
+    try {
+      await page.getByLabel("Add files").setInputFiles({
+        name: "left.bin",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.from("left"),
+      });
+      const item = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+      await see(item.getByText("Part 1 was not stored.", { exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
+    } finally {
+      await page.unroute("**/parts/1");
+    }
+    const ended = page.waitForResponse(
+      (res) =>
+        new URL(res.url()).pathname === `${REPO}/releases/uploads` &&
+        JSON.parse(res.request().postData() ?? "{}").intent === "abort",
+    );
+    // Within the app, so the uploader is taken off the page rather than the page unloaded.
+    await page
+      .getByRole("navigation", { name: "Repository" })
+      .getByRole("link", { name: "Commits" })
+      .click();
+    const res = await ended;
+    // Its body went with the page it was asked from; the status stays.
+    expect(res.status()).toBe(200);
+    // Ended at the API: it takes no more parts (its row ended, or already cleared away).
+    const { upload_id } = JSON.parse(res.request().postData() ?? "{}") as { upload_id: string };
+    const part = await page.request.put(
+      `${stack.origin}/api/repos/${handle}/${name}/releases/assets/uploads/${upload_id}/parts/1`,
+      { headers: { "X-Fyrden-Session": "1" }, data: Buffer.from("left") },
+    );
+    expect(((await part.json()) as { code: string }).code).toMatch(
+      /^(upload_not_receiving|upload_not_found)$/,
+    );
+    expect((await assets()).map((a) => a.name)).not.toContain("left.bin");
+  });
+
   it("answers a second completion of a committed upload as completed, committing nothing twice", async () => {
     const { session, parts } = await uploadByRoute("once.txt", Buffer.from("once"), "text/plain");
     const complete = (key: string) =>
