@@ -19,6 +19,8 @@ export interface Problem {
   readonly status: number;
   readonly code?: string;
   readonly detail?: string;
+  /** Seconds to wait before asking again, with a 429 or a 503 (also sent as `Retry-After`). */
+  readonly retry_after?: number;
 }
 
 function binding(context: Readonly<RouterContextProvider>): Fetcher {

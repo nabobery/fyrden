@@ -4,9 +4,10 @@
  * plain view until it has rows to show, so nothing moves when it takes over; it tells the
  * page where it has got to through `onStatus`.
  */
-import { type File as RendererFile, type VirtualizedFile, Virtualizer } from "@pierre/diffs";
+import type { LineAnnotation, File as RendererFile, VirtualizedFile } from "@pierre/diffs";
 import { File, VirtualizerContext, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import {
+  type ReactNode,
   type RefObject,
   useEffect,
   useLayoutEffect,
@@ -29,6 +30,7 @@ import {
   THEMES,
 } from "./highlighter.js";
 import { newPoolWorker } from "./pool-worker.client.js";
+import { steadyVirtualizer } from "./steady-virtualizer.client.js";
 import { useWindowVirtualizer, WindowVirtualizer } from "./window-virtualizer.js";
 
 const choice = await sessionHighlighter();
@@ -43,11 +45,11 @@ const SCROLL_MARGIN = 16;
  * before the renderer's own component compares its options, which then finds nothing changed,
  * so no row is drawn again. Rendered ahead of `File` for that order.
  */
-function FollowScheme({
+function FollowScheme<A>({
   instance,
   mode,
 }: {
-  instance: RefObject<RendererFile<undefined> | null>;
+  instance: RefObject<RendererFile<A> | null>;
   mode: ThemeMode;
 }) {
   useLayoutEffect(() => {
@@ -84,7 +86,13 @@ function useWholeText(given: string | null, rawUrl: string | null): WholeText {
   return read;
 }
 
-function Drawn({
+/**
+ * The renderer's drawing of one file. Blame draws its own (`blame-view.client.tsx`), with rows
+ * between lines (`lineAnnotations`, `renderAnnotation`, both kept stable by the caller so a
+ * drawing isn't redone) and its own way of bringing a line into view (`onDrawn` hands it the
+ * drawing; it passes a null `position`).
+ */
+export function Drawn<A = undefined>({
   path,
   contents,
   cacheKey,
@@ -95,6 +103,9 @@ function Drawn({
   position,
   revealed,
   onStatus,
+  lineAnnotations,
+  renderAnnotation,
+  onDrawn,
 }: {
   path: string;
   contents: string;
@@ -107,12 +118,15 @@ function Drawn({
   /** The page has taken the plain view away for this drawing: only now is the layout final. */
   revealed: boolean;
   onStatus: (status: FileViewStatus) => void;
+  lineAnnotations?: LineAnnotation<A>[];
+  renderAnnotation?: (annotation: LineAnnotation<A>) => ReactNode;
+  onDrawn?: (node: HTMLElement, drawn: RendererFile<A>) => void;
 }) {
   const highlighter = useSyncExternalStore(choice.subscribe, choice.current, choice.current);
   const engine = highlighter && highlighter.name !== "plain" ? highlighter.name : undefined;
   const step = highlighter?.step ?? null;
   const mode = useThemeMode();
-  const instance = useRef<RendererFile<undefined> | null>(null);
+  const instance = useRef<RendererFile<A> | null>(null);
   const host = useRef<HTMLElement | null>(null);
   // The step that has drawn rows: a step down draws from the start, the plain view back up
   // meanwhile. A drawing the renderer failed leaves this file as text, the session unchanged.
@@ -141,17 +155,18 @@ function Drawn({
           },
         );
       },
-      onPostRender: (node: HTMLElement, drawn: RendererFile<undefined>) => {
+      onPostRender: (node: HTMLElement, drawn: RendererFile<A>) => {
         instance.current = drawn;
         host.current = node;
+        onDrawn?.(node, drawn);
         if (node.shadowRoot?.querySelector("[data-error-wrapper]")) setFailed(true);
         else if (node.shadowRoot?.querySelector("[data-line]")) setDrawnOn(step);
       },
     }),
-    [engine, onSelect, step],
+    [engine, onSelect, step, onDrawn],
   );
   const options = useMemo(() => ({ ...stable, themeType: mode }), [stable, mode]);
-  const virtualizer = useWindowVirtualizer(() => new Virtualizer());
+  const virtualizer = useWindowVirtualizer(steadyVirtualizer);
   const drawn = !failed && step !== null && drawnOn === step;
   const nothingDraws = highlighter !== null && !engine;
   const status: FileViewStatus = failed || nothingDraws ? "failed" : drawn ? "drawn" : "waiting";
@@ -162,9 +177,7 @@ function Drawn({
       window.scrollTo({ top: position.top });
       return;
     }
-    const at = (instance.current as VirtualizedFile<undefined> | null)?.getLinePosition(
-      position.line,
-    );
+    const at = (instance.current as VirtualizedFile<A> | null)?.getLinePosition(position.line);
     if (!at || !host.current) return;
     const top = host.current.getBoundingClientRect().top + window.scrollY + at.top;
     window.scrollTo({ top: top - SCROLL_MARGIN });
@@ -178,7 +191,13 @@ function Drawn({
   const body = (
     <>
       <FollowScheme instance={instance} mode={mode} />
-      <File file={file} options={options} selectedLines={selection} />
+      <File
+        file={file}
+        options={options}
+        selectedLines={selection}
+        {...(lineAnnotations && { lineAnnotations })}
+        {...(renderAnnotation && { renderAnnotation })}
+      />
     </>
   );
   return (

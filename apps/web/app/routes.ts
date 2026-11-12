@@ -24,6 +24,8 @@ export default [
   route(":owner/:repo/archive/:format", "routes/repo.archive.ts"),
   route(":owner/:repo/commits", "routes/repo.commits.tsx"),
   route(":owner/:repo/commits/:ref/*", "routes/repo.commits.tsx", { id: "repo.commits.at" }),
+  route(":owner/:repo/blame/:ref/*", "routes/repo.blame.tsx"),
+  route(":owner/:repo/blame-ranges/:ref/*", "routes/repo.blame-ranges.ts"),
   route(":owner/:repo/issues", "routes/repo.issues.tsx"),
   route(":owner/:repo/issues/:number", "routes/repo.issue.tsx"),
   route(":owner/:repo/issues/:number/labels", "routes/repo.issue.labels.tsx"),
