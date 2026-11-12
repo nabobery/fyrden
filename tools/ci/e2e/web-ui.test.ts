@@ -14,7 +14,12 @@ import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FJORD } from "../../../apps/web/app/lib/fjord.js";
 import { runSmoke, webChecks } from "../src/smoke.ts";
-import { accessible as axe, startWebStack, type WebStack } from "./web-stack.js";
+import {
+  accessibleInEveryTheme,
+  accessible as axe,
+  startWebStack,
+  type WebStack,
+} from "./web-stack.js";
 
 /** `#rrggbb` as `getComputedStyle` reports it. */
 function rgbOf(hex: string): string {
@@ -30,7 +35,12 @@ let token = "";
 
 /** Picks a colour scheme in the header, and waits until the server has kept it. */
 async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
-  const kept = page.waitForResponse((res) => new URL(res.url()).pathname === "/appearance");
+  // Its own post's answer, not one of an earlier pick still on its way.
+  const kept = page.waitForResponse(
+    (res) =>
+      new URL(res.url()).pathname === "/appearance" &&
+      new URLSearchParams(res.request().postData() ?? "").get("mode") === name.toLowerCase(),
+  );
   await page.getByRole("button", { name, exact: true }).click();
   await kept;
 }
@@ -311,6 +321,145 @@ describe("the web UI", () => {
     await page.unroute("**/appearance");
     await pickScheme("System");
     await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+  });
+
+  it("checks a page in all six colour scheme states through the header's control, and puts it back", async () => {
+    await page.goto(`${origin}/ada/demo/commits`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    // A start other than the default, to see it come back.
+    await pickScheme("Light");
+    await page.emulateMedia({ colorScheme: "dark" });
+    try {
+      // A fault only Dark picked shows: the brand in a colour barely apart from its background
+      // (exactly equal axe takes for hidden text). Through the stylesheet's own rules, which
+      // the pages' Content Security Policy allows.
+      await page.locator("html").evaluate(
+        (html, [background, colour]) => {
+          type Sheet = { href: string | null; cssRules: { length: number } };
+          const root = html as unknown as {
+            ownerDocument: {
+              styleSheets: Iterable<Sheet & { insertRule(rule: string, at: number): void }>;
+            };
+          };
+          const sheet = [...root.ownerDocument.styleSheets].find((s) =>
+            s.href?.includes("/assets/"),
+          );
+          if (!sheet) throw new Error("no stylesheet");
+          sheet.insertRule(
+            `html[data-theme="dark"] header.site .brand { background-color: ${background} !important; color: ${colour} !important }`,
+            sheet.cssRules.length,
+          );
+        },
+        [FJORD.dark.page.bg, FJORD.dark.page.panel] as const,
+      );
+      const posted: string[] = [];
+      const noted = (request: { url(): string; postData(): string | null }) => {
+        if (new URL(request.url()).pathname === "/appearance")
+          posted.push(new URLSearchParams(request.postData() ?? "").get("mode") ?? "");
+      };
+      page.on("request", noted);
+      // On a failure the start is put back without waiting for the server (the failure is
+      // what to report), so this waits for that post itself: the second Light one, after the
+      // loop's own, once the failure is seen to be the one under Dark. Handled at once, so a
+      // failure found sooner is what the test reports.
+      let lights = 0;
+      const restored = page.waitForEvent("requestfinished", {
+        predicate: (request) =>
+          new URL(request.url()).pathname === "/appearance" &&
+          new URLSearchParams(request.postData() ?? "").get("mode") === "light" &&
+          ++lights === 2,
+      });
+      restored.catch(() => undefined);
+      const failure = await accessibleInEveryTheme(page, "a page with a fault").then(
+        () => "no violation found",
+        (error: Error) => error.message,
+      );
+      expect(failure).toContain("dark picked, the system in light");
+      expect(failure).toContain("color-contrast");
+      await restored;
+      page.off("request", noted);
+      // Each pick went through the server, as a visitor's does, then the starting one again.
+      expect(posted).toEqual(["system", "light", "dark", "light"]);
+      await see(page.getByRole("button", { name: "Light", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(await page.evaluate('matchMedia("(prefers-color-scheme: dark)").matches')).toBe(true);
+      const kept = (await page.context().cookies()).find((c) => c.name === "fyrden_theme");
+      expect(kept?.value).toBe("light");
+
+      // Without the fault, every state passes.
+      await page.reload();
+      await accessibleInEveryTheme(page, "commits");
+    } finally {
+      // The next tests start from System under a light system, whatever happened here.
+      await page.emulateMedia({ colorScheme: "light" });
+      await pickScheme("System");
+    }
+  });
+
+  it("waits for the server to keep its own pick, not one still on its way", async () => {
+    await page.goto(`${origin}/ada/demo/commits`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    let first = true;
+    await page.route("**/appearance", async (route) => {
+      if (first) {
+        first = false;
+        await held;
+      }
+      await route.continue();
+    });
+    try {
+      // A pick of Light whose post is held on its way; the page shows it at once.
+      await page.getByRole("button", { name: "Light", exact: true }).click();
+      await see(page.locator("html")).toHaveAttribute("data-theme", "light");
+      const checked = accessibleInEveryTheme(page, "commits, with a pick still on its way");
+      // The check's own first pick (System) is shown, its post queued behind Light's: let
+      // Light's land now, which must not count as System's.
+      await see(page.getByRole("button", { name: "System", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      release();
+      await checked;
+    } finally {
+      release();
+      await page.unroute("**/appearance");
+      await page.emulateMedia({ colorScheme: "light" });
+      await pickScheme("System");
+    }
+  });
+
+  it("doesn't take a pick the server refused for one it kept", async () => {
+    await page.goto(`${origin}/ada/demo/commits`);
+    await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
+    // Starts in System, which keeps no cookie: a refused System pick leaves none either.
+    await see(page.getByRole("button", { name: "System", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await page.route("**/appearance", (route) =>
+      new URLSearchParams(route.request().postData() ?? "").get("mode") === "system"
+        ? route.fulfill({ status: 503, body: "" })
+        : route.continue(),
+    );
+    try {
+      const failure = await accessibleInEveryTheme(page, "commits").then(
+        () => "no failure",
+        (error: Error) => error.message,
+      );
+      expect(failure).toContain("system");
+      expect(failure).toContain("503");
+    } finally {
+      await page.unroute("**/appearance");
+      await page.emulateMedia({ colorScheme: "light" });
+      await pickScheme("Light");
+      await pickScheme("System");
+    }
   });
 
   it("keeps the header's control on screen on a phone", async () => {
