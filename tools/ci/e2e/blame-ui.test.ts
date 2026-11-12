@@ -27,6 +27,7 @@ const OVER_FILE_LIMIT = 1024 * 1024 + 4096;
 /** Lines alternating between two commits: one display group each. */
 const UNDER_CUTOFF_LINES = 3_000;
 const OVER_CUTOFF_LINES = 5_002;
+const TALL_SUMMARY = `Start tall ${"with a summary long enough to wrap ".repeat(60).trim()}`;
 
 const blame = (ref: string, path: string, query = "") =>
   `${stack.origin}${REPO}/blame/${ref}/${path}${query}`;
@@ -123,6 +124,10 @@ function fixtures(): string {
   );
   // The small current version, read on its own; the one before it is over the object cap.
   commit("main", "Shrink object", write("object.txt", "small 1\nsmall 2\nsmall 3\n"));
+  // Line 1's commit has a summary that wraps to many lines in the drawing's row above it, and
+  // takes one in the table's.
+  commit("tall", TALL_SUMMARY, write("tall.txt", alternating(OVER_CUTOFF_LINES, false)), true);
+  commit("tall", "Edit tall", write("tall.txt", alternating(OVER_CUTOFF_LINES, true)));
   for (const branch of ["deep", "deep-plain", "deep-restart"]) {
     commit(branch, `Root of ${branch}`, write("deep.txt", "origin\ncount 0\n"), true);
     for (let k = 1; k <= DEEP_COMMITS; k++)
@@ -225,6 +230,10 @@ const scroll = (on: Page, to: { by: number } | { fraction: number }) =>
     else view?.scrollTo({ top: html.scrollHeight * where.fraction });
   }, to);
 
+/** How far `on` is scrolled. */
+const scrollY = (on: Page) =>
+  on.locator("html").evaluate((html) => html.ownerDocument.defaultView?.scrollY ?? null);
+
 beforeAll(async () => {
   stack = await startWebStack("ada");
   ({ page } = stack);
@@ -252,7 +261,7 @@ beforeAll(async () => {
   await git(["init", "-q", "--bare", work], stack.scratch);
   await git(["fast-import", "--quiet"], work, fixtures());
   // No deltas: the small object.txt mustn't be stored as a delta on the oversized one before it.
-  for (const ref of ["main", "deep", "deep-plain", "deep-restart"])
+  for (const ref of ["main", "tall", "deep", "deep-plain", "deep-restart"])
     await git(
       [
         "-c",
@@ -433,6 +442,60 @@ describe("with JavaScript", () => {
       await see(file(fresh)).toHaveAttribute("data-drawn", "text", { timeout: 30_000 });
       await see(fresh.locator(`table.blame a#L${reached}`)).toBeAttached();
       await see(fresh.locator("table.blame a#L1")).toHaveCount(0);
+    });
+  });
+
+  it("leaves the page where it is when the table takes over above the file", async () => {
+    await freshPage(async (fresh) => {
+      let release!: () => void;
+      const released = new Promise<void>((done) => {
+        release = done;
+      });
+      await fresh.route("**/blame-ranges/**", async (route: Route) => {
+        await released;
+        await route.continue();
+      });
+      await visit(fresh, blame("main", "over.txt"));
+      await see(file(fresh)).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
+      // The reader at the top of the page: its header and the file's first lines in view.
+      await scroll(fresh, { fraction: 0 });
+      await see.poll(() => scrollY(fresh)).toBe(0);
+      expect(await firstVisibleLine(fresh)).toBe(1);
+      release();
+      await see(file(fresh)).toHaveAttribute("data-drawn", "text", { timeout: 30_000 });
+      await see(fresh.locator("table.blame a#L1")).toBeAttached();
+      expect(await scrollY(fresh)).toBe(0);
+    });
+  });
+
+  it("brings the reader back to line 1 when the table takes over past a tall row above it", async () => {
+    await freshPage(async (fresh) => {
+      let release!: () => void;
+      const released = new Promise<void>((done) => {
+        release = done;
+      });
+      await fresh.route("**/blame-ranges/**", async (route: Route) => {
+        await released;
+        await route.continue();
+      });
+      await visit(fresh, blame("tall", "tall.txt", "?line=1#L1"));
+      await see(file(fresh)).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
+      await see(fresh.locator(".blame-view")).toHaveAttribute("data-position-line", "1", {
+        timeout: 30_000,
+      });
+      // The reader is on line 1, past its commit's row, which the table draws far shorter.
+      const tall = await notes(fresh)
+        .first()
+        .evaluate((note) => note.getBoundingClientRect().height);
+      expect(tall).toBeGreaterThan(300);
+      release();
+      await see(file(fresh)).toHaveAttribute("data-drawn", "text", { timeout: 30_000 });
+      const top = await fresh
+        .locator("table.blame a#L1")
+        .evaluate((a) => a.getBoundingClientRect().top);
+      // Within a few rows of the top: the progress line above the table changes height as
+      // answers arrive.
+      expect(Math.abs(top - 16)).toBeLessThanOrEqual(100);
     });
   });
 

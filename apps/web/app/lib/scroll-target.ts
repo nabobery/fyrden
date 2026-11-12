@@ -138,3 +138,12 @@ export function topVisibleLine(container: Element): number | null {
   }
   return null;
 }
+
+/**
+ * Whether the reader is still above the renderer's drawing under `container`: it starts at or
+ * below the top of the window. False with no drawing.
+ */
+export function aboveDrawing(container: Element): boolean {
+  const host = container.querySelector("diffs-container");
+  return host !== null && host.getBoundingClientRect().top >= 0;
+}

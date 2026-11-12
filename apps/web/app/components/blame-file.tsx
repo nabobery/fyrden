@@ -43,7 +43,7 @@ import {
   type WholeText,
 } from "../lib/blame-delivery.js";
 import { blockHolding, rawBytesUrl, withoutFinalEnding } from "../lib/file-view.js";
-import { topVisibleLine } from "../lib/scroll-target.js";
+import { aboveDrawing, topVisibleLine } from "../lib/scroll-target.js";
 import { encodePath } from "../lib/types.js";
 import { forgetLineEntry, type LinePosition, useLineLinks } from "../lib/use-line-links.js";
 import { BlameTable, count } from "./blame-table.js";
@@ -261,8 +261,13 @@ export function BlameFile({ view }: { view: BlameView }) {
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
   const [budget] = useState(() => new Budget());
-  // Set when the groups pass the cutoff: the table, at the line the reader had reached.
-  const [shown, setShown] = useState<{ window: BlameView["window"]; top: number } | null>(null);
+  // Set when the groups pass the cutoff: the table, at the line the reader had reached, and
+  // whether the reader was still above the drawing then.
+  const [shown, setShown] = useState<{
+    window: BlameView["window"];
+    top: number;
+    stay: boolean;
+  } | null>(null);
   const drawable = !view.loneCr && shown === null;
   const [status, setStatus] = useState<FileViewStatus>(drawable ? "waiting" : "failed");
   const onFail = useCallback(() => setStatus("failed"), []);
@@ -339,10 +344,12 @@ export function BlameFile({ view }: { view: BlameView }) {
     const top =
       (container.current && topVisibleLine(container.current)) ??
       (position !== null && "line" in position ? position.line : view.window.firstLine);
+    const stay = container.current !== null && aboveDrawing(container.current);
     if (text?.kind !== "text") {
       setShown({
         window: view.window,
         top: Math.min(Math.max(top, view.window.firstLine), view.window.lastLine),
+        stay,
       });
     } else {
       const { blocks } = blameBlocks(text.text);
@@ -358,13 +365,15 @@ export function BlameFile({ view }: { view: BlameView }) {
           lines: drawnLines(text.text, block),
         },
         top,
+        stay,
       });
     }
     setStatus("failed");
   }, [over, drawable, text, view, position]);
-  // The table has taken over: back to the line the reader had reached.
+  // The table has taken over: back to the line the reader had reached. A reader still above the
+  // drawing needs nothing: the table starts where the drawing did, so the page stays put.
   useLayoutEffect(() => {
-    if (shown !== null) document.getElementById(`L${shown.top}`)?.scrollIntoView();
+    if (shown !== null && !shown.stay) document.getElementById(`L${shown.top}`)?.scrollIntoView();
   }, [shown]);
 
   // The table is what is on the page: an anchor for a line a fragment alone can't scroll to.
