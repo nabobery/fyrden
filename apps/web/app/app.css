@@ -351,6 +351,19 @@ table.blame .selected td {
 table.blame .selected .blame-num a {
   color: var(--accent);
 }
+/* A group's row in the renderer's drawing: light DOM in its annotation slot, so these apply. */
+.blame-note {
+  padding: 0.25rem 1ch;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 20px;
+}
+.blame-note a {
+  color: var(--accent);
+}
 /* Highlighted code: each token's colour for the scheme in use (lib/highlight-palette.ts). */
 pre.highlights span {
   color: var(--hls-light, var(--fg));

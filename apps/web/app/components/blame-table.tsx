@@ -4,6 +4,7 @@
  * is native and names the commit blamed, so the page keeps showing one version however its
  * branch moves.
  */
+import type { ReactNode } from "react";
 import { Link } from "react-router";
 import {
   authorDate,
@@ -11,10 +12,10 @@ import {
   type CommitFacts,
   displayGroups,
   type Group,
+  historyPath,
   unresolvedSentence,
 } from "../lib/blame.js";
-import { lineLink, lineParam, rawBytesUrl } from "../lib/file-view.js";
-import { encodePath } from "../lib/types.js";
+import { type LineRange, lineLink, lineParam, rawBytesUrl } from "../lib/file-view.js";
 
 /** `at` with `query`, its empty values left out. */
 function withQuery(at: string, query: Record<string, string | null>): string {
@@ -24,23 +25,25 @@ function withQuery(at: string, query: Record<string, string | null>): string {
   return text ? `${at}?${text}` : at;
 }
 
-const count = (n: number) => n.toLocaleString("en");
+export const count = (n: number) => n.toLocaleString("en");
 
-function GroupLabel({
+/** What a group's row says: its commit's summary, author and date, or why it has none. */
+export function GroupLabel({
   group,
   facts,
   history,
 }: {
   group: Group;
   facts: CommitFacts | undefined;
-  history: (commit: string) => string;
+  /** The commit's history of this path: the link its summary leads to. */
+  history: string;
 }) {
   if (group.kind === "pending") return <span className="muted">Not worked out yet.</span>;
   if (group.kind === "unresolved") return <span>{unresolvedSentence(group.reason)}</span>;
   const short = group.commit.slice(0, 7);
   return (
     <>
-      <Link to={history(group.commit)}>{facts?.summary || short}</Link>{" "}
+      <Link to={history}>{facts?.summary || short}</Link>{" "}
       {facts && (
         <span className="muted">
           {facts.author.name}, {authorDate(facts.author.date)}
@@ -51,16 +54,33 @@ function GroupLabel({
   );
 }
 
-export function BlameTable({ view, at }: { view: BlameView; at: string }) {
-  const { owner, repo, commit, path, blame, window: shown, selected } = view;
+/**
+ * The page's blame. `progress` takes the place of the server's own line and Continue link once
+ * the script runs; `rows` is false while the renderer draws the file instead; `selection` is
+ * the script's, which may have moved from the query's.
+ */
+export function BlameTable({
+  view,
+  at,
+  progress,
+  rows = true,
+  selection = view.selected,
+}: {
+  view: BlameView;
+  at: string;
+  progress?: ReactNode;
+  rows?: boolean;
+  selection?: LineRange | null;
+}) {
+  const { owner, repo, commit, path, blame, window: shown } = view;
+  const selected = selection;
   const groups = displayGroups(blame.ranges, shown.firstLine, shown.lastLine);
   const lines = new Map(shown.lines.map((line) => [line.number, line.text]));
   const keep = lineParam(selected);
   const settled = blame.resolved + blame.unresolved;
-  const history = (id: string) =>
-    `/${owner}/${repo}/commits/${encodeURIComponent(id)}/${encodePath(path)}`;
   const digits = String(blame.lines).length;
   const paging = (label: string) =>
+    rows &&
     !view.whole && (
       <nav className="row file-paging" aria-label={label}>
         {shown.previous !== null && (
@@ -76,7 +96,9 @@ export function BlameTable({ view, at }: { view: BlameView; at: string }) {
     );
   return (
     <>
-      {blame.state === "partial" ? (
+      {progress !== undefined ? (
+        progress
+      ) : blame.state === "partial" ? (
         <p className="row">
           <span role="status">{`${count(settled)} of ${count(blame.lines)} lines worked out so far.`}</span>
           {/* The same window again, at the commit: each request walks further. */}
@@ -97,50 +119,57 @@ export function BlameTable({ view, at }: { view: BlameView; at: string }) {
         <button type="submit">Go</button>
       </form>
       {paging("Pages of this file")}
-      <div className="blame-scroll">
-        <table className="blame" aria-label={`Blame of ${path}`}>
-          <thead className="visually-hidden">
-            <tr>
-              <th scope="col">Line</th>
-              <th scope="col">Text</th>
-            </tr>
-          </thead>
-          {groups.map((group) => (
-            <tbody key={group.startLine}>
-              <tr className="blame-group">
-                <th colSpan={2} scope="rowgroup">
-                  <GroupLabel
-                    group={group}
-                    facts={group.kind === "commit" ? blame.commits[group.commit] : undefined}
-                    history={history}
-                  />
-                </th>
+      {rows && (
+        <div className="blame-scroll">
+          <table className="blame" aria-label={`Blame of ${path}`}>
+            <thead className="visually-hidden">
+              <tr>
+                <th scope="col">Line</th>
+                <th scope="col">Text</th>
               </tr>
-              {Array.from({ length: group.lineCount }, (_, k) => {
-                const number = group.startLine + k;
-                const marked =
-                  selected !== null && number >= selected.start && number <= selected.end;
-                return (
-                  <tr key={number} className={marked ? "blame-line selected" : "blame-line"}>
-                    <td className="blame-num" style={{ minWidth: `${digits}ch` }}>
-                      <a
-                        id={`L${number}`}
-                        href={`${at}${lineLink({ start: number, end: number }, false)}`}
-                      >
-                        {number}
-                      </a>
-                    </td>
-                    <td className="blame-text">
-                      <code>{lines.get(number)}</code>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          ))}
-        </table>
-      </div>
-      {shown.cut && (
+            </thead>
+            {groups.map((group) => (
+              <tbody key={group.startLine}>
+                <tr className="blame-group">
+                  <th colSpan={2} scope="rowgroup">
+                    <GroupLabel
+                      group={group}
+                      facts={group.kind === "commit" ? blame.commits[group.commit] : undefined}
+                      history={historyPath(
+                        owner,
+                        repo,
+                        group.kind === "commit" ? group.commit : commit,
+                        path,
+                      )}
+                    />
+                  </th>
+                </tr>
+                {Array.from({ length: group.lineCount }, (_, k) => {
+                  const number = group.startLine + k;
+                  const marked =
+                    selected !== null && number >= selected.start && number <= selected.end;
+                  return (
+                    <tr key={number} className={marked ? "blame-line selected" : "blame-line"}>
+                      <td className="blame-num" style={{ minWidth: `${digits}ch` }}>
+                        <a
+                          id={`L${number}`}
+                          href={`${at}${lineLink({ start: number, end: number }, false)}`}
+                        >
+                          {number}
+                        </a>
+                      </td>
+                      <td className="blame-text">
+                        <code>{lines.get(number)}</code>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            ))}
+          </table>
+        </div>
+      )}
+      {rows && shown.cut && (
         <p className="muted">
           This line is cut at 64 KiB. <a href={rawBytesUrl(owner, repo, commit, path)}>Raw</a> has
           all of it.

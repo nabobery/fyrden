@@ -1,5 +1,5 @@
 import { data, Link, redirect } from "react-router";
-import { BlameTable } from "../components/blame-table.js";
+import { BlameFile } from "../components/blame-file.js";
 import { apiCall, bodyOf, type Problem } from "../lib/api.server.js";
 import {
   BLAME_LIMIT_LINES,
@@ -11,6 +11,7 @@ import {
   decodeBlameBytes,
   drawnLines,
   hasLoneCr,
+  refusalSentence,
 } from "../lib/blame.js";
 import { blockHolding, gotoTarget, MAX_RAW_BYTES, parseLineRange } from "../lib/file-view.js";
 import { pageUrl, refAndPath } from "../lib/target.js";
@@ -26,17 +27,6 @@ export function headers({ loaderHeaders }: Route.HeadersArgs): HeadersInit {
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
   return [{ title: `Blame · ${loaderData?.path} · ${params.owner}/${params.repo} · Fyrden` }];
 }
-
-/** What the page says when the API refuses to blame the file, in the page's own words. */
-const REFUSALS: Record<string, string> = {
-  file_too_large: "This file is too large to blame.",
-  object_limit:
-    "This file could not be blamed because reading it requires an object larger than Fyrden's 4 MiB blame limit. The file itself may be smaller.",
-  work_limit:
-    "This file could not be blamed because reaching it takes more reads or decoding than one request allows.",
-  ref_unreadable: "This ref couldn't be read for blame.",
-  repo_empty: "This repository is empty.",
-};
 
 const BUSY = "Blame is busy right now. Try again in a moment.";
 const UNMATCHED = "This file's lines couldn't be matched to its blame.";
@@ -124,8 +114,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       return message(base, 200, `A submodule at commit ${found.sha}.`);
     return message(base, 404, "", { history: true });
   }
-  if (code !== undefined && code in REFUSALS)
-    return message(base, answered.status, REFUSALS[code] as string);
+  const refused = code === undefined ? null : refusalSentence(code);
+  if (refused !== null) return message(base, answered.status, refused);
   const blame = bodyOf(answered, request) as BlameAnswer;
   const commit = blame.commit;
 
@@ -201,7 +191,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       next: blocks[index + 1]?.firstLine ?? null,
       lines: drawnLines(read.text, block),
     },
-    whole: blocks.length === 1,
+    whole: blocks.length === 1 && !block.cut,
+    size: contents.size,
     selected: parseLineRange(query.get("line"), totalLines),
     loneCr: hasLoneCr(read.text),
   };
@@ -237,7 +228,7 @@ export default function BlamePage({ loaderData }: Route.ComponentProps) {
       </div>
       <p className="muted">Renames aren't followed.</p>
       {loaderData.kind === "view" ? (
-        <BlameTable view={loaderData} at={blamePath(owner, repo, loaderData.commit, path)} />
+        <BlameFile view={loaderData} />
       ) : loaderData.history ? (
         <>
           <p>

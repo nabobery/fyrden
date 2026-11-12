@@ -39,8 +39,10 @@ export interface BlameView {
     readonly next: number | null;
     readonly lines: readonly { number: number; text: string }[];
   };
-  /** The whole file is this one window. */
+  /** The whole file is this one window, uncut. */
   readonly whole: boolean;
+  /** The file's size in bytes. */
+  readonly size: number;
   readonly selected: LineRange | null;
   /** A carriage return not ending a CRLF: the renderer would number lines differently. */
   readonly loneCr: boolean;
@@ -50,6 +52,17 @@ export interface BlameView {
 export function blamePath(owner: string, repo: string, ref: string, path: string): string {
   return `/${owner}/${repo}/blame/${encodeURIComponent(ref)}/${encodePath(path)}`;
 }
+
+/** A path's history from `commit`, where a group's commit leads. */
+export function historyPath(owner: string, repo: string, commit: string, path: string): string {
+  return `/${owner}/${repo}/commits/${encodeURIComponent(commit)}/${encodePath(path)}`;
+}
+
+/**
+ * The most annotation rows the renderer is given: past it, each scroll costs several times
+ * the file's own drawing (measured at @pierre/diffs 1.6.2), so the plain table is used.
+ */
+export const ANNOTATION_CUTOFF = 5_000;
 
 /** The most lines blame takes (`MAX_BLAME_LINES`): no page asks past it. */
 export const BLAME_LIMIT_LINES = 100_000;
@@ -266,6 +279,22 @@ export function unresolvedSentence(reason: string): string {
   return Object.hasOwn(UNRESOLVED, reason)
     ? UNRESOLVED[reason as Reason]
     : `Not attributed (${reason}).`;
+}
+
+/** What the page says when the API refuses to blame the file, in the page's own words. */
+const REFUSALS: Record<string, string> = {
+  file_too_large: "This file is too large to blame.",
+  object_limit:
+    "This file could not be blamed because reading it requires an object larger than Fyrden's 4 MiB blame limit. The file itself may be smaller.",
+  work_limit:
+    "This file could not be blamed because reaching it takes more reads or decoding than one request allows.",
+  ref_unreadable: "This ref couldn't be read for blame.",
+  repo_empty: "This repository is empty.",
+};
+
+/** The page's words for a refusal the API gives (final for that commit and path), or null. */
+export function refusalSentence(code: string): string | null {
+  return Object.hasOwn(REFUSALS, code) ? (REFUSALS[code] as string) : null;
 }
 
 /** An author time as git prints it (`1700000000 +0100`): its date where the author was. */
