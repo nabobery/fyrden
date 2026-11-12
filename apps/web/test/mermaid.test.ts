@@ -150,9 +150,14 @@ describe("drawing Mermaid diagrams", () => {
     });
     const first = drawDiagrams([block("graph TD\n  One --> Two").element], () => false);
     await firstStarted.promise;
-    const second = drawDiagrams([block("graph TD\n  Three --> Four").element], () => false);
-    // Turns enough for the second to reach the renderer, were nothing holding it back.
-    for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+    // The second asks whether its page left just before it queues for its turn, in the
+    // same synchronous step: were nothing holding it back, it would be at the renderer now.
+    const secondQueued = Promise.withResolvers<void>();
+    const second = drawDiagrams([block("graph TD\n  Three --> Four").element], () => {
+      secondQueued.resolve();
+      return false;
+    });
+    await secondQueued.promise;
     finishFirst();
     await Promise.all([first, second]);
     initialize.mockReset();
@@ -178,9 +183,14 @@ describe("drawing Mermaid diagrams", () => {
     const first = drawDiagrams([block("graph TD\n  One --> Two").element], () => false);
     await firstStarted.promise;
     let left = false;
-    const second = drawDiagrams([block("graph TD\n  Gone --> Away").element], () => left);
-    // Turns enough for the second to be waiting in the queue before its page leaves.
-    for (let turn = 0; turn < 50; turn++) await Promise.resolve();
+    // The second asks whether its page left just before it queues for its turn, in the
+    // same synchronous step, so once asked it is waiting in the queue.
+    const secondQueued = Promise.withResolvers<void>();
+    const second = drawDiagrams([block("graph TD\n  Gone --> Away").element], () => {
+      secondQueued.resolve();
+      return left;
+    });
+    await secondQueued.promise;
     left = true;
     finishFirst();
     await Promise.all([first, second]);

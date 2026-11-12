@@ -8,7 +8,7 @@
 | Workerd integration | `apps/api`, `packages/adapters-cloudflare` | workerd via `@cloudflare/vitest-plugin`, with local D1, R2, KV, Queues and Durable Objects | `pnpm turbo run test` |
 | Shuffle guard | workerd suites | the same, in random file and test order with several seeds | `pnpm turbo run test:shuffle` |
 | Dry-run deploy | both Workers | wrangler bundling | `pnpm turbo run deploy:dry-run` |
-| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright (the file finder's keyboard path in Firefox and WebKit too), every page checked with axe (WCAG 2.x A and AA); hostile Markdown and Mermaid stay inert; a pull request opened from a pushed branch, discussed, its files drawn by the diff renderer (hostile file names and lines inert; highlighted by Highlights in workers, by Shiki where Highlights cannot load or WebAssembly cannot run, off the workers once they fail, never start or answer with errors, as text when nothing highlights or a step stalls, a file that fails to draw as text with its threads, threads and unsent replies kept; axe in both colour schemes), commented on from the keyboard, replied to, resolved and a suggestion applied, reviewed, brought up to date with its base and squash-merged, another's conflict resolved in the web editor from the keyboard (a resolution refused after the base moved, its edit kept apart from the conflicts read again), and a long file drawn a window of lines at a time; no form takes a post from another origin, a file named `*.data` opens and the pages' data is never cached; a file's page with and without JavaScript (numbered lines agreeing with the renderer's rows over LF, CR-LF, a lone CR and no final line ending; canonical line links, selection, go to line and repeat navigation; a large file paged in fixed blocks, a range kept across them; its whole text read at the pinned commit, a raw answer that fails or isn't text leaving the plain lines; highlighting exactly at and just over its limits; the fall back to plain text down the highlighter's steps; Fjord's colours in both schemes and a scheme change that keeps every row); and, with fyrden-api alone, an agent's whole workflow: an MCP client signs its user in with OAuth 2.1 (PKCE, a resource indicator, a DPoP-bound token), creates a repository, gets a git token, pushes with stock git, browses, reads a file as a resource at a commit, commits a verified change, downloads an archive, forks, and sets an expiry the reaper deletes it after; then an agent acting for that user under a grant (its own token exchanged for a DPoP-bound one) makes a scratch repository that expires, is refused a direct push by a pull-request ruleset its user is not, and is stopped by revoking the grant; and pull requests, checked with stock git: merged by merge, squash and rebase, within one repository and from a fork (opened by an agent through MCP); a fork's branch updated by the base's maintainers only while its author allows it; approvals gone stale after a push to the base and to the fork, the merge refused until the exact head is approved; conflicts resolved through REST and MCP as a merge commit on the head branch; and an agent following its user's activity feed (each item once in its latest state, forged cursors refused with 410, a removed collaborator's items purged); global search's page from the header's box, its scope prompt, real refusals and its form resetting to page 1 without JavaScript (results themselves come in route tests: the repair job that projects them runs in the API's maintenance cron, which the combined `wrangler dev` cannot trigger). Webhook redelivery (`webhook-redelivery.test.ts`) needs a public https URL that forwards to the test's receiver, since the server posts only to public https addresses: it runs when `FYRDEN_E2E_WEBHOOK_URL` and `FYRDEN_E2E_WEBHOOK_PORT` (the local port the URL forwards to) are set, and is skipped otherwise | Node driving workerd and the browser (Playwright's Chromium, Firefox and WebKit must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium firefox webkit`) | `pnpm turbo run test:e2e` |
+| Local end to end | both Workers under one `wrangler dev`, with the real service binding; the web UI in Chromium through Playwright (the file finder's keyboard path in Firefox and WebKit too), every page checked with axe (WCAG 2.x A and AA); hostile Markdown and Mermaid stay inert; a pull request opened from a pushed branch, discussed, its files drawn by the diff renderer (hostile file names and lines inert; highlighted by Highlights in workers, by Shiki where Highlights cannot load or WebAssembly cannot run, off the workers once they fail, never start or answer with errors, as text when nothing highlights or a step stalls, a file that fails to draw as text with its threads, threads and unsent replies kept; axe in both colour schemes), commented on from the keyboard, replied to, resolved and a suggestion applied, reviewed, brought up to date with its base and squash-merged, another's conflict resolved in the web editor from the keyboard (a resolution refused after the base moved, its edit kept apart from the conflicts read again), and a long file drawn a window of lines at a time; no form takes a post from another origin, a file named `*.data` opens and the pages' data is never cached; a file's page with and without JavaScript (numbered lines agreeing with the renderer's rows over LF, CR-LF, a lone CR and no final line ending; canonical line links, selection, go to line and repeat navigation; a large file paged in fixed blocks, a range kept across them; its whole text read at the pinned commit, a raw answer that fails or isn't text leaving the plain lines; highlighting exactly at and just over its limits; the fall back to plain text down the highlighter's steps; Fjord's colours in both schemes and a scheme change that keeps every row); and, with fyrden-api alone, an agent's whole workflow: an MCP client signs its user in with OAuth 2.1 (PKCE, a resource indicator, a DPoP-bound token), creates a repository, gets a git token, pushes with stock git, browses, reads a file as a resource at a commit, commits a verified change, downloads an archive, forks, and sets an expiry the reaper leaves it alone before (the deletion is `expiry.test.ts`'s); then an agent acting for that user under a grant (its own token exchanged for a DPoP-bound one) makes a scratch repository that expires, is refused a direct push by a pull-request ruleset its user is not, and is stopped by revoking the grant; and pull requests, checked with stock git: merged by merge, squash and rebase, within one repository and from a fork (opened by an agent through MCP); a fork's branch updated by the base's maintainers only while its author allows it; approvals gone stale after a push to the base and to the fork, the merge refused until the exact head is approved; conflicts resolved through REST and MCP as a merge commit on the head branch; and an agent following its user's activity feed (each item once in its latest state, forged cursors refused with 410, a removed collaborator's items purged); global search's page from the header's box, its scope prompt, real refusals and its form resetting to page 1 without JavaScript (results themselves come in route tests: the repair job that projects them runs in the API's maintenance cron, which the combined `wrangler dev` cannot trigger). Webhook redelivery (`webhook-redelivery.test.ts`) needs a public https URL that forwards to the test's receiver, since the server posts only to public https addresses: it runs when `FYRDEN_E2E_WEBHOOK_URL` and `FYRDEN_E2E_WEBHOOK_PORT` (the local port the URL forwards to) are set, and is skipped otherwise | Node driving workerd and the browser (Playwright's Chromium, Firefox and WebKit must be installed: `pnpm --filter @fyrden/ci-tools exec playwright install chromium firefox webkit`) | `pnpm turbo run test:e2e` |
 | Smoke | a deployed instance | Node | `node tools/ci/src/smoke.ts <api-url> <web-url>` |
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
 | MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
@@ -17,7 +17,8 @@
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
 Pull requests and pushes to `main` run the unit, workerd, shuffle (three
-seeds, one a job side by side, gathered in one required check), dry-run
+seeds, each seed's pass of the API's suite split across four jobs by Vitest's
+`--shard`, gathered in one required check), dry-run
 and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
 `contract`, which deploys also wait for), and the interoperability subset with
 the current pinned git. Pull requests also run mutation testing
@@ -29,6 +30,23 @@ frozen public files against the pinned git.
 
 `git-core` and `domain` run under plain Node on purpose: it proves they do not
 depend on the Workers runtime.
+
+### What CI reuses
+
+- **Turbo task results.** The lint, typecheck, dry-run, package coverage and
+  API coverage jobs restore their Turbo cache from their last passing run (this
+  pull request's, else `main`'s), so a task whose inputs did not change replays
+  its logs and outputs (an API shard's blob report included) instead of
+  running (`.github/actions/turbo-cache`). The shuffle guard, end-to-end and
+  mutation runs are never cached. A test that reads, or a compiled file that
+  imports, a file outside its own package and its workspace dependencies must
+  name that file in the package's `turbo.json` `inputs` for each task that
+  reads it (`test`, `test:coverage`, `typecheck`), or a change to it would
+  replay a stale pass.
+- **Mutation results.** See [Coverage and mutation testing](#coverage-and-mutation-testing).
+- **Pull request job selection** is reported, not yet enforced: the `detect`
+  job's summary shows which jobs a change needs, from its paths and Turbo's
+  package graph (`tools/ci/src/select-ci.ts`), while every job still runs.
 
 ### Test workers on a local machine
 
@@ -42,6 +60,12 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
 
 ## Writing workerd tests
 
+- **Fixtures a global setup provides go to every file of their Vitest
+  project, serialized, once per file.** `apps/api` keeps its large chunked
+  upload and import fixtures (23 MiB) in a project of their own,
+  `api-chunked`: a new test reading `inject("chunkedFixtures")` goes in that
+  project's file list in `vitest.config.ts`, and a new large fixture gets a
+  project of its own the same way.
 - **Storage is isolated per file, not per test.** Use `uniqueId()` from
   `@fyrden/testing` for every Durable Object name, R2 key and D1 row, so tests
   pass in any order. The shuffle guard catches tests that depend on order.
@@ -77,9 +101,12 @@ a machine short of memory add `--concurrency=1` to heavy runs (`test`,
   parallel run, timings stretch several times. Deployed Durable Objects run other
   requests during R2 awaits, but the local pool does not, so race tests pause
   code at explicit hooks. `setTimeout`, `setInterval` and the `sleep` helper are
-  lint errors in test files (`biome.json`); a deliberate exception (a test of a
-  timeout itself, a yield whose length does not change the outcome) carries a
-  `biome-ignore` saying why.
+  lint errors in test files, `tools/ci`'s suites and their helpers included
+  (`biome.json`); a deliberate exception (a test of a timeout itself, a yield
+  whose length does not change the outcome, a deadline for failing, a process's
+  exit, the end-to-end tests' `eventually` for a running server's background
+  work) carries a `biome-ignore` saying why. In a browser, Playwright's clock
+  moves the page's timers on (`live-ui.test.ts`).
 - Never assert on elapsed time. A cost bound is asserted as work done: rows
   read or written, commits walked (a walk's `maxCommits`), steps a function
   reports. A benchmark prints times only when `FYRDEN_BENCH=1` and asserts
@@ -107,7 +134,7 @@ Coverage is Istanbul (V8 coverage does not work inside workerd). `git-core` and
 `domain` have an 80% line floor.
 
 Stryker mutation testing runs one scope, a directory under `git-core/src/`, per
-run (`FYRDEN_MUTATION_SCOPE`, default `protocol`; `stryker.config.mjs` lists
+run (`FYRDEN_MUTATION_SCOPE`, default `protocol`; `stryker/scopes.mjs` lists
 the scopes). It runs the scope's tests once per mutant through Stryker's
 command runner: its Vitest runner does not switch mutants under Vitest 5, and
 the TypeScript 7 compiler has no API for its tsconfig rewriting. Because the
@@ -127,13 +154,21 @@ table). Stryker's timeout is 60 s: a mutant that makes a test wait forever
 fails at Vitest's 30 s test timeout and counts as killed, so only a loop that
 never yields times out (with Stryker's default, slow runs on a busy machine
 were counted as timed out, that is detected, even for string-literal
-mutants). Pull requests run
-`--incremental` from the results the nightly full run caches: without per-test
-coverage (command runner) Stryker reuses every mutant whose own code did not
-change, so only the full nightly run sees a change elsewhere that weakens the
-tests. When no cached results exist (before the first nightly run, or after
-the cache was evicted), the pull request runs every mutant of each changed
-scope instead, so the gate is never skipped.
+mutants). A pull request gets a mutation job only for the scopes it changed
+(their source directory, or every scope when the mutation setup changed;
+`tools/ci/src/select-mutation.ts`). Each runs `--incremental` from the
+cached results of that pull request's last passing run of the scope, else of
+the nightly full run: without per-test coverage (command runner) Stryker
+reuses every mutant whose own code did not change, so only the full nightly
+run sees a change elsewhere that weakens the tests. Results are keyed by the
+mutation setup they were made under (Stryker's config and scopes, git-core's
+Vitest config), and only results made under the pull request's own setup are
+restored: after a change to it, on `main` before the next nightly run or in
+the pull request itself, a scope runs every mutant and saves its results for
+the next push. When neither exists (a new
+scope, or the caches were evicted), the scope runs every mutant instead, so
+the gate is never skipped, and a passing run saves its results for the pull
+request's next push.
 
 Stryker 10 cannot instrument two TypeScript patterns safely (measured): an
 `as` expression as the left operand of `|` or `&` loses its parentheses when

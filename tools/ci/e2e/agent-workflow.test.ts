@@ -4,7 +4,8 @@
 // repository, gets a short-lived git token and pushes with stock git,
 // browses it and reads a file as an MCP resource at a commit, commits a file
 // change (signed by the platform, so verified), downloads an archive, forks,
-// sets an expiry, and the reaper deletes the repository after it. Then an
+// and sets an expiry the reaper leaves the repository alone before (the
+// deletion itself is expiry.test.ts's, on a clock it controls). Then an
 // agent acting for that user under a grant: a scratch repository that
 // expires, a ruleset that holds the agent to pull requests but not its
 // user, and a revoked grant that stops its git token.
@@ -23,6 +24,7 @@ import {
   exchangeToken,
 } from "@fyrden/sdk";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { eventually } from "./forge.js";
 import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -393,17 +395,20 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
       ...at,
       format: "zip",
     });
-    let zip: Response | undefined;
-    for (let i = 0; i < 20; i++) {
-      zip = await fetch(
-        archive.download_url,
-        timed({ headers: { Authorization: `Bearer ${gitToken.token}` } }),
-      );
-      if (zip.status !== 202) break;
-      await new Promise((r) => setTimeout(r, 1_000));
-    }
-    expect(zip?.status).toBe(200);
-    const bytes = Buffer.from(await (zip as Response).arrayBuffer());
+    // Built in the background: 202 until it is ready.
+    const zip = await eventually(
+      "the archive",
+      async () => {
+        const res = await fetch(
+          archive.download_url,
+          timed({ headers: { Authorization: `Bearer ${gitToken.token}` } }),
+        );
+        return res.status === 202 ? undefined : res;
+      },
+      { timeoutMs: 20_000, intervalMs: 1_000 },
+    );
+    expect(zip.status).toBe(200);
+    const bytes = Buffer.from(await zip.arrayBuffer());
     expect(bytes.subarray(0, 2).toString()).toBe("PK");
     // Its central directory names the file under the archive's top directory.
     expect(bytes.toString("latin1")).toMatch(/\/README\.md/);
@@ -421,53 +426,26 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     });
     expect(forked.commits.map((c) => c.sha)).toEqual(after.commits.map((c) => c.sha));
 
-    // An expiry: the reaper leaves it until then, and deletes it after.
-    const expiresAt = Date.now() + 20_000;
+    // An expiry, set through MCP: stored, and the reaper leaves the repository
+    // until then. The deletion when it comes is expiry.test.ts's, on a clock
+    // it controls; an hour ahead, no reaper run in this file reaches it.
+    const expiresAt = Date.now() + 3_600_000;
     const set = await mcp.tool<{ expires_at: number }>("update_repo", {
       ...at,
       expires_at: expiresAt,
     });
     expect(set.expires_at).toBe(expiresAt);
-    const cron = async () => {
-      const res = await fetch(
-        `${origin}/__scheduled?cron=${encodeURIComponent("*/5 * * * *")}`,
-        timed(),
-      );
-      expect(res.status).toBe(200);
-    };
-    const exists = async () =>
-      (
-        await fetch(
-          `${origin}/api/repos/${handle}/${name}`,
-          timed({ headers: { Authorization: `Bearer ${pat}` } }),
-        )
-      ).status === 200;
-    await cron();
-    expect(await exists()).toBe(true);
-    await new Promise((r) => setTimeout(r, Math.max(0, expiresAt - Date.now()) + 500));
-    // Deleted once its name can be taken again (a deletion holds it until it finishes).
-    let recreated = false;
-    for (let i = 0; i < 30 && !recreated; i++) {
-      await cron();
-      const again = await fetch(
-        `${origin}/api/user/repos`,
-        timed({
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${pat}`,
-            "Content-Type": "application/json",
-            "Idempotency-Key": crypto.randomUUID(),
-          },
-          body: JSON.stringify({ name }),
-        }),
-      );
-      recreated = again.status === 201;
-      if (!recreated) {
-        expect(again.status).toBe(409);
-        await new Promise((r) => setTimeout(r, 1_000));
-      }
-    }
-    expect(recreated).toBe(true);
+    const reaped = await fetch(
+      `${origin}/__scheduled?cron=${encodeURIComponent("*/5 * * * *")}`,
+      timed(),
+    );
+    expect(reaped.status).toBe(200);
+    const still = await fetch(
+      `${origin}/api/repos/${handle}/${name}`,
+      timed({ headers: { Authorization: `Bearer ${pat}` } }),
+    );
+    expect(still.status).toBe(200);
+    expect(((await still.json()) as { expires_at: number }).expires_at).toBe(expiresAt);
   });
 
   it("lets an agent act for its user under a grant, held to the agents' rules, until it is revoked", {

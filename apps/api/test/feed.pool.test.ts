@@ -9,8 +9,19 @@ describe("a pool of calls", () => {
     let most = 0;
     // Each task waits until released; they are released out of order, a few at a time.
     const waiting = new Map<number, () => void>();
+    // Each task announces its start, so the test waits for the pool's own progress.
+    let started = 0;
+    let reached: { count: number; resolve: () => void } | undefined;
+    const startedAtLeast = (count: number) =>
+      started >= count
+        ? Promise.resolve()
+        : new Promise<void>((resolve) => {
+            reached = { count, resolve };
+          });
     const tasks = Array.from({ length: 25 }, (_, i) => async () => {
       inFlight++;
+      started++;
+      if (reached && started >= reached.count) reached.resolve();
       most = Math.max(most, inFlight);
       await new Promise<void>((resolve) => waiting.set(i, resolve));
       inFlight--;
@@ -19,8 +30,9 @@ describe("a pool of calls", () => {
     });
     const settled = settledInPool(tasks, 6);
     for (let released = 0; released < 25; released++) {
-      // Let the pool start what it can, then end the newest task under way.
-      for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+      // Wait until the pool has started what it can (its limit, or all that remain),
+      // then end the newest task under way.
+      await startedAtLeast(Math.min(25, 6 + released));
       const newest = Math.max(...waiting.keys());
       waiting.get(newest)?.();
       waiting.delete(newest);

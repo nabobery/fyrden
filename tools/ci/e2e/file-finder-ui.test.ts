@@ -684,11 +684,12 @@ describe("a list that starts over", () => {
 
 /** What `run` gives up on can hang as well, and a report mustn't. */
 const within = async <T>(ms: number, run: Promise<T>): Promise<T | string> => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
       run,
       new Promise<string>((done) => {
+        // biome-ignore lint/style/noRestrictedGlobals: a deadline for a report, not a wait: the answer arrives as a promise.
         timer = setTimeout(() => done(`no answer in ${ms} ms`), ms);
       }),
     ]);

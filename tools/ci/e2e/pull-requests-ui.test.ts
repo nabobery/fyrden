@@ -491,6 +491,7 @@ describe("pull requests in the web UI", () => {
       for (const worker of page.workers()) {
         await worker
           .evaluate(() => {
+            // biome-ignore lint/style/noRestrictedGlobals: runs in the browser's worker: a throw outside the evaluate call, so the worker itself crashes.
             setTimeout(() => {
               throw new Error("crashed");
             }, 0);
