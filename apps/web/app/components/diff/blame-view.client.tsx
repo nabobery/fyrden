@@ -2,6 +2,7 @@
  * A blamed file drawn by the renderer, in the browser only: the file view's drawing with one
  * annotation row above each group of lines, and a line brought into view by measuring it
  * (`ScrollTarget`), since the renderer's own position misses once annotation rows are drawn.
+ * The line stays held there as the rest of the blame arrives, until the viewer scrolls.
  */
 import type { LineAnnotation, File as RendererFile, VirtualizedFile } from "@pierre/diffs";
 import {
@@ -56,6 +57,7 @@ export default function BlameView({
   position,
   revealed,
   onStatus,
+  above,
 }: {
   path: string;
   cacheKey: string;
@@ -70,6 +72,8 @@ export default function BlameView({
   position: LinePosition | null;
   revealed: boolean;
   onStatus: (status: FileViewStatus) => void;
+  /** Changes whenever what the page shows above the drawing may have changed height. */
+  above: unknown;
 }) {
   const host = useRef<HTMLElement | null>(null);
   const instance = useRef<RendererFile<Note> | null>(null);
@@ -87,7 +91,9 @@ export default function BlameView({
           const at = (instance.current as VirtualizedFile<Note> | null)?.getLinePosition(line);
           return at ? node.getBoundingClientRect().top + at.top - SCROLL_MARGIN : null;
         },
-        scrollBy: (dy) => window.scrollBy({ top: dy }),
+        // Instant, whatever the page's CSS: the target reads where it left the page at once.
+        scrollBy: (dy) => window.scrollBy({ top: dy, behavior: "instant" }),
+        scrollY: () => window.scrollY,
         onReached: setReached,
       }),
   );
@@ -129,6 +135,11 @@ export default function BlameView({
     }
     target.go(position.line);
   }, [revealed, position, target]);
+  // New rows above the line, or a progress line of another height: the line goes back.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `annotations` and `above` say the layout above may have moved
+  useLayoutEffect(() => {
+    if (target.hold()) setReached(null);
+  }, [annotations, above, target]);
 
   const file = useMemo(() => ({ text, cacheKey }), [text, cacheKey]);
   return (

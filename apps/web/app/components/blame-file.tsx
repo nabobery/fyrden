@@ -414,6 +414,7 @@ export function BlameFile({ view }: { view: BlameView }) {
               position={position}
               revealed={drawn}
               onStatus={setStatus}
+              above={state}
             />
           </Suspense>
         </Fallback>

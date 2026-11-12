@@ -8,6 +8,13 @@
  * checks in a row in place reach it. It never waits on the renderer to draw again, which an
  * unchanged drawing doesn't. It gives up after `MAX_CORRECTIONS` (a frame it couldn't measure
  * counts), so it ends within about twice that many frames.
+ *
+ * A line reached is then held: when something above it may have changed height (`hold`), it
+ * is brought back the same way, until the viewer scrolls. The viewer has scrolled when the
+ * page is no longer where the target left it, checked before bringing it back and before each
+ * correction after; this also covers a scrollbar dragged, with no input event to cancel on.
+ * (The first jump to a line has no such check: the browser may still be scrolling to the
+ * page's fragment then.)
  */
 
 export const MAX_CORRECTIONS = 5;
@@ -18,6 +25,8 @@ export interface ScrollTargetDeps {
   /** How far below where it belongs the line is now (negative: above), or null if unknown. */
   offset(line: number): number | null;
   scrollBy(dy: number): void;
+  /** How far the page is scrolled: changed by anything but the target, the viewer moved. */
+  scrollY(): number;
   onReached(line: number): void;
 }
 
@@ -27,6 +36,9 @@ export class ScrollTarget {
   #frame: number | null = null;
   #corrections = 0;
   #inPlace = 0;
+  #held: { line: number; scrollY: number } | null = null;
+  /** While a held line is brought back: where the page is when only the target moved it. */
+  #expectY: number | null = null;
 
   constructor(deps: ScrollTargetDeps) {
     this.#deps = deps;
@@ -50,6 +62,25 @@ export class ScrollTarget {
     if (this.#frame !== null) this.#deps.cancelFrame(this.#frame);
     this.#frame = null;
     this.#line = null;
+    this.#held = null;
+    this.#expectY = null;
+  }
+
+  /**
+   * Something above the line reached may have changed height: brings it back into view, unless
+   * the viewer has scrolled since, which lets it go for good. True when it starts bringing it
+   * back. A line still being brought in needs nothing: its own frames see the change.
+   */
+  hold(): boolean {
+    const held = this.#held;
+    if (held === null || this.#line !== null) return false;
+    if (this.#deps.scrollY() !== held.scrollY) {
+      this.#held = null;
+      return false;
+    }
+    this.go(held.line);
+    this.#expectY = held.scrollY;
+    return true;
   }
 
   #next(): void {
@@ -62,11 +93,17 @@ export class ScrollTarget {
   #check(): void {
     const line = this.#line;
     if (line === null) return;
+    if (this.#expectY !== null && this.#deps.scrollY() !== this.#expectY) {
+      this.cancel();
+      return;
+    }
     const offset = this.#deps.offset(line);
     if (offset !== null && Math.abs(offset) <= 1) {
       this.#inPlace++;
       if (this.#inPlace >= 2) {
         this.#line = null;
+        this.#expectY = null;
+        this.#held = { line, scrollY: this.#deps.scrollY() };
         this.#deps.onReached(line);
         return;
       }
@@ -76,10 +113,14 @@ export class ScrollTarget {
     this.#inPlace = 0;
     if (this.#corrections >= MAX_CORRECTIONS) {
       this.#line = null;
+      this.#expectY = null;
       return;
     }
     this.#corrections++;
-    if (offset !== null) this.#deps.scrollBy(offset);
+    if (offset !== null) {
+      this.#deps.scrollBy(offset);
+      if (this.#expectY !== null) this.#expectY = this.#deps.scrollY();
+    }
     this.#next();
   }
 }
