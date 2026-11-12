@@ -26,6 +26,13 @@ export interface PackIdxSource {
     oids: readonly Uint8Array[],
     budget?: IdxReadBudget,
   ): (IdxLocation | undefined | null)[] | Promise<(IdxLocation | undefined | null)[]>;
+  /**
+   * Optional: whether each oid has an entry, for callers that need
+   * presence only. A source read by ranges reads only its oid table for
+   * it, no offsets (32-bit or 64-bit), so an entry past 2 GiB costs no read
+   * of its own. Its reads are not budgeted.
+   */
+  hasMany?(oids: readonly Uint8Array[]): boolean[] | Promise<boolean[]>;
   /** The CRC32 of the entry at `position`, for copying the entry verbatim. */
   crc32At(position: number, budget?: IdxReadBudget): number | Promise<number>;
 }

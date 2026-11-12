@@ -86,7 +86,8 @@ export class RangedPackIdx {
    * With `maxReadBytes`, `find` and `lookup` never ask for more than that in
    * one read of the oid table: a larger bucket is searched by pages, about
    * eight reads for a 20 MiB one at 128 KiB. A pusher chooses a pack's ids,
-   * so a bucket can be most of a pack. `lookupMany` still reads whole buckets.
+   * so a bucket can be most of a pack. `lookupMany` and `hasMany` still read
+   * whole buckets.
    */
   static withFanout(
     readRange: IdxRangeReader,
@@ -180,8 +181,65 @@ export class RangedPackIdx {
     const read = counted(this.#read, budget);
     const maxReads = budget?.maxReads ?? Number.POSITIVE_INFINITY;
     const spent = () => budget?.reads ?? 0;
-    const positions = new Array<number>(oids.length).fill(-1);
-    const answered = new Array<boolean>(oids.length).fill(false);
+    // Entries per offset read, and the reads still owed for the spans read so far.
+    const wordsPerRead = Math.max(1, Math.floor(maxSpanBytes / 4));
+    let owed = 0;
+    const positions = await this.#positionsMany(read, oids, maxSpanBytes, (span) => {
+      // The entries found in one span need at most this many offset reads.
+      const words = Math.ceil((span.hi - span.lo) / wordsPerRead);
+      if (spent() + owed + 1 + words > maxReads) return false;
+      owed += words;
+      return true;
+    });
+    const found = [
+      ...new Set(positions.filter((p): p is number => p !== undefined && p >= 0)),
+    ].sort((a, b) => a - b);
+    const smalls = await this.#readWords(read, this.#layout.offsetsAt, found, maxSpanBytes);
+    const offsets = new Map<number, number>();
+    for (const position of found) {
+      const small = smalls.get(position) as number;
+      if ((small & IDX_LARGE_OFFSET_FLAG) === 0) offsets.set(position, small);
+      else if (spent() + 1 <= maxReads) {
+        offsets.set(position, await this.#largeOffset(read, position, small));
+      }
+    }
+    return positions.map((position) => {
+      if (position === undefined) return null;
+      if (position < 0) return undefined;
+      const offset = offsets.get(position);
+      if (offset === undefined) return null;
+      return { position, offset };
+    });
+  }
+
+  /**
+   * Whether each oid has an entry, with the coalesced oid-table reads of
+   * `lookupMany` and nothing else: neither offset table is read, so an
+   * entry past 2 GiB costs no read of its own. For callers that need
+   * presence only. Unbudgeted; like `lookupMany`, it reads whole buckets.
+   */
+  async hasMany(
+    oids: readonly Uint8Array[],
+    maxSpanBytes = DEFAULT_SPAN_BYTES,
+  ): Promise<boolean[]> {
+    const positions = await this.#positionsMany(this.#read, oids, maxSpanBytes, () => true);
+    return positions.map((position) => (position as number) >= 0);
+  }
+
+  /**
+   * Each oid's position (the first copy), or -1 when it has none, found in
+   * the oid-table slices of their fanout buckets, read in spans of at most
+   * `maxSpanBytes` (an empty bucket answers without a read). Spans are read
+   * in table order while `admit` allows them; from the first it refuses,
+   * the oids of that span and every later one are undefined.
+   */
+  async #positionsMany(
+    read: IdxRangeReader,
+    oids: readonly Uint8Array[],
+    maxSpanBytes: number,
+    admit: (span: { readonly lo: number; readonly hi: number }) => boolean,
+  ): Promise<(number | undefined)[]> {
+    const positions = new Array<number | undefined>(oids.length).fill(undefined);
     const byBucket = new Map<number, number[]>();
     for (const [i, oid] of oids.entries()) {
       checkOidAt(oid, 0);
@@ -198,21 +256,15 @@ export class RangedPackIdx {
       });
     // An empty bucket answers without a read.
     for (const bucket of buckets) {
-      if (bucket.hi === bucket.lo) for (const i of bucket.items) answered[i] = true;
+      if (bucket.hi === bucket.lo) for (const i of bucket.items) positions[i] = -1;
     }
-    // Entries per offset read, and the reads still owed for the spans read so far.
-    const wordsPerRead = Math.max(1, Math.floor(maxSpanBytes / 4));
-    let owed = 0;
     const spans = coalesce(
       buckets.filter((bucket) => bucket.hi > bucket.lo),
       OID_BYTES,
       maxSpanBytes,
     );
     for (const span of spans) {
-      // The entries found in one span need at most this many offset reads.
-      const words = Math.ceil((span.hi - span.lo) / wordsPerRead);
-      if (spent() + owed + 1 + words > maxReads) break;
-      owed += words;
+      if (!admit(span)) break;
       const slice = await readExactly(
         read,
         this.#layout.oidsAt + span.lo * OID_BYTES,
@@ -222,28 +274,11 @@ export class RangedPackIdx {
         const at = (bucket.lo - span.lo) * OID_BYTES;
         for (const i of bucket.items) {
           const found = searchOids(slice, at, bucket.hi - bucket.lo, oids[i] as Uint8Array, 0);
-          if (found >= 0) positions[i] = bucket.lo + found;
-          answered[i] = true;
+          positions[i] = found < 0 ? -1 : bucket.lo + found;
         }
       }
     }
-    const found = [...new Set(positions.filter((p) => p >= 0))].sort((a, b) => a - b);
-    const smalls = await this.#readWords(read, this.#layout.offsetsAt, found, maxSpanBytes);
-    const offsets = new Map<number, number>();
-    for (const position of found) {
-      const small = smalls.get(position) as number;
-      if ((small & IDX_LARGE_OFFSET_FLAG) === 0) offsets.set(position, small);
-      else if (spent() + 1 <= maxReads) {
-        offsets.set(position, await this.#largeOffset(read, position, small));
-      }
-    }
-    return positions.map((position, i) => {
-      if (!answered[i]) return null;
-      if (position < 0) return undefined;
-      const offset = offsets.get(position);
-      if (offset === undefined) return null;
-      return { position, offset };
-    });
+    return positions;
   }
 
   /** The 32-bit words at `positions` (ascending) of the table at `tableAt`, read in coalesced spans. */
