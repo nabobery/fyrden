@@ -53,13 +53,23 @@ counted in `metrics.dropped`; a metrics write never fails the operation.
 | `worker.wall_ms` | as `worker.cpu_ms` | Wall time of the same invocation |
 | `metrics.dropped` | `where`, `op` (as for `subrequests`; `op` is `tail` for a Tail batch) | Data points the invocation could not write: over its budget of 200, or refused by Analytics Engine. Any point other than zero means the metrics of that invocation are incomplete |
 
-Workers report CPU time to Tail handlers only, not to the running code.
+Workers report CPU time in Tail events, not to the running code.
 `fyrden-web` is `fyrden-api`'s Tail consumer and writes `worker.cpu_ms` and
 `worker.wall_ms`. Tail Workers need the Workers Paid plan
 ([platform docs](https://developers.cloudflare.com/workers/observability/logs/tail-workers/)),
-so on Free there are no CPU metrics. Whether Durable Object invocations
-appear in Tail events alongside the Worker's has not been checked on a
+so on Free these two metrics stay empty. Whether Durable Object invocations
+reach a Tail Worker alongside the Worker's has not been checked on a Paid
 deployment yet.
+
+On Free, `wrangler tail --format=json` still gives each invocation's CPU time
+in whole milliseconds, in the event's `cpuTime` field, with Durable Object
+invocations as events of their own (`executionModel` is `durableObject`):
+**measured** on a Workers Free account, 2026-11-07 and 2026-11-08. The tail is
+a live stream, so it has to run for the whole window being measured. Under
+high traffic it samples, dropping some events, and at most 10 clients can
+follow one Worker at once
+([platform docs](https://developers.cloudflare.com/workers/observability/logs/real-time-logs/)).
+Maxima read from it are the maxima observed, not the true ones.
 
 ### Per repository
 
