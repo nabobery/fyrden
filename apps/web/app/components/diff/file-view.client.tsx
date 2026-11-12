@@ -4,12 +4,7 @@
  * plain view until it has rows to show, so nothing moves when it takes over; it tells the
  * page where it has got to through `onStatus`.
  */
-import {
-  type LineAnnotation,
-  type File as RendererFile,
-  type VirtualizedFile,
-  Virtualizer,
-} from "@pierre/diffs";
+import type { LineAnnotation, File as RendererFile, VirtualizedFile } from "@pierre/diffs";
 import { File, VirtualizerContext, WorkerPoolContextProvider } from "@pierre/diffs/react";
 import {
   type ReactNode,
@@ -35,6 +30,7 @@ import {
   THEMES,
 } from "./highlighter.js";
 import { newPoolWorker } from "./pool-worker.client.js";
+import { steadyVirtualizer } from "./steady-virtualizer.client.js";
 import { useWindowVirtualizer, WindowVirtualizer } from "./window-virtualizer.js";
 
 const choice = await sessionHighlighter();
@@ -170,7 +166,7 @@ export function Drawn<A = undefined>({
     [engine, onSelect, step, onDrawn],
   );
   const options = useMemo(() => ({ ...stable, themeType: mode }), [stable, mode]);
-  const virtualizer = useWindowVirtualizer(() => new Virtualizer());
+  const virtualizer = useWindowVirtualizer(steadyVirtualizer);
   const drawn = !failed && step !== null && drawnOn === step;
   const nothingDraws = highlighter !== null && !engine;
   const status: FileViewStatus = failed || nothingDraws ? "failed" : drawn ? "drawn" : "waiting";

@@ -328,6 +328,28 @@ describe("with JavaScript", () => {
     expect(asked).toHaveLength(1);
   });
 
+  it("opens a large blamed file at its top while its ranges are still coming", async () => {
+    // The drawing's first render could take the page to the file's end: not every time, so
+    // two files, each from a fresh page.
+    for (const path of ["many.txt", "over.txt"]) {
+      await freshPage(async (fresh) => {
+        let release!: () => void;
+        const released = new Promise<void>((done) => {
+          release = done;
+        });
+        await fresh.route("**/blame-ranges/**", async (route: Route) => {
+          await released;
+          await route.continue();
+        });
+        await visit(fresh, blame("main", path));
+        await see(file(fresh)).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
+        expect(await firstVisibleLine(fresh)).toBe(1);
+        expect(await scrollY(fresh)).toBe(0);
+        release();
+      });
+    }
+  });
+
   it("opens a deep link at its line, and keeps it there as the rows above it arrive", async () => {
     await freshPage(async (fresh) => {
       // The ranges are held back until the line is in place from the server's window alone.
