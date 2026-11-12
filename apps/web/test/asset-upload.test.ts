@@ -133,6 +133,7 @@ describe("an asset's upload", () => {
       size: 12,
       content_type: "application/zip",
       replace: false,
+      key: "00000000-0000-4000-8000-000000000001",
     });
     expect(complete).toEqual({
       intent: "complete",
@@ -142,7 +143,7 @@ describe("an asset's upload", () => {
         { part_number: 2, etag: "e2" },
         { part_number: 3, etag: "e3" },
       ],
-      key: "00000000-0000-4000-8000-000000000001",
+      key: "00000000-0000-4000-8000-000000000002",
     });
     const parts = fake.partCalls();
     expect(parts.map((p) => [p.request.method, new URL(p.request.url).pathname, p.body])).toEqual([
@@ -568,6 +569,115 @@ describe("an asset's upload", () => {
       message: "The repository has 20 uploads open. Finish or abort one first.",
     });
     expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: true });
-    expect(fake.routeCalls().map((c) => c.intent)).toEqual(["begin", "begin", "complete"]);
+    const calls = fake.routeCalls();
+    expect(calls.map((c) => c.intent)).toEqual(["begin", "begin", "complete"]);
+    // The refusal was the first key's answer, which the API keeps: a new start, a new key.
+    expect(calls[1]?.key).not.toBe(calls[0]?.key);
+  });
+
+  it("starts again with the same key when the start's answer never came, so the API answers the session it made", async () => {
+    const fake = server({ route: [new TypeError("network")] });
+    const upload = newUpload(AT, file(), { replace: false });
+    await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+    expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: true });
+    const [first, again, complete] = fake.routeCalls();
+    expect([first?.intent, again?.intent, complete?.intent]).toEqual([
+      "begin",
+      "begin",
+      "complete",
+    ]);
+    expect(again?.key).toBe(first?.key);
+    // Learnt, the session's key is done with; a later start makes its own.
+    expect(complete?.key).not.toBe(first?.key);
+    expect(upload.beginKey).toBeNull();
+  });
+
+  it("keeps a session whose ending wasn't confirmed, so ending it can be asked again", async () => {
+    const stop = new AbortController();
+    const fake = server({
+      parts: {
+        1: [
+          (request) =>
+            new Promise<Response>((_, fail) => {
+              request.signal.addEventListener("abort", () =>
+                fail(new DOMException("", "AbortError")),
+              );
+              stop.abort();
+            }),
+        ],
+      },
+      route: [json(session(), 201), new TypeError("offline")],
+    });
+    const upload = newUpload(AT, file(), { replace: false });
+    const result = await runUpload(upload, fake.deps, { signal: stop.signal });
+    expect(result.ok ? "" : result.message).toMatch(/may not have ended/);
+    expect(upload.session?.id).toBe(ID);
+    // Asked again, online: ended, and let go.
+    expect(await abandonUpload(upload, fake.deps)).toEqual({
+      ok: false,
+      kind: "cancelled",
+      message: "Cancelled.",
+    });
+    expect(fake.routeCalls().slice(1)).toEqual([
+      { intent: "abort", upload_id: ID },
+      { intent: "abort", upload_id: ID },
+    ]);
+    expect(upload.session).toBeNull();
+  });
+
+  it("asks to start and to end so that the request outlives the page, parts and completion not", async () => {
+    const stop = new AbortController();
+    const fake = server({ parts: { 2: Array.from({ length: 4 }, () => json({}, 502)) } });
+    const upload = newUpload(AT, file(), { replace: false });
+    await runUpload(upload, fake.deps);
+    await abandonUpload(upload, fake.deps);
+    const cancelled = server({
+      parts: {
+        1: [
+          () => {
+            stop.abort();
+            return json({ code: "internal" }, 503);
+          },
+        ],
+      },
+    });
+    await runUpload(newUpload(AT, file(), { replace: false }), cancelled.deps, {
+      signal: stop.signal,
+    });
+    const done = server();
+    await runUpload(newUpload(AT, file(), { replace: false }), done.deps);
+    const kept = (sent: { request: Request; body: string }[]) =>
+      sent.map((s) => [JSON.parse(s.body || "{}").intent ?? "part", s.request.keepalive]);
+    expect(kept(fake.sent.filter((s) => !/parts/.test(s.request.url)))).toEqual([
+      ["begin", true],
+      ["abort", true],
+    ]);
+    expect(kept(cancelled.sent.filter((s) => !/parts/.test(s.request.url)))).toEqual([
+      ["begin", true],
+      ["abort", true],
+    ]);
+    expect(kept(done.sent.filter((s) => !/parts/.test(s.request.url)))).toEqual([
+      ["begin", true],
+      ["complete", false],
+    ]);
+    expect(done.partCalls().map((p) => p.request.keepalive)).toEqual([false, false, false]);
+  });
+
+  it("keeps the start's key while the start it lost is still running, so Retry gets its session", async () => {
+    const fake = server({
+      route: [
+        new TypeError("network"),
+        json({ code: "idempotency_key_in_use", detail: "Still running." }, 409, {
+          "Retry-After": "5",
+        }),
+      ],
+    });
+    const upload = newUpload(AT, file(), { replace: false });
+    await expect(runUpload(upload, fake.deps)).rejects.toThrow("network");
+    expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: false, kind: "retryable" });
+    expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: true });
+    const begins = fake.routeCalls().filter((c) => c.intent === "begin");
+    expect(begins).toHaveLength(3);
+    expect(new Set(begins.map((c) => c.key)).size).toBe(1);
   });
 });

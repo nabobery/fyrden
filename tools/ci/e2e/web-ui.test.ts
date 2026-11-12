@@ -35,7 +35,12 @@ let token = "";
 
 /** Picks a colour scheme in the header, and waits until the server has kept it. */
 async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
-  const kept = page.waitForResponse((res) => new URL(res.url()).pathname === "/appearance");
+  // Its own post's answer, not one of an earlier pick still on its way.
+  const kept = page.waitForResponse(
+    (res) =>
+      new URL(res.url()).pathname === "/appearance" &&
+      new URLSearchParams(res.request().postData() ?? "").get("mode") === name.toLowerCase(),
+  );
   await page.getByRole("button", { name, exact: true }).click();
   await kept;
 }

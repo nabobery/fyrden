@@ -35,6 +35,11 @@ export interface Upload {
   readonly name: string;
   readonly replace: boolean;
   session: Session | null;
+  /**
+   * The key of a start whose answer never came, kept so the next start asks the same: the API
+   * then answers the session the first one made, if it made one.
+   */
+  beginKey: string | null;
   /** Part n's etag at n - 1, once the API has it. */
   etags: (string | undefined)[];
   /** The key of the completion asked for with the parts as they stand: kept only to retry it. */
@@ -91,6 +96,7 @@ export function newUpload(target: UploadTarget, file: File, options: { replace: 
     name: file.name,
     replace: options.replace,
     session: null,
+    beginKey: null,
     etags: [],
     completeKey: null,
   };
@@ -157,13 +163,16 @@ export async function runUpload(
     }
     checkCancelled();
   };
-  /** The page's route, with `body` as JSON. */
+  /**
+   * The page's route, with `body` as JSON. What isn't cancellable (a start, an ending) must not
+   * be lost with the page either: it outlives the page as `keepalive`.
+   */
   const ask = (body: Record<string, unknown>, cancellable = true) =>
     deps.fetch(route, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      ...(cancellable && signal && { signal }),
+      ...(cancellable ? signal && { signal } : { keepalive: true }),
     });
   const sentBytes = () => {
     const session = upload.session;
@@ -189,6 +198,7 @@ export async function runUpload(
       if (!name.ok) throw new Stopped("fatal", `The file's name ${name.reason}.`);
       const type = assetContentType(upload.file.type || undefined);
       checkCancelled();
+      upload.beginKey ??= deps.newKey();
       // Not cancellable: a session the API makes must be learnt, so a Cancel can end it.
       const res = await ask(
         {
@@ -198,13 +208,19 @@ export async function runUpload(
           size: upload.file.size,
           ...(type.ok && upload.file.type !== "" ? { content_type: type.type } : {}),
           replace: upload.replace,
+          key: upload.beginKey,
         },
         false,
       );
       if (!res.ok) {
         const problem = res.status === 401 ? {} : await problemOf(res);
+        // The lost start this key was kept for is still running: the same key gets its answer.
+        const running = problem.code === "idempotency_key_in_use";
+        // Else answered: the API keeps this answer for the key, so the next start needs a new one.
+        if (!running) upload.beginKey = null;
         // A Cancel asked for meanwhile is what the person sees: nothing was begun to end.
         checkCancelled();
+        if (running) throw new Stopped("retryable", "The upload is still starting; retry it.");
         // The repository's open uploads are at their limit: one may finish or end soon.
         throw new Stopped(
           problem.code === "too_many_uploads" ? "retryable" : "fatal",
@@ -212,6 +228,7 @@ export async function runUpload(
         );
       }
       upload.session = (await res.json()) as Session;
+      upload.beginKey = null;
       upload.etags = [];
       upload.completeKey = null;
       checkCancelled();
@@ -247,16 +264,29 @@ function refusal(status: number, problem: { code?: string; detail?: string }): s
  */
 export type Ending = "ended" | "completed" | "unknown" | "none";
 
-/** Ends the upload's session, if it has one, freeing what it holds, and says how that went. */
+/**
+ * Ends the upload's session, if it has one, freeing what it holds, and says how that went. A
+ * session whose ending isn't confirmed stays on the upload, so ending it can be asked again.
+ */
 async function end(
   upload: Upload,
   ask: (body: Record<string, unknown>, cancellable?: boolean) => Promise<Response>,
 ): Promise<Ending> {
   const session = upload.session;
+  // Taken at once, so an ending asked for meanwhile doesn't ask again.
   upload.session = null;
   upload.etags = [];
   upload.completeKey = null;
   if (!session) return "none";
+  const ending = await endingOf(session, ask);
+  if (ending === "unknown") upload.session ??= session;
+  return ending;
+}
+
+async function endingOf(
+  session: Session,
+  ask: (body: Record<string, unknown>, cancellable?: boolean) => Promise<Response>,
+): Promise<Ending> {
   let res: Response;
   try {
     res = await ask({ intent: "abort", upload_id: session.id }, false);
@@ -296,8 +326,9 @@ function cancelled(ending: Ending): UploadResult {
 }
 
 /**
- * Lets a stopped upload go: its session ends, freeing the storage it holds, and the result
- * says what that came to (see `cancelled`). Not while it runs.
+ * Lets an upload go: its session ends, freeing the storage it holds, and the result says what
+ * that came to (see `cancelled`). The request outlives the page that asks (`keepalive`), so a
+ * page being left still ends it, though the result is then never seen.
  */
 export async function abandonUpload(upload: Upload, deps: UploadDeps): Promise<UploadResult> {
   const ending = await end(upload, (body) =>
@@ -305,6 +336,7 @@ export async function abandonUpload(upload: Upload, deps: UploadDeps): Promise<U
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      keepalive: true,
     }),
   );
   return cancelled(ending);

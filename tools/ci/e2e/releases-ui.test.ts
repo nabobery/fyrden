@@ -11,7 +11,7 @@
 import { execFile } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type APIResponse, type Page, expect as see } from "@playwright/test";
+import { type APIResponse, type Page, type Request, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { accessibleInEveryTheme, startWebStack, visit, type WebStack } from "./web-stack.js";
 
@@ -204,6 +204,7 @@ describe("release assets", () => {
       size: bytes.length,
       content_type: contentType,
       replace: false,
+      key: crypto.randomUUID(),
     });
     expect(begun.status(), await begun.text()).toBe(201);
     const session = (await begun.json()) as { id: string; part_count: number };
@@ -216,6 +217,22 @@ describe("release assets", () => {
     const { etag } = (await part.json()) as { etag: string };
     return { session, parts: [{ part_number: 1, etag }] };
   }
+
+  /** The session `id` takes no more parts: ended (its row ended, or already cleared away). */
+  async function takesNoParts(id: string) {
+    const part = await page.request.put(
+      `${stack.origin}/api/repos/${handle}/${name}/releases/assets/uploads/${id}/parts/1`,
+      { headers: { "X-Fyrden-Session": "1" }, data: Buffer.from("x") },
+    );
+    expect(((await part.json()) as { code: string }).code).toMatch(
+      /^(upload_not_receiving|upload_not_found)$/,
+    );
+  }
+
+  /** The page's own `intent` post to its upload route. */
+  const uploadPost = (intent: string) => (request: Request) =>
+    new URL(request.url()).pathname === `${REPO}/releases/uploads` &&
+    JSON.parse(request.postData() ?? "{}").intent === intent;
 
   beforeAll(async () => {
     await git(["tag", "-a", TAG, "-m", "assets"], work);
@@ -419,16 +436,145 @@ describe("release assets", () => {
     const res = await ended;
     // Its body went with the page it was asked from; the status stays.
     expect(res.status()).toBe(200);
-    // Ended at the API: it takes no more parts (its row ended, or already cleared away).
+    // Ended at the API.
     const { upload_id } = JSON.parse(res.request().postData() ?? "{}") as { upload_id: string };
-    const part = await page.request.put(
-      `${stack.origin}/api/repos/${handle}/${name}/releases/assets/uploads/${upload_id}/parts/1`,
-      { headers: { "X-Fyrden-Session": "1" }, data: Buffer.from("left") },
-    );
-    expect(((await part.json()) as { code: string }).code).toMatch(
-      /^(upload_not_receiving|upload_not_found)$/,
-    );
+    await takesNoParts(upload_id);
     expect((await assets()).map((a) => a.name)).not.toContain("left.bin");
+  });
+
+  it("ends a stopped upload's session when the page is reloaded", async () => {
+    await visit(page, editUrl());
+    await page.route("**/parts/1", (r) => r.fulfill({ status: 502, body: "" }));
+    const begun = page.waitForResponse((res) => uploadPost("begin")(res.request()));
+    let id = "";
+    try {
+      await page.getByLabel("Add files").setInputFiles({
+        name: "reloaded.bin",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.from("reloaded"),
+      });
+      id = ((await (await begun).json()) as { id: string }).id;
+      const item = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+      await see(item.getByText("Part 1 was not stored.", { exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
+    } finally {
+      await page.unroute("**/parts/1");
+    }
+    // Sent by the page as it unloads, which the browser doesn't report: wrangler dev's log of
+    // answering it is the sign it landed (the reloaded page posts nothing to the route).
+    const from = stack.output().length;
+    await page.reload();
+    await stack.waitForLine(
+      new RegExp(`^\\[wrangler:info\\] POST ${REPO}/releases/uploads 200 `),
+      from,
+      15_000,
+      { accessLog: true },
+    );
+    await takesNoParts(id);
+  });
+
+  it("holds a running upload left by the page until its ending is known", async () => {
+    await visit(page, editUrl());
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    // The part never answers while the page is there; the ending is held, then lost.
+    await page.route("**/parts/1", async (r) => {
+      await held;
+      await r.fulfill({ status: 502, body: "" }).catch(() => undefined);
+    });
+    await page.route(`**${REPO}/releases/uploads`, async (r) => {
+      if (JSON.parse(r.request().postData() ?? "{}").intent !== "abort") return r.continue();
+      await held;
+      await r.abort("internetdisconnected");
+    });
+    try {
+      const sending = page.waitForRequest("**/parts/1");
+      await page.getByLabel("Add files").setInputFiles({
+        name: "kept.bin",
+        mimeType: "application/octet-stream",
+        buffer: Buffer.from("kept"),
+      });
+      await sending;
+      const item = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+      // As a page kept in the back-forward cache is left, and comes back before its ending is.
+      await page.evaluate(() => {
+        const win = globalThis as unknown as {
+          dispatchEvent(event: unknown): void;
+          PageTransitionEvent: new (type: string, init: { persisted: boolean }) => unknown;
+        };
+        win.dispatchEvent(new win.PageTransitionEvent("pagehide", { persisted: true }));
+      });
+      await see(item.getByText("Cancelling…", { exact: true })).toBeVisible();
+      await see(item.getByRole("button")).toHaveCount(0);
+      release();
+      await see(item.getByText(/may not have ended/)).toBeVisible();
+      await see(item.getByRole("button", { name: "Cancel" })).toBeVisible();
+    } finally {
+      release();
+      await page.unroute("**/parts/1");
+      await page.unroute(`**${REPO}/releases/uploads`);
+    }
+    const item = page.getByRole("list", { name: "Uploads" }).getByRole("listitem");
+    const ended = page.waitForResponse((res) => uploadPost("abort")(res.request()));
+    ended.catch(() => undefined);
+    await item.getByRole("button", { name: "Cancel" }).click();
+    const { upload_id } = JSON.parse((await ended).request().postData() ?? "{}") as {
+      upload_id: string;
+    };
+    await see(item).toHaveCount(0);
+    await takesNoParts(upload_id);
+  });
+
+  it("offers Cancel again when ending an upload couldn't be confirmed, and asks again on Dismiss", async () => {
+    await visit(page, editUrl());
+    await page.route("**/parts/1", (r) => r.fulfill({ status: 502, body: "" }));
+    // Each upload's first ending is lost on the network; the next goes through.
+    const lost = new Set<string>();
+    await page.route(`**${REPO}/releases/uploads`, (r) => {
+      const sent = JSON.parse(r.request().postData() ?? "{}") as Record<string, string>;
+      if (sent.intent !== "abort" || lost.has(sent.upload_id ?? "")) return r.continue();
+      lost.add(sent.upload_id ?? "");
+      return r.abort("internetdisconnected");
+    });
+    try {
+      for (const [file, then] of [
+        ["unsure.bin", "Cancel"],
+        ["dismissed.bin", "Dismiss"],
+      ] as const) {
+        await page.getByLabel("Add files").setInputFiles({
+          name: file,
+          mimeType: "application/octet-stream",
+          buffer: Buffer.from(file),
+        });
+        const item = page
+          .getByRole("list", { name: "Uploads" })
+          .getByRole("listitem")
+          .filter({ hasText: file });
+        await see(item.getByText("Part 1 was not stored.", { exact: true })).toBeVisible({
+          timeout: 30_000,
+        });
+        await item.getByRole("button", { name: "Cancel" }).click();
+        await see(item.getByText(/may not have ended/)).toBeVisible();
+        await see(item.getByRole("button", { name: "Retry" })).toHaveCount(0);
+        if (then === "Cancel")
+          await accessibleInEveryTheme(page, "an upload whose ending is unknown");
+        const ended = page.waitForResponse((res) => uploadPost("abort")(res.request()));
+        // Handled at once: a click that fails first is the failure to report.
+        ended.catch(() => undefined);
+        await item.getByRole("button", { name: then }).click();
+        const { upload_id } = JSON.parse((await ended).request().postData() ?? "{}") as {
+          upload_id: string;
+        };
+        await see(item).toHaveCount(0);
+        await takesNoParts(upload_id);
+      }
+    } finally {
+      await page.unroute("**/parts/1");
+      await page.unroute(`**${REPO}/releases/uploads`);
+    }
   });
 
   it("answers a second completion of a committed upload as completed, committing nothing twice", async () => {

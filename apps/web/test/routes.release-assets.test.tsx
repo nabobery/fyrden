@@ -167,7 +167,7 @@ async function upload(body: unknown, reply = () => json({ id: ID }), headers = {
 }
 
 describe("an upload's session", () => {
-  it("begins with only the fields it names", async () => {
+  it("begins with only the fields it names, and the browser's own key", async () => {
     const { answer, calls } = await upload(
       {
         intent: "begin",
@@ -176,6 +176,7 @@ describe("an upload's session", () => {
         size: 12,
         content_type: "application/zip",
         replace: true,
+        key: KEY,
         extra: "dropped",
       },
       () => json({ id: ID }, 201),
@@ -192,7 +193,7 @@ describe("an upload's session", () => {
       content_type: "application/zip",
       replace: true,
     });
-    expect(call?.headers.get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+    expect(call?.headers.get("Idempotency-Key")).toBe(KEY);
   });
 
   it("completes with the browser's own key, and passes the API's answer back as it came", async () => {
@@ -225,8 +226,10 @@ describe("an upload's session", () => {
       { intent: "complete", upload_id: ID, parts: [], key: `${KEY}\r\nX: 1` },
       { intent: "complete", upload_id: "../../x", parts: [], key: KEY },
       { intent: "abort", upload_id: `${ID}/../x` },
-      { intent: "begin", release_id: "7/../../x", name: "a", size: 1, replace: false },
-      { intent: "begin", release_id: 7, name: "a", size: "1", replace: false },
+      { intent: "begin", release_id: "7/../../x", name: "a", size: 1, replace: false, key: KEY },
+      { intent: "begin", release_id: 7, name: "a", size: "1", replace: false, key: KEY },
+      { intent: "begin", release_id: 7, name: "a", size: 1, replace: false },
+      { intent: "begin", release_id: 7, name: "a", size: 1, replace: false, key: "k" },
       { intent: "delete" },
       [],
     ]) {

@@ -46,9 +46,16 @@ export interface WebStack {
   workerLines(from?: number): string[];
   /**
    * Resolves when a Worker line written after `from` matches: as the output
-   * arrives, not by polling. Rejects after `deadlineMs` without one.
+   * arrives, not by polling. Rejects after `deadlineMs` without one. With
+   * `accessLog`, wrangler dev's access log lines count too: a request it
+   * answered, which the browser may not report (one sent by a page as it unloads).
    */
-  waitForLine(match: RegExp, from: number, deadlineMs?: number): Promise<void>;
+  waitForLine(
+    match: RegExp,
+    from: number,
+    deadlineMs?: number,
+    options?: { accessLog?: boolean },
+  ): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -101,8 +108,14 @@ export async function startWebStack(
       .slice(from)
       .split("\n")
       .filter((line) => !line.startsWith("[wrangler:info]"));
-  const waitForLine = (match: RegExp, from: number, deadlineMs = 15_000) =>
+  const waitForLine = (
+    match: RegExp,
+    from: number,
+    deadlineMs = 15_000,
+    options: { accessLog?: boolean } = {},
+  ) =>
     new Promise<void>((done, fail) => {
+      const lines = () => (options.accessLog ? output.slice(from).split("\n") : workerLines(from));
       // A deadline for failing, not a wait: the line itself resolves the promise.
       // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: the line itself resolves the promise.
       const deadline = setTimeout(() => {
@@ -110,7 +123,7 @@ export async function startWebStack(
         fail(new Error(`no Worker log line matched ${match}`));
       }, deadlineMs);
       const check = () => {
-        if (!workerLines(from).some((line) => match.test(line))) return;
+        if (!lines().some((line) => match.test(line))) return;
         waiters.delete(check);
         clearTimeout(deadline);
         done();

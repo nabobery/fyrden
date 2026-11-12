@@ -12,7 +12,7 @@ import type { Route } from "./+types/repo.release-uploads";
 /** A completion of 2,000 parts is about 150 KB of JSON. */
 const UPLOAD_JSON_MAX_BYTES = 512 * 1024;
 const UPLOAD_ID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
-/** A completion's key, made by the browser: a UUID, as `crypto.randomUUID` makes. */
+/** A start's or a completion's key, made by the browser: a UUID, as `crypto.randomUUID` makes. */
 const KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const refused = (detail: string, status = 400) =>
@@ -39,13 +39,14 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const base = repoApiPath(params.owner, params.repo);
   switch (sent.intent) {
     case "begin": {
-      const { release_id, name, size, content_type, replace } = sent;
+      const { release_id, name, size, content_type, replace, key } = sent;
       if (!Number.isSafeInteger(release_id) || (release_id as number) < 1)
         return refused("No such release.");
       if (typeof name !== "string" || !Number.isSafeInteger(size) || typeof replace !== "boolean")
         return refused("Give the file's name, size and whether it replaces one.");
       if (content_type !== undefined && typeof content_type !== "string")
         return refused("A content type is text.");
+      if (typeof key !== "string" || !KEY.test(key)) return refused("The key must be a UUID.");
       return passed(
         await apiFetch(
           context,
@@ -58,6 +59,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
             replace,
             ...(content_type !== undefined && { content_type }),
           }),
+          key,
         ),
       );
     }

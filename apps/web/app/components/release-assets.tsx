@@ -56,6 +56,8 @@ type Item = {
   /** Whether Retry goes on from where it stopped (else it must start again). */
   retryable: boolean;
   stop: AbortController | null;
+  /** The ending asked for as the page was left while it ran: what its run then reports. */
+  leaving: Promise<UploadResult> | null;
 };
 
 const BROWSER: UploadDeps = {
@@ -108,17 +110,36 @@ export function AssetUploader({
   const [said, setSaid] = useState("");
   const counter = useRef(0);
   const { revalidate } = useRevalidator();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: set up once for the page's life; `settle` uses only the items' refs, the state's setters and the router's revalidate, none of them tied to a render.
   useEffect(() => {
     setReady(true);
     const all = items.current;
-    // Leaving the page ends each upload's session that would otherwise hold the file's size on
-    // the quota until it expires: a running one's as it stops, a stopped one's here.
-    return () => {
+    // Leaving the page, by a link within it or by a reload or another site, ends every session
+    // still open, which would otherwise hold the file's size on the quota until it expires.
+    // Each is ended here, at once (its request outlives the page), then a running upload stops
+    // and reports what that ending came to. A page kept to come back to (the back-forward
+    // cache) shows the others' outcomes too; one taken off by the app has no one to show.
+    const endAll = (shown: boolean) => {
       for (const item of all.values()) {
-        if (item.stop) item.stop.abort();
-        else if (item.status === "failed" && item.upload.session !== null)
-          void abandonUpload(item.upload, BROWSER);
+        const ending =
+          item.status !== "done" && item.upload.session !== null
+            ? abandonUpload(item.upload, BROWSER)
+            : null;
+        if (item.stop) {
+          item.leaving = ending;
+          // Until that ending is known, nothing else starts or ends this upload.
+          item.status = "cancelling";
+          item.stop.abort();
+        } else if (ending && shown) void ending.then((result) => settle(item, result));
       }
+      if (shown) changed();
+    };
+    // A page being unloaded runs no cleanup.
+    const unloading = () => endAll(true);
+    window.addEventListener("pagehide", unloading);
+    return () => {
+      window.removeEventListener("pagehide", unloading);
+      endAll(false);
     };
   }, []);
 
@@ -169,6 +190,10 @@ export function AssetUploader({
     } finally {
       item.stop = null;
     }
+    // Stopped by leaving the page: what the ending came to, which may have kept the asset or
+    // not be known, rather than merely cancelled.
+    if (item.leaving && !result.ok) result = await item.leaving;
+    item.leaving = null;
     settle(item, result);
   };
 
@@ -185,6 +210,7 @@ export function AssetUploader({
         message: "",
         retryable: true,
         stop: null,
+        leaving: null,
       });
     }
     for (const item of added) items.current.set(item.key, item);
@@ -195,6 +221,13 @@ export function AssetUploader({
   const remove = (item: Item) => {
     items.current.delete(item.key);
     changed();
+  };
+
+  /** Takes a stopped upload off the page; an ending not confirmed is asked once more first. */
+  const dismiss = (item: Item) => {
+    if (item.status === "failed" && item.upload.session !== null)
+      void abandonUpload(item.upload, BROWSER);
+    remove(item);
   };
 
   const cancel = async (item: Item) => {
@@ -286,7 +319,9 @@ export function AssetUploader({
                     )}
                     {(item.status === "sending" ||
                       item.status === "completing" ||
-                      (item.status === "failed" && item.retryable)) && (
+                      // Stopped with its session open, or whose ending wasn't confirmed.
+                      (item.status === "failed" &&
+                        (item.retryable || item.upload.session !== null))) && (
                       <button type="button" onClick={() => void cancel(item)}>
                         Cancel
                       </button>
@@ -294,7 +329,7 @@ export function AssetUploader({
                     {(item.status === "done" ||
                       item.status === "cancelled" ||
                       (item.status === "failed" && !item.retryable)) && (
-                      <button type="button" onClick={() => remove(item)}>
+                      <button type="button" onClick={() => dismiss(item)}>
                         Dismiss
                       </button>
                     )}
