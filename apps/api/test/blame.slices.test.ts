@@ -3,7 +3,12 @@
 // lost compare-and-set leaving nothing behind, and a run whose checkpoint
 // can't be read replaced rather than failing forever.
 import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
-import { DO_MEMORY, type RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import {
+  createDoMemoryBudget,
+  DO_MEMORY,
+  type MemoryAdmission,
+  type RepoGitStorage,
+} from "@fyrden/adapters-cloudflare/git";
 import { describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import {
@@ -13,6 +18,8 @@ import {
   type BlameResult,
   RepoBlame,
 } from "../src/do/repo/blame.js";
+import { recordingMetrics } from "./helpers/fetch-repo.js";
+import { setOffset } from "./helpers/maintenance.js";
 import { postPush, pushTarget } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -118,6 +125,77 @@ describe("blame runs over slices", () => {
   it("runs one blame request per object: its share is over half the pool", () => {
     expect(2 * BLAME_SHARE_BYTES).toBeGreaterThan(DO_MEMORY.operationPoolBytes);
     expect(BLAME_SHARE_BYTES).toBeLessThanOrEqual(DO_MEMORY.operationPoolBytes);
+  });
+
+  it("records its share's admission: queued behind other work, then granted, with the wait", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      const metrics = recordingMetrics();
+      repo.metricsDataset = metrics.dataset;
+      setOffset(repo.git, 0);
+      // Other work holds enough that blame's share doesn't fit until it ends.
+      const { totalBytes } = repo.git.memory.stats();
+      const other = await repo.git.memory.reserve(totalBytes - BLAME_SHARE_BYTES + 1);
+      const blame = new RepoBlame({
+        git: repo.git,
+        memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
+        repoId: () => repoId,
+        epochGen: () => repo.events.epochGen(),
+      });
+      const answering = blame.answer({ path: "f.txt" });
+      const waiting = repo.git.memory.stats().waiting;
+      setOffset(repo.git, 300);
+      other.release();
+      const answer = await answering;
+      const admission = (name: string) =>
+        metrics.points.filter((p) => p.name === name).map((p) => [...p.blobs, p.value]);
+      return {
+        waiting,
+        answered: answer.ok,
+        waits: admission("memory.share_wait_ms"),
+        shares: admission("memory.share_bytes"),
+      };
+    });
+    expect(seen).toMatchObject({ waiting: 1, answered: true });
+    expect(seen.shares).toEqual([["blame", "granted", "true", BLAME_SHARE_BYTES]]);
+    expect(seen.waits).toHaveLength(1);
+    expect(seen.waits[0]?.slice(0, 3)).toEqual(["blame", "granted", "true"]);
+    expect(seen.waits[0]?.[3]).toBeGreaterThanOrEqual(300);
+  });
+
+  it("answers busy once its share's wait reaches its limit, recorded as timed out", async () => {
+    const { stub, repoId } = await pushed();
+    const seen = await inRepo(stub, async (repo) => {
+      const admissions: MemoryAdmission[] = [];
+      // A pool whose limit is below blame's own wait, so the wait ends at once.
+      const memory = createDoMemoryBudget(DO_MEMORY.operationPoolBytes, {
+        maxWaitMs: 1,
+        onAdmission: (a) => admissions.push(a),
+      });
+      const other = await memory.reserve(DO_MEMORY.operationPoolBytes - BLAME_SHARE_BYTES + 1);
+      const git = new Proxy(repo.git, {
+        get: (inner, property) => (property === "memory" ? memory : Reflect.get(inner, property)),
+      });
+      const answer = await new RepoBlame({
+        git,
+        memoryBlocks: createClockBlockCache(),
+        storage: repo.git.context.storage as unknown as DurableObjectStorage,
+        repoId: () => repoId,
+        epochGen: () => repo.events.epochGen(),
+      }).answer({ path: "f.txt" });
+      other.release();
+      return {
+        answer: answer.ok ? "answered" : [answer.failure.status, answer.failure.code],
+        admissions: admissions.map(({ waitMs: _, ...a }) => a),
+        waiting: memory.stats().waiting,
+      };
+    });
+    expect(seen.answer).toEqual([503, "blame_busy"]);
+    expect(seen.admissions).toEqual([
+      { consumer: "blame", bytes: BLAME_SHARE_BYTES, outcome: "timed_out", queued: true },
+    ]);
+    expect(seen.waiting).toBe(0);
   });
 
   it("answers busy to a second request while a slice runs, touching nothing, and a retry resumes", async () => {

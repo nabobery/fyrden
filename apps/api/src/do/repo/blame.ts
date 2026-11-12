@@ -300,12 +300,14 @@ export class RepoBlame {
     // While the share is held, 24 MiB of the pool is left: a fetch plan (25 MiB
     // and up) or a push's indexing phase (33 MiB) waits for this request to end,
     // in arrival order, and fails once its wait reaches DO_MEMORY.maxWaitMs (60 s).
-    const signal = AbortSignal.timeout(SHARE_WAIT_MS);
     let share: { release(): void };
     try {
-      share = await this.deps.git.memory.begin(BLAME_SHARE_BYTES, signal);
+      share = await this.deps.git.memory.begin(BLAME_SHARE_BYTES, {
+        consumer: "blame",
+        waitMs: SHARE_WAIT_MS,
+      });
     } catch (error) {
-      if (signal.aborted || error instanceof MemoryWaitTimeoutError)
+      if (error instanceof MemoryWaitTimeoutError)
         return busy("Blame is busy in this repository; ask again shortly.");
       throw error;
     }
@@ -738,6 +740,10 @@ export class RepoBlame {
         lines: state.lines,
       };
     }
+    // Counted here, once the compare-and-set moved the row: this slice's ranges are
+    // the run's from now on, and no retry or later delivery settles them again.
+    for (const [reason, lines] of unresolvedSince(state, row.settledRanges))
+      git.context.metrics.count("blame.refused", { reason }, lines);
     if (row.checkpointKey) await git.bucket.delete(row.checkpointKey).catch(() => {});
     return this.#runs.get(row.runId) as RunRow;
   }
@@ -985,6 +991,28 @@ function tally(state: BlameState): { resolved: number; unresolved: number } {
   }
   if (state.stateLimit) unresolved = state.lines - resolved;
   return { resolved, unresolved };
+}
+
+/**
+ * Lines settled as unresolved by the ranges from `from` on, by reason, and,
+ * for a flagged state, the lines no range settled, as state_limit. Settled
+ * ranges only grow, and a flagged state is final, so the ranges a run had
+ * before a publish give the lines that publish settled.
+ */
+export function unresolvedSince(state: BlameState, from: number): Map<UnresolvedReason, number> {
+  const out = new Map<UnresolvedReason, number>();
+  let settled = 0;
+  for (let k = 0; k < state.rangeCount; k++) {
+    const count = state.ranges[4 * k + 1] as number;
+    const reference = state.ranges[4 * k + 2] as number;
+    settled += count;
+    if (k < from || reference >= 0) continue;
+    const reason = UNRESOLVED_REASONS[-1 - reference] as UnresolvedReason;
+    out.set(reason, (out.get(reason) ?? 0) + count);
+  }
+  if (state.stateLimit && state.lines > settled)
+    out.set("state_limit", (out.get("state_limit") ?? 0) + state.lines - settled);
+  return out;
 }
 
 /** The ranges overlapping lines `start` to `end`, cut to them, in line order. */

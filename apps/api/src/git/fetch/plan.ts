@@ -76,7 +76,7 @@ export async function planFetchInRepo(
   for (const row of git.registry.liveForFetch())
     indexes += idxBytesAtMost(row.objectCount, row.bytes ?? 0) ?? 0;
   const share = Math.min(fetchPlanMemoryBytes() + indexes, git.memory.stats().totalBytes);
-  const memory = await git.memory.begin(share);
+  const memory = await git.memory.begin(share, { consumer: "fetch_plan" });
   try {
     return await plan(deps, request, memory);
   } finally {

@@ -42,10 +42,13 @@ export {
   swapPacks,
 } from "./maintenance-swap.js";
 export {
+  type BeginOptions,
   createDoMemoryBudget,
   DO_MEMORY,
   type DoMemoryBudget,
+  type MemoryAdmission,
   type MemoryBudgetStats,
+  type MemoryConsumer,
   MemoryWaitTimeoutError,
   type OperationMemory,
   withReservation,

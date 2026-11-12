@@ -53,13 +53,23 @@ counted in `metrics.dropped`; a metrics write never fails the operation.
 | `worker.wall_ms` | as `worker.cpu_ms` | Wall time of the same invocation |
 | `metrics.dropped` | `where`, `op` (as for `subrequests`; `op` is `tail` for a Tail batch) | Data points the invocation could not write: over its budget of 200, or refused by Analytics Engine. Any point other than zero means the metrics of that invocation are incomplete |
 
-Workers report CPU time to Tail handlers only, not to the running code.
+Workers report CPU time in Tail events, not to the running code.
 `fyrden-web` is `fyrden-api`'s Tail consumer and writes `worker.cpu_ms` and
 `worker.wall_ms`. Tail Workers need the Workers Paid plan
 ([platform docs](https://developers.cloudflare.com/workers/observability/logs/tail-workers/)),
-so on Free there are no CPU metrics. Whether Durable Object invocations
-appear in Tail events alongside the Worker's has not been checked on a
+so on Free these two metrics stay empty. Whether Durable Object invocations
+reach a Tail Worker alongside the Worker's has not been checked on a Paid
 deployment yet.
+
+On Free, `wrangler tail --format=json` still gives each invocation's CPU time
+in whole milliseconds, in the event's `cpuTime` field, with Durable Object
+invocations as events of their own (`executionModel` is `durableObject`):
+**measured** on a Workers Free account, 2026-11-07 and 2026-11-08. The tail is
+a live stream, so it has to run for the whole window being measured. Under
+high traffic it samples, dropping some events, and at most 10 clients can
+follow one Worker at once
+([platform docs](https://developers.cloudflare.com/workers/observability/logs/real-time-logs/)).
+Maxima read from it are the maxima observed, not the true ones.
 
 ### Per repository
 
@@ -84,6 +94,32 @@ The latest point of a group is its current value.
 | `discarded` | Failed or abandoned uploads, waiting for cleanup |
 | `fetch` | Stored fetch responses (regenerated or framed packs) |
 
+### Memory
+
+A repository object holds a 72 MiB pool of working memory. Three kinds of
+work take a share of it before they start, waiting in arrival order when it
+isn't free: a blame request (48 MiB), a fetch plan (its base plus the
+estimated size of the live packs' indexes, at most the whole pool) and each
+slice of a push's indexing (about 33 MiB). Blame waits at most 2 seconds, then
+answers `503 blame_busy`; the others wait up to 60 seconds, then a fetch answers that
+the repository is busy and an indexing slice is tried again later.
+
+| Metric | Dimensions | Value |
+|---|---|---|
+| `memory.share_wait_ms` | `consumer` (`blame`, `fetch_plan`, `push_index`), `outcome` (`granted`, `timed_out`, `cancelled`), `queued` (`true`, `false`) | Milliseconds one start waited for its share: 0 when granted at once |
+| `memory.share_bytes` | as `memory.share_wait_ms` | Bytes that start asked for |
+
+Both are samples, one point each time work asks for its share, written by the
+invocation that asked when its wait ends. `queued` is `true` when the share
+couldn't be granted at once: the bytes weren't free, or other work was already
+waiting. A `queued` point therefore shows that other work overlapped it,
+though not which. Read `queued` rather than a non-zero wait as the sign of
+contention: the runtime's clock advances only on I/O, so a short wait can read
+0. `timed_out` is a wait that reached its limit; `cancelled` is one its caller
+gave up on (no caller does so today). A retried request, a retried indexing
+slice and the next slice of the same push each ask again and each count.
+Points are lost when an object is reset while it waits.
+
 ### Git operations
 
 | Metric | Dimensions | Value |
@@ -98,6 +134,7 @@ The latest point of a group is its current value.
 | `git.maintenance` | `job` (`repack`, `gc`, `reachability`, `retire`), `what` | Amounts per maintenance step (`bytes_in`, `bytes_out`, `objects`, `packs_in`, `packs_out`, `garbage_objects`, `garbage_bytes`, `condemned`, `deleted`, `deleted_bytes`, `expired_fetch`, `stale_output`, `all_reachable`, `slices`, `restarts`) |
 | `git.reaped` | `what` (`upload`, `pack`, `scratch`, `object`, `abort_failed`) | Items the cleanup of abandoned uploads removed |
 | `blame.run` | `event` (`lost`, `start_given_up`, `replaced`, `prune_failed`) | A blame run event, with an error log. `prune_failed`: their cleanup met an R2 failure and backs off, doubling up to an hour. `lost`: its slices kept dying at one point, so it answers `422 work_limit` until it expires. `start_given_up`: its start died three times. `replaced`: its checkpoint couldn't be read, so it started over |
+| `blame.refused` | `reason` (one of blame's unresolved reasons: `parent_too_large`, `too_many_parents`, `diff_budget`, `slide_unsettled`, `object_limit`, `work_limit`, `history_unreadable`, `history_missing`, `history_limit`, `state_limit`, `commit_info_too_large`, `rename_possible`, `step_lost`) | Lines a blame run settled as unresolved. Counted once, when the slice that settled them published its checkpoint and moved the run's row: delivering them again (pages, windows, a finished run read again), a retried request and a slice that lost its row count nothing. A new run of the same file and commit (after its run expired or was replaced, a restore, or a new blame engine) counts its lines again. Refusals answered over HTTP (`422`, `503 blame_busy`) aren't here: they show in `http.request`, and a lost run in `blame.run`. An invocation that ends abnormally after publishing may lose its points, so the count can be low, never high |
 
 ### Effects
 

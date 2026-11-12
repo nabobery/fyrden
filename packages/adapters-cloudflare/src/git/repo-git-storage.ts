@@ -100,7 +100,16 @@ export class RepoGitStorage {
       options.setAlarm ?? (() => {}),
       options.jobPolicy ?? DEFAULT_JOB_POLICY,
     );
-    this.memory = options.memory ?? createDoMemoryBudget(DO_MEMORY.operationPoolBytes);
+    this.memory =
+      options.memory ??
+      createDoMemoryBudget(DO_MEMORY.operationPoolBytes, {
+        now: () => this.context.now(),
+        onAdmission: ({ consumer, bytes, outcome, queued, waitMs }) => {
+          const dimensions = { consumer, outcome, queued: String(queued) };
+          this.context.metrics.count("memory.share_wait_ms", dimensions, waitMs);
+          this.context.metrics.count("memory.share_bytes", dimensions, bytes);
+        },
+      });
   }
 
   /**

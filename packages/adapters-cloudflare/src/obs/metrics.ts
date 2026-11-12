@@ -29,6 +29,17 @@ export const METRICS = {
   // couldn't be read, so the run started over) | prune_failed (cleanup
   // met an R2 failure and backed off).
   "blame.run": ["event"],
+  // Lines blame settled as unresolved (the value is the amount), by reason =
+  // one of git-core's UNRESOLVED_REASONS: counted once, when the publish
+  // that settled them moved the run's row; never for delivering them.
+  "blame.refused": ["reason"],
+  // A repository object's operations started on its memory pool, one point
+  // each: the wait in ms (0 when granted at once) and the bytes asked for, by
+  // consumer = blame | fetch_plan | push_index, outcome = granted | timed_out
+  // | cancelled, queued = true (it waited: the bytes weren't free, or others
+  // were waiting first) | false.
+  "memory.share_wait_ms": ["consumer", "outcome", "queued"],
+  "memory.share_bytes": ["consumer", "outcome", "queued"],
   "r2.class_a": ["bucket", "op"],
   "r2.class_b": ["bucket", "op"],
   "do.rows_written": ["class", "op"],
@@ -165,6 +176,8 @@ export const METRIC_AGGREGATION: Partial<Record<MetricName, MetricAggregation>> 
   "webhooks.stage_ms": "each",
   "feed.stage_ms": "each",
   "acl.snapshot_age_ms": "each",
+  "memory.share_wait_ms": "each",
+  "memory.share_bytes": "each",
   "worker.cpu_ms": "each",
   "d1.invocation_statements": "each",
   "d1.invocation_rows": "each",
