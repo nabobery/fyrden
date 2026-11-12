@@ -94,6 +94,10 @@ function cachedIdx(
       const idx = await open(budget);
       return idx instanceof PackIdx ? idx.lookupMany(oids) : idx.lookupMany(oids, budget);
     },
+    async hasMany(oids) {
+      const idx = await open(undefined);
+      return idx instanceof PackIdx ? oids.map((oid) => idx.find(oid) >= 0) : idx.hasMany(oids);
+    },
     async crc32At(position, budget) {
       const idx = await open(budget);
       return idx instanceof PackIdx ? idx.crc32At(position) : idx.crc32At(position, budget);

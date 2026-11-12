@@ -10,6 +10,11 @@ import { runDurableObjectAlarm } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
 import {
+  PackIndexCache,
+  packObjectKey,
+  type RepoGitStorage,
+} from "@fyrden/adapters-cloudflare/git";
+import {
   createSha1Hasher,
   encodeCommit,
   encodeTree,
@@ -19,17 +24,21 @@ import {
   type Oid,
   oidToHex,
   PackBuilder,
+  type PackId,
 } from "@fyrden/git-core";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { PACK_CAP_JOB_ID } from "../src/git/maintenance/tail-merge-job.js";
 import { PACK_CAP_DEFAULTS } from "../src/git/maintenance/tail-merge-plan.js";
+import { followMergedAway } from "../src/git/push/merged-deps.js";
 import { pushBody, reportLines, ZERO } from "./helpers/push-fixtures.js";
 import { inRepo, newRepo } from "./helpers/repo-git.js";
 
 type Stub = DurableObjectStub<RepoDO>;
 
 const MAIN = "refs/heads/main";
+/** Where an `.idx`'s oid table starts: after its 8-byte header and 1,024-byte fanout. */
+const IDX_OIDS_START = 8 + 1024;
 const GONE = "objects this push builds on were removed meanwhile; try the push again";
 const encoder = new TextEncoder();
 const zlib = createWorkersZlib();
@@ -264,6 +273,75 @@ const refOf = (stub: Stub, ref: string) =>
   inRepo(stub, ({ git }) => {
     const oid = git.refStore.readRefsSync().refs.get(ref);
     return oid ? oidToHex(oid) : null;
+  });
+
+/**
+ * `git` with every `.idx` read of the bucket recorded per pack as [offset, length] (a whole
+ * read as [0, -1]), and an index cache too small to hold any index whole: every index is
+ * then read by ranges, as one larger than the cache's whole-index bound is.
+ */
+function rangedIdxReads(git: RepoGitStorage) {
+  const reads = new Map<string, [number, number][]>();
+  const bucket = new Proxy(git.bucket, {
+    get(target, property) {
+      if (property === "get") {
+        return (key: string, options?: R2GetOptions) => {
+          const range = options?.range as { offset: number; length: number } | undefined;
+          const list = reads.get(key) ?? [];
+          list.push(range ? [range.offset, range.length] : [0, -1]);
+          reads.set(key, list);
+          return target.get(key, options);
+        };
+      }
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const packIndexes = new PackIndexCache(4 * 1024);
+  const ranged = new Proxy(git, {
+    get(inner, property) {
+      if (property === "bucket") return bucket;
+      if (property === "packIndexes") return packIndexes;
+      return Reflect.get(inner, property);
+    },
+  });
+  /** The reads of `packId`'s index: its header and fanout, then the rest. */
+  const of = (packId: string) => {
+    const [open, ...rest] = reads.get(packObjectKey(git.networkId(), packId, "idx")) ?? [];
+    const count = git.registry.get(packId)?.objectCount ?? 0;
+    // The oid table, between the fanout and the CRC32s; the offset tables follow those.
+    const oidTableEnd = IDX_OIDS_START + 20 * count;
+    return {
+      open,
+      oidTable: rest.filter(([at, length]) => at >= IDX_OIDS_START && at + length <= oidTableEnd),
+      other: rest.filter(([at, length]) => !(at >= IDX_OIDS_START && at + length <= oidTableEnd)),
+    };
+  };
+  return { git: ranged, reads, of };
+}
+
+/** Follows `packId` with every index read by ranges; its result and each readable pack's index reads. */
+const followRanged = (stub: Stub, packId: string) =>
+  inRepo(stub, async ({ git }) => {
+    const { git: ranged, reads, of } = rangedIdxReads(git);
+    let onRead = 0;
+    const counter = { calls: 0 };
+    const deps = await followMergedAway(
+      ranged,
+      [packId as PackId],
+      { counter, onRead: () => onRead++ },
+      () => true,
+    );
+    const live = git.registry.liveOwn().map((p) => p.packId as string);
+    const rangeReads = [...reads.values()].flat().filter(([, length]) => length >= 0).length;
+    return {
+      deps: deps?.map(String),
+      live,
+      holders: live.map((id) => of(id)),
+      sourceReads: counter.calls,
+      onRead,
+      rangeReads,
+    };
   });
 
 describe("push: dependencies merged away by compaction", () => {
@@ -534,5 +612,94 @@ describe("push: dependencies merged away by compaction", () => {
       "0000",
     ]);
     expect(await refOf(stub, "refs/heads/a")).toBeNull();
+  });
+  it("follows a dependency of two lookup slices through holders read by ranges, reading only their oid tables", async () => {
+    const { stub } = await newRepo();
+    await inRepo(stub, (repo) => {
+      repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 1 };
+    });
+    // 4,102 objects: two lookup slices.
+    const wide = await widePack(4_100);
+    expect(
+      await push(
+        stub,
+        concat([pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: MAIN }]), wide.pack]),
+      ),
+    ).toEqual(ok(MAIN));
+    const widePackId = await onlyLivePack(stub);
+    expect(await push(stub, (await branchBody("refs/heads/b", wide.oid, 680)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+
+    const followed = await followRanged(stub, widePackId);
+    // The compacted pack holds every object, as its oid table shows: one read for each
+    // slice, after its header, and no read of its offsets (32-bit or 64-bit).
+    expect(followed.live).toHaveLength(1);
+    expect(followed.deps).toEqual(followed.live);
+    const [holder] = followed.holders;
+    expect(holder?.open).toEqual([0, IDX_OIDS_START]);
+    expect(holder?.oidTable).toHaveLength(2);
+    expect(holder?.other).toEqual([]);
+    // Read accounting: the source index once, whole; every range read reported.
+    expect(followed.sourceReads).toBe(1);
+    expect(followed.onRead).toBe(followed.rangeReads);
+  });
+
+  it("keeps a dependency whose later lookup slice no holder read by ranges has, after checking that slice", async () => {
+    const { stub } = await newRepo();
+    await inRepo(stub, (repo) => {
+      repo.packCap = { ...PACK_CAP_DEFAULTS, cap: 1 };
+    });
+    // The wide commit's 4,102 objects, and 6 blobs sorting after all of them: the second slice.
+    const wide = await widePack(4_100);
+    const highest = wide.objects
+      .map((o) => oidToHex(o.oid))
+      .sort()
+      .at(-1) as string;
+    const extras: PackObject[] = [];
+    for (let i = 0; extras.length < 6; i++) {
+      const data = encoder.encode(`later slice ${i}\n`);
+      const blobOid = await hashObject(sha1, "blob", data);
+      if (oidToHex(blobOid) > highest) extras.push({ type: "blob", data, oid: blobOid });
+    }
+    expect(
+      await push(
+        stub,
+        concat([
+          pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: MAIN }]),
+          await packOf([...wide.objects, ...extras]),
+        ]),
+      ),
+    ).toEqual(ok(MAIN));
+    const widePackId = await onlyLivePack(stub);
+    expect(await push(stub, (await branchBody("refs/heads/b", wide.oid, 690)).bytes)).toEqual(
+      ok("refs/heads/b"),
+    );
+    // The compacted pack is removed for good; a new pack holds the wide commit's objects
+    // again, but not the 6 blobs.
+    await inRepo(stub, ({ git }) => {
+      for (const pack of git.registry.liveOwn())
+        git.registry.transition(pack.packId, ["live"], "condemned");
+    });
+    expect(
+      await push(
+        stub,
+        concat([
+          pushBody([{ old: ZERO, new: oidToHex(wide.oid), ref: "refs/heads/p" }]),
+          wide.pack,
+        ]),
+      ),
+    ).toEqual(ok("refs/heads/p"));
+
+    const followed = await followRanged(stub, widePackId);
+    // Kept as it is, so the commit refuses.
+    expect(followed.deps).toEqual([widePackId]);
+    // The new pack answered the first slice and was asked for the second: an oid-table read
+    // each, and no offsets read.
+    expect(followed.live).toHaveLength(1);
+    const [holder] = followed.holders;
+    expect(holder?.oidTable).toHaveLength(2);
+    expect(holder?.other).toEqual([]);
+    expect(followed.onRead).toBe(followed.rangeReads);
   });
 });
