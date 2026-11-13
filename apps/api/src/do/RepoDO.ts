@@ -660,7 +660,11 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
-    this.checks = new RepoChecks({ git: this.git, events: this.events });
+    this.checks = new RepoChecks({
+      git: this.git,
+      events: this.events,
+      required: (baseRef) => this.#authority.requiredOn(baseRef).checks.map((c) => c.check),
+    });
     this.releases = new RepoReleases({
       git: this.git,
       events: this.events,

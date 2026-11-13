@@ -7,6 +7,7 @@ import {
 } from "../../src/checks/checks.js";
 import {
   candidateFacts,
+  countedByRequired,
   MAX_CHECKS_NAMED,
   type RequiredStatusCheck,
   requiredCheckOutcomes,
@@ -263,5 +264,27 @@ describe("the refusal", () => {
     const refusal = requiredChecksRefusal(requiredCheckOutcomes(required, facts()));
     expect(refusal?.match(/required status check "/g)).toHaveLength(MAX_CHECKS_NAMED);
     expect(refusal).toMatch(/; and 3 more required status checks are not passing$/);
+  });
+});
+
+describe("the summaries a pull request's required checks count", () => {
+  it("are those the rule decides by: the latest status of each name, every check, from its source", () => {
+    const a = status("build", "usr_a", "failure", 3);
+    const b = status("build", "usr_b", "success", 7);
+    const ci = check("build", "completed", "success");
+    const lint = status("lint", "usr_a", "failure", 2);
+    const pinned = status("test", "usr_a", "failure", 4);
+    const other = status("test", "usr_b", "failure", 5);
+    const unrequired = status("docs", "usr_a", "failure", 6);
+    expect(
+      countedByRequired(
+        [req("build"), req("BUILD"), req("lint"), req("test", "usr_a")],
+        [a, b, ci, lint, pinned, other, unrequired],
+      ),
+    ).toEqual([b, ci, lint, pinned]);
+  });
+
+  it("count nothing when no check is required", () => {
+    expect(countedByRequired([], [status("build", "usr_a", "failure", 1)])).toEqual([]);
   });
 });

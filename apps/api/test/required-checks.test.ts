@@ -607,3 +607,79 @@ describe("a pull request's required checks", () => {
     });
   });
 });
+
+describe("failed CI once a rule names required checks", () => {
+  let head: string;
+  /** The names failing on pull request 1's head, as its `ci_failed` item holds them. */
+  const failing = async () => {
+    const [row] = (await inRepo(stub(), (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ failing: string }>("SELECT failing FROM pull_checks WHERE pr_number = 1")
+        .toArray(),
+    )) as { failing: string }[];
+    return row
+      ? (JSON.parse(row.failing) as { shown: { name: string }[] }).shown.map((f) => f.name)
+      : [];
+  };
+
+  beforeEach(async () => {
+    const made = await json<{ commit: { sha: string } }>(
+      api("POST", `${path}/file-commits`, owner.token, {
+        branch: "topic",
+        message: "change",
+        changes: [{ path: "new.txt", content: "new\n" }],
+      }),
+    );
+    head = made.body.commit.sha;
+    expect(
+      (await api("POST", `${path}/pulls`, owner.token, { title: "T", head: "topic", base: "main" }))
+        .status,
+    ).toBe(201);
+  });
+
+  it("counts only the required checks, as the rule decides them", async () => {
+    await requireChecks();
+    await status(head, "failure", "docs");
+    expect(await failing()).toEqual([]);
+    await status(head, "failure", "ci/build");
+    expect(await failing()).toEqual(["ci/build"]);
+  });
+
+  it("resolves when another publisher's later status passes the check", async () => {
+    const ci = await user();
+    expect(
+      (await api("PUT", `${path}/collaborators/${ci.handle}`, owner.token, { permission: "push" }))
+        .status,
+    ).toBe(200);
+    await requireChecks();
+    await status(head, "failure", "ci/build", owner);
+    expect(await failing()).toEqual(["ci/build"]);
+    await status(head, "success", "ci/build", ci);
+    expect(await failing()).toEqual([]);
+  });
+
+  it("applies a ruleset made since at the head's next status or completed check, not before", async () => {
+    await status(head, "failure", "docs");
+    expect(await failing()).toEqual(["docs"]);
+    await requireChecks({
+      required_status_checks: [{ context: "build", integration_id: FYRDEN_CI_SOURCE }],
+    });
+    const attempt = await ciCheck(head, "build", null);
+    const [running] = await stub().recordCheckUpdates([
+      { sha: head, name: "build", attempt, status: "in_progress" },
+    ]);
+    expect(running).toBe("applied");
+    // Starting and running change no feed state.
+    expect(await failing()).toEqual(["docs"]);
+    const [done] = await stub().recordCheckUpdates([
+      { sha: head, name: "build", attempt, status: "completed", conclusion: "success" },
+    ]);
+    expect(done).toBe("applied");
+    expect(await failing()).toEqual([]);
+  });
+
+  it("keeps counting every check while no rule names any", async () => {
+    await status(head, "failure", "docs");
+    expect(await failing()).toEqual(["docs"]);
+  });
+});
