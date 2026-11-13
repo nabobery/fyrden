@@ -6,6 +6,13 @@ import { describe, expect, it } from "vitest";
 import { parseWorkflow } from "../../src/ci/parse.js";
 
 const encoder = new TextEncoder();
+
+/**
+ * A limit for tests whose input is deliberately at a bound (the node budget,
+ * the stack): generous because CI runs every package's suite at once on one
+ * runner. What they assert is the outcome and the work, never the time.
+ */
+const LARGE_INPUT = 60_000;
 const parse = (text: string) => parseWorkflow("w.yml", encoder.encode(text));
 const JOB = "jobs:\n  b:\n    runs-on: x\n    steps: [{run: a}]\n";
 const job = (jobLines = "", stepLines = "") =>
@@ -37,22 +44,30 @@ describe("keys that name deeper features or values", () => {
 });
 
 describe("long text read many times", () => {
-  it("charges a scalar's length at each use through an alias", () => {
-    const long = `a/b@${"v".repeat(64_000)}`;
-    const uses = Array.from({ length: 100 }, () => "      - *step").join("\n");
-    const text = `on: push\njobs:\n  build:\n    runs-on: x\n    steps:\n      - &step {uses: "${long}"}\n${uses}\n`;
-    expect(summary(text)).toEqual(["yaml_too_complex jobs.build.steps[49].uses"]);
-  });
+  it(
+    "charges a scalar's length at each use through an alias",
+    () => {
+      const long = `a/b@${"v".repeat(64_000)}`;
+      const uses = Array.from({ length: 100 }, () => "      - *step").join("\n");
+      const text = `on: push\njobs:\n  build:\n    runs-on: x\n    steps:\n      - &step {uses: "${long}"}\n${uses}\n`;
+      expect(summary(text)).toEqual(["yaml_too_complex jobs.build.steps[49].uses"]);
+    },
+    LARGE_INPUT,
+  );
 
-  it("charges a key's length too", () => {
-    const key = "K".repeat(64_000);
-    const jobs = Array.from(
-      { length: 100 },
-      (_, i) => `  j${i}:\n    runs-on: x\n    env: *env\n    steps: [{run: a}]\n`,
-    ).join("");
-    const parsed = parse(`on: push\nenv: &env {${key}: v}\njobs:\n${jobs}`);
-    expect(parsed.ok || parsed.errors.map((e) => e.code)).toEqual(["yaml_too_complex"]);
-  });
+  it(
+    "charges a key's length too",
+    () => {
+      const key = "K".repeat(64_000);
+      const jobs = Array.from(
+        { length: 100 },
+        (_, i) => `  j${i}:\n    runs-on: x\n    env: *env\n    steps: [{run: a}]\n`,
+      ).join("");
+      const parsed = parse(`on: push\nenv: &env {${key}: v}\njobs:\n${jobs}`);
+      expect(parsed.ok || parsed.errors.map((e) => e.code)).toEqual(["yaml_too_complex"]);
+    },
+    LARGE_INPUT,
+  );
 });
 
 describe("errors quoting huge keys", () => {

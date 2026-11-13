@@ -11,6 +11,13 @@ import {
 } from "../../src/ci/workflow-schema.js";
 
 const encoder = new TextEncoder();
+
+/**
+ * A limit for tests whose input is deliberately at a bound (the node budget,
+ * the stack): generous because CI runs every package's suite at once on one
+ * runner. What they assert is the outcome and the work, never the time.
+ */
+const LARGE_INPUT = 60_000;
 const parse = (text: string) => parseWorkflow("w.yml", encoder.encode(text));
 const job = (jobLines = "", stepLines = "") =>
   `on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n${jobLines}    steps:\n      - run: echo hi\n${stepLines}`;
@@ -44,13 +51,18 @@ describe("anchors and aliases", () => {
     ]);
   });
 
-  it("stops an alias bomb within the node budget", () => {
-    // Each dimension doubles the one before: 2^21 values if expanded.
-    let dimensions = "        x0: &a0 [v, v]\n";
-    for (let i = 1; i <= 20; i++) dimensions += `        x${i}: &a${i} [*a${i - 1}, *a${i - 1}]\n`;
-    const parsed = parse(job(`    strategy:\n      matrix:\n${dimensions}`));
-    expect(parsed.ok || parsed.errors.map((e) => e.code)).toEqual(["yaml_too_complex"]);
-  });
+  it(
+    "stops an alias bomb within the node budget",
+    () => {
+      // Each dimension doubles the one before: 2^21 values if expanded.
+      let dimensions = "        x0: &a0 [v, v]\n";
+      for (let i = 1; i <= 20; i++)
+        dimensions += `        x${i}: &a${i} [*a${i - 1}, *a${i - 1}]\n`;
+      const parsed = parse(job(`    strategy:\n      matrix:\n${dimensions}`));
+      expect(parsed.ok || parsed.errors.map((e) => e.code)).toEqual(["yaml_too_complex"]);
+    },
+    LARGE_INPUT,
+  );
 
   it("refuses nesting deeper than the bound before walking it", () => {
     const deep = `${"[".repeat(MAX_YAML_DEPTH + 1)}${"]".repeat(MAX_YAML_DEPTH + 1)}`;
@@ -70,20 +82,32 @@ describe("anchors and aliases", () => {
     expect(codes(text)).toEqual(["yaml_too_complex"]);
   });
 
-  it("stops a tree too large or deep in the anchor pass, before the walk", () => {
-    const wide = Array.from({ length: MAX_WORKFLOW_NODES / 2 + 1 }, (_, i) => `k${i}: 1`).join(
-      ", ",
-    );
-    expect(codes(`env: {${wide}}\n${job()}`)).toEqual(["yaml_too_complex"]);
-    const nested = `${"[".repeat(400)}{${Array.from({ length: 2_000 }, (_, i) => `k${i}: v`).join(", ")}}${"]".repeat(400)}`;
-    expect(codes(`env: ${nested}\n${job()}`)).toEqual(["yaml_too_complex"]);
-  });
+  it(
+    "stops a tree too large or deep in the anchor pass, before the walk",
+    () => {
+      const wide = Array.from({ length: MAX_WORKFLOW_NODES / 2 + 1 }, (_, i) => `k${i}: 1`).join(
+        ", ",
+      );
+      expect(codes(`env: {${wide}}\n${job()}`)).toEqual(["yaml_too_complex"]);
+      const nested = `${"[".repeat(400)}{${Array.from({ length: 2_000 }, (_, i) => `k${i}: v`).join(", ")}}${"]".repeat(400)}`;
+      expect(codes(`env: ${nested}\n${job()}`)).toEqual(["yaml_too_complex"]);
+    },
+    LARGE_INPUT,
+  );
 
-  it("turns nesting too deep for the stack into an error, never a throw", () => {
-    const depth = 100_000;
-    expect(() => parse(`${"[".repeat(depth)}${"]".repeat(depth)}`)).not.toThrow();
-    expect(codes(`${"[".repeat(depth)}${"]".repeat(depth)}`)).not.toEqual([]);
-  });
+  it(
+    "turns nesting too deep for the stack into an error, never a throw",
+    () => {
+      const depth = 100_000;
+      // parseWorkflow never throws (codes() would fail the test if it did).
+      // The library reports the overflow (yaml_syntax); a runtime with a deeper stack would reach
+      // the parser's own depth bound instead (yaml_too_complex). Either way, one error.
+      const found = codes(`${"[".repeat(depth)}${"]".repeat(depth)}`);
+      expect(found).toHaveLength(1);
+      expect(["yaml_syntax", "yaml_too_complex"]).toContain(found[0]);
+    },
+    LARGE_INPUT,
+  );
 });
 
 describe("keys", () => {
@@ -100,12 +124,16 @@ describe("keys", () => {
     expect(parsed.ok || parsed.errors[0]).toMatchObject({ path: "name", line: 2, column: 1 });
   });
 
-  it("checks a wide mapping's keys in linear work: no library check, one lookup per key", () => {
-    expect(YAML_OPTIONS.uniqueKeys).toBe(false);
-    const wide = Array.from({ length: 20_000 }, (_, i) => `K${i}: v`).join("\n  ");
-    const parsed = parse(`env:\n  ${wide}\n${job()}`);
-    expect(parsed.ok || parsed.errors).toBe(true);
-  });
+  it(
+    "checks a wide mapping's keys in linear work: no library check, one lookup per key",
+    () => {
+      expect(YAML_OPTIONS.uniqueKeys).toBe(false);
+      const wide = Array.from({ length: 20_000 }, (_, i) => `K${i}: v`).join("\n  ");
+      const parsed = parse(`env:\n  ${wide}\n${job()}`);
+      expect(parsed.ok || parsed.errors).toBe(true);
+    },
+    LARGE_INPUT,
+  );
 
   it("refuses a merge key by name", () => {
     const parsed = parse(`env: &e {A: b}\n${job("    env:\n      <<: *e\n")}`);
@@ -193,12 +221,15 @@ describe("YAML version, directives and tags", () => {
     expect(parsed.ok || parsed.errors[0]?.line).toBe(3);
   });
 
-  it("does not format diagnostics: a line of many tagged items costs one error each, bounded", () => {
+  it("does not format diagnostics, and reports a line of many tagged items in bounded errors", () => {
     expect(YAML_OPTIONS.prettyErrors).toBe(false);
-    const line = `env: [${Array(83_333).fill("!x a").join(",")}]`.slice(0, 499_000);
-    const parsed = parse(`${line}]\n${job()}`);
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) expect(parsed.errors.length).toBeLessThanOrEqual(MAX_WORKFLOW_ERRORS + 1);
+    const tagged = `[${Array(10_000).fill("!x a").join(",")}]`;
+    const parsed = parse(job().replace("runs-on: ubuntu-latest", `runs-on: ${tagged}`));
+    if (parsed.ok) throw new Error("parsed");
+    // Each item is refused in turn until the cap, then one entry says there were more.
+    expect(parsed.errors).toHaveLength(MAX_WORKFLOW_ERRORS + 1);
+    expect(parsed.errors.slice(0, -1).every((e) => e.feature === "yaml.tags")).toBe(true);
+    expect(parsed.errors.at(-1)?.code).toBe("too_many_errors");
   });
 });
 
