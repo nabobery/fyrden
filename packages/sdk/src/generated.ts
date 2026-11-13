@@ -7249,6 +7249,79 @@ export type ReposCommitsListOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `statuses.list`: List commit statuses for a reference. */
+export type StatusesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A full commit SHA, a branch, a tag or a full ref name. One path segment: percent-encode a slash (`feature%2Fx`). */
+  ref: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `statuses.list`. */
+export type StatusesListOutput = {
+  statuses: ({
+    id: number;
+    state: "pending" | "success" | "failure" | "error";
+    context: string;
+    description: string | null;
+    target_url: string | null;
+    created_at: number;
+    /** A status never changes: its creation time. */
+    updated_at: number;
+    /** The principal that posted it. */
+    creator: {
+      id: string;
+    };
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `statuses.combined`: Get the combined status for a reference. */
+export type StatusesCombinedInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A full commit SHA, a branch, a tag or a full ref name. One path segment: percent-encode a slash (`feature%2Fx`). */
+  ref: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `statuses.combined`. */
+export type StatusesCombinedOutput = {
+  state: "pending" | "success" | "failure";
+  /** The commit the ref named. */
+  sha: string;
+  /** Contexts with a status. */
+  total_count: number;
+  statuses: ({
+    id: number;
+    state: "pending" | "success" | "failure" | "error";
+    context: string;
+    description: string | null;
+    target_url: string | null;
+    created_at: number;
+    /** A status never changes: its creation time. */
+    updated_at: number;
+    /** The principal that posted it. */
+    creator: {
+      id: string;
+    };
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `repos.commits.get`: Get a commit. */
 export type ReposCommitsGetInput = {
   /** The owner's handle. */
@@ -7425,6 +7498,39 @@ export type ReposCompareOutput = {
       sha: string;
     }[];
   })[];
+};
+
+/** Input of `statuses.create`: Create a commit status. */
+export type StatusesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The commit. */
+  sha: string;
+  state: "pending" | "success" | "failure" | "error";
+  /** A link to the status's details (absolute http or https). */
+  target_url?: string | null;
+  /** A short description, at most 140 characters. */
+  description?: string | null;
+  /** The label that tells this system's statuses from others'. */
+  context?: string;
+};
+
+/** Output of `statuses.create`. */
+export type StatusesCreateOutput = {
+  id: number;
+  state: "pending" | "success" | "failure" | "error";
+  context: string;
+  description: string | null;
+  target_url: string | null;
+  created_at: number;
+  /** A status never changes: its creation time. */
+  updated_at: number;
+  /** The principal that posted it. */
+  creator: {
+    id: string;
+  };
 };
 
 /** Input of `repos.blame.get`: Blame a file. */
@@ -8762,8 +8868,11 @@ export const OPERATIONS = {
   "repos.branches.get": { method: "GET", path: "/repos/{owner}/{repo}/branches/{branch+}", pathParams: ["owner","repo","branch"], idempotent: false },
   "repos.tags.list": { method: "GET", path: "/repos/{owner}/{repo}/tags", pathParams: ["owner","repo"], idempotent: false, items: "tags" },
   "repos.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/commits", pathParams: ["owner","repo"], idempotent: false, items: "commits" },
+  "statuses.list": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref}/statuses", pathParams: ["owner","repo","ref"], idempotent: false, items: "statuses" },
+  "statuses.combined": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref}/status", pathParams: ["owner","repo","ref"], idempotent: false, items: "statuses" },
   "repos.commits.get": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref+}", pathParams: ["owner","repo","ref"], idempotent: false },
   "repos.compare": { method: "GET", path: "/repos/{owner}/{repo}/compare/{basehead+}", pathParams: ["owner","repo","basehead"], idempotent: false },
+  "statuses.create": { method: "POST", path: "/repos/{owner}/{repo}/statuses/{sha}", pathParams: ["owner","repo","sha"], idempotent: true },
   "repos.blame.get": { method: "GET", path: "/repos/{owner}/{repo}/blame", pathParams: ["owner","repo"], idempotent: false },
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
@@ -9190,10 +9299,16 @@ export interface Operations {
   "repos.tags.list": { input: ReposTagsListInput; output: ReposTagsListOutput };
   /** List commits. The history from a branch, tag or commit (the default branch without `sha`), newest first, as `git log` lists it (unless commit dates go backwards: the order is by corrected commit date); with `path`, only commits that change that file or directory. A page can hold fewer commits than `per_page` and still have a next one. */
   "repos.commits.list": { input: ReposCommitsListInput; output: ReposCommitsListOutput };
-  /** Get a commit. One commit, named by its SHA or by a branch or tag. */
+  /** List commit statuses for a reference. Every status posted on the commit `ref` names, newest first. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:read` permission. */
+  "statuses.list": { input: StatusesListInput; output: StatusesListOutput };
+  /** Get the combined status for a reference. The latest status of each context on the commit `ref` names, whoever posted it, in context order, and their roll-up: `failure` if any is `failure` or `error`, else `pending` if there are none or any is `pending`, else `success`. `state` and `total_count` cover every context, whatever the page. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:read` permission. */
+  "statuses.combined": { input: StatusesCombinedInput; output: StatusesCombinedOutput };
+  /** Get a commit. One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (`feature%2Fstatus`): raw, a name ending in `/status` or `/statuses` reads that commit's commit statuses instead. */
   "repos.commits.get": { input: ReposCommitsGetInput; output: ReposCommitsGetOutput };
   /** Compare two commits. Compares `base...head` (branches, tags or SHAs): how far head is ahead of and behind base, their merge base, and the commits in head and not in base, oldest first (the newest 100). File differences are not included. */
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };
+  /** Create a commit status. Posts a status on a commit: `state` is `pending`, `success`, `failure` or `error`, under a `context` (default `default`, compared ignoring case) that tells one system's statuses from another's. The commit must be one this repository has (422 `commit_not_found`). A commit takes 1,000 statuses of one context and 10,000 in all (422 `status_limit`), and 1,000 status summaries (each publisher's contexts, counted across publishers; 422 `check_limit`). The status is attributed to the principal that posts it: a required check naming an expected source matches that principal. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:write` permission. */
+  "statuses.create": { input: StatusesCreateInput; output: StatusesCreateOutput };
   /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
   "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };
   /** List the repository's root directory. The root directory's entries at a branch, tag or commit, a page at a time. */

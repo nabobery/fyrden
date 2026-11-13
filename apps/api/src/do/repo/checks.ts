@@ -56,6 +56,21 @@ export interface StatusRecord {
   readonly createdAt: number;
 }
 
+/** A page of a commit's statuses, newest first; `next` the id to continue before. */
+export interface StatusPage {
+  readonly statuses: StatusRecord[];
+  readonly next: number | null;
+}
+
+/** A commit's combined status: the roll-up over every context, and a page of them in key order. */
+export interface CombinedStatus {
+  readonly state: "pending" | "success" | "failure";
+  readonly totalCount: number;
+  readonly statuses: StatusRecord[];
+  /** The context key to continue after. */
+  readonly next: string | null;
+}
+
 export type StatusFailure =
   | "forbidden"
   | "invalid_status"
@@ -328,6 +343,61 @@ export class RepoChecks {
         }
       return results;
     });
+  }
+
+  /** `sha`'s statuses, newest first, before id `before`. */
+  listStatuses(sha: string, before: number | null, limit: number): StatusPage {
+    const rows = this.#exec<StatusRow>(
+      "checks.read",
+      "SELECT * FROM commit_statuses WHERE sha = ? AND id < ? ORDER BY id DESC LIMIT ?",
+      sha,
+      before ?? Number.MAX_SAFE_INTEGER,
+      limit + 1,
+    );
+    const shown = rows.slice(0, limit);
+    return {
+      statuses: shown.map(statusRecord),
+      next: rows.length > limit ? (shown.at(-1)?.id ?? null) : null,
+    };
+  }
+
+  /**
+   * `sha`'s combined status: each context's latest status, whoever posted it,
+   * rolled up as GitHub does (failure if any is failure or error, else
+   * pending if there is none or any is pending, else success); the page
+   * after context key `after`.
+   */
+  combinedStatus(sha: string, after: string | null, limit: number): CombinedStatus {
+    // Each publisher's summary points at its latest status of a context; the context's latest is
+    // the greatest of them. At most the commit's 1,000 status summaries.
+    const latest = this.#exec<StatusRow & { context_key: string }>(
+      "checks.read",
+      `SELECT s.* FROM commit_statuses s
+       WHERE s.id IN (
+         SELECT max(status_id) FROM check_summaries
+         WHERE sha = ? AND kind = 'status' GROUP BY name_key)`,
+      sha,
+    );
+    // Ordered and continued with one comparison (SQLite's would order UTF-8 bytes, which UTF-16
+    // comparison does not follow past the Basic Multilingual Plane).
+    latest.sort((a, b) =>
+      a.context_key < b.context_key ? -1 : a.context_key > b.context_key ? 1 : 0,
+    );
+    const states = new Set(latest.map((row) => row.state));
+    const state =
+      states.has("failure") || states.has("error")
+        ? "failure"
+        : latest.length === 0 || states.has("pending")
+          ? "pending"
+          : "success";
+    const rest = after === null ? latest : latest.filter((row) => row.context_key > after);
+    const shown = rest.slice(0, limit);
+    return {
+      state,
+      totalCount: latest.length,
+      statuses: shown.map(statusRecord),
+      next: rest.length > limit ? (shown.at(-1)?.context_key ?? null) : null,
+    };
   }
 
   /** Every publisher's summary of every check on `sha`. */
