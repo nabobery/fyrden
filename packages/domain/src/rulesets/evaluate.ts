@@ -9,7 +9,13 @@ import {
   type Rule,
   type Ruleset,
   refPatternMatches,
+  requiredChecksOf,
 } from "./ruleset.js";
+import {
+  requiredCheckOutcomes,
+  requiredChecksRefusal,
+  type StatusCheckFacts,
+} from "./status-checks.js";
 
 /** Who is pushing: their principal type and their role on the repository. */
 export interface RuleActor {
@@ -31,6 +37,12 @@ export interface RefChange {
    * refuses the update.
    */
   readonly pullRequest?: MergeContext;
+  /**
+   * The check summaries of the commit whose checks count: the new tip, or a
+   * merge's pull request head. Known at the commit point, and at a merge's
+   * precheck; left out at the commit point, required checks are missing.
+   */
+  readonly statusChecks?: StatusCheckFacts;
 }
 
 /** What a merge's rules read about the pull request being merged. */
@@ -125,8 +137,12 @@ export function ruleViolations(
 ): RuleViolation[] {
   const out: RuleViolation[] = [];
   for (const { ruleset, rule } of applicableRules(rulesets, change.ref, actor, defaultBranch)) {
-    if (stage === "precheck" && !PRECHECK_RULES.has(rule.type)) continue;
-    const broken = breaks(rule, change);
+    // Required checks need the commit's facts: before an upload they are known only for a merge.
+    const judgedEarly =
+      PRECHECK_RULES.has(rule.type) ||
+      (rule.type === "required_status_checks" && change.statusChecks !== undefined);
+    if (stage === "precheck" && !judgedEarly) continue;
+    const broken = breaks(rule, change, ruleset, stage);
     if (broken)
       out.push({
         rulesetId: ruleset.id,
@@ -139,7 +155,12 @@ export function ruleViolations(
   return out;
 }
 
-function breaks(rule: Rule, change: RefChange): string | undefined {
+function breaks(
+  rule: Rule,
+  change: RefChange,
+  ruleset: Ruleset,
+  stage: "precheck" | "commit",
+): string | undefined {
   switch (rule.type) {
     case "creation":
       return change.kind === "create" ? "cannot create this ref" : undefined;
@@ -150,9 +171,9 @@ function breaks(rule: Rule, change: RefChange): string | undefined {
     case "pull_request":
       return pullRequestRefusal(rule, change.pullRequest);
     case "require_up_to_date":
-      return change.pullRequest && !change.pullRequest.upToDate
-        ? `pull request #${change.pullRequest.number} must include the latest commit of the branch it merges into`
-        : undefined;
+      return upToDateRefusal(change);
+    case "required_status_checks":
+      return requiredChecksRefusalOf(rule, change, ruleset, stage);
     case "non_fast_forward":
       return change.kind === "update" && change.fastForward === false
         ? "cannot force-push to this ref"
@@ -162,6 +183,41 @@ function breaks(rule: Rule, change: RefChange): string | undefined {
         ? `commits must have verified signatures (${change.unverifiedCommit.sha.slice(0, 12)} is ${change.unverifiedCommit.reason})`
         : undefined;
   }
+}
+
+function upToDateRefusal(change: RefChange): string | undefined {
+  return change.pullRequest && !change.pullRequest.upToDate
+    ? `pull request #${change.pullRequest.number} must include the latest commit of the branch it merges into`
+    : undefined;
+}
+
+/**
+ * The required checks of the commit that counts, and, strict (the
+ * default), being up to date as `require_up_to_date` asks: said by that
+ * rule when the ruleset has it too and it is judged at this stage, so once.
+ */
+function requiredChecksRefusalOf(
+  rule: Rule,
+  change: RefChange,
+  ruleset: Ruleset,
+  stage: "precheck" | "commit",
+) {
+  if (change.kind === "delete") return undefined;
+  const parameters = requiredChecksOf(rule);
+  const reasons: string[] = [];
+  if (!(change.kind === "create" && parameters.do_not_enforce_on_create)) {
+    const outcomes = requiredCheckOutcomes(parameters.required_status_checks, change.statusChecks);
+    const checks = requiredChecksRefusal(outcomes);
+    if (checks) reasons.push(checks);
+  }
+  const saidElsewhere =
+    (stage === "commit" || PRECHECK_RULES.has("require_up_to_date")) &&
+    ruleset.rules.some((r) => r.type === "require_up_to_date");
+  if (parameters.strict_required_status_checks_policy && !saidElsewhere) {
+    const stale = upToDateRefusal(change);
+    if (stale) reasons.push(stale);
+  }
+  return reasons.length === 0 ? undefined : reasons.join("; ");
 }
 
 function pullRequestRefusal(rule: Rule, merge: MergeContext | undefined): string | undefined {

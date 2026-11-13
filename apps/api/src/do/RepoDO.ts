@@ -119,7 +119,7 @@ import type { AclSnapshot, RoleConfirmation, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
-import { RepoAuthority } from "./repo/authority.js";
+import { type PushRuleHooks, RepoAuthority } from "./repo/authority.js";
 import { type BlameRequest, RepoBlame } from "./repo/blame.js";
 import { blamePruneHandler } from "./repo/blame-prune.js";
 import {
@@ -498,6 +498,8 @@ export class RepoDO extends MigratingDO {
   assetBucket: R2Bucket;
   /** Hooks between a release asset completion's steps. For tests. */
   assetHooks: AssetHooks = {};
+  /** For tests: runs between a push's rule check and its commit. */
+  pushRuleHooks: PushRuleHooks = {};
   readonly blameRuns: RepoBlame;
 
   /** Reactions to issues, pull requests and their comments. */
@@ -907,6 +909,8 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       rulesets: () => this.rulesetStore,
       memoryBlocks: () => this.#memoryBlocks(),
+      checks: () => this.checks,
+      hooks: () => this.pushRuleHooks,
     });
     this.#admin = new RepoAdministration({
       git: this.git,
