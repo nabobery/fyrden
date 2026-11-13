@@ -2942,6 +2942,19 @@ export class RepoDO extends MigratingDO {
   }
 
   /** The conflicts of merging an open pull request's base branch into its head. */
+  /**
+   * The required checks of a pull request's base branch, judged on its
+   * head; undefined for no such pull request, null once the repository is
+   * gone.
+   */
+  requiredChecks(number: number) {
+    return this.#measured("requiredChecks", () => {
+      if (this.#refusesReads()) return null;
+      const pull = this.pulls.get(number);
+      return pull ? this.#authority.pullRequiredChecks(pull) : undefined;
+    });
+  }
+
   pullConflicts(number: number): Promise<Browsed<ConflictsView>> {
     return this.#measured("pullConflicts", async () =>
       this.#refusesReads()

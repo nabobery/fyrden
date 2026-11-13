@@ -97,7 +97,8 @@ function decidingFacts(candidates: readonly CheckSummary[]): CheckSummary[] {
   return [...statuses, ...checks];
 }
 
-function stateOf(fact: CheckSummary): "passed" | "pending" | "failing" {
+/** Where one status or check stands: passed (success, skipped, neutral), pending or failing. */
+export function checkFactState(fact: CheckSummary): "passed" | "pending" | "failing" {
   if (fact.status !== "completed") return "pending";
   return fact.conclusion !== null && PASSING.has(fact.conclusion) ? "passed" : "failing";
 }
@@ -113,7 +114,7 @@ export function requiredCheckOutcomes(
   return required.map((check) => {
     const deciding = facts ? decidingFacts(candidateFacts(check, facts)) : [];
     if (deciding.length === 0) return { check, state: "expected", deciding };
-    const states = deciding.map(stateOf);
+    const states = deciding.map(checkFactState);
     const state = states.includes("failing")
       ? "failing"
       : states.includes("pending")

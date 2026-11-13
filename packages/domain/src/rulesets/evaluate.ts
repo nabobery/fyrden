@@ -1,4 +1,5 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
+import { checkNameKey } from "../checks/checks.js";
 import type { PrincipalType } from "../principals/principal.js";
 import { type ApprovalInput, evaluateApprovals } from "../pulls/approvals.js";
 import { type CodeOwnersInput, codeOwnerRefusal } from "../pulls/code-owner-approvals.js";
@@ -12,6 +13,7 @@ import {
   requiredChecksOf,
 } from "./ruleset.js";
 import {
+  type RequiredStatusCheck,
   requiredCheckOutcomes,
   requiredChecksRefusal,
   type StatusCheckFacts,
@@ -115,6 +117,42 @@ export function protectsBranch(
     const matches = (p: string) => refPatternMatches(p, ref, "branch", defaultBranch);
     return include.some(matches) && !exclude.some(matches);
   });
+}
+
+/**
+ * The checks the active branch rulesets covering `ref` require, each once
+ * (by name, compared as checks are, and source) with the rulesets asking,
+ * and whether any of them is strict. Who merges plays no part (a bypass or
+ * an actor type changes whom they stop, decided at the merge).
+ */
+export function requiredChecksOn(
+  rulesets: readonly Ruleset[],
+  ref: string,
+  defaultBranch: string | null,
+): {
+  readonly strict: boolean;
+  readonly checks: readonly { check: RequiredStatusCheck; rulesets: string[] }[];
+} {
+  const checks = new Map<string, { check: RequiredStatusCheck; rulesets: string[] }>();
+  let strict = false;
+  for (const ruleset of rulesets) {
+    if (ruleset.enforcement !== "active" || ruleset.target !== "branch") continue;
+    const { include, exclude } = ruleset.conditions.ref_name;
+    const matches = (p: string) => refPatternMatches(p, ref, "branch", defaultBranch);
+    if (!include.some(matches) || exclude.some(matches)) continue;
+    for (const rule of ruleset.rules) {
+      if (rule.type !== "required_status_checks") continue;
+      const parameters = requiredChecksOf(rule);
+      strict ||= parameters.strict_required_status_checks_policy;
+      for (const check of parameters.required_status_checks) {
+        const key = JSON.stringify([checkNameKey(check.context), check.integration_id ?? null]);
+        const seen = checks.get(key);
+        if (!seen) checks.set(key, { check, rulesets: [ruleset.name] });
+        else if (!seen.rulesets.includes(ruleset.name)) seen.rulesets.push(ruleset.name);
+      }
+    }
+  }
+  return { strict, checks: [...checks.values()] };
 }
 
 function bypasses(ruleset: Ruleset, actor: RuleActor): boolean {

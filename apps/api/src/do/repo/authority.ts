@@ -4,12 +4,15 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import {
   type CheckSummary,
   candidateFacts,
+  checkFactState,
   checkNameKey,
   type MergeContext,
   principalTypeOf,
   REPO_ROLES,
   type RepoRole,
   type RequiredStatusCheck,
+  requiredCheckOutcomes,
+  requiredChecksOn,
   type StatusCheckFacts,
 } from "@fyrden/domain";
 import {
@@ -83,6 +86,23 @@ export interface AuthorityDeps {
 /** What the rules read of a commit's checks: every publisher's summary of the named checks. */
 export interface CheckReader {
   summariesFor(sha: string, names: readonly string[]): CheckSummary[];
+}
+
+/** A pull request's required checks, judged on its head (see `pullRequiredChecks`). */
+export interface RequiredChecksView {
+  readonly headSha: string;
+  readonly strict: boolean;
+  readonly checks: readonly {
+    readonly check: RequiredStatusCheck;
+    readonly rulesets: readonly string[];
+    readonly state: "passed" | "pending" | "failing" | "expected";
+    readonly deciding: readonly {
+      readonly kind: "status" | "check";
+      readonly source: string;
+      readonly state: "passed" | "pending" | "failing";
+      readonly detailsUrl: string | null;
+    }[];
+  }[];
 }
 
 export interface PushRuleHooks {
@@ -450,6 +470,45 @@ export class RepoAuthority {
             }),
         };
       },
+    };
+  }
+
+  /**
+   * The checks the active rulesets on a pull request's base branch
+   * require, judged on its head as a merge judges them (whoever merges).
+   */
+  pullRequiredChecks(pull: {
+    readonly baseRef: string;
+    readonly headSha: string;
+  }): RequiredChecksView {
+    const { rulesets } = this.deps.rulesets().current();
+    const head = this.deps.git.refStore.head();
+    const asked = requiredChecksOn(
+      rulesets.map((r) => r.ruleset),
+      `refs/heads/${pull.baseRef}`,
+      head?.startsWith("refs/heads/") ? head.slice("refs/heads/".length) : null,
+    );
+    const required = asked.checks.map((c) => c.check);
+    const facts =
+      required.length > 0 ? this.#facts(pull.headSha, required) : { sha: pull.headSha, checks: [] };
+    const outcomes = requiredCheckOutcomes(required, facts);
+    return {
+      headSha: pull.headSha,
+      strict: asked.strict,
+      checks: asked.checks.map((c, i) => {
+        const outcome = outcomes[i] as (typeof outcomes)[number];
+        return {
+          check: c.check,
+          rulesets: c.rulesets,
+          state: outcome.state,
+          deciding: outcome.deciding.map((d) => ({
+            kind: d.kind,
+            source: d.source,
+            state: checkFactState(d),
+            detailsUrl: d.detailsUrl,
+          })),
+        };
+      }),
     };
   }
 

@@ -57,6 +57,7 @@ async function ciCheck(
 const ruleset = (rules: unknown[], over: Record<string, unknown> = {}) =>
   json<{
     id: number;
+    name: string;
     code?: string;
     detail?: string;
     rules: { type: string; parameters?: Record<string, unknown> }[];
@@ -498,5 +499,111 @@ describe("a merge", () => {
       r.git.context.storage.sql.exec("SELECT count(*) AS n FROM merge_sagas").one(),
     );
     expect(sagas).toEqual({ n: 0 });
+  });
+});
+
+describe("a pull request's required checks", () => {
+  type Required = {
+    head_sha: string;
+    strict: boolean;
+    blocking: boolean;
+    checks: {
+      context: string;
+      integration_id: string | null;
+      state: string;
+      rulesets: string[];
+      deciding: { kind: string; source: string; state: string; details_url: string | null }[];
+    }[];
+  };
+  let head: string;
+  const read = () => json<Required>(api("GET", `${path}/pulls/1/required-checks`, owner.token));
+
+  beforeEach(async () => {
+    const made = await json<{ commit: { sha: string } }>(
+      api("POST", `${path}/file-commits`, owner.token, {
+        branch: "topic",
+        message: "change",
+        changes: [{ path: "new.txt", content: "new\n" }],
+      }),
+    );
+    head = made.body.commit.sha;
+    expect(
+      (await api("POST", `${path}/pulls`, owner.token, { title: "T", head: "topic", base: "main" }))
+        .status,
+    ).toBe(201);
+  });
+
+  it("is empty and not blocking when no rule requires any", async () => {
+    expect(await read()).toMatchObject({
+      status: 200,
+      body: { head_sha: head, strict: false, blocking: false, checks: [] },
+    });
+  });
+
+  it("judges each required check on the head, naming what decided it", async () => {
+    const made = await requireChecks({
+      required_status_checks: [
+        { context: "ci/build" },
+        { context: "test", integration_id: FYRDEN_CI_SOURCE },
+        { context: "docs" },
+      ],
+    });
+    const posted = await stub().createStatus(
+      head,
+      {
+        state: "success",
+        context: "CI/Build",
+        description: null,
+        targetUrl: "https://ci.example/1",
+      },
+      actor(owner),
+    );
+    expect(posted).toMatchObject({ ok: true });
+    await ciCheck(head, "test", null);
+    expect(await read()).toEqual({
+      status: 200,
+      body: {
+        head_sha: head,
+        strict: true,
+        blocking: true,
+        checks: [
+          {
+            context: "ci/build",
+            integration_id: null,
+            state: "passed",
+            rulesets: [made.name],
+            deciding: [
+              {
+                kind: "status",
+                source: owner.principalId,
+                state: "passed",
+                details_url: "https://ci.example/1",
+              },
+            ],
+          },
+          {
+            context: "test",
+            integration_id: "ci",
+            state: "pending",
+            rulesets: [made.name],
+            deciding: [{ kind: "check", source: "ci", state: "pending", details_url: null }],
+          },
+          {
+            context: "docs",
+            integration_id: null,
+            state: "expected",
+            rulesets: [made.name],
+            deciding: [],
+          },
+        ],
+      },
+    });
+  });
+
+  it("answers 404 for a pull request the repository does not have", async () => {
+    expect(await json(api("GET", `${path}/pulls/9/required-checks`, owner.token))).toMatchObject({
+      status: 404,
+      body: { code: "pull_not_found" },
+    });
   });
 });
