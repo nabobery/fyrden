@@ -275,8 +275,11 @@ export function expandJob(
 
   let combinations: readonly MatrixCombination[] | undefined;
   if (strategy?.matrix) {
-    const spec = matrixSpec(jobId, strategy.matrix, (place) =>
-      evaluateField(fieldAt(place.path, place.at), outer, budget),
+    const spec = matrixSpec(
+      jobId,
+      strategy.matrix,
+      (place) => evaluateField(fieldAt(place.path, place.at), outer, budget),
+      (units) => charge(budget, units),
     );
     if (spec.kind === "invalid") for (const e of spec.errors) addError(errors, e);
     else if (spec.kind === "spec") {

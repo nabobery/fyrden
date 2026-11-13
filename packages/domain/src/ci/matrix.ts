@@ -115,31 +115,61 @@ export function matrixSpec(
   jobId: string,
   matrix: Valued<Matrix>,
   resolve?: MatrixResolver,
+  charge: (units: number) => boolean = () => true,
 ): MatrixSpecResult {
   if (!resolve && holdsAnyExpression(matrix)) return { kind: "dynamic" };
   const errors = new ErrorList();
   const path = `jobs.${jobId}.strategy.matrix`;
-  const evaluate = (source: string, at: Position, where: string): MatrixValue | undefined => {
+  // Each evaluated value is checked once, where it comes back, with a unit charged per value
+  // visited: several keys can give the same large context array.
+  let outOfWork = false;
+  const evaluate = (
+    source: string,
+    at: Position,
+    where: string,
+    feature: string,
+  ): MatrixValue | undefined => {
+    // Once the step's work is spent, nothing more is evaluated: one error says so.
+    if (outOfWork) return undefined;
     const result = (resolve as MatrixResolver)({ source, path: where, at });
-    if (result.ok) return result.value;
-    errors.add(
-      result.error.code,
-      result.error.feature,
-      result.error.path,
-      result.error,
-      result.error.message,
-    );
-    return undefined;
+    if (!result.ok) {
+      outOfWork = result.error.code === "limit_exceeded";
+      errors.add(
+        result.error.code,
+        result.error.feature,
+        result.error.path,
+        result.error,
+        result.error.message,
+      );
+      return undefined;
+    }
+    const checked = checkEvaluated(result.value, at, where, feature, errors, charge);
+    if (checked === "out of work") {
+      outOfWork = true;
+      errors.add(
+        "limit_exceeded",
+        feature,
+        where,
+        at,
+        `Checking the values \`${where}\` gives needs more work than this step may spend.`,
+      );
+    }
+    return checked === "ok" ? result.value : undefined;
   };
   const spec =
     matrix.kind === "expression"
-      ? specFromValue(evaluate(matrix.source, matrix.at, path), matrix.at, path, errors)
+      ? specFromValue(evaluate(matrix.source, matrix.at, path, MATRIX), matrix.at, path, errors)
       : specFromLiteral(matrix.value, matrix.at, path, errors, evaluate);
   if (errors.any() || !spec) return { kind: "invalid", errors: errors.list() };
   return { kind: "spec", spec };
 }
 
-type Evaluate = (source: string, at: Position, path: string) => MatrixValue | undefined;
+type Evaluate = (
+  source: string,
+  at: Position,
+  path: string,
+  feature: string,
+) => MatrixValue | undefined;
 
 function holdsAnyExpression(matrix: Valued<Matrix>): boolean {
   if (matrix.kind === "expression") return true;
@@ -181,18 +211,17 @@ function list(
   feature: string,
   errors: ErrorList,
   evaluate: Evaluate,
-): MatrixValue[] | undefined {
+): readonly MatrixValue[] | undefined {
   if (values.kind === "literal") {
     return values.value.map((v, i) => convert(v, `${path}[${i}]`, feature, errors, evaluate));
   }
-  const value = evaluate(values.source, values.at, path);
+  const value = evaluate(values.source, values.at, path, feature);
   if (value === undefined) return undefined;
   if (value === null || typeof value !== "object" || value.kind !== "array") {
     errors.add("invalid_type", feature, path, values.at, `\`${path}\` must give a list.`);
     return undefined;
   }
-  checkEvaluated(value, values.at, path, feature, errors);
-  return [...value.items];
+  return value.items;
 }
 
 function entries(
@@ -258,7 +287,6 @@ function specFromValue(
     errors.add("invalid_type", MATRIX, path, at, `\`${path}\` must give an object of matrix keys.`);
     return undefined;
   }
-  checkEvaluated(value, at, path, MATRIX, errors);
   const dims: MatrixDimension[] = [];
   const lists: Record<"include" | "exclude", MatrixEntry[]> = { include: [], exclude: [] };
   for (const [key, item] of value.entries) {
@@ -276,7 +304,7 @@ function specFromValue(
     } else if (!isList) {
       errors.add("invalid_type", MATRIX, where, at, `\`${where}\` must give a list.`);
     } else {
-      dims.push({ name: key, values: [...item.items], at, path: where });
+      dims.push({ name: key, values: item.items, at, path: where });
     }
   }
   return { dimensions: dims, include: lists.include, exclude: lists.exclude, at, path };
@@ -293,7 +321,9 @@ function checkEvaluated(
   path: string,
   feature: string,
   errors: ErrorList,
-): void {
+  charge: (units: number) => boolean,
+): "ok" | "refused" | "out of work" {
+  if (!charge(1)) return "out of work";
   if (typeof value === "number" && !Number.isFinite(value)) {
     errors.add(
       "invalid_value",
@@ -302,20 +332,32 @@ function checkEvaluated(
       at,
       `\`${path}\` gave ${value}, which is not a finite number.`,
     );
-    return;
+    return "refused";
   }
-  if (value === null || typeof value !== "object") return;
+  if (value === null || typeof value !== "object") return "ok";
+  let result: "ok" | "refused" | "out of work" = "ok";
+  const visit = (item: MatrixValue, where: string): boolean => {
+    const checked = checkEvaluated(item, at, where, feature, errors, charge);
+    if (checked === "out of work") {
+      result = checked;
+      return false;
+    }
+    if (checked === "refused") result = "refused";
+    return true;
+  };
   if (value.kind === "array") {
-    for (const [i, item] of value.items.entries())
-      checkEvaluated(item, at, `${path}[${i}]`, feature, errors);
-    return;
+    for (const [i, item] of value.items.entries()) if (!visit(item, `${path}[${i}]`)) break;
+    return result;
   }
   const seen = new Map<string, string>();
   for (const [key, item] of value.entries) {
+    // Every entry is charged, a refused duplicate too.
+    if (!charge(1)) return "out of work";
     const where = `${path}.${key}`;
-    if (unique(seen, key, at, where, feature, errors))
-      checkEvaluated(item, at, where, feature, errors);
+    if (!unique(seen, key, at, where, feature, errors)) result = "refused";
+    else if (!visit(item, where)) break;
   }
+  return result;
 }
 
 /** True when a scalar anywhere in `value` holds `${{` (the parser refuses one in a key). */
@@ -371,10 +413,8 @@ function convert(
     case "scalar": {
       if (typeof value.value !== "string" || !value.value.includes("${{")) return value.value;
       // A value that cannot be evaluated is reported; null stands in for it.
-      const evaluated = evaluate(value.value, value.at, path);
-      if (evaluated === undefined) return null;
-      checkEvaluated(evaluated, value.at, path, feature, errors);
-      return evaluated;
+      const evaluated = evaluate(value.value, value.at, path, feature);
+      return evaluated ?? null;
     }
     case "sequence":
       return {
@@ -556,6 +596,9 @@ function expand(spec: MatrixSpec, work: Work): ExpandedMatrix {
       originals.push({ picks, building });
     }
   }
+
+  // The keys the surviving combinations hold: `exclude` may have removed many.
+  entries = originals.length * dims.length;
 
   // `include`: added to each original it does not contradict, or a combination of its own.
   const extras: { building: Building; order: { key: MatrixKey }[] }[] = [];

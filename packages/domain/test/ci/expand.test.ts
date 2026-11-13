@@ -263,6 +263,71 @@ jobs:
     expect(result.instances[0]?.name).toBe("build (first, second, third, fourth)");
   });
 
+  it("charges checking evaluated matrix values, however many keys share one large array", () => {
+    const big = exprArray(Array.from({ length: 10_000 }, (_, i) => i));
+    const keys = Array.from({ length: 10 }, (_, i) => `        k${i}: \${{ inputs.big }}\n`).join(
+      "",
+    );
+    const workflow = workflowOf(job(`    strategy:\n      matrix:\n${keys}`));
+    const budget = newWorkBudget(50_000);
+    const result = expandJob(
+      workflow,
+      "build",
+      { inputs: obj({ big }) },
+      { ...options(workflow), budget },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toEqual([
+      expect.objectContaining({
+        code: "limit_exceeded",
+        path: expect.stringMatching(/^jobs\.build\.strategy\.matrix\.k\d$/),
+        message: expect.stringMatching(/work/),
+      }),
+    ]);
+  });
+
+  it("charges every key of an evaluated object, refused duplicates too", () => {
+    // 256 spellings of one key: each is a duplicate after the first, and each is charged.
+    const spellings = Array.from({ length: 256 }, (_, i) =>
+      [...i.toString(2).padStart(8, "0")]
+        .map((bit, j) => (bit === "1" ? "ABCDEFGH"[j] : "abcdefgh"[j]))
+        .join(""),
+    );
+    const object = exprObject(spellings.map((k) => [k, 1] as const));
+    const workflow = workflowOf(
+      job(`    strategy:\n      matrix:\n        os: ['\${{ inputs.o }}']\n`),
+    );
+    // Few enough units that the duplicate errors stay under the error limit.
+    const budget = newWorkBudget(60);
+    const result = expandJob(
+      workflow,
+      "build",
+      { inputs: obj({ o: object }) },
+      { ...options(workflow), budget },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.length).toBeLessThan(100);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ code: "limit_exceeded", message: expect.stringMatching(/work/) }),
+      );
+    }
+  });
+
+  it("names the feature of an evaluated value by where it is, not by how its key starts", () => {
+    const errors = errorsOf(
+      job(`    strategy:\n      matrix:\n        include-extra: ['\${{ Infinity }}']\n`),
+    );
+    expect(errors).toEqual([
+      expect.objectContaining({
+        code: "invalid_value",
+        feature: "jobs.<job_id>.strategy.matrix",
+        path: "jobs.build.strategy.matrix.include-extra[0]",
+      }),
+    ]);
+  });
+
   it("refuses an evaluated matrix of the wrong shape, at the expression", () => {
     const codes = (lines: string, m: string) =>
       errorsOf(job(lines), { inputs: obj({ m }) }).map((e) => [e.code, e.path]);
