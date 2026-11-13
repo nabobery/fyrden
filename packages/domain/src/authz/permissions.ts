@@ -293,6 +293,24 @@ export const PERMISSIONS = {
     implies: ["repository_hooks:read"],
     writes: true,
   },
+  // GitHub's "Commit statuses" permission: apart from contents, so a CI
+  // token can report on commits without being able to change code.
+  "statuses:read": {
+    resource: "repo",
+    minRole: "read",
+    summary: "Read the statuses posted on commits.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "statuses:write": {
+    resource: "repo",
+    minRole: "write",
+    summary: "Post statuses on commits.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["statuses:read"],
+    writes: true,
+  },
 } as const satisfies Record<string, PermissionDef>;
 
 export type Permission = keyof typeof PERMISSIONS;

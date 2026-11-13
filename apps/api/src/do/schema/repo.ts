@@ -1645,4 +1645,71 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
     `,
   },
+  {
+    version: 51,
+    // Commit statuses and check summaries. Statuses are kept as posted, newest
+    // last. A summary is one publisher's current state of one named check on
+    // one commit (a principal for statuses, 'ci' for Fyrden's runs), names
+    // compared folded; `settled` keeps the last outcome while a re-run is
+    // pending, with the attempt and actor it came from. A check attempt is
+    // recorded once per caller key, so a retried start is answered, not
+    // repeated. `pull_checks` holds an open pull request's failing checks
+    // while it has any, and who was told of them.
+    name: "commit_statuses",
+    sql: `
+      CREATE TABLE commit_statuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sha TEXT NOT NULL,
+        context TEXT NOT NULL,
+        context_key TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'success', 'failure', 'error')),
+        description TEXT,
+        target_url TEXT,
+        creator_id TEXT NOT NULL,
+        creator_root TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX commit_statuses_context ON commit_statuses (sha, context_key, id);
+      CREATE TABLE check_summaries (
+        sha TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('status', 'check')),
+        attempt INTEGER CHECK (attempt >= 1),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'in_progress', 'completed')),
+        conclusion TEXT CHECK (conclusion IN ('success', 'failure', 'neutral', 'cancelled',
+          'skipped', 'timed_out', 'action_required', 'error')),
+        settled TEXT CHECK (settled IN ('success', 'failure', 'neutral', 'cancelled', 'skipped',
+          'timed_out', 'action_required', 'error')),
+        settled_attempt INTEGER,
+        settled_actor_id TEXT,
+        status_id INTEGER,
+        actor_id TEXT,
+        details_url TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (sha, name_key, source),
+        CHECK ((status = 'completed') = (conclusion IS NOT NULL)),
+        CHECK ((kind = 'check') = (attempt IS NOT NULL)),
+        CHECK ((kind = 'status') = (status_id IS NOT NULL))
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX check_summaries_settled ON check_summaries (sha, settled);
+      CREATE TABLE check_attempts (
+        sha TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        start_key TEXT NOT NULL,
+        PRIMARY KEY (sha, name_key, source, attempt),
+        UNIQUE (sha, name_key, source, start_key)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE pull_checks (
+        pr_number INTEGER PRIMARY KEY,
+        head_sha TEXT NOT NULL,
+        failing TEXT NOT NULL,
+        holders TEXT NOT NULL
+      ) STRICT;
+      CREATE INDEX pull_requests_open_head ON pull_requests (head_sha) WHERE state = 'open';
+    `,
+  },
 ];
