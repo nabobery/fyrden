@@ -253,6 +253,8 @@ export type WorkflowErrorCode =
   | "invalid_encoding"
   | "file_too_large"
   | "limit_exceeded"
+  | "unknown_job"
+  | "dependency_cycle"
   | "too_many_errors"
   | "expression_syntax"
   | "unknown_context"
