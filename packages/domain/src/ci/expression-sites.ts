@@ -480,6 +480,11 @@ function stepFields(step: Step, path: string, fields: ExpressionField[], h: Help
   }
 }
 
+/** The message for `${{` in a field that takes no expressions. */
+export function noExpressions(feature: string): string {
+  return `\`${feature}\` takes no expressions; GitHub evaluates \`\${{ }}\` only in the keys its context availability table lists.`;
+}
+
 // --- The check -----------------------------------------------------------------------------
 
 type Parsed =
@@ -513,7 +518,7 @@ export function checkWorkflowExpressions(workflow: Workflow): WorkflowError[] {
             ? `\`${field.path}\` is a name, and names take no expressions.`
             : field.feature === "name"
               ? "`name` is not evaluated, so `${{ }}` cannot be used in it; `run-name` is the workflow's evaluated display name."
-              : `\`${field.feature}\` takes no expressions; GitHub evaluates \`\${{ }}\` only in the keys its context availability table lists.`,
+              : noExpressions(field.feature),
         },
       ];
     } else {

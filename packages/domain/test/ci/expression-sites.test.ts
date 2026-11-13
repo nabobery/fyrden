@@ -193,6 +193,58 @@ describe("special functions", () => {
 describe("fields that take no expressions", () => {
   it.each([
     [
+      "a remote action's ref",
+      job("", "      - uses: actions/checkout@${{ github.ref }}\n"),
+      "jobs.<job_id>.steps[*].uses",
+    ],
+    [
+      "a whole action reference",
+      job("", "      - uses: ${{ matrix.action }}\n"),
+      "jobs.<job_id>.steps[*].uses",
+    ],
+    [
+      "a cron",
+      "on:\n  schedule:\n    - cron: '${{ inputs.c }}'\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n",
+      "on.schedule[*].cron",
+    ],
+    [
+      "a pull request activity type",
+      "on:\n  pull_request:\n    types: ['${{ inputs.t }}']\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n",
+      "on.pull_request.types",
+    ],
+    ["workflow permissions", job("", "", "permissions: ${{ inputs.p }}\n"), "permissions"],
+    [
+      "a workflow permission scope",
+      job("", "", "permissions:\n  contents: ${{ inputs.p }}\n"),
+      "permissions",
+    ],
+    [
+      "a job permission scope",
+      job("    permissions:\n      contents: ${{ inputs.p }}\n"),
+      "jobs.<job_id>.permissions",
+    ],
+    [
+      "a dispatch input type",
+      "on:\n  workflow_dispatch:\n    inputs:\n      a:\n        type: ${{ inputs.t }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n",
+      "on.workflow_dispatch.inputs.<input_id>.type",
+    ],
+    [
+      "a dispatch input's required",
+      "on:\n  workflow_dispatch:\n    inputs:\n      a:\n        required: ${{ inputs.r }}\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n",
+      "on.workflow_dispatch.inputs.<input_id>.required",
+    ],
+  ])("names the expression, not the value's format, in %s", (_, text, feature) => {
+    const parsed = parse(text);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.errors.map(({ code, feature }) => ({ code, feature }))).toEqual([
+      { code: "expression_not_allowed", feature },
+    ]);
+    expect(parsed.errors[0]?.message).toContain("takes no expressions");
+  });
+
+  it.each([
+    [
       "uses",
       job("", "      - uses: ./${{ inputs.path }}\n"),
       "jobs.<job_id>.steps[*].uses",
@@ -248,6 +300,52 @@ describe("fields that take no expressions", () => {
 
   it("names a forbidden context once however often it appears", () => {
     expect(errorsOf(job("    if: secrets.A == secrets.B\n"))).toHaveLength(1);
+  });
+
+  it("places an expression in a list of activity types at its item", () => {
+    const text =
+      "on:\n  pull_request:\n    types: [opened, '${{ inputs.t }}']\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n";
+    expect(errorsOf(text)).toEqual([
+      {
+        code: "expression_not_allowed",
+        feature: "on.pull_request.types",
+        path: "on.pull_request.types[1]",
+        line: 3,
+        column: 21,
+      },
+    ]);
+  });
+
+  it.each([
+    ["the whole of on", "on: ${{ inputs.event }}\n", "on", 1, 5],
+    ["an item of on", "on: [push, '${{ inputs.event }}']\n", "on[1]", 1, 12],
+    ["an item of on after a repeat", "on: [push, push, '${{ inputs.event }}']\n", "on[2]", 1, 18],
+  ])("names an expression in %s", (_, top, path, line, column) => {
+    const errors = errorsOf(`${top}jobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n`);
+    expect(errors).toContainEqual({
+      code: "expression_not_allowed",
+      feature: "on",
+      path,
+      line,
+      column,
+    });
+    expect(errors.filter((e) => e.code === "unknown_key")).toEqual([]);
+  });
+
+  it("does not call a list holding only an expression empty", () => {
+    const errors = errorsOf(
+      "on: ['${{ inputs.event }}']\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n",
+    );
+    expect(errors.map((e) => e.code)).toEqual(["expression_not_allowed"]);
+  });
+
+  it("keeps an activity type's own index after a dropped item and through an alias", () => {
+    const text =
+      "on:\n  pull_request:\n    types: &t [opened, opened, '${{ inputs.t }}']\n  pull_request_target:\n    types: *t\njobs:\n  build:\n    runs-on: x\n    steps:\n      - run: a\n";
+    const paths = errorsOf(text)
+      .filter((e) => e.code === "expression_not_allowed")
+      .map((e) => e.path);
+    expect(paths).toEqual(["on.pull_request.types[2]", "on.pull_request_target.types[2]"]);
   });
 
   it("points the workflow name at run-name", () => {
