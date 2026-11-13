@@ -146,6 +146,10 @@ const PUSH_OPTIONS = { pushOptionsAdvertised: true } as const;
 export const RULESETS_CHANGED =
   "the repository's rulesets changed while the push was checked; try the push again";
 
+/** Why an update was refused because a check it required changed after it was judged. */
+export const CHECKS_CHANGED =
+  "a required status check changed while the push was checked; try the push again";
+
 const fatal = (message: string, sideband: boolean): PushProgress => ({
   state: "done",
   response: encodeFatalError(message, sideband),
@@ -271,6 +275,15 @@ export class RepoPush {
           restamp: () => string;
           writable: boolean;
           refusals: ReadonlyMap<number, string>;
+          /**
+           * The required checks the active rules judged, by command index: a
+           * stamp of the summaries they counted, and the stamp read again
+           * (with no await) in the commit's transaction.
+           */
+          checks?: {
+            readonly stamps: ReadonlyMap<number, string>;
+            readonly restamp: (index: number) => string;
+          };
           /**
            * A merge's: what its rules relied on that only the account can
            * confirm, and its rules judged again (with no await) without what
@@ -606,9 +619,17 @@ export class RepoPush {
     let rulesStamp:
       | Pick<
           Awaited<ReturnType<NonNullable<RepoPush["rules"]>["check"]>>,
-          "stamp" | "restamp" | "writable" | "approvals"
+          "stamp" | "restamp" | "writable" | "approvals" | "checks"
         >
       | undefined;
+    // The command each ref name was checked as, so the commit can tell its updates' stamps.
+    const indexOf = new Map<string, number>();
+    const checksMoved = (updates: readonly { readonly name: string }[]) =>
+      updates.some((u) => {
+        const index = indexOf.get(u.name);
+        const stamp = index === undefined ? undefined : rulesStamp?.checks?.stamps.get(index);
+        return stamp !== undefined && rulesStamp?.checks?.restamp(index as number) !== stamp;
+      });
     // The merge's confirmation of its approvers: what it learned, or why it failed.
     let confirmed: ApprovalConfirmation | string | undefined;
     const confirmedRefusal = (): string | undefined => {
@@ -640,6 +661,7 @@ export class RepoPush {
             (await this.storage?.charge(uploadId, record.bodyBytes)),
           ...(rules && {
             checkCommands: async (commands: readonly CheckedCommand[]) => {
+              for (const cmd of commands) indexOf.set(cmd.name, cmd.index);
               const checked = await rules.check({
                 principal: upload.principal,
                 grantId: upload.grantId,
@@ -662,8 +684,9 @@ export class RepoPush {
             committed,
             this.#capGate(uploadId, merged),
             // In the commit's transaction: the pusher's effective role still
-            // allows writing, and the rulesets checked are still the current ones.
-            () =>
+            // allows writing, the rulesets checked are still the current ones,
+            // and so are the required checks of the updates it commits.
+            (updates) =>
               this.frozen?.() ??
               (rulesStamp === undefined
                 ? undefined
@@ -671,7 +694,9 @@ export class RepoPush {
                   ? (meta.authority?.() ?? ACCESS_LOST)
                   : rulesStamp.restamp() !== rulesStamp.stamp
                     ? RULESETS_CHANGED
-                    : undefined) ??
+                    : checksMoved(updates)
+                      ? CHECKS_CHANGED
+                      : undefined) ??
               meta.fence?.() ??
               confirmedRefusal(),
             // In the commit's transaction: the account is owed its confirmation (told after,

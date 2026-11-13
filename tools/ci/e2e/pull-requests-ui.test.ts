@@ -13,7 +13,13 @@ import { mentionsToken } from "@fyrden/domain";
 import { type Locator, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FJORD, type Scheme } from "../../../apps/web/app/lib/fjord.js";
-import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js";
+import {
+  accessible,
+  accessibleInEveryTheme,
+  startWebStack,
+  visit,
+  type WebStack,
+} from "./web-stack.js";
 
 let stack: WebStack;
 let page: Page;
@@ -1155,6 +1161,64 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     const linked = page.locator(`#comment-${comment.id} article.linked`);
     await see(linked).toContainText("see #1");
     await see(linked.locator("header")).toBeInViewport();
+  });
+
+  it("lists the required checks in the merge box, blocking and then passed, in every theme", async () => {
+    await pushBranch("checked", { "checked.txt": "x\n" });
+    const ruleset = await rest<{ id: number }>("POST", `/repos/${handle}/${name}/rulesets`, {
+      name: "main needs CI",
+      enforcement: "active",
+      target: "branch",
+      conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
+      rules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [
+              { context: "ci/build" },
+              { context: "lint" },
+              { context: "docs" },
+            ],
+          },
+        },
+      ],
+    });
+    const number = await openPull("checked", "Checked");
+    const { head } = await rest<{ head: { sha: string } }>(
+      "GET",
+      `/repos/${handle}/${name}/pulls/${number}`,
+    );
+    const status = (context: string, state: string, target_url?: string) =>
+      rest("POST", `/repos/${handle}/${name}/statuses/${head.sha}`, { state, context, target_url });
+    await status("ci/build", "success", "https://ci.example/runs/1");
+    await status("lint", "failure");
+
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
+    const box = page.locator(".required-checks");
+    await see(box.getByRole("heading", { name: "Required checks" })).toBeVisible();
+    await see(box).toContainText("2 required checks have not passed.");
+    await see(box.getByRole("listitem").filter({ hasText: "ci/build" })).toContainText("Passed");
+    await see(box.getByRole("listitem").filter({ hasText: "lint" })).toContainText("Failing");
+    await see(box.getByRole("listitem").filter({ hasText: "docs" })).toContainText("Expected");
+    await see(box.getByRole("link", { name: /Details of ci\/build/ })).toHaveAttribute(
+      "href",
+      "https://ci.example/runs/1",
+    );
+    // The merge decides: a role that bypasses the ruleset may still merge.
+    await see(page.getByRole("button", { name: "Merge pull request" })).toBeEnabled();
+    await accessibleInEveryTheme(page, "merge box, required checks blocking");
+
+    await status("lint", "success");
+    await status("docs", "success");
+    await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
+    await see(box).toContainText("All required checks passed.");
+    await accessibleInEveryTheme(page, "merge box, required checks passed");
+    // Gone again, so nothing after this needs its checks.
+    const removed = await fetch(
+      `${stack.origin}/api/repos/${handle}/${name}/rulesets/${ruleset.id}`,
+      { method: "DELETE", headers: { Authorization: `Bearer ${stack.token}` } },
+    );
+    expect(removed.ok).toBe(true);
   });
 
   // Last: every page the suite visited.

@@ -1,10 +1,18 @@
 import {
+  checkNameKey,
+  checkText,
+  FYRDEN_CI_SOURCE,
   HANDLE_SHAPE,
+  isId,
+  MAX_CHECK_NAME_LENGTH,
   MAX_HANDLE_LENGTH,
+  MAX_REQUIRED_CHECKS,
   MERGE_METHODS,
+  PRINCIPAL_ID_PREFIX,
   PRINCIPAL_TYPES,
   REPO_ROLES,
   RULE_TYPES,
+  type RuleType,
 } from "@fyrden/domain";
 import { z } from "zod";
 import { defineOperation } from "../src/op.js";
@@ -81,6 +89,80 @@ const PullRequestParameters = z
     "For `pull_request` only: what a merge needs; left out, nothing beyond the pull request.",
   );
 
+const Publisher = z
+  .string()
+  .refine(
+    (id) =>
+      id === FYRDEN_CI_SOURCE ||
+      Object.values(PRINCIPAL_ID_PREFIX).some((prefix) => isId(id, prefix)),
+    "Not a publisher: `ci` (Fyrden's own runs) or a principal's id.",
+  )
+  .describe(
+    "Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+  );
+
+const RequiredStatusChecksParameters = z
+  .strictObject({
+    required_status_checks: z
+      .array(
+        z.strictObject({
+          context: z
+            .string()
+            .refine(
+              (context) => checkText(context, MAX_CHECK_NAME_LENGTH).ok,
+              `1-${MAX_CHECK_NAME_LENGTH} characters, no control characters.`,
+            )
+            .describe("The status context or check name, compared case-insensitively."),
+          integration_id: Publisher.optional(),
+        }),
+      )
+      .min(1)
+      .max(MAX_REQUIRED_CHECKS)
+      .refine(
+        (checks) =>
+          new Set(checks.map((c) => `${checkNameKey(c.context)} ${c.integration_id ?? ""}`))
+            .size === checks.length,
+        "A check is required twice from the same source.",
+      ),
+    strict_required_status_checks_policy: z
+      .boolean()
+      .default(true)
+      .describe(
+        "A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule.",
+      ),
+    do_not_enforce_on_create: z
+      .boolean()
+      .default(false)
+      .describe("A branch being created skips this rule."),
+  })
+  .describe(
+    "For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+  );
+
+const RULE_DESCRIPTION =
+  "`creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit).";
+
+/** Rules that take no parameters. */
+const PLAIN_RULES = RULE_TYPES.filter(
+  (type): type is Exclude<RuleType, "pull_request" | "required_status_checks"> =>
+    type !== "pull_request" && type !== "required_status_checks",
+) as [
+  Exclude<RuleType, "pull_request" | "required_status_checks">,
+  ...Exclude<RuleType, "pull_request" | "required_status_checks">[],
+];
+
+const Rule = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("pull_request").describe(RULE_DESCRIPTION),
+    parameters: PullRequestParameters.optional(),
+  }),
+  z.object({
+    type: z.literal("required_status_checks").describe(RULE_DESCRIPTION),
+    parameters: RequiredStatusChecksParameters,
+  }),
+  z.strictObject({ type: z.enum(PLAIN_RULES).describe(RULE_DESCRIPTION) }),
+]);
+
 const RulesetBody = {
   name: z.string().min(1).max(100).describe("Unique in the repository."),
   target: z.enum(["branch", "tag"]).default("branch"),
@@ -96,21 +178,7 @@ const RulesetBody = {
     }),
   }),
   rules: z
-    .array(
-      z
-        .object({
-          type: z
-            .enum(RULE_TYPES)
-            .describe(
-              "`creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit).",
-            ),
-          parameters: PullRequestParameters.optional(),
-        })
-        .refine(
-          (rule) => rule.parameters === undefined || rule.type === "pull_request",
-          "Only a pull_request rule takes parameters.",
-        ),
-    )
+    .array(Rule)
     .min(1)
     .max(RULE_TYPES.length)
     .refine(
@@ -150,10 +218,15 @@ export const Ruleset = z.object({
 
 const RepoInput = { owner: Owner, repo: RepoName };
 
-/** Signatures are of commits: only branch rulesets require them. */
+/**
+ * Signatures and checks are of commits: only branch rulesets require them
+ * (a tag may point at a tag object, which has neither).
+ */
 const signaturesOnBranches = (input: { target: string; rules: readonly { type: string }[] }) =>
-  input.target === "branch" || !input.rules.some((r) => r.type === "required_signatures");
-const SIGNATURES_ON_BRANCHES = "required_signatures applies to branch rulesets only.";
+  input.target === "branch" ||
+  !input.rules.some((r) => r.type === "required_signatures" || r.type === "required_status_checks");
+const SIGNATURES_ON_BRANCHES =
+  "required_signatures and required_status_checks apply to branch rulesets only.";
 
 export const listRulesets = defineOperation({
   id: "repos.rulesets.list",

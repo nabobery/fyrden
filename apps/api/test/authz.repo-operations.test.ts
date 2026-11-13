@@ -158,6 +158,7 @@ const CASES: Record<
     expected: { status: 404, code: "pull_not_found" },
   },
   "pulls.code_owners.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
+  "pulls.required_checks.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
   // The owner itself, found by handle: the missing pull request is what answers.
   "pulls.requested_reviewers.add": {
     input: {
@@ -426,6 +427,9 @@ async function outcome(res: Response): Promise<Outcome> {
 /** An operation answering with the repository's file contents beside what it declares (owners from CODEOWNERS). */
 const needsContents = (op: OperationDef) => op.id === "pulls.code_owners.get";
 
+/** An operation answering with commit statuses beside what it declares (a pull request's required checks). */
+const needsStatuses = (op: OperationDef) => op.id === "pulls.required_checks.get";
+
 describe("repository operations", () => {
   it("have an input here for each of them", () => {
     expect(repoOps.map((op) => op.id).sort()).toEqual(Object.keys(CASES).sort());
@@ -443,7 +447,9 @@ describe("repository operations", () => {
   );
 
   it.each(
-    repoOps.filter((op) => !isHookOp(op) && !needsContents(op)).map((op) => [op.id, op] as const),
+    repoOps
+      .filter((op) => !isHookOp(op) && !needsContents(op) && !needsStatuses(op))
+      .map((op) => [op.id, op] as const),
   )("%s needs no more than the permission it declares", async (_, op) => {
     const token = await scopedToken(owner.principalId, [op.permission]);
     const name = CASES[op.id]?.ownRepo ? (await createRepo(owner.principalId)).name : repo.name;
@@ -461,6 +467,21 @@ describe("operations answering with file contents", () => {
         code: "missing_permission",
       });
       const both = await scopedToken(owner.principalId, [op.permission, "contents:read"]);
+      expect(await outcome(await call(op, both))).toEqual(CASES[op.id]?.expected);
+    },
+  );
+});
+
+describe("operations answering with commit statuses", () => {
+  it.each(repoOps.filter(needsStatuses).map((op) => [op.id, op] as const))(
+    "%s needs statuses:read beside the permission it declares",
+    async (_, op) => {
+      const declared = await scopedToken(owner.principalId, [op.permission]);
+      expect(await outcome(await call(op, declared))).toEqual({
+        status: 403,
+        code: "missing_permission",
+      });
+      const both = await scopedToken(owner.principalId, [op.permission, "statuses:read"]);
       expect(await outcome(await call(op, both))).toEqual(CASES[op.id]?.expected);
     },
   );

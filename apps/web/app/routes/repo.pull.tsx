@@ -18,6 +18,7 @@ import {
   writeContinuation,
 } from "../lib/continuation.js";
 import { NO_VERSION, viewerRefusal } from "../lib/edits.server.js";
+import type { RequiredChecks } from "../lib/merge.js";
 import { mergeRules, type RulesetsPage } from "../lib/merge.server.js";
 import { type PageLinks, pageLinks, positiveId } from "../lib/pages.js";
 import {
@@ -110,7 +111,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     commentsAt.after ?? (linked !== null && linked > 1 ? linked - 1 : null),
   );
   const reviewsAt = readContinuation(url.searchParams.get("reviews"));
-  const [comments, reviews, repo, rulesets] = await Promise.all([
+  const [comments, reviews, repo, rulesets, requiredChecks] = await Promise.all([
     apiCall<IssueCommentsPage>(
       context,
       request,
@@ -123,6 +124,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     apiCall<Repo>(context, request, "GET", repoApi),
     // For the merge box only: what the base branch's rulesets ask of a merge.
     open ? apiCall<RulesetsPage>(context, request, "GET", `${repoApi}/rulesets`) : null,
+    // For the merge box only: where the required checks stand on the head.
+    open ? apiCall<RequiredChecks>(context, request, "GET", `${api}/required-checks`) : null,
   ]);
   const rules =
     repo.status === 200 && rulesets?.status === 200
@@ -204,6 +207,11 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       shownReviews.next && writeContinuation(shownReviews.next),
     ),
     rules,
+    // Judged on the head this page shows, or not shown: a push between the reads moves it.
+    requiredChecks:
+      requiredChecks?.status === 200 && requiredChecks.body.head_sha === pull.head.sha
+        ? requiredChecks.body
+        : null,
     // What the viewer's role allows (none when the repository could not be read).
     permissions: (repo.status === 200 && repo.body.permissions) || null,
   };
@@ -419,8 +427,18 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
   const known = useRef(loaderData.viewer);
   if (loaderData.viewerKnown) known.current = loaderData.viewer;
   const viewer = known.current;
-  const { owner, repo, pull, body, timeline, commentPages, reviewPages, rules, permissions } =
-    loaderData;
+  const {
+    owner,
+    repo,
+    pull,
+    body,
+    timeline,
+    commentPages,
+    reviewPages,
+    rules,
+    requiredChecks,
+    permissions,
+  } = loaderData;
   const push = permissions?.push === true;
   // A locked conversation takes reactions from write access only (the API decides each).
   const react = { canReact: viewer !== null && (!pull.locked || push), busy };
@@ -504,6 +522,7 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
         <MergeBox
           pull={pull}
           rules={rules}
+          requiredChecks={requiredChecks}
           conflicts={`${pullPage(owner, repo, pull.number)}/conflicts`}
           hidden={viewerField}
           canAct={writable}

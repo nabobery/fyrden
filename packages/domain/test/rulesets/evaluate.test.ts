@@ -3,15 +3,23 @@ import { describe, expect, it } from "vitest";
 import {
   type MergeContext,
   protectsBranch,
+  type RefChange,
   type RuleActor,
+  requiredChecksOn,
   ruleViolations,
 } from "../../src/rulesets/evaluate.js";
 import {
   pullRequestParameters,
+  RULE_TYPES,
   type Rule,
   type Ruleset,
   refPatternMatches,
+  requiredChecksOf,
 } from "../../src/rulesets/ruleset.js";
+import type {
+  RequiredStatusChecksParameters,
+  StatusCheckFacts,
+} from "../../src/rulesets/status-checks.js";
 
 const ruleset = (over: Partial<Ruleset>): Ruleset => ({
   id: 1,
@@ -385,5 +393,256 @@ describe("pull request merges", () => {
     expect(read({ require_code_owner_review: true })).toBe(true);
     expect(read({ required_approving_review_count: 1 })).toBe(false);
     expect(read(undefined)).toBe(false);
+  });
+});
+
+describe("required status checks", () => {
+  const head = "b".repeat(40);
+  const summary = (name: string, conclusion: "success" | "failure" | null, source = "ci") => ({
+    name,
+    source,
+    kind: "check" as const,
+    attempt: 1,
+    statusId: null,
+    status: conclusion === null ? ("in_progress" as const) : ("completed" as const),
+    conclusion,
+    detailsUrl: null,
+    updatedAt: 0,
+  });
+  const facts = (...checks: ReturnType<typeof summary>[]): StatusCheckFacts => ({
+    sha: head,
+    checks,
+  });
+  const requiring = (
+    parameters: Partial<RequiredStatusChecksParameters> = {},
+    extra: Rule[] = [],
+    enforcement: Ruleset["enforcement"] = "active",
+  ) => [
+    ruleset({
+      enforcement,
+      rules: [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: [{ context: "ci/build" }], ...parameters },
+        },
+        ...extra,
+      ],
+    }),
+  ];
+  const change = (over: Partial<RefChange> = {}): RefChange => ({
+    ref: "refs/heads/main",
+    kind: "update",
+    fastForward: true,
+    ...over,
+  });
+  const judged = (
+    rulesets: Ruleset[],
+    over: Partial<RefChange> = {},
+    stage: "precheck" | "commit" = "commit",
+  ) => ruleViolations(rulesets, change(over), human, "main", stage);
+  const messages = (...args: Parameters<typeof judged>) => judged(...args).map((v) => v.message);
+  const merge: MergeContext = {
+    number: 3,
+    method: "merge",
+    approvals: {
+      reviews: [],
+      headSha: head,
+      authorRoot: "author",
+      lastPush: null,
+      eligibleRoots: new Set(),
+      eligiblePrincipals: new Set(),
+    },
+    unresolvedThreads: 0,
+    upToDate: true,
+  };
+  const UP_TO_DATE = "pull request #3 must include the latest commit of the branch it merges into";
+
+  it("is a rule type of its own", () => {
+    expect(RULE_TYPES).toContain("required_status_checks");
+  });
+
+  it("refuses a commit whose required check is missing, pending or failing", () => {
+    expect(messages(requiring(), { statusChecks: facts() })).toEqual([
+      'required status check "ci/build" is expected (ruleset "protect main")',
+    ]);
+    expect(messages(requiring(), { statusChecks: facts(summary("ci/build", null)) })).toEqual([
+      'required status check "ci/build" is pending (ruleset "protect main")',
+    ]);
+    expect(messages(requiring(), { statusChecks: facts(summary("ci/build", "failure")) })).toEqual([
+      'required status check "ci/build" is failing (ruleset "protect main")',
+    ]);
+  });
+
+  it("lets a commit through once its required checks passed", () => {
+    expect(judged(requiring(), { statusChecks: facts(summary("ci/build", "success")) })).toEqual(
+      [],
+    );
+  });
+
+  it("refuses when the facts could not be read at the commit point", () => {
+    expect(messages(requiring())).toEqual([
+      'required status check "ci/build" is expected (ruleset "protect main")',
+    ]);
+  });
+
+  it("skips the rule before an upload, when no facts are known yet", () => {
+    expect(judged(requiring(), {}, "precheck")).toEqual([]);
+  });
+
+  it("judges a merge's precheck when the head's facts are given", () => {
+    expect(
+      messages(requiring(), { pullRequest: merge, statusChecks: facts() }, "precheck"),
+    ).toEqual(['required status check "ci/build" is expected (ruleset "protect main")']);
+  });
+
+  it("does not apply to a deletion", () => {
+    expect(judged(requiring(), { kind: "delete" })).toEqual([]);
+  });
+
+  it("skips a creation only when asked not to enforce on creation", () => {
+    expect(judged(requiring({ do_not_enforce_on_create: true }), { kind: "create" })).toEqual([]);
+    expect(messages(requiring(), { kind: "create" })).toEqual([
+      'required status check "ci/build" is expected (ruleset "protect main")',
+    ]);
+  });
+
+  it("is strict by default: a merge must be up to date, as require_up_to_date asks", () => {
+    const passing = facts(summary("ci/build", "success"));
+    expect(
+      messages(requiring(), { pullRequest: { ...merge, upToDate: false }, statusChecks: passing }),
+    ).toEqual([`${UP_TO_DATE} (ruleset "protect main")`]);
+    expect(
+      judged(requiring({ strict_required_status_checks_policy: false }), {
+        pullRequest: { ...merge, upToDate: false },
+        statusChecks: passing,
+      }),
+    ).toEqual([]);
+  });
+
+  it("says up to date once when the ruleset also has require_up_to_date", () => {
+    expect(
+      messages(requiring({}, [{ type: "require_up_to_date" }]), {
+        pullRequest: { ...merge, upToDate: false },
+        statusChecks: facts(),
+      }),
+    ).toEqual([
+      'required status check "ci/build" is expected (ruleset "protect main")',
+      `${UP_TO_DATE} (ruleset "protect main")`,
+    ]);
+  });
+
+  it("says up to date at a merge's precheck even when the ruleset also has require_up_to_date", () => {
+    expect(
+      messages(
+        requiring({}, [{ type: "require_up_to_date" }]),
+        {
+          pullRequest: { ...merge, upToDate: false },
+          statusChecks: facts(summary("ci/build", "success")),
+        },
+        "precheck",
+      ),
+    ).toEqual([`${UP_TO_DATE} (ruleset "protect main")`]);
+  });
+
+  it("names both the checks and being up to date when both block", () => {
+    expect(
+      messages(requiring(), { pullRequest: { ...merge, upToDate: false }, statusChecks: facts() }),
+    ).toEqual([
+      `required status check "ci/build" is expected; ${UP_TO_DATE} (ruleset "protect main")`,
+    ]);
+  });
+
+  it("reports an evaluate ruleset without blocking", () => {
+    expect(judged(requiring({}, [], "evaluate"), { statusChecks: facts() })).toMatchObject([
+      { rule: "required_status_checks", blocking: false },
+    ]);
+  });
+
+  it("reads a stored rule's parameters with the defaults filled in", () => {
+    expect(
+      requiredChecksOf({
+        type: "required_status_checks",
+        parameters: { required_status_checks: [{ context: "x" }] },
+      }),
+    ).toEqual({
+      required_status_checks: [{ context: "x" }],
+      strict_required_status_checks_policy: true,
+      do_not_enforce_on_create: false,
+    });
+  });
+});
+
+describe("the required checks of a branch", () => {
+  const checks = (
+    name: string,
+    required: { context: string; integration_id?: string }[],
+    over: Partial<Ruleset> = {},
+    parameters: Partial<RequiredStatusChecksParameters> = {},
+  ) =>
+    ruleset({
+      name,
+      rules: [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: required, ...parameters },
+        },
+      ],
+      ...over,
+    });
+
+  it("lists each check the active branch rulesets covering it ask, once, with the rulesets asking", () => {
+    const asked = requiredChecksOn(
+      [
+        checks("a", [{ context: "Build" }, { context: "lint", integration_id: "ci" }]),
+        checks(
+          "b",
+          [{ context: "build" }, { context: "lint" }],
+          {},
+          {
+            strict_required_status_checks_policy: false,
+          },
+        ),
+        checks("off", [{ context: "docs" }], { enforcement: "evaluate" }),
+        checks("tags", [{ context: "tag" }], {
+          target: "tag",
+          conditions: { ref_name: { include: ["~ALL"], exclude: [] } },
+        }),
+        checks("elsewhere", [{ context: "x" }], {
+          conditions: { ref_name: { include: ["refs/heads/release/*"], exclude: [] } },
+        }),
+      ],
+      "refs/heads/main",
+      "main",
+    );
+    expect(asked).toEqual({
+      strict: true,
+      checks: [
+        { check: { context: "Build" }, rulesets: ["a", "b"] },
+        { check: { context: "lint", integration_id: "ci" }, rulesets: ["a"] },
+        { check: { context: "lint" }, rulesets: ["b"] },
+      ],
+    });
+  });
+
+  it("ignores who merges: bypass and actor types decide only at the merge", () => {
+    const asked = requiredChecksOn(
+      [
+        checks("agents", [{ context: "build" }], {
+          actor_types: ["agent"],
+          bypass_actors: [
+            { actor_type: "RepositoryRole", actor_id: "admin", bypass_mode: "always" },
+          ],
+        }),
+      ],
+      "refs/heads/main",
+      "main",
+    );
+    expect(asked.checks).toHaveLength(1);
+  });
+
+  it("asks nothing, and is not strict, without such a rule", () => {
+    expect(
+      requiredChecksOn([ruleset({ rules: [{ type: "deletion" }] })], "refs/heads/main", "main"),
+    ).toEqual({ strict: false, checks: [] });
   });
 });
