@@ -14,7 +14,7 @@
  * not built yet does nothing until it is.
  */
 
-export type FeatureArea = "yaml" | "workflow" | "trigger" | "job" | "step";
+export type FeatureArea = "yaml" | "workflow" | "trigger" | "job" | "step" | "expression";
 
 export type WorkflowFeature =
   | {
@@ -439,6 +439,68 @@ export const WORKFLOW_FEATURES = [
         example: job("", `        ${key}: true\n`),
       }) as const,
   ),
+  // Expressions: every function and context GitHub documents (expressions and contexts
+  // references, read 2026-11-13). Where each may be used is `expression-sites.ts`.
+  ...(
+    [
+      "contains",
+      "startsWith",
+      "endsWith",
+      "format",
+      "join",
+      "toJSON",
+      "fromJSON",
+      "case",
+      "success",
+      "always",
+      "cancelled",
+      "failure",
+    ] as const
+  ).map(
+    (value) =>
+      ({
+        feature: "expression.function",
+        value,
+        area: "expression",
+        status: "supported",
+        owner: "expressions",
+      }) as const,
+  ),
+  {
+    feature: "expression.function",
+    value: "hashFiles",
+    area: "expression",
+    status: "supported",
+    owner: "the runner",
+  },
+  ...(["github", "vars", "strategy", "matrix", "needs", "inputs"] as const).map(
+    (value) =>
+      ({
+        feature: "expression.context",
+        value,
+        area: "expression",
+        status: "supported",
+        owner: "expressions",
+      }) as const,
+  ),
+  ...(["env", "job", "steps", "runner", "secrets"] as const).map(
+    (value) =>
+      ({
+        feature: "expression.context",
+        value,
+        area: "expression",
+        status: "supported",
+        owner: "the runner",
+      }) as const,
+  ),
+  {
+    feature: "expression.context",
+    value: "jobs",
+    area: "expression",
+    status: "unsupported",
+    reason: "The `jobs` context exists only in reusable workflows, which Fyrden does not run.",
+    example: job("    if: jobs.build.result == 'success'\n"),
+  },
 ] as const satisfies readonly WorkflowFeature[];
 
 type Entry = (typeof WORKFLOW_FEATURES)[number];

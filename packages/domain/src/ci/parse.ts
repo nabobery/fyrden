@@ -12,6 +12,7 @@ import {
   type Scalar,
   type YAMLMap,
 } from "yaml";
+import { checkWorkflowExpressions } from "./expression-sites.js";
 import {
   featureOf,
   type SupportedKey,
@@ -119,7 +120,14 @@ export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
       return doc === null ? wholeFile("yaml_too_complex", tooComplex()) : walk.result(undefined);
     if (!walk.checkDiagnostics(doc)) return walk.result(undefined);
     if (!walk.resolveAnchors(doc)) return walk.result(undefined);
-    return walk.result(readWorkflow(walk, doc.contents, path));
+    const workflow = readWorkflow(walk, doc.contents, path);
+    // Expressions are checked once the structure is valid: a field's site is known only then.
+    if (workflow && walk.errors.length === 0) {
+      for (const e of checkWorkflowExpressions(workflow)) {
+        walk.fail(e.code, e.feature, e.path, { line: e.line, column: e.column }, e.message);
+      }
+    }
+    return walk.result(workflow);
   } catch (error) {
     if (error instanceof Stop) return walk.result(undefined);
     throw error;
