@@ -12,21 +12,21 @@
  * charged as work units against a limit.
  */
 import { ErrorList } from "./error-list.js";
-import { foldKey, looseEquals } from "./matrix-language.js";
-import type { Matrix, Position, Text, Value, Valued, WorkflowError } from "./workflow-schema.js";
+import {
+  type ExprArray,
+  type ExprObject,
+  type ExprValue,
+  equalsIgnoreCase,
+  foldCase,
+  toExprNumber,
+} from "./expression-values.js";
+import type { Matrix, Position, Value, Valued, WorkflowError } from "./workflow-schema.js";
 
+/** Matrix values are expression values: a matrix is read through the `matrix` context. */
+export type MatrixValue = ExprValue;
 export type MatrixScalar = null | boolean | number | string;
-export type MatrixValue = MatrixScalar | MatrixArray | MatrixObject;
-
-export interface MatrixArray {
-  readonly kind: "array";
-  readonly items: readonly MatrixValue[];
-}
-
-export interface MatrixObject {
-  readonly kind: "object";
-  readonly entries: ReadonlyMap<string, MatrixValue>;
-}
+export type MatrixArray = ExprArray;
+export type MatrixObject = ExprObject;
 
 /** Where a part of the matrix came from, for its errors. */
 interface Located {
@@ -72,7 +72,7 @@ export type ExpandedMatrix =
     }
   | { readonly ok: false; readonly errors: readonly WorkflowError[]; readonly units: number };
 
-export type LiteralMatrix =
+export type MatrixSpecResult =
   | { readonly kind: "spec"; readonly spec: MatrixSpec }
   /** An expression somewhere in it: expanded when the job is ready. */
   | { readonly kind: "dynamic" }
@@ -91,65 +91,231 @@ const EXCLUDE = `${MATRIX}.exclude`;
 /** Code units of text one work unit pays for when folded or compared. */
 const UNITS_TEXT = 64;
 
-// The literal matrix -------------------------------------------------------------------
+// The matrix as written, or as evaluated ------------------------------------------------
+
+/** The value of the expression at one place in a matrix, or the error saying why not. */
+export type MatrixResolver = (place: {
+  readonly source: string;
+  readonly path: string;
+  readonly at: Position;
+}) =>
+  | { readonly ok: true; readonly value: MatrixValue }
+  | { readonly ok: false; readonly error: WorkflowError };
 
 /**
- * A literal matrix as a spec, with keys that differ only in case refused,
- * positioned; or `dynamic` when a value anywhere in it holds an expression,
- * to be evaluated and expanded when the job is ready. Keys never do: the
- * parser refuses an expression in a matrix key.
+ * A job's matrix as a spec. Without `resolve`, a matrix with an expression
+ * in any value is `dynamic`: it is evaluated and expanded when the job is
+ * ready. With it, each expression (the whole matrix, a key's list, an
+ * `include` or `exclude` list, or one value) is replaced by its value.
+ * Keys that differ only in case are refused, positioned at the second, and
+ * so are evaluated numbers that are not finite. Keys never hold
+ * expressions: the parser refuses one in a matrix key.
  */
-export function literalMatrixSpec(jobId: string, matrix: Valued<Matrix>): LiteralMatrix {
-  if (matrix.kind === "expression") return { kind: "dynamic" };
-  const { dimensions, include, exclude } = matrix.value;
-  const lists = [include, exclude, ...dimensions.map((d) => d.values)];
-  for (const list of lists) {
-    if (list === undefined) continue;
-    if (list.kind === "expression" || list.value.some(holdsExpression)) return { kind: "dynamic" };
-  }
-
+export function matrixSpec(
+  jobId: string,
+  matrix: Valued<Matrix>,
+  resolve?: MatrixResolver,
+): MatrixSpecResult {
+  if (!resolve && holdsAnyExpression(matrix)) return { kind: "dynamic" };
   const errors = new ErrorList();
   const path = `jobs.${jobId}.strategy.matrix`;
+  const evaluate = (source: string, at: Position, where: string): MatrixValue | undefined => {
+    const result = (resolve as MatrixResolver)({ source, path: where, at });
+    if (result.ok) return result.value;
+    errors.add(
+      result.error.code,
+      result.error.feature,
+      result.error.path,
+      result.error,
+      result.error.message,
+    );
+    return undefined;
+  };
+  const spec =
+    matrix.kind === "expression"
+      ? specFromValue(evaluate(matrix.source, matrix.at, path), matrix.at, path, errors)
+      : specFromLiteral(matrix.value, matrix.at, path, errors, evaluate);
+  if (errors.any() || !spec) return { kind: "invalid", errors: errors.list() };
+  return { kind: "spec", spec };
+}
+
+type Evaluate = (source: string, at: Position, path: string) => MatrixValue | undefined;
+
+function holdsAnyExpression(matrix: Valued<Matrix>): boolean {
+  if (matrix.kind === "expression") return true;
+  const { dimensions, include, exclude } = matrix.value;
+  return [include, exclude, ...dimensions.map((d) => d.values)].some(
+    (list) =>
+      list !== undefined && (list.kind === "expression" || list.value.some(holdsExpression)),
+  );
+}
+
+function specFromLiteral(
+  matrix: Matrix,
+  at: Position,
+  path: string,
+  errors: ErrorList,
+  evaluate: Evaluate,
+): MatrixSpec {
   const seen = new Map<string, string>();
   const dims: MatrixDimension[] = [];
-  for (const { name, values } of dimensions) {
-    const at = `${path}.${name.value}`;
-    if (!unique(seen, name, at, MATRIX, errors)) continue;
-    const items = values.kind === "literal" ? values.value : [];
-    dims.push({
-      name: name.value,
-      values: items.map((v, i) => convert(v, `${at}[${i}]`, MATRIX, errors)),
-      at: name.at,
-      path: at,
-    });
+  for (const { name, values } of matrix.dimensions) {
+    const where = `${path}.${name.value}`;
+    if (!unique(seen, name.value, name.at, where, MATRIX, errors)) continue;
+    const items = list(values, where, MATRIX, errors, evaluate);
+    if (items) dims.push({ name: name.value, values: items, at: name.at, path: where });
   }
-  const entries = (list: Valued<readonly Value[]> | undefined, key: string, feature: string) =>
-    (list?.kind === "literal" ? list.value : []).map((item, i): MatrixEntry => {
-      const at = `${path}.${key}[${i}]`;
+  return {
+    dimensions: dims,
+    include: entries(matrix.include, `${path}.include`, INCLUDE, errors, evaluate),
+    exclude: entries(matrix.exclude, `${path}.exclude`, EXCLUDE, errors, evaluate),
+    at,
+    path,
+  };
+}
+
+/** A key's values, or an `include`/`exclude` list: literal items converted, or the list an expression gives. */
+function list(
+  values: Valued<readonly Value[]>,
+  path: string,
+  feature: string,
+  errors: ErrorList,
+  evaluate: Evaluate,
+): MatrixValue[] | undefined {
+  if (values.kind === "literal") {
+    return values.value.map((v, i) => convert(v, `${path}[${i}]`, feature, errors, evaluate));
+  }
+  const value = evaluate(values.source, values.at, path);
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || value.kind !== "array") {
+    errors.add("invalid_type", feature, path, values.at, `\`${path}\` must give a list.`);
+    return undefined;
+  }
+  checkEvaluated(value, values.at, path, feature, errors);
+  return [...value.items];
+}
+
+function entries(
+  values: Valued<readonly Value[]> | undefined,
+  path: string,
+  feature: string,
+  errors: ErrorList,
+  evaluate: Evaluate,
+): MatrixEntry[] {
+  if (values === undefined) return [];
+  if (values.kind === "literal") {
+    return values.value.map((item, i): MatrixEntry => {
+      const where = `${path}[${i}]`;
       const keys: MatrixKey[] = [];
-      const seenKeys = new Map<string, string>();
+      const seen = new Map<string, string>();
       if (item.kind === "mapping") {
         for (const [k, v] of item.entries) {
-          const keyPath = `${at}.${k.value}`;
-          if (!unique(seenKeys, k, keyPath, feature, errors)) continue;
+          const keyPath = `${where}.${k.value}`;
+          if (!unique(seen, k.value, k.at, keyPath, feature, errors)) continue;
           keys.push({
             key: k.value,
-            value: convert(v, keyPath, feature, errors),
+            value: convert(v, keyPath, feature, errors, evaluate),
             at: k.at,
             path: keyPath,
           });
         }
       }
-      return { keys, at: item.at, path: at };
+      return { keys, at: item.at, path: where };
     });
-  const spec: MatrixSpec = {
-    dimensions: dims,
-    include: entries(include, "include", INCLUDE),
-    exclude: entries(exclude, "exclude", EXCLUDE),
-    at: matrix.at,
-    path,
-  };
-  return errors.any() ? { kind: "invalid", errors: errors.list() } : { kind: "spec", spec };
+  }
+  const items = list(values, path, feature, errors, evaluate) ?? [];
+  return items.flatMap((item, i): MatrixEntry[] =>
+    entryFromValue(item, values.at, `${path}[${i}]`, feature, errors),
+  );
+}
+
+function entryFromValue(
+  value: MatrixValue,
+  at: Position,
+  path: string,
+  feature: string,
+  errors: ErrorList,
+): MatrixEntry[] {
+  if (value === null || typeof value !== "object" || value.kind !== "object") {
+    errors.add("invalid_type", feature, path, at, `\`${path}\` must be an object of matrix keys.`);
+    return [];
+  }
+  const keys = [...value.entries].map(
+    ([key, v]): MatrixKey => ({ key, value: v, at, path: `${path}.${key}` }),
+  );
+  return [{ keys, at, path }];
+}
+
+/** The spec of a matrix an expression gave whole: an object of key lists, `include` and `exclude`. */
+function specFromValue(
+  value: MatrixValue | undefined,
+  at: Position,
+  path: string,
+  errors: ErrorList,
+): MatrixSpec | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || value.kind !== "object") {
+    errors.add("invalid_type", MATRIX, path, at, `\`${path}\` must give an object of matrix keys.`);
+    return undefined;
+  }
+  checkEvaluated(value, at, path, MATRIX, errors);
+  const dims: MatrixDimension[] = [];
+  const lists: Record<"include" | "exclude", MatrixEntry[]> = { include: [], exclude: [] };
+  for (const [key, item] of value.entries) {
+    const where = `${path}.${key}`;
+    const isList = item !== null && typeof item === "object" && item.kind === "array";
+    if (key === "include" || key === "exclude") {
+      const feature = key === "include" ? INCLUDE : EXCLUDE;
+      if (!isList) {
+        errors.add("invalid_type", feature, where, at, `\`${where}\` must give a list.`);
+        continue;
+      }
+      lists[key] = item.items.flatMap((entry, i) =>
+        entryFromValue(entry, at, `${where}[${i}]`, feature, errors),
+      );
+    } else if (!isList) {
+      errors.add("invalid_type", MATRIX, where, at, `\`${where}\` must give a list.`);
+    } else {
+      dims.push({ name: key, values: [...item.items], at, path: where });
+    }
+  }
+  return { dimensions: dims, include: lists.include, exclude: lists.exclude, at, path };
+}
+
+/**
+ * An evaluated value checked as a literal one is: object keys that differ
+ * only in case (contexts such as `github.event` can hold them) and numbers
+ * JSON cannot write are refused, at the expression.
+ */
+function checkEvaluated(
+  value: MatrixValue,
+  at: Position,
+  path: string,
+  feature: string,
+  errors: ErrorList,
+): void {
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    errors.add(
+      "invalid_value",
+      feature,
+      path,
+      at,
+      `\`${path}\` gave ${value}, which is not a finite number.`,
+    );
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (value.kind === "array") {
+    for (const [i, item] of value.items.entries())
+      checkEvaluated(item, at, `${path}[${i}]`, feature, errors);
+    return;
+  }
+  const seen = new Map<string, string>();
+  for (const [key, item] of value.entries) {
+    const where = `${path}.${key}`;
+    if (unique(seen, key, at, where, feature, errors))
+      checkEvaluated(item, at, where, feature, errors);
+  }
 }
 
 /** True when a scalar anywhere in `value` holds `${{` (the parser refuses one in a key). */
@@ -171,45 +337,59 @@ function holdsExpression(value: Value): boolean {
 /** Records `key` under its fold, or reports it as a duplicate of an earlier spelling. */
 function unique(
   seen: Map<string, string>,
-  key: Text,
+  key: string,
+  at: Position,
   path: string,
   feature: string,
   errors: ErrorList,
 ): boolean {
-  const folded = foldKey(key.value);
+  const folded = foldCase(key);
   const first = seen.get(folded);
   if (first === undefined) {
-    seen.set(folded, key.value);
+    seen.set(folded, key);
     return true;
   }
   errors.add(
     "duplicate_key",
     feature,
     path,
-    key.at,
-    `Matrix keys ignore case, so \`${key.value}\` is the same key as \`${first}\`.`,
+    at,
+    `Matrix keys ignore case, so \`${key}\` is the same key as \`${first}\`.`,
   );
   return false;
 }
 
-/** A positioned YAML value as matrix data, checking nested keys and numbers. */
-function convert(value: Value, path: string, feature: string, errors: ErrorList): MatrixValue {
+/** A positioned YAML value as matrix data, checking nested keys; a scalar holding `${{` evaluated. */
+function convert(
+  value: Value,
+  path: string,
+  feature: string,
+  errors: ErrorList,
+  evaluate: Evaluate,
+): MatrixValue {
   switch (value.kind) {
-    case "scalar":
-      // The parser has already refused numbers that are not finite.
-      return value.value;
+    case "scalar": {
+      if (typeof value.value !== "string" || !value.value.includes("${{")) return value.value;
+      // A value that cannot be evaluated is reported; null stands in for it.
+      const evaluated = evaluate(value.value, value.at, path);
+      if (evaluated === undefined) return null;
+      checkEvaluated(evaluated, value.at, path, feature, errors);
+      return evaluated;
+    }
     case "sequence":
       return {
         kind: "array",
-        items: value.items.map((item, i) => convert(item, `${path}[${i}]`, feature, errors)),
+        items: value.items.map((item, i) =>
+          convert(item, `${path}[${i}]`, feature, errors, evaluate),
+        ),
       };
     case "mapping": {
       const seen = new Map<string, string>();
       const entries = new Map<string, MatrixValue>();
       for (const [key, item] of value.entries) {
         const keyPath = `${path}.${key.value}`;
-        if (!unique(seen, key, keyPath, feature, errors)) continue;
-        entries.set(key.value, convert(item, keyPath, feature, errors));
+        if (!unique(seen, key.value, key.at, keyPath, feature, errors)) continue;
+        entries.set(key.value, convert(item, keyPath, feature, errors, evaluate));
       }
       return { kind: "object", entries };
     }
@@ -325,13 +505,13 @@ function expand(spec: MatrixSpec, work: Work): ExpandedMatrix {
   const declared = new Map<string, number>();
   for (const [i, dim] of dims.entries()) {
     work.text(dim.name);
-    folds.push(foldKey(dim.name));
+    folds.push(foldCase(dim.name));
     declared.set(folds[i] as string, i);
   }
   /** A key folded once (charged), and the dimension it names, if any. */
   const resolve = (key: MatrixKey) => {
     work.text(key.key);
-    const fold = foldKey(key.key);
+    const fold = foldCase(key.key);
     return { key, fold, d: declared.get(fold) };
   };
 
@@ -521,17 +701,32 @@ function lookup(object: MatrixObject, key: string, work: Work): MatrixValue | un
     index = new Map();
     for (const [k, v] of object.entries) {
       work.text(k);
-      const f = foldKey(k);
+      const f = foldCase(k);
       if (!index.has(f)) index.set(f, v);
     }
     work.indexes.set(object, index);
   }
   work.text(key);
-  return index.get(foldKey(key));
+  return index.get(foldCase(key));
 }
 
 /** `a`, `a and b`, `a, b and c`. */
 function listed(names: readonly string[]): string {
   if (names.length === 1) return names[0] as string;
   return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * The expression language's `==`, from its evaluator's own conversions:
+ * strings ignoring case, null with null, booleans exactly, two containers
+ * only when they are the same one, anything else as numbers.
+ */
+function looseEquals(left: MatrixValue, right: MatrixValue): boolean {
+  if (typeof left === "string" && typeof right === "string") return equalsIgnoreCase(left, right);
+  const leftCollection = left !== null && typeof left === "object";
+  const rightCollection = right !== null && typeof right === "object";
+  if (leftCollection && rightCollection) return left === right;
+  if (left === null && right === null) return true;
+  if (typeof left === "boolean" && typeof right === "boolean") return left === right;
+  return toExprNumber(left) === toExprNumber(right);
 }
