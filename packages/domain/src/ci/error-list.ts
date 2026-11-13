@@ -40,6 +40,11 @@ export class ErrorList {
   #more = false;
 
   add(code: WorkflowErrorCode, feature: string, path: string, at: Position, message: string): void {
+    // Errors forwarded from another check bring its marker: keep the overflow, not the marker.
+    if (code === "too_many_errors") {
+      this.#more = true;
+      return;
+    }
     const errors = this.#errors;
     const after = (e: WorkflowError) =>
       e.line < at.line || (e.line === at.line && e.column <= at.column);

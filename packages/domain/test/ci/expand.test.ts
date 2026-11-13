@@ -553,6 +553,16 @@ jobs:
       expect(result.errors[0]).toMatchObject({ code: "limit_exceeded", path: "jobs.build" });
   }, 60_000);
 
+  it("keeps the graph's overflow marker last when it forwards more errors than the limit", () => {
+    const needs = Array.from({ length: 105 }, (_, i) => `missing${i}`).join(", ");
+    const result = plan(job(`    needs: [${needs}]\n`));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors).toHaveLength(101);
+    expect(result.errors.slice(0, -1).every((e) => e.code === "unknown_job")).toBe(true);
+    expect(result.errors.at(-1)?.code).toBe("too_many_errors");
+  });
+
   it("reports graph errors", () => {
     const result = plan(
       "on: push\njobs:\n  a:\n    runs-on: x\n    needs: a\n    steps:\n      - run: echo\n",

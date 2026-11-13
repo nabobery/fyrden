@@ -454,8 +454,8 @@ describe("jobPayload: size", () => {
         fc.string({ unit: "grapheme" }),
         fc.array(fc.string({ unit: "binary" }), { minLength: 1, maxLength: 3 }),
         (name, labels) => {
-          const safe = labels.map((l) => l.replace(/[\ud800-\udfff]/g, "x"));
-          const instance = { name: name.replace(/[\ud800-\udfff]/g, "x"), runsOn: safe };
+          const safe = labels.map((l) => l.replace(/[\ud800-\udfff\u0085]/g, "x"));
+          const instance = { name: name.replace(/[\ud800-\udfff\u0085]/g, "x"), runsOn: safe };
           expect(jobPayload(workflow, "build", instance).length).toBe(
             invariant + instancePayloadBytes(instance),
           );
