@@ -160,6 +160,7 @@ const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "changes_requested",
   "approved",
   "merge_conflict",
+  "ci_failed",
   "assigned",
 ]);
 
@@ -777,6 +778,30 @@ export class RepoFeed {
           ...nothing(row.number as number, "comment_edited"),
           member: `${prefix}/${row.id}`,
           mentions: mentioned(newMentions(before, row.body as string | null)),
+        };
+      }
+      case "pull_request.checks": {
+        const number = data.number as number;
+        const pull = this.#pull(number);
+        if (!pull) return undefined;
+        const failing = (data.failing as unknown[] | undefined) ?? [];
+        const holders = (data.holders as string[] | undefined) ?? [];
+        const released = (data.released as string[] | undefined) ?? [];
+        // An author's root is known from the pull request; a run's trigger actor stands for itself.
+        const roots = new Map(authorsOf(pull).map((who) => [who.id, who.root] as const));
+        const entry = (id: string, state: "open" | "resolved"): Named => ({
+          ...settledAs({ id, root: roots.get(id) ?? id }, "ci_failed", "author"),
+          reasons: [roots.has(id) ? "author" : "triggered"],
+          state,
+        });
+        const failingNow = ((data.failingCount as number | undefined) ?? failing.length) > 0;
+        return {
+          ...nothing(number, failingNow ? "checks_failed" : "checks_passed"),
+          member: failingNow ? `checks/${number}` : null,
+          direct: [
+            ...holders.map((id) => entry(id, failingNow ? "open" : "resolved")),
+            ...released.map((id) => entry(id, "resolved")),
+          ],
         };
       }
       case "pull_request.mergeability": {

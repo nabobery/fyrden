@@ -1,4 +1,4 @@
-import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { RefActor, RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import {
   advanceCheck,
   atLeast,
@@ -10,15 +10,20 @@ import {
   type CheckSummary,
   checkNameKey,
   checkText,
+  countedByDefault,
+  digestOf,
   FYRDEN_CI_SOURCE,
+  isFailing,
   isFullSha,
   MAX_CHECK_ATTEMPTS,
   MAX_CHECK_BATCH,
   MAX_CHECK_NAME_LENGTH,
+  MAX_FAILING_SHOWN,
   MAX_STATUS_DESCRIPTION_LENGTH,
   MAX_STATUSES_PER_CONTEXT,
   MAX_STATUSES_PER_SHA,
   MAX_SUMMARIES_PER_SHA,
+  MAX_TRIGGER_HOLDERS,
   STATUS_STATES,
   type StatusState,
   settleStatus,
@@ -26,6 +31,7 @@ import {
   targetUrl,
 } from "@fyrden/domain";
 import { type Oid, oidFromHex } from "@fyrden/git-core";
+import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
 
 /*
@@ -139,6 +145,35 @@ type SummaryRow = {
   updated_at: number;
 };
 
+/** What a pull request's checks are worked out from. */
+export interface PullHead {
+  readonly number: number;
+  readonly state: string;
+  readonly headSha: string;
+  readonly baseRef: string;
+  readonly authorId: string;
+  readonly authorRoot: string;
+}
+
+/** A failing check as `pull_checks` and the feed event name it: the attempt that failed, for a check. */
+interface Failing {
+  readonly name: string;
+  readonly source: CheckSource;
+  readonly attempt: number | null;
+}
+
+/**
+ * What `pull_checks.failing` holds: how many fail, a digest of all of them
+ * (so a change past the shown ones is still a change), and the first few.
+ */
+interface FailingRecord {
+  readonly count: number;
+  readonly digest: string;
+  readonly shown: readonly Failing[];
+}
+
+type PullChecksRow = { pr_number: number; head_sha: string; failing: string; holders: string };
+
 type StatusRow = {
   id: number;
   sha: string;
@@ -151,7 +186,12 @@ type StatusRow = {
 };
 
 export class RepoChecks {
-  constructor(private readonly deps: { readonly git: RepoGitStorage }) {}
+  constructor(
+    private readonly deps: {
+      readonly git: RepoGitStorage;
+      readonly events: Pick<RepoEvents, "emitActivity">;
+    },
+  ) {}
 
   /** Posts a status as `caller`, who must still write here; its summary of the context follows it. */
   createStatus(sha: string, input: StatusInput, caller: PullCaller): StatusAnswer {
@@ -218,6 +258,7 @@ export class RepoChecks {
         input.targetUrl,
         now,
       );
+      this.reconcileHeads(sha, caller.actor);
       return statusRecord(made);
     });
     return { ok: true, status };
@@ -310,8 +351,11 @@ export class RepoChecks {
         return "applied";
       });
       const now = this.#now();
+      // Only a completion moves what a pull request's failing checks are.
+      const settledOn = new Set<string>();
       for (const state of states.values())
         if (state?.dirty) {
+          if (state.settledMoved) settledOn.add(state.row.sha);
           const r = state.row;
           const where = [r.sha, r.name_key, r.source, r.attempt] as const;
           if (state.settledMoved)
@@ -341,8 +385,150 @@ export class RepoChecks {
               ...where,
             );
         }
+      for (const sha of settledOn) this.reconcileHeads(sha, null);
       return results;
     });
+  }
+
+  /**
+   * Which of the summaries on a pull request's head count toward its
+   * failing checks: with no rule naming required checks, the latest status
+   * of each name and every check of Fyrden's runs (the rows the combined
+   * status reads). A required-checks rule narrows it to the rows it decides
+   * by.
+   */
+  counts(_pull: Pick<PullHead, "number" | "baseRef">) {
+    return (rows: readonly CheckSummary[]): readonly CheckSummary[] => countedByDefault(rows);
+  }
+
+  /** In the caller's transaction: reconciles each open pull request whose head is `sha`. */
+  reconcileHeads(sha: string, actor: RefActor | null): void {
+    const pulls = this.#exec<{
+      number: number;
+      state: string;
+      head_sha: string;
+      base_ref: string;
+      author_id: string;
+      author_root: string;
+    }>(
+      "checks.read",
+      `SELECT number, state, head_sha, base_ref, author_id, author_root FROM pull_requests
+       WHERE state = 'open' AND head_sha = ?`,
+      sha,
+    );
+    for (const p of pulls)
+      this.reconcile(
+        {
+          number: p.number,
+          state: p.state,
+          headSha: p.head_sha,
+          baseRef: p.base_ref,
+          authorId: p.author_id,
+          authorRoot: p.author_root,
+        },
+        actor,
+      );
+  }
+
+  /**
+   * In the caller's transaction: works out what fails on the pull request's
+   * current head (nothing once it is closed) and who holds it (its author,
+   * the user its agent acted for, whoever triggered each failing attempt);
+   * when that or the head changed, records it and tells the feed, which
+   * opens the item for the holders and resolves it for those who left.
+   */
+  reconcile(pull: PullHead, actor: RefActor | null): void {
+    const [before] = this.#exec<PullChecksRow>(
+      "checks.read",
+      "SELECT * FROM pull_checks WHERE pr_number = ?",
+      pull.number,
+    );
+    let failing: Failing[] = [];
+    let holders: string[] = [];
+    if (pull.state === "open") {
+      const rows = this.#exec<SummaryRow>(
+        "checks.read",
+        "SELECT * FROM check_summaries WHERE sha = ?",
+        pull.headSha,
+      );
+      const byKey = new Map(rows.map((row) => [`${row.name_key} ${row.source}`, row]));
+      const failed = this.counts(pull)(rows.map(summaryOf))
+        .map((summary) => byKey.get(`${checkNameKey(summary.name)} ${summary.source}`))
+        .filter((row): row is SummaryRow => row !== undefined && isFailing(row.settled))
+        .sort((a, b) =>
+          a.name_key === b.name_key
+            ? a.source < b.source
+              ? -1
+              : 1
+            : a.name_key < b.name_key
+              ? -1
+              : 1,
+        );
+      failing = failed.map((row) => ({
+        name: row.name,
+        source: row.source,
+        attempt: row.settled_attempt,
+      }));
+      if (failing.length > 0) {
+        // The author always; the runs' trigger actors up to a bound, the first by id.
+        const actors = [
+          ...new Set(failed.flatMap((row) => (row.settled_actor_id ? [row.settled_actor_id] : []))),
+        ]
+          .sort()
+          .slice(0, MAX_TRIGGER_HOLDERS);
+        holders = [...new Set([pull.authorId, pull.authorRoot, ...actors])].sort();
+      }
+    }
+    // Bounded, so the record fits a row and the event a queue message whatever names fail.
+    const record: FailingRecord = {
+      count: failing.length,
+      digest: failing.length > 0 ? digestOf(JSON.stringify(failing)) : "",
+      shown: failing.slice(0, MAX_FAILING_SHOWN),
+    };
+    const failingJson = JSON.stringify(record);
+    const holdersJson = JSON.stringify(holders);
+    // A new head always replaces the row: a status has no attempt, so the same failing entries
+    // can stand on two heads.
+    const unchanged = before
+      ? before.head_sha === pull.headSha &&
+        before.failing === failingJson &&
+        before.holders === holdersJson
+      : record.count === 0;
+    if (unchanged) return;
+    const previous: string[] = before ? (JSON.parse(before.holders) as string[]) : [];
+    const released = previous.filter((id) => !holders.includes(id));
+    if (record.count > 0)
+      this.#exec(
+        "checks.pull",
+        `INSERT INTO pull_checks (pr_number, head_sha, failing, holders) VALUES (?, ?, ?, ?)
+         ON CONFLICT (pr_number) DO UPDATE SET head_sha = excluded.head_sha,
+           failing = excluded.failing, holders = excluded.holders`,
+        pull.number,
+        pull.headSha,
+        failingJson,
+        holdersJson,
+      );
+    else this.#exec("checks.pull", "DELETE FROM pull_checks WHERE pr_number = ?", pull.number);
+    this.deps.events.emitActivity("pull_request.checks", actor, {
+      number: pull.number,
+      sha: pull.headSha,
+      failing: record.shown,
+      failingCount: record.count,
+      holders,
+      released,
+    });
+  }
+
+  /** A pull request's failing checks as a feed item shows them, read live; null when none fail. */
+  failingText(number: number): string | null {
+    const [row] = this.#exec<PullChecksRow>(
+      "checks.read",
+      "SELECT * FROM pull_checks WHERE pr_number = ?",
+      number,
+    );
+    if (!row) return null;
+    const record = JSON.parse(row.failing) as FailingRecord;
+    return `${record.count} failing on ${row.head_sha.slice(0, 7)}: ${record.shown.map((f) => f.name).join(", ")}`;
   }
 
   /** `sha`'s statuses, newest first, before id `before`. */
