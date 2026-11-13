@@ -11,6 +11,7 @@ import {
   checkNameKey,
   checkText,
   countedByDefault,
+  countedByRequired,
   digestOf,
   FYRDEN_CI_SOURCE,
   isFailing,
@@ -24,6 +25,7 @@ import {
   MAX_STATUSES_PER_SHA,
   MAX_SUMMARIES_PER_SHA,
   MAX_TRIGGER_HOLDERS,
+  type RequiredStatusCheck,
   STATUS_STATES,
   type StatusState,
   settleStatus,
@@ -190,6 +192,8 @@ export class RepoChecks {
     private readonly deps: {
       readonly git: RepoGitStorage;
       readonly events: Pick<RepoEvents, "emitActivity">;
+      /** The checks the active rulesets on a base branch require (none when no rule names any). */
+      readonly required?: (baseRef: string) => readonly RequiredStatusCheck[];
     },
   ) {}
 
@@ -399,8 +403,10 @@ export class RepoChecks {
    * status reads). A required-checks rule narrows it to the rows it decides
    * by.
    */
-  counts(_pull: Pick<PullHead, "number" | "baseRef">) {
-    return (rows: readonly CheckSummary[]): readonly CheckSummary[] => countedByDefault(rows);
+  counts(pull: Pick<PullHead, "number" | "baseRef">) {
+    const required = this.deps.required?.(pull.baseRef) ?? [];
+    return (rows: readonly CheckSummary[]): readonly CheckSummary[] =>
+      required.length === 0 ? countedByDefault(rows) : countedByRequired(required, rows);
   }
 
   /** In the caller's transaction: reconciles each open pull request whose head is `sha`. */

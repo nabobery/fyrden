@@ -97,6 +97,20 @@ function decidingFacts(candidates: readonly CheckSummary[]): CheckSummary[] {
   return [...statuses, ...checks];
 }
 
+/**
+ * Of a commit's summaries, those `required` checks decide by (each
+ * requirement's deciding facts): what a pull request's failing checks are
+ * read from once a rule names required checks. In the order given.
+ */
+export function countedByRequired(
+  required: readonly RequiredStatusCheck[],
+  rows: readonly CheckSummary[],
+): CheckSummary[] {
+  const facts = { sha: "", checks: rows };
+  const counted = new Set(required.flatMap((check) => decidingFacts(candidateFacts(check, facts))));
+  return rows.filter((row) => counted.has(row));
+}
+
 /** Where one status or check stands: passed (success, skipped, neutral), pending or failing. */
 export function checkFactState(fact: CheckSummary): "passed" | "pending" | "failing" {
   if (fact.status !== "completed") return "pending";

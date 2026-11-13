@@ -473,6 +473,17 @@ export class RepoAuthority {
     };
   }
 
+  /** The checks the active rulesets on branch `baseRef` require, whoever merges. */
+  requiredOn(baseRef: string): ReturnType<typeof requiredChecksOn> {
+    const { rulesets } = this.deps.rulesets().current();
+    const head = this.deps.git.refStore.head();
+    return requiredChecksOn(
+      rulesets.map((r) => r.ruleset),
+      `refs/heads/${baseRef}`,
+      head?.startsWith("refs/heads/") ? head.slice("refs/heads/".length) : null,
+    );
+  }
+
   /**
    * The checks the active rulesets on a pull request's base branch
    * require, judged on its head as a merge judges them (whoever merges).
@@ -481,13 +492,7 @@ export class RepoAuthority {
     readonly baseRef: string;
     readonly headSha: string;
   }): RequiredChecksView {
-    const { rulesets } = this.deps.rulesets().current();
-    const head = this.deps.git.refStore.head();
-    const asked = requiredChecksOn(
-      rulesets.map((r) => r.ruleset),
-      `refs/heads/${pull.baseRef}`,
-      head?.startsWith("refs/heads/") ? head.slice("refs/heads/".length) : null,
-    );
+    const asked = this.requiredOn(pull.baseRef);
     const required = asked.checks.map((c) => c.check);
     const facts =
       required.length > 0 ? this.#facts(pull.headSha, required) : { sha: pull.headSha, checks: [] };
