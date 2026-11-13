@@ -4,12 +4,12 @@
 import { describe, expect, it } from "vitest";
 import {
   expandMatrix,
-  literalMatrixSpec,
   MAX_MATRIX_COMBINATIONS,
   MAX_MATRIX_ENTRIES,
   type MatrixCombination,
   type MatrixSpec,
   type MatrixValue,
+  matrixSpec,
 } from "../../src/ci/matrix.js";
 import { parseWorkflow } from "../../src/ci/parse.js";
 import type { WorkflowError } from "../../src/ci/workflow-schema.js";
@@ -23,7 +23,7 @@ function literal(lines: string) {
   if (!parsed.ok) throw new Error(`errors: ${JSON.stringify(parsed.errors, null, 2)}`);
   const matrix = parsed.workflow.jobs[0]?.strategy?.matrix;
   if (!matrix) throw new Error("no matrix");
-  return literalMatrixSpec("build", matrix);
+  return matrixSpec("build", matrix);
 }
 
 function specOf(lines: string): MatrixSpec {
@@ -416,7 +416,7 @@ describe("expandMatrix: refusals", () => {
   });
 });
 
-describe("literalMatrixSpec: dynamic matrices", () => {
+describe("matrixSpec: dynamic matrices", () => {
   it("leaves a matrix with an expression in any value for when the job is ready", () => {
     expect(literal(`        \${{ fromJSON(needs.a.outputs.m) }}\n`).kind).toBe("dynamic");
     expect(literal(m(`os: \${{ fromJSON(inputs.os) }}`)).kind).toBe("dynamic");

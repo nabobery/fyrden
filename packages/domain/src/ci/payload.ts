@@ -82,6 +82,21 @@ export function instancePayloadBytes(instance: PayloadInstance): number {
   return sink.size;
 }
 
+/**
+ * Why the runner cannot read `text` exactly, or undefined when it can: NEL
+ * (U+0085), which its YAML reader drops in every form, or a lone surrogate,
+ * which it rejects. Checked, positioned, before any payload is built.
+ */
+export function unreadableByRunner(text: string): string | undefined {
+  if (text.includes("\u0085")) {
+    return "holds NEL (U+0085), which the runner's YAML reader drops; use a line feed instead";
+  }
+  if (!text.isWellFormed()) {
+    return "is not well-formed UTF-16 (it holds a lone surrogate, as an escape like `\\ud800` writes), which the runner cannot read";
+  }
+  return undefined;
+}
+
 function jobOf(workflow: Workflow, jobId: string): Job {
   const job = workflow.jobs.find((j) => j.id.value === jobId);
   if (!job) throw new Error(`The workflow has no job \`${jobId}\`.`);

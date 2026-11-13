@@ -3,13 +3,22 @@
 // the same order with the same keys, or the same error code.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { equalsIgnoreCase, foldCase, toExprNumber } from "../../src/ci/expression-values.js";
 import {
   expandMatrix,
   type MatrixEntry,
   type MatrixScalar,
   type MatrixSpec,
 } from "../../src/ci/matrix.js";
-import { foldKey, looseEquals } from "../../src/ci/matrix-language.js";
+
+const foldKey = foldCase;
+/** `==` on scalars, written out here rather than shared with the code under test. */
+function looseEquals(left: MatrixScalar, right: MatrixScalar): boolean {
+  if (typeof left === "string" && typeof right === "string") return equalsIgnoreCase(left, right);
+  if (left === null && right === null) return true;
+  if (typeof left === "boolean" && typeof right === "boolean") return left === right;
+  return toExprNumber(left) === toExprNumber(right);
+}
 
 const at = { line: 1, column: 1 };
 const keys = fc.constantFrom("os", "OS", "node", "arch", "extra");
