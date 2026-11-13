@@ -246,10 +246,10 @@ export class RepoFeed {
       if (self && !ACTION_KINDS.has(r.kind) && !ownState) return;
       const key = `${r.principal}|${r.kind}`;
       if (named.has(key)) return;
-      // A request settled, or standing again, reaches everyone it asks, whether they still read
+      // A request or failure settled, or standing again, reaches everyone it asks, whether they still read
       // the repository or not (feeds check access when read): one who reads it again must find
       // it as it is.
-      if (!readers.mayRead(r.principal) && !settlesRequest(r) && !r.standing) return;
+      if (!readers.mayRead(r.principal) && !settlesAction(r) && !r.standing) return;
       named.add(key);
       const { root: _root, standing: _standing, ...recipient } = r;
       (recipient.priority === "P2" ? watchers : audience).push({ ...recipient, silent: self });
@@ -1099,8 +1099,13 @@ export function markEmail(audience: FeedRecipient[], action: string): void {
   }
 }
 
-function settlesRequest(r: Named): boolean {
-  return r.kind === "review_requested" && r.state === "resolved";
+/**
+ * An entry that only settles something it asked of its recipient (a review
+ * request, a failure to fix): it reaches the recipient whether it still
+ * reads the repository or not, so an item it was told of is not left open.
+ */
+function settlesAction(r: Named): boolean {
+  return (r.kind === "review_requested" || r.kind === "ci_failed") && r.state === "resolved";
 }
 
 /** The issue's or pull request's author, and the user its agent author acts for. */

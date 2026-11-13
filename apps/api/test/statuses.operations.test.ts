@@ -7,6 +7,7 @@ import { uniqueId } from "@fyrden/testing";
 import { beforeEach, describe, expect, inject, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { RepoBrowse } from "../src/do/repo/browse.js";
+import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
 import { type PushTarget, postPush } from "./helpers/push.js";
@@ -213,6 +214,26 @@ describe("who may post and read", () => {
     await post({ state: "success" });
     expect((await list(sha, "", reader.token)).body.statuses).toHaveLength(1);
     expect((await combined(sha, "", reader.token)).body.state).toBe("success");
+  });
+
+  it("names an agent acting for its user as the creator and the publisher, not the user", async () => {
+    const agent = await agentFor(owner, ["statuses:write"]);
+    const made = await post({ state: "success", context: "agents" }, agent.delegated);
+    expect(made.status).toBe(201);
+    expect(made.body.creator).toEqual({ id: agent.id });
+    const [row] = await inRepo(stub(), (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ creator_id: string; creator_root: string; source: string }>(
+          `SELECT s.creator_id, s.creator_root, c.source FROM commit_statuses s
+           JOIN check_summaries c ON c.status_id = s.id`,
+        )
+        .toArray(),
+    );
+    expect(row).toEqual({
+      creator_id: agent.id,
+      creator_root: owner.principalId,
+      source: agent.id,
+    });
   });
 
   it("names the writer that posted it as the creator", async () => {
