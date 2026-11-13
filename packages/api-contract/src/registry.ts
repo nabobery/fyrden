@@ -245,6 +245,7 @@ import {
   listSshSigningKeys,
 } from "../ops/signing-keys.js";
 import { listStarred, starRepo, unstarRepo } from "../ops/stars.js";
+import { createStatus, getCombinedStatus, listStatuses } from "../ops/statuses.js";
 import { createGitToken, createUserToken, listUserTokens, revokeUserToken } from "../ops/tokens.js";
 import { abortUpload, completeUpload, createUpload, getUpload } from "../ops/uploads.js";
 import {
@@ -456,8 +457,12 @@ export const registry = defineRegistry([
   getBranch,
   listTags,
   listCommits,
+  // Before `getCommit`: its greedy `{ref+}` would take `.../{ref}/statuses` and `.../{ref}/status`.
+  listStatuses,
+  getCombinedStatus,
   getCommit,
   compareCommits,
+  createStatus,
   getBlame,
   getRootContents,
   getContents,

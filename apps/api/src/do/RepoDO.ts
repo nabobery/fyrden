@@ -2396,6 +2396,35 @@ export class RepoDO extends MigratingDO {
     );
   }
 
+  /** The statuses of the commit `ref` names, newest first, before status id `before`. */
+  listStatuses(ref: string, before: number | null, limit: number) {
+    return this.#statusesAt("listStatuses", ref, (sha) => ({
+      sha,
+      ...this.checks.listStatuses(sha, before, limit),
+    }));
+  }
+
+  /** The combined status of the commit `ref` names, its contexts after key `after`. */
+  combinedStatus(ref: string, after: string | null, limit: number) {
+    return this.#statusesAt("combinedStatus", ref, (sha) => ({
+      sha,
+      ...this.checks.combinedStatus(sha, after, limit),
+    }));
+  }
+
+  /** Reads `read` at the commit `ref` names (a SHA it has, a branch, a tag, a full ref name). */
+  #statusesAt<R>(method: string, ref: string, read: (sha: string) => R) {
+    // Guarded as every browse read: a reader that could not get memory answers busy, not an error.
+    return this.#browse(method, (browse) =>
+      guarded(async (): Promise<Browsed<R>> => {
+        if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+        const at = await browse.resolveTree(ref);
+        if (!at.ok) return at;
+        return { ok: true, value: read(oidToHex(at.value.commit)) };
+      }),
+    );
+  }
+
   /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */
   startCheckAttempts(sha: string, items: readonly CheckStart[]) {
     return this.#checkChange("startCheckAttempts", () =>
