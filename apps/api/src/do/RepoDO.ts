@@ -136,6 +136,7 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
+import { type CheckStart, type CheckUpdate, RepoChecks, type StatusInput } from "./repo/checks.js";
 import {
   CODE_OWNER_MERGE_POLICY,
   CodeOwnerFacts,
@@ -490,6 +491,7 @@ export class RepoDO extends MigratingDO {
 
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
+  readonly checks: RepoChecks;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -656,6 +658,7 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
+    this.checks = new RepoChecks({ git: this.git });
     this.releases = new RepoReleases({
       git: this.git,
       events: this.events,
@@ -2384,6 +2387,39 @@ export class RepoDO extends MigratingDO {
     return this.#measured("getLatestRelease", () =>
       this.#refusesReads() ? null : this.releases.latest(),
     );
+  }
+
+  /** Posts a commit status as `actor`, who must write here (checked again in the change). */
+  createStatus(sha: string, input: StatusInput, actor: RefActor) {
+    return this.#pullChange("createStatus", actor, (caller) =>
+      this.#withIdentity(() => this.checks.createStatus(sha, input, caller)),
+    );
+  }
+
+  /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */
+  startCheckAttempts(sha: string, items: readonly CheckStart[]) {
+    return this.#checkChange("startCheckAttempts", () =>
+      this.checks.startCheckAttempts(sha, items),
+    );
+  }
+
+  /** Applies a batch of Fyrden's runs' check updates (see `RepoChecks.recordCheckUpdates`). */
+  recordCheckUpdates(updates: readonly CheckUpdate[]) {
+    return this.#checkChange("recordCheckUpdates", () => this.checks.recordCheckUpdates(updates));
+  }
+
+  /**
+   * A change Fyrden's runs make, with no caller to check: refused, by
+   * throwing, when the repository takes no changes (deleted, transferring).
+   */
+  #checkChange<R>(method: string, change: () => R): Promise<R> {
+    return this.#measured(method, () => {
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      const result = change();
+      this.#armOutbox();
+      return result;
+    });
   }
 
   /** Creates a release; one published peels its tag first, and writes nothing until the recheck. */

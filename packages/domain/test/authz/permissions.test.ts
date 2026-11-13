@@ -88,6 +88,18 @@ describe("scopesAllow", () => {
     expect(scopesAllow(["metadata:read"], "contents:read")).toBe(false);
   });
 
+  it("keeps commit statuses apart from contents, as GitHub's fine-grained tokens do", () => {
+    expect(scopesAllow(["statuses:write"], "statuses:read")).toBe(true);
+    expect(scopesAllow(["statuses:write"], "metadata:read")).toBe(true);
+    expect(scopesAllow(["statuses:write"], "contents:read")).toBe(false);
+    expect(scopesAllow(["contents:write"], "statuses:write")).toBe(false);
+    expect(scopesAllow(["contents:write"], "statuses:read")).toBe(false);
+    expect(permissionDef("statuses:write")).toMatchObject({ resource: "repo", minRole: "write" });
+    expect(permissionDef("statuses:read")).toMatchObject({ resource: "repo", minRole: "read" });
+    expect(PERMISSIONS["statuses:write"].writes).toBe(true);
+    expect(PERMISSIONS["statuses:read"].writes).toBe(false);
+  });
+
   it("grants nothing for scopes it does not know", () => {
     for (const p of PERMISSION_NAMES) {
       expect(scopesAllow(["repo"], p)).toBe(false);

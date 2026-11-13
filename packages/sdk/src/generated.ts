@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write")[];
+  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
