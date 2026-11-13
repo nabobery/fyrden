@@ -56,7 +56,7 @@ export const createStatus = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/statuses/{sha}",
   summary: "Create a commit status",
-  description: `Posts a status on a commit: \`state\` is \`pending\`, \`success\`, \`failure\` or \`error\`, under a \`context\` (default \`default\`, compared ignoring case) that tells one system's statuses from another's. The commit must be one this repository has (422 \`commit_not_found\`). A commit takes 1,000 statuses of one context and 10,000 in all (422 \`status_limit\`), and 1,000 status summaries (each publisher's contexts, counted across publishers; 422 \`check_limit\`). The status is attributed to the principal that posts it, for an agent acting for a user the agent: a required check naming an expected source matches that principal. ${COMPATIBILITY} Takes the \`statuses:write\` permission.`,
+  description: `Posts a status on a commit: \`state\` is \`pending\`, \`success\`, \`failure\` or \`error\`, under a \`context\` (default \`default\`, compared ignoring case) that tells one system's statuses from another's. The commit must be one this repository has (422 \`commit_not_found\`). A commit takes 1,000 statuses of one context and 10,000 in all (422 \`status_limit\`), and 1,000 status summaries (each publisher's contexts, counted across publishers; 422 \`check_limit\`). The status is attributed to the principal that posts it (for an agent acting for a user, the agent): it is the status's publisher, and the creator this answers with. ${COMPATIBILITY} Takes the \`statuses:write\` permission.`,
   input: z.object({
     ...RepoInput,
     sha: z
