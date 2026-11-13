@@ -8,7 +8,7 @@ import type {
   Output,
   updateRuleset,
 } from "@fyrden/api-contract";
-import { pullRequestParameters } from "@fyrden/domain";
+import { pullRequestParameters, requiredChecksOf } from "@fyrden/domain";
 import type { RulesetInput, RulesetRecord } from "../do/repo/rulesets.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
@@ -31,6 +31,16 @@ function output(record: RulesetRecord): RulesetOutput {
       },
     },
     rules: ruleset.rules.map((r) => {
+      if (r.type === "required_status_checks") {
+        const p = requiredChecksOf(r);
+        return {
+          type: r.type,
+          parameters: {
+            ...p,
+            required_status_checks: p.required_status_checks.map((c) => ({ ...c })),
+          },
+        };
+      }
       if (r.type !== "pull_request") return { type: r.type };
       // Stored before parameters existed, or partly: the defaults fill in.
       const parameters = pullRequestParameters(r);
@@ -52,11 +62,23 @@ function inputOf(input: Input<typeof createRuleset>): RulesetInput {
     target: input.target,
     enforcement: input.enforcement,
     conditions: input.conditions,
-    rules: input.rules.map(({ type, parameters }) => {
-      if (!parameters) return { type };
+    rules: input.rules.map((rule) => {
+      if (rule.type === "required_status_checks")
+        return {
+          type: rule.type,
+          parameters: {
+            ...rule.parameters,
+            required_status_checks: rule.parameters.required_status_checks.map((c) =>
+              c.integration_id === undefined
+                ? { context: c.context }
+                : { context: c.context, integration_id: c.integration_id },
+            ),
+          },
+        };
+      if (rule.type !== "pull_request" || !rule.parameters) return { type: rule.type };
       // An empty `required_reviewers` (sent by GitHub clients) requires nothing: not stored.
-      const { required_reviewers: _none, ...kept } = parameters;
-      return { type, parameters: kept };
+      const { required_reviewers: _none, ...kept } = rule.parameters;
+      return { type: rule.type, parameters: kept };
     }),
     bypass_actors: input.bypass_actors,
     ...(input.actor_types && { actor_types: input.actor_types }),

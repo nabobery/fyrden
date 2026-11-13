@@ -1,7 +1,17 @@
 import { readGrantLinks } from "@fyrden/adapters-cloudflare/auth";
 import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { type MergeContext, principalTypeOf, REPO_ROLES, type RepoRole } from "@fyrden/domain";
+import {
+  type CheckSummary,
+  candidateFacts,
+  checkNameKey,
+  type MergeContext,
+  principalTypeOf,
+  REPO_ROLES,
+  type RepoRole,
+  type RequiredStatusCheck,
+  type StatusCheckFacts,
+} from "@fyrden/domain";
 import {
   type BlockCache,
   bytesBody,
@@ -25,8 +35,10 @@ import {
   codeOwnerDemand,
   countedApprovals,
   hasPrecheckRules,
+  hasRequiredChecks,
   precheckPushRules,
   type RuleSnapshot,
+  requiredChecksFor,
 } from "./push-rules.js";
 import type { RepoRulesets } from "./rulesets.js";
 import { factOf } from "./signature.js";
@@ -62,6 +74,37 @@ export interface AuthorityDeps {
   readonly acl: RepoAcl;
   readonly rulesets: () => RepoRulesets;
   readonly memoryBlocks: () => BlockCache;
+  /** The check summaries of commits, read in the object with no await. */
+  readonly checks: () => CheckReader;
+  /** For tests: run between the commit point's check and the commit's transaction. */
+  readonly hooks?: () => PushRuleHooks;
+}
+
+/** What the rules read of a commit's checks: every publisher's summary of the named checks. */
+export interface CheckReader {
+  summariesFor(sha: string, names: readonly string[]): CheckSummary[];
+}
+
+export interface PushRuleHooks {
+  /** Awaited once a push's rules were checked, before its commit. */
+  afterChecked?: () => Promise<void>;
+}
+
+/**
+ * The stamp of the summaries `checks` count on a commit: those of their
+ * names from their sources (from any when a check names none), so a
+ * publisher no requirement counts changes nothing.
+ */
+function checksStamp(checks: readonly RequiredStatusCheck[], facts: StatusCheckFacts): string {
+  const counted = new Map<string, CheckSummary>();
+  for (const check of checks)
+    for (const row of candidateFacts(check, facts))
+      counted.set(JSON.stringify([checkNameKey(row.name), row.source]), row);
+  return JSON.stringify(
+    [...counted.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, r]) => [key, r.kind, r.attempt, r.statusId, r.status, r.conclusion]),
+  );
 }
 
 export class RepoAuthority {
@@ -268,11 +311,30 @@ export class RepoAuthority {
     /** The pull request the write merges, for its `pull_request` rules. */
     merge?: MergeContext,
   ): Promise<string | undefined> {
-    if (!hasPrecheckRules(this.deps.rulesets())) return undefined;
+    const rulesets = this.deps.rulesets();
+    // A merge's required checks are known before it is made: those of its head.
+    const mergeChecks = merge !== undefined && hasRequiredChecks(rulesets);
+    if (!hasPrecheckRules(rulesets) && !mergeChecks) return undefined;
     const ceilings = await this.rolesPulled(principal, grantId);
     const delegated = grantId !== null;
+    const { snapshot } = this.#ruleSnapshot(principal, ceilings);
+    const merged = updates[0];
+    const required =
+      mergeChecks && merged
+        ? requiredChecksFor(snapshot, {
+            principal,
+            delegated,
+            ref: merged.ref,
+            head,
+            kind: "update",
+          })
+        : undefined;
+    const statusChecks =
+      merge && required && required.all.length > 0
+        ? this.#facts(merge.approvals.headSha, required.all)
+        : undefined;
     const refusals = precheckPushRules(
-      this.#ruleSnapshot(principal, ceilings).snapshot,
+      snapshot,
       principal,
       updates.map((u, index) => ({
         index,
@@ -282,6 +344,7 @@ export class RepoAuthority {
       delegated,
       head,
       merge,
+      statusChecks,
     );
     return refusals.size === 0 ? undefined : [...refusals.values()].join("; ");
   }
@@ -343,6 +406,7 @@ export class RepoAuthority {
         // check reads, and its stamp, taken together with no await between them.
         const ceilings = await this.rolesPulled(input.principal, input.grantId);
         const { snapshot, stamp } = this.#ruleSnapshot(input.principal, ceilings);
+        const checks = this.#commandChecks(snapshot, input);
         const signatures = this.#signatureReader(input.packs);
         let checked: Awaited<ReturnType<typeof checkPushRules>>;
         try {
@@ -354,12 +418,13 @@ export class RepoAuthority {
                 verdicts({ env: this.deps.env(), metrics: git.context.metrics }, facts),
             },
             snapshot,
-            { ...input, delegated: input.grantId !== null },
+            { ...input, delegated: input.grantId !== null, statusChecks: checks.facts },
           );
         } finally {
           signatures.release();
         }
         this.deps.rulesets().recordEvaluated(input.uploadId, input.principal, checked.evaluated);
+        await this.deps.hooks?.().afterChecked?.();
         const { refusals } = checked;
         // A merge is one update: the approvals its rules count, from this same snapshot.
         const merged = input.merge && input.commands[0]?.name;
@@ -370,6 +435,9 @@ export class RepoAuthority {
             snapshot.role !== null &&
             REPO_ROLES.indexOf(snapshot.role) >= REPO_ROLES.indexOf("write"),
           refusals,
+          ...(checks.stamps.size > 0 && {
+            checks: { stamps: checks.stamps, restamp: checks.restamp },
+          }),
           ...(input.merge &&
             merged && {
               approvals: countedApprovals(snapshot, {
@@ -381,6 +449,68 @@ export class RepoAuthority {
               }),
             }),
         };
+      },
+    };
+  }
+
+  /** The summaries of `checks` on `sha`: one read for every publisher of their names. */
+  #facts(sha: string, checks: readonly RequiredStatusCheck[]): StatusCheckFacts {
+    const names = [...new Set(checks.map((c) => checkNameKey(c.context)))];
+    return { sha, checks: this.deps.checks().summariesFor(sha, names) };
+  }
+
+  /**
+   * The required checks of a push's commands, read with its rule snapshot
+   * (no await between): for each command such a rule applies to, the
+   * summaries of the commit that counts (its new tip; a merge's pull
+   * request head), each commit's read once; and for those the active rules
+   * ask, a stamp the commit's transaction takes again.
+   */
+  #commandChecks(
+    snapshot: RuleSnapshot,
+    input: Parameters<NonNullable<RepoPush["rules"]>["check"]>[0],
+  ): {
+    facts: Map<number, StatusCheckFacts>;
+    stamps: Map<number, string>;
+    restamp: (index: number) => string;
+  } {
+    // Each command's requirements and the commit they count on, then one read per commit.
+    const asked = new Map<
+      number,
+      { sha: string; all: RequiredStatusCheck[]; active: RequiredStatusCheck[] }
+    >();
+    const bySha = new Map<string, RequiredStatusCheck[]>();
+    for (const cmd of input.commands) {
+      if (cmd.kind === "delete") continue;
+      const required = requiredChecksFor(snapshot, {
+        principal: input.principal,
+        delegated: input.grantId !== null,
+        ref: cmd.name,
+        head: input.head,
+        kind: cmd.kind,
+      });
+      if (required.all.length === 0) continue;
+      // A merge's checks are its pull request head's, not those of the commit it makes.
+      const sha = input.merge ? input.merge.approvals.headSha : oidToHex(cmd.newOid as Oid);
+      asked.set(cmd.index, { sha, ...required });
+      bySha.set(sha, [...(bySha.get(sha) ?? []), ...required.all]);
+    }
+    const read = new Map([...bySha].map(([sha, checks]) => [sha, this.#facts(sha, checks)]));
+    const facts = new Map<number, StatusCheckFacts>();
+    const stamps = new Map<number, string>();
+    for (const [index, at] of asked) {
+      const found = read.get(at.sha) as StatusCheckFacts;
+      facts.set(index, found);
+      if (at.active.length > 0) stamps.set(index, checksStamp(at.active, found));
+    }
+    return {
+      facts,
+      stamps,
+      restamp: (index) => {
+        const at = asked.get(index);
+        return at && at.active.length > 0
+          ? checksStamp(at.active, this.#facts(at.sha, at.active))
+          : "";
       },
     };
   }

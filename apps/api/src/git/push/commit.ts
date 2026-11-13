@@ -101,8 +101,11 @@ export function pushCommitter(
   lock: LockHandle,
   committed: CommittedTransaction[],
   cap?: PushCapGate,
-  /** A last refusal checked in the transaction (the rulesets are still the ones checked). */
-  fence?: () => string | undefined,
+  /**
+   * A last refusal checked in the transaction (the rulesets are still the
+   * ones checked), given the ref updates that transaction commits.
+   */
+  fence?: (updates: readonly RefUpdate[]) => string | undefined,
   /** Runs in the transaction that commits the upload, after its refs. */
   inCommit?: () => void,
   /** How the change is made, for the reflog: a merge of a pull request is `merge`. */
@@ -117,9 +120,13 @@ export function pushCommitter(
    */
   beforeCommit?: () => Promise<void>,
 ): (request: PushCommitRequest) => Promise<PushCommitResult> {
-  const authorize = ({ now }: { now: number }, removing: readonly PackId[]): string | undefined => {
+  const authorize = (
+    { now }: { now: number },
+    removing: readonly PackId[],
+    updates: readonly RefUpdate[],
+  ): string | undefined => {
     if (!git.locks.isHeld(lock)) return "the push lost its turn to commit; try the push again";
-    const fenced = fence?.();
+    const fenced = fence?.(updates);
     if (fenced) return fenced;
     if (anyLeased(git, removing)) return PACKS_IN_USE;
     if (upload.tokenId !== decision.tokenId) return "the push was authorized for another token";
@@ -176,7 +183,7 @@ export function pushCommitter(
           ...(maintainerFor && { maintainerFor }),
         },
         fastForward: request.fastForward,
-        authorize: (context) => authorize(context, removePacks),
+        authorize: (context) => authorize(context, removePacks, request.updates),
         onCommitted: (context) => {
           // Other pushes indexed against a merged pack depend on the compacted one now (it
           // holds all their objects); without this their commit would find the pack gone.

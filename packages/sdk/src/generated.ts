@@ -1039,8 +1039,8 @@ export type ReposRulesetsListOutput = {
       };
     };
     rules: ({
-      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+      type: "pull_request";
       /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
       parameters?: {
         /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1059,6 +1059,25 @@ export type ReposRulesetsListOutput = {
         /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
         allow_agent_approvals: boolean;
       };
+    } | {
+      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+      type: "required_status_checks";
+      /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+      parameters: {
+        required_status_checks: {
+          /** The status context or check name, compared case-insensitively. */
+          context: string;
+          /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+          integration_id?: string;
+        }[];
+        /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+        strict_required_status_checks_policy: boolean;
+        /** A branch being created skips this rule. */
+        do_not_enforce_on_create: boolean;
+      };
+    } | {
+      /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+      type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
     })[];
     bypass_actors: ({
       actor_type: "RepositoryRole";
@@ -1144,8 +1163,8 @@ export type ReposRulesetsGetOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "pull_request";
     /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
     parameters?: {
       /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1164,6 +1183,25 @@ export type ReposRulesetsGetOutput = {
       /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
       allow_agent_approvals: boolean;
     };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "required_status_checks";
+    /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+    parameters: {
+      required_status_checks: {
+        /** The status context or check name, compared case-insensitively. */
+        context: string;
+        /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+        integration_id?: string;
+      }[];
+      /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+      strict_required_status_checks_policy: boolean;
+      /** A branch being created skips this rule. */
+      do_not_enforce_on_create: boolean;
+    };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1196,8 +1234,8 @@ export type ReposRulesetsCreateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "pull_request";
     /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
     parameters?: {
       /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1216,6 +1254,25 @@ export type ReposRulesetsCreateInput = {
       /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
       allow_agent_approvals?: boolean;
     };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "required_status_checks";
+    /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+    parameters: {
+      required_status_checks: {
+        /** The status context or check name, compared case-insensitively. */
+        context: string;
+        /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+        integration_id?: string;
+      }[];
+      /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+      strict_required_status_checks_policy?: boolean;
+      /** A branch being created skips this rule. */
+      do_not_enforce_on_create?: boolean;
+    };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1242,8 +1299,8 @@ export type ReposRulesetsCreateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "pull_request";
     /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
     parameters?: {
       /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1262,6 +1319,25 @@ export type ReposRulesetsCreateOutput = {
       /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
       allow_agent_approvals: boolean;
     };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "required_status_checks";
+    /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+    parameters: {
+      required_status_checks: {
+        /** The status context or check name, compared case-insensitively. */
+        context: string;
+        /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+        integration_id?: string;
+      }[];
+      /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+      strict_required_status_checks_policy: boolean;
+      /** A branch being created skips this rule. */
+      do_not_enforce_on_create: boolean;
+    };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";
@@ -1296,8 +1372,8 @@ export type ReposRulesetsUpdateInput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "pull_request";
     /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
     parameters?: {
       /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1316,6 +1392,25 @@ export type ReposRulesetsUpdateInput = {
       /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
       allow_agent_approvals?: boolean;
     };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "required_status_checks";
+    /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+    parameters: {
+      required_status_checks: {
+        /** The status context or check name, compared case-insensitively. */
+        context: string;
+        /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+        integration_id?: string;
+      }[];
+      /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+      strict_required_status_checks_policy?: boolean;
+      /** A branch being created skips this rule. */
+      do_not_enforce_on_create?: boolean;
+    };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
   })[];
   bypass_actors?: ({
     actor_type: "RepositoryRole";
@@ -1342,8 +1437,8 @@ export type ReposRulesetsUpdateOutput = {
     };
   };
   rules: ({
-    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
-    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "pull_request" | "require_up_to_date";
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "pull_request";
     /** For `pull_request` only: what a merge needs; left out, nothing beyond the pull request. */
     parameters?: {
       /** Approving reviews a merge needs, from people with write access other than the author. */
@@ -1362,6 +1457,25 @@ export type ReposRulesetsUpdateOutput = {
       /** Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count. */
       allow_agent_approvals: boolean;
     };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "required_status_checks";
+    /** For `required_status_checks` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head). */
+    parameters: {
+      required_status_checks: {
+        /** The status context or check name, compared case-insensitively. */
+        context: string;
+        /** Fyrden: the publisher the check must come from, `ci` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here. */
+        integration_id?: string;
+      }[];
+      /** A pull request merged into the branch must contain its latest commit, as `require_up_to_date` asks. GitHub's default for the rule. */
+      strict_required_status_checks_policy: boolean;
+      /** A branch being created skips this rule. */
+      do_not_enforce_on_create: boolean;
+    };
+  } | {
+    /** `creation`, `update`, `deletion` (of a matching ref), `non_fast_forward` (no force pushes), `required_signatures` (every new commit verified), `pull_request` (no direct pushes; changes come through pull requests, merged as its `parameters` require), `required_status_checks` (named checks must pass on the commit first), Fyrden's `require_up_to_date` (a pull request merged into the branch must already contain the branch's latest commit). */
+    type: "creation" | "update" | "deletion" | "non_fast_forward" | "required_signatures" | "require_up_to_date";
   })[];
   bypass_actors: ({
     actor_type: "RepositoryRole";

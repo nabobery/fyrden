@@ -11,10 +11,13 @@ import {
   principalTypeOf,
   pullRequestParameters,
   type RepoRole,
+  type RequiredStatusCheck,
   type RuleActor,
   type Ruleset,
   type RuleViolation,
+  requiredChecksOf,
   ruleViolations,
+  type StatusCheckFacts,
 } from "@fyrden/domain";
 import {
   type CheckedCommand,
@@ -63,6 +66,17 @@ export function hasPrecheckRules(rulesets: RepoRulesets): boolean {
       (r) =>
         r.ruleset.enforcement === "active" &&
         r.ruleset.rules.some((rule) => PRECHECK_RULES.has(rule.type)),
+    );
+}
+
+/** Whether any active ruleset requires status checks (a merge reads its head's then). */
+export function hasRequiredChecks(rulesets: RepoRulesets): boolean {
+  return rulesets
+    .current()
+    .rulesets.some(
+      (r) =>
+        r.ruleset.enforcement === "active" &&
+        r.ruleset.rules.some((rule) => rule.type === "required_status_checks"),
     );
 }
 
@@ -146,6 +160,8 @@ export function precheckPushRules(
   head?: string,
   /** The pull request the commands merge (one update), for its `pull_request` rules. */
   merge?: MergeContext,
+  /** The checks of the merge's head, for its `required_status_checks` rules. */
+  statusChecks?: StatusCheckFacts,
 ): Map<number, string> {
   const refusals = new Map<number, string>();
   const rulesets = snapshot.rulesets.filter((r) => r.enforcement === "active");
@@ -155,7 +171,12 @@ export function precheckPushRules(
   for (const cmd of commands) {
     const found = blocking(
       rulesets,
-      { ref: cmd.name, kind: cmd.kind, ...(merge && { pullRequest: merge }) },
+      {
+        ref: cmd.name,
+        kind: cmd.kind,
+        ...(merge && { pullRequest: merge }),
+        ...(statusChecks && { statusChecks }),
+      },
       actor,
       branches,
       "precheck",
@@ -244,6 +265,41 @@ export function countedApprovals(
   };
 }
 
+/**
+ * The checks the `required_status_checks` rules that apply to `ref` for
+ * the pusher ask (under any of the default-branch candidates): those of
+ * every non-disabled ruleset, and those of the active ones, which the
+ * commit's transaction judges again.
+ */
+export function requiredChecksFor(
+  snapshot: RuleSnapshot,
+  input: {
+    readonly principal: string;
+    readonly delegated: boolean;
+    readonly ref: string;
+    readonly head: string | undefined;
+    /** The update's kind: a creation skips the rules that do not enforce on creation. */
+    readonly kind: "create" | "update" | "delete";
+  },
+): { all: RequiredStatusCheck[]; active: RequiredStatusCheck[] } {
+  const rulesets = snapshot.rulesets.filter((r) => r.enforcement !== "disabled");
+  const actor = actorOf(snapshot, input.principal, input.delegated);
+  const all = new Map<string, RequiredStatusCheck>();
+  const active = new Map<string, RequiredStatusCheck>();
+  for (const branch of defaultBranches(snapshot.head, input.head))
+    for (const { ruleset, rule } of applicableRules(rulesets, input.ref, actor, branch)) {
+      if (rule.type !== "required_status_checks") continue;
+      const parameters = requiredChecksOf(rule);
+      if (input.kind === "create" && parameters.do_not_enforce_on_create) continue;
+      for (const check of parameters.required_status_checks) {
+        const key = JSON.stringify([check.context, check.integration_id ?? null]);
+        all.set(key, check);
+        if (ruleset.enforcement === "active") active.set(key, check);
+      }
+    }
+  return { all: [...all.values()], active: [...active.values()] };
+}
+
 /** A `pull_request` rule's approval settings, as the domain's evaluations take them. */
 function approvalSettings(p: PullRequestParameters): ApprovalSettings {
   return {
@@ -323,6 +379,11 @@ export async function checkPushRules(
     readonly atomic?: boolean;
     /** The pull request the upload merges (its one update), built from the repository's records. */
     readonly merge?: MergeContext;
+    /**
+     * The checks of the commit each command's required checks count, by
+     * command index (none for a command no such rule applies to).
+     */
+    readonly statusChecks?: ReadonlyMap<number, StatusCheckFacts>;
   },
 ): Promise<{ refusals: Map<number, string>; evaluated: EvaluatedUpdate[] }> {
   const refusals = new Map<number, string>();
@@ -351,6 +412,7 @@ export async function checkPushRules(
       if (typeof found === "string") unchecked = found;
       else unverifiedCommit = found;
     }
+    const facts = input.statusChecks?.get(cmd.index);
     const found = violations(
       rulesets,
       {
@@ -359,6 +421,7 @@ export async function checkPushRules(
         fastForward: cmd.fastForward,
         ...(unverifiedCommit && { unverifiedCommit }),
         ...(input.merge && { pullRequest: input.merge }),
+        ...(facts && { statusChecks: facts }),
       },
       actor,
       branches,
