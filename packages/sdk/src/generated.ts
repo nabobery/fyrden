@@ -6717,7 +6717,7 @@ export type FeedListInput = {
   /** Only items of this priority. */
   priority?: "P0" | "P1" | "P2";
   /** Only items of this kind. */
-  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
 };
 
 /** Output of `feed.list`. */
@@ -6732,7 +6732,7 @@ export type FeedListOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
       /** The conversation's number; none for a digest. */
@@ -6807,7 +6807,7 @@ export type FeedSyncOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "assigned" | "mention" | "activity" | "digest";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
       /** The conversation's number; none for a digest. */

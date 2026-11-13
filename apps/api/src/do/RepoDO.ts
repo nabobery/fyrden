@@ -658,7 +658,7 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
-    this.checks = new RepoChecks({ git: this.git });
+    this.checks = new RepoChecks({ git: this.git, events: this.events });
     this.releases = new RepoReleases({
       git: this.git,
       events: this.events,
@@ -695,6 +695,7 @@ export class RepoDO extends MigratingDO {
       follow: (pull) => this.#forkPulls.follow(pull),
       view: (pull) => this.#viewed(pull),
       milestone: (number) => this.subjectMeta.milestone(number),
+      checks: (pull, actor) => this.checks.reconcile(pull, actor),
     });
     this.pullSource = new PullSource({
       git: this.git,
@@ -939,6 +940,7 @@ export class RepoDO extends MigratingDO {
         return subject?.kind === kind ? subject.conversation : undefined;
       },
       digestShows: (subject, window, epoch) => this.digests.shows(subject, window, epoch),
+      failingChecks: (number) => this.checks.failingText(number),
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,
@@ -2442,9 +2444,13 @@ export class RepoDO extends MigratingDO {
    * throwing, when the repository takes no changes (deleted, transferring).
    */
   #checkChange<R>(method: string, change: () => R): Promise<R> {
-    return this.#measured(method, () => {
+    return this.#measured(method, async () => {
+      // Who may hear of a failure, brought up to date before the change (which does not await).
+      await this.feed.prepare();
       const refused = this.#writeRefusal();
       if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      if (!this.events.hasIdentity())
+        throw new Error("repo_not_ready: the repository has no identity yet");
       const result = change();
       this.#armOutbox();
       return result;

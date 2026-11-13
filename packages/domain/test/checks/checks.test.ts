@@ -6,6 +6,7 @@ import {
   checkNameKey,
   checkText,
   countedByDefault,
+  digestOf,
   FYRDEN_CI_SOURCE,
   isFailing,
   isFullSha,
@@ -182,5 +183,18 @@ describe("counted by default", () => {
     expect(countedByDefault([])).toEqual([]);
     const only = summary({});
     expect(countedByDefault([only])).toEqual([only]);
+  });
+});
+
+describe("a digest", () => {
+  it("is the same for the same text, 16 hex digits, and tells texts apart", () => {
+    expect(digestOf("build")).toBe(digestOf("build"));
+    expect(digestOf("build")).toMatch(/^[0-9a-f]{16}$/);
+    expect(digestOf("")).toMatch(/^[0-9a-f]{16}$/);
+    fc.assert(
+      fc.property(fc.string(), fc.string(), (a, b) => {
+        if (a !== b) expect(digestOf(a)).not.toBe(digestOf(b));
+      }),
+    );
   });
 });

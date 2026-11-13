@@ -101,6 +101,8 @@ export interface FeedViewDeps {
   readonly conversationOf: (kind: "issue" | "pull", number: number) => string | undefined;
   /** Whether a kind's digest of a window, of a generation, still shows (see `RepoDigests.shows`). */
   readonly digestShows: (subject: FeedSubjectKind, window: number, epoch: number) => boolean;
+  /** A pull request's failing checks as its `ci_failed` item shows them; null when none fail. */
+  readonly failingChecks?: (number: number) => string | null;
 }
 
 export class RepoFeedView {
@@ -209,6 +211,8 @@ export class RepoFeedView {
               subject.number,
             )
             .toArray()[0]?.body;
+        } else if (kind === "checks" && subject.kind === "pull" && n === subject.number) {
+          body = this.deps.failingChecks?.(n);
         } else if (m.member === m.thread)
           // The thread's own description.
           body = kind === "pull" ? this.deps.pulls.get(n)?.body : this.deps.issues.get(n)?.body;

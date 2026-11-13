@@ -62,6 +62,15 @@ export const MAX_SUMMARIES_PER_SHA = 1_000;
 export const MAX_CHECK_ATTEMPTS = 100;
 /** Updates or starts in one call. Proposed: the matrix cap. */
 export const MAX_CHECK_BATCH = 256;
+/**
+ * Failing checks a pull request's record and its feed events name at most
+ * (the excerpt shows a few); the count and a digest stand for the rest.
+ * Proposed: with names of 255 characters, the record stays well inside a
+ * row and an event.
+ */
+export const MAX_FAILING_SHOWN = 20;
+/** Runs' trigger actors told of a pull request's failing checks, beside its author. Proposed. */
+export const MAX_TRIGGER_HOLDERS = 50;
 /** A context or check name, in characters. Proposed: GitHub documents none. */
 export const MAX_CHECK_NAME_LENGTH = 255;
 /** A status description, in characters. Proposed: GitHub's reported limit (unverified). */
@@ -172,4 +181,25 @@ export function countedByDefault(rows: readonly CheckSummary[]): CheckSummary[] 
   return rows.filter(
     (row) => row.kind === "check" || latest.get(checkNameKey(row.name)) === row.statusId,
   );
+}
+
+/**
+ * A 64-bit digest of `text` as 16 hex digits (a cyrb53-style mix, two
+ * 32-bit halves): what tells one record of failing checks from another
+ * without keeping all of it. Not for secrets.
+ */
+export function digestOf(text: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
+  return hex(h2) + hex(h1);
 }
