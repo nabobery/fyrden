@@ -32,3 +32,4 @@ export * from "./releases/releases.js";
 export * from "./repos/expiry.js";
 export * from "./rulesets/evaluate.js";
 export * from "./rulesets/ruleset.js";
+export * from "./rulesets/status-checks.js";
