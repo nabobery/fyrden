@@ -200,7 +200,9 @@ export class RepoChecks {
     if (!validStatus(input)) return { ok: false, code: "invalid_status" };
     if (!this.#hasCommit(sha)) return { ok: false, code: "commit_not_found" };
     const key = checkNameKey(input.context);
-    const source = caller.actor.principal;
+    // The publisher is who posted it: for a delegated token the agent acting (the first of its
+    // act chain), not the user whose rights it uses; that user is kept as the root.
+    const source = caller.actor.actChain?.[0] ?? caller.actor.principal;
     const count = (query: string, ...bindings: unknown[]) =>
       this.#exec<{ n: number }>("checks.read", query, ...bindings)[0]?.n ?? 0;
     if (

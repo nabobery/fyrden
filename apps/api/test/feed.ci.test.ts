@@ -339,6 +339,22 @@ describe("a run's trigger actor", () => {
     );
   });
 
+  it("is told its failure resolved after it lost read access", async () => {
+    await stub().startCheckAttempts(head, [
+      { name: "ci", startKey: "a1", actor: writer.principalId },
+    ]);
+    await run(1, "failure");
+    expect(
+      (await api("DELETE", `${path}/collaborators/${writer.handle}`, owner.token)).status,
+    ).toBeLessThan(300);
+    await stub().startCheckAttempts(head, [{ name: "ci", startKey: "a2" }]);
+    const from = await seq();
+    await run(2, "success");
+    expect(told((await checkBlocks(from))[0])).toEqual(
+      [`${owner.principalId}:resolved`, `${writer.principalId}:resolved`].sort(),
+    );
+  });
+
   it("is released when a new head passes", async () => {
     await stub().startCheckAttempts(head, [
       { name: "ci", startKey: "a1", actor: writer.principalId },
