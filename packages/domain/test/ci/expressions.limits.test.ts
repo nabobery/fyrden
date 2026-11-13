@@ -3,6 +3,7 @@
 // as work units and limits, never as time. Inputs at a limit get room on a loaded CI runner.
 import { describe, expect, it } from "vitest";
 import {
+  evaluateCondition,
   evaluateExpression,
   evaluateTemplate,
   MAX_EXPRESSION_DEPTH,
@@ -10,6 +11,7 @@ import {
   MAX_EXPRESSION_WORK,
   MAX_NESTING,
   newWorkBudget,
+  parseCondition,
   parseTemplate,
 } from "../../src/ci/expressions.js";
 import { scopeOf } from "./expression-helpers.js";
@@ -186,6 +188,25 @@ describe("work", () => {
     },
     LARGE_INPUT,
   );
+});
+
+describe("status functions", () => {
+  it("charge scanning a job's ancestors, once per evaluation", () => {
+    const ancestors = Array.from({ length: 1_000 }, () => "success" as const);
+    const status = { cancelled: false, ancestors };
+    const many = Array.from({ length: 1_500 }, () => "success()").join(" && ");
+    const parsed = parseCondition(many);
+    if (!parsed.ok) throw new Error(parsed.problem.message);
+    const tight = newWorkBudget(2_000);
+    const refused = evaluateCondition(parsed.condition, {}, status, tight);
+    expect(refused.ok ? "ok" : refused.problem.code).toBe("limit_exceeded");
+    const roomy = newWorkBudget(10_000);
+    expect(evaluateCondition(parsed.condition, {}, status, roomy)).toEqual({
+      ok: true,
+      value: true,
+    });
+    expect(roomy.spent).toBeLessThan(5_000);
+  });
 });
 
 describe("JSON depth", () => {

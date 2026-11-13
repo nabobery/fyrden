@@ -766,6 +766,20 @@ const stringBytes = (text: string) => STRING_OVERHEAD + 2 * text.length;
 
 class Evaluator {
   readonly #ledger = new Ledger();
+  /** The ancestors' results summed up once per evaluation, charged when first needed. */
+  #summary: { readonly allSucceeded: boolean; readonly anyFailed: boolean } | undefined;
+
+  #ancestors(at: number): { readonly allSucceeded: boolean; readonly anyFailed: boolean } {
+    if (this.#summary === undefined) {
+      const { ancestors } = this.status;
+      this.work(ancestors.length, at);
+      this.#summary = {
+        allSucceeded: ancestors.every((r) => r === "success"),
+        anyFailed: ancestors.some((r) => r === "failure"),
+      };
+    }
+    return this.#summary;
+  }
 
   constructor(
     readonly scope: ExpressionScope,
@@ -1037,9 +1051,9 @@ class Evaluator {
       case "cancelled":
         return this.status.cancelled;
       case "success":
-        return !this.status.cancelled && this.status.ancestors.every((r) => r === "success");
+        return !this.status.cancelled && this.#ancestors(at).allSucceeded;
       case "failure":
-        return this.status.ancestors.some((r) => r === "failure");
+        return this.#ancestors(at).anyFailed;
     }
   }
 
