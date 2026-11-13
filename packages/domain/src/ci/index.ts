@@ -8,5 +8,6 @@ export * from "./expressions.js";
 export * from "./graph.js";
 export * from "./matrix.js";
 export * from "./parse.js";
+export * from "./payload.js";
 export * from "./support-matrix.js";
 export * from "./workflow-schema.js";
