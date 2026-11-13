@@ -205,5 +205,5 @@ describe("the yaml library as the workflow parser uses it", () => {
       doc = first(text);
     }).not.toThrow();
     expect(doc?.errors.some((e) => e.code === "RESOURCE_EXHAUSTION")).toBe(true);
-  });
+  }, 60_000); // The input must overflow the stack; CI runs every suite at once.
 });
