@@ -1,0 +1,1320 @@
+{
+  "source": "Observed with gitea.dev/actionslib v1.5.2 (the evaluator gitea/runner v6.0.0 links), Go 1.26.0, Unicode 15.0.0, on 2026-11-13. kind and string are the value and its string conversion; json is toJSON of an array or object.",
+  "scope": {
+    "inputs": {
+      "s": "Hello World",
+      "n": 5,
+      "f": 1.5,
+      "t": true,
+      "nul": null,
+      "e": "",
+      "arr": ["a", "B", 3, true, null],
+      "objs": [
+        {
+          "name": "apple",
+          "q": 1
+        },
+        {
+          "name": "orange"
+        },
+        {
+          "q": 2
+        },
+        "x"
+      ],
+      "o": {
+        "b": 1,
+        "a": "two",
+        "C": [1, 2]
+      },
+      "proto": {
+        "__proto__x": 1,
+        "constructor": 2,
+        "prototype": 3
+      },
+      "num": "42",
+      "ws": " 1 ",
+      "hex": "0x10",
+      "inf": "infinity",
+      "pinf": "+Infinity",
+      "title": "${{ github.sha }}",
+      "quote": "It's",
+      "deep": {
+        "a": {
+          "b": {
+            "c": "d"
+          }
+        }
+      }
+    },
+    "needs": {
+      "build": {
+        "result": "failure",
+        "outputs": {
+          "v": "1.2.3"
+        }
+      },
+      "Build": {
+        "result": "success",
+        "outputs": {}
+      },
+      "test": {
+        "result": "success",
+        "outputs": {
+          "m": "{\"os\":[\"linux\",\"mac\"]}"
+        }
+      }
+    },
+    "matrix": {
+      "os": "linux",
+      "node": 20,
+      "Os2": "x"
+    }
+  },
+  "rows": [
+    {
+      "expr": "null",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "true",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "false",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "711",
+      "kind": "number",
+      "string": "711"
+    },
+    {
+      "expr": "-9.2",
+      "kind": "number",
+      "string": "-9.2"
+    },
+    {
+      "expr": "0xff",
+      "kind": "number",
+      "string": "255"
+    },
+    {
+      "expr": "-2.99e-2",
+      "kind": "number",
+      "string": "-0.0299"
+    },
+    {
+      "expr": "'It''s open source!'",
+      "kind": "string",
+      "string": "It's open source!"
+    },
+    {
+      "expr": ".5",
+      "kind": "number",
+      "string": "0.5"
+    },
+    {
+      "expr": "+1",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "1.",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "0o17",
+      "kind": "number",
+      "string": "15"
+    },
+    {
+      "expr": "0xffffffff",
+      "kind": "number",
+      "string": "-1"
+    },
+    {
+      "expr": "NaN",
+      "kind": "number",
+      "string": "NaN"
+    },
+    {
+      "expr": "Infinity",
+      "kind": "number",
+      "string": "Infinity"
+    },
+    {
+      "expr": "-Infinity",
+      "kind": "number",
+      "string": "-Infinity"
+    },
+    {
+      "expr": "+Infinity",
+      "kind": "number",
+      "string": "Infinity"
+    },
+    {
+      "expr": "1e400",
+      "kind": "number",
+      "string": "Infinity"
+    },
+    {
+      "expr": "1.0",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "1e15",
+      "kind": "number",
+      "string": "1E+15"
+    },
+    {
+      "expr": "123456789012345",
+      "kind": "number",
+      "string": "123456789012345"
+    },
+    {
+      "expr": "1234567890123456",
+      "kind": "number",
+      "string": "1.23456789012346E+15"
+    },
+    {
+      "expr": "0.00001",
+      "kind": "number",
+      "string": "1E-05"
+    },
+    {
+      "expr": "0.0001",
+      "kind": "number",
+      "string": "0.0001"
+    },
+    {
+      "expr": "-0",
+      "kind": "number",
+      "string": "0"
+    },
+    {
+      "expr": "1.2345678901234567",
+      "kind": "number",
+      "string": "1.23456789012346"
+    },
+    {
+      "expr": "0.1",
+      "kind": "number",
+      "string": "0.1"
+    },
+    {
+      "expr": "100000000000000000000",
+      "kind": "number",
+      "string": "1E+20"
+    },
+    {
+      "expr": "1 == 1",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "1 == '1'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'abc' == 'ABC'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "null == 0",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "null == ''",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "true == 1",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "false == ''",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'' == 0",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "' 1 ' == 1",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'0x10' == 16",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'infinity' == Infinity",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'+Infinity' == Infinity",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'Infinity' == Infinity",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'nan' == 0",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "NaN == NaN",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "NaN != NaN",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "1 < 2",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'a' < 'B'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'B' < 'a'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "'a' < 'b' == true",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "1 == 1 == true",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "1 < 2 < 3",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!0",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!''",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!'0'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "!null",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!NaN",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!-0",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "!inputs.arr",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "!!inputs.o",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'' || 'x'",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "'a' && 'b'",
+      "kind": "string",
+      "string": "b"
+    },
+    {
+      "expr": "0 && 'x'",
+      "kind": "number",
+      "string": "0"
+    },
+    {
+      "expr": "null || 0 || ''",
+      "kind": "string",
+      "string": ""
+    },
+    {
+      "expr": "1 && 2 || 3",
+      "kind": "number",
+      "string": "2"
+    },
+    {
+      "expr": "false || null",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "true && null",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.arr == inputs.arr",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "inputs.o == inputs.o",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "fromJSON('[]') == fromJSON('[]')",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "inputs.arr == 'Array'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "inputs.o < 1",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "1 > inputs.o",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "'ı' == 'I'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "'ſ' == 'S'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "'ᾀ' == 'ᾈ'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'ß' == 'SS'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "'é' == 'É'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'ɤ' < 'Ω'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'𐀀' > ''",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'ǅ' == 'Ǆ'",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "'ﬀ' == 'FF'",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "inputs.s",
+      "kind": "string",
+      "string": "Hello World"
+    },
+    {
+      "expr": "INPUTS.S",
+      "kind": "string",
+      "string": "Hello World"
+    },
+    {
+      "expr": "inputs['s']",
+      "kind": "string",
+      "string": "Hello World"
+    },
+    {
+      "expr": "inputs['S']",
+      "kind": "string",
+      "string": "Hello World"
+    },
+    {
+      "expr": "inputs.missing",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.missing.deeper",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.s.length",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.arr[1]",
+      "kind": "string",
+      "string": "B"
+    },
+    {
+      "expr": "inputs.arr[1.9]",
+      "kind": "string",
+      "string": "B"
+    },
+    {
+      "expr": "inputs.arr[-1]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.arr[9]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.arr['1']",
+      "kind": "string",
+      "string": "B"
+    },
+    {
+      "expr": "inputs.arr[NaN]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.o[0]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.o['B']",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "inputs.o[true]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.o[null]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.o[fromJSON('[]')]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "fromJSON('{\"Array\":7}')[fromJSON('[]')]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "fromJSON('{\"0\":\"z\"}')[0]",
+      "kind": "string",
+      "string": "z"
+    },
+    {
+      "expr": "fromJSON('{\"true\":\"t\"}')[true]",
+      "kind": "string",
+      "string": "t"
+    },
+    {
+      "expr": "fromJSON('{\"\":\"empty\"}')[null]",
+      "kind": "string",
+      "string": "empty"
+    },
+    {
+      "expr": "inputs.proto.constructor",
+      "kind": "number",
+      "string": "2"
+    },
+    {
+      "expr": "inputs.proto.prototype",
+      "kind": "number",
+      "string": "3"
+    },
+    {
+      "expr": "inputs.proto['__proto__x']",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "fromJSON('{\"__proto__\":1}')['__proto__']",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "fromJSON('{\"__proto__\":{\"x\":1}}').x",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "needs.build.result",
+      "kind": "string",
+      "string": "failure"
+    },
+    {
+      "expr": "needs.Build.result",
+      "kind": "string",
+      "string": "success"
+    },
+    {
+      "expr": "needs.BUILD.result",
+      "kind": "string",
+      "string": "success"
+    },
+    {
+      "expr": "needs.test.outputs.m",
+      "kind": "string",
+      "string": "{\"os\":[\"linux\",\"mac\"]}"
+    },
+    {
+      "expr": "matrix.os",
+      "kind": "string",
+      "string": "linux"
+    },
+    {
+      "expr": "matrix.OS2",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "matrix.node",
+      "kind": "number",
+      "string": "20"
+    },
+    {
+      "expr": "inputs.deep.a.b.c",
+      "kind": "string",
+      "string": "d"
+    },
+    {
+      "expr": "inputs.deep['a']['b'].c",
+      "kind": "string",
+      "string": "d"
+    },
+    {
+      "expr": "inputs.n.x",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.s[0]",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.nul.x",
+      "kind": "null",
+      "string": ""
+    },
+    {
+      "expr": "inputs.arr.0",
+      "error": "Unexpected symbol: '0'. Located at position 12 within expression: inputs.arr.0"
+    },
+    {
+      "expr": "inputs.objs.*.name",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  \"apple\",\n  \"orange\"\n]"
+    },
+    {
+      "expr": "inputs.objs.*.q",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  1,\n  2\n]"
+    },
+    {
+      "expr": "inputs.o.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  [\n    1,\n    2\n  ],\n  \"two\",\n  1\n]"
+    },
+    {
+      "expr": "inputs.arr.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  \"a\",\n  \"B\",\n  3,\n  true,\n  null\n]"
+    },
+    {
+      "expr": "inputs.s.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[]"
+    },
+    {
+      "expr": "inputs.nul.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[]"
+    },
+    {
+      "expr": "inputs.objs.*.name[0]",
+      "kind": "array",
+      "string": "Array",
+      "json": "[]"
+    },
+    {
+      "expr": "inputs.objs[*].name",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  \"apple\",\n  \"orange\"\n]"
+    },
+    {
+      "expr": "inputs.objs.*.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  \"apple\",\n  1,\n  \"orange\",\n  2\n]"
+    },
+    {
+      "expr": "inputs.o.C.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  1,\n  2\n]"
+    },
+    {
+      "expr": "needs.*.result",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  \"success\",\n  \"failure\",\n  \"success\"\n]"
+    },
+    {
+      "expr": "join(needs.*.result, ' ')",
+      "kind": "string",
+      "string": "success failure success"
+    },
+    {
+      "expr": "inputs.objs.*.missing",
+      "kind": "array",
+      "string": "Array",
+      "json": "[]"
+    },
+    {
+      "expr": "toJSON(inputs.objs.*.missing)",
+      "kind": "string",
+      "string": "[]"
+    },
+    {
+      "expr": "fromJSON('[[1,2],[3]]').*.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  1,\n  2,\n  3\n]"
+    },
+    {
+      "expr": "fromJSON('[{\"a\":[1,2]},{\"a\":[3]}]').*.a.*",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  1,\n  2,\n  3\n]"
+    },
+    {
+      "expr": "contains(inputs.objs.*.name, 'APPLE')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains('Hello world', 'llo')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains('Hello world', 'LLO')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(inputs.arr, 'b')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(inputs.arr, 3)",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(inputs.arr, '3')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(inputs.arr, null)",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(fromJSON('[]'), fromJSON('{'))",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "contains(inputs.o, 'b')",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "contains('abc', inputs.arr)",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "contains(123, 2)",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(true, 'RU')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(null, '')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains('', '')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "contains(fromJSON('[\"push\", \"pull_request\"]'), 'PUSH')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "startsWith('Hello world', 'He')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "startsWith('Hello world', 'he')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "endsWith('Hello world', 'LD')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "startsWith(inputs.arr, 'a')",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "startsWith(1.5, '1.')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "endsWith(null, '')",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "format('Hello {0} {1} {2}', 'Mona', 'the', 'Octocat')",
+      "kind": "string",
+      "string": "Hello Mona the Octocat"
+    },
+    {
+      "expr": "format('{{Hello {0} {1} {2}!}}', 'Mona', 'the', 'Octocat')",
+      "kind": "string",
+      "string": "{Hello Mona the Octocat!}"
+    },
+    {
+      "expr": "format('{0}', 'ok', fromJSON('{'))",
+      "kind": "string",
+      "string": "ok"
+    },
+    {
+      "expr": "format('{1}{0}', 'a', 'b')",
+      "kind": "string",
+      "string": "ba"
+    },
+    {
+      "expr": "format('{0}{0}', 'x')",
+      "kind": "string",
+      "string": "xx"
+    },
+    {
+      "expr": "format('{0:}', 'x')",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "format('{0:x}', 'x')",
+      "error": "The following format string contains an invalid format specifier: '{0:x}'"
+    },
+    {
+      "expr": "format('{2}', 'a')",
+      "error": "The following format string references more arguments than were supplied: {2}"
+    },
+    {
+      "expr": "format('{', 'a')",
+      "error": "The following format string is invalid: {"
+    },
+    {
+      "expr": "format('}', 'a')",
+      "error": "The following format string is invalid: }"
+    },
+    {
+      "expr": "format('a}}b', 'x')",
+      "kind": "string",
+      "string": "a}b"
+    },
+    {
+      "expr": "format('{a}', 'x')",
+      "error": "The following format string is invalid: {a}"
+    },
+    {
+      "expr": "format('{00}', 'x')",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "format('{256}', 'x')",
+      "error": "The following format string is invalid: {256}"
+    },
+    {
+      "expr": "format('{0}', inputs.arr)",
+      "kind": "string",
+      "string": "Array"
+    },
+    {
+      "expr": "format('{0}', inputs.o)",
+      "kind": "string",
+      "string": "Object"
+    },
+    {
+      "expr": "format('{0}', null)",
+      "kind": "string",
+      "string": ""
+    },
+    {
+      "expr": "format('{0}', 1.0)",
+      "kind": "string",
+      "string": "1"
+    },
+    {
+      "expr": "format('no args')",
+      "kind": "string",
+      "string": "no args"
+    },
+    {
+      "expr": "format('{0}')",
+      "error": "The following format string references more arguments than were supplied: {0}"
+    },
+    {
+      "expr": "format(1, 2)",
+      "kind": "string",
+      "string": "1"
+    },
+    {
+      "expr": "format('{ 0}', 'x')",
+      "error": "The following format string is invalid: { 0}"
+    },
+    {
+      "expr": "format('{0 }', 'x')",
+      "error": "The following format string is invalid: {0 }"
+    },
+    {
+      "expr": "join(inputs.arr)",
+      "kind": "string",
+      "string": "a,B,3,true,"
+    },
+    {
+      "expr": "join(inputs.arr, ' | ')",
+      "kind": "string",
+      "string": "a | B | 3 | true | "
+    },
+    {
+      "expr": "join('ok', fromJSON('{'))",
+      "kind": "string",
+      "string": "ok"
+    },
+    {
+      "expr": "join(fromJSON('[\"one\"]'), fromJSON('{'))",
+      "kind": "string",
+      "string": "one"
+    },
+    {
+      "expr": "join(inputs.o)",
+      "kind": "string",
+      "string": ""
+    },
+    {
+      "expr": "join(inputs.objs, '-')",
+      "kind": "string",
+      "string": "Object-Object-Object-x"
+    },
+    {
+      "expr": "join(fromJSON('[1,2]'), inputs.arr)",
+      "kind": "string",
+      "string": "1,2"
+    },
+    {
+      "expr": "join(5)",
+      "kind": "string",
+      "string": "5"
+    },
+    {
+      "expr": "join(null)",
+      "kind": "string",
+      "string": ""
+    },
+    {
+      "expr": "join(fromJSON('[]'), 'x')",
+      "kind": "string",
+      "string": ""
+    },
+    {
+      "expr": "join(fromJSON('[[1],{}]'), ';')",
+      "kind": "string",
+      "string": "Array;Object"
+    },
+    {
+      "expr": "toJSON(inputs.o)",
+      "kind": "string",
+      "string": "{\n  \"C\": [\n    1,\n    2\n  ],\n  \"a\": \"two\",\n  \"b\": 1\n}"
+    },
+    {
+      "expr": "toJSON(inputs.arr)",
+      "kind": "string",
+      "string": "[\n  \"a\",\n  \"B\",\n  3,\n  true,\n  null\n]"
+    },
+    {
+      "expr": "toJSON(null)",
+      "kind": "string",
+      "string": "null"
+    },
+    {
+      "expr": "toJSON('a\"b\\\\c\\n\\u0001é')",
+      "kind": "string",
+      "string": "\"a\\\"b\\\\\\\\c\\\\n\\\\u0001é\""
+    },
+    {
+      "expr": "toJSON(1.5)",
+      "kind": "string",
+      "string": "1.5"
+    },
+    {
+      "expr": "toJSON(fromJSON('{}'))",
+      "kind": "string",
+      "string": "{}"
+    },
+    {
+      "expr": "toJSON(fromJSON('[]'))",
+      "kind": "string",
+      "string": "[]"
+    },
+    {
+      "expr": "toJSON(fromJSON('{\"b\":1,\"a\":{\"c\":[]}}'))",
+      "kind": "string",
+      "string": "{\n  \"b\": 1,\n  \"a\": {\n    \"c\": []\n  }\n}"
+    },
+    {
+      "expr": "toJSON(fromJSON('{\"a\":1,\"A\":2}'))",
+      "kind": "string",
+      "string": "{\n  \"a\": 2\n}"
+    },
+    {
+      "expr": "toJSON(matrix)",
+      "kind": "string",
+      "string": "{\n  \"Os2\": \"x\",\n  \"node\": 20,\n  \"os\": \"linux\"\n}"
+    },
+    {
+      "expr": "toJSON(needs)",
+      "kind": "string",
+      "string": "{\n  \"Build\": {\n    \"outputs\": {},\n    \"result\": \"success\"\n  },\n  \"build\": {\n    \"outputs\": {\n      \"v\": \"1.2.3\"\n    },\n    \"result\": \"failure\"\n  },\n  \"test\": {\n    \"outputs\": {\n      \"m\": \"{\\\"os\\\":[\\\"linux\\\",\\\"mac\\\"]}\"\n    },\n    \"result\": \"success\"\n  }\n}"
+    },
+    {
+      "expr": "toJSON(1.2345678901234567)",
+      "kind": "string",
+      "string": "1.23456789012346"
+    },
+    {
+      "expr": "toJSON(Infinity)",
+      "kind": "string",
+      "string": "Infinity"
+    },
+    {
+      "expr": "fromJSON('{\"a\":1,\"A\":2}').a",
+      "kind": "number",
+      "string": "2"
+    },
+    {
+      "expr": "fromJSON('{\"a\":1,\"A\":2,\"a\":3}')",
+      "kind": "object",
+      "string": "Object",
+      "json": "{\n  \"a\": 2\n}"
+    },
+    {
+      "expr": "fromJSON(true)",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "fromJSON(5)",
+      "kind": "number",
+      "string": "5"
+    },
+    {
+      "expr": "fromJSON(null)",
+      "error": "Invalid JSON: unexpected end of input"
+    },
+    {
+      "expr": "fromJSON('')",
+      "error": "Invalid JSON: unexpected end of input"
+    },
+    {
+      "expr": "fromJSON(' 1 ')",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "fromJSON('\"x\"')",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "fromJSON('[1, 2, ]')",
+      "kind": "array",
+      "string": "Array",
+      "json": "[\n  1,\n  2\n]"
+    },
+    {
+      "expr": "fromJSON('{''a'':1}')",
+      "kind": "object",
+      "string": "Object",
+      "json": "{\n  \"a\": 1\n}"
+    },
+    {
+      "expr": "fromJSON('/* c */ 1')",
+      "kind": "string",
+      "string": " c "
+    },
+    {
+      "expr": "fromJSON('NaN')",
+      "kind": "number",
+      "string": "NaN"
+    },
+    {
+      "expr": "fromJSON('{a:1}')",
+      "kind": "object",
+      "string": "Object",
+      "json": "{\n  \"a\": 1\n}"
+    },
+    {
+      "expr": "fromJSON('1 2')",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "fromJSON('0x10')",
+      "kind": "number",
+      "string": "16"
+    },
+    {
+      "expr": "fromJSON('01')",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "fromJSON('1e999')",
+      "kind": "number",
+      "string": "Infinity"
+    },
+    {
+      "expr": "fromJSON('\"\\\\ud83d\\\\ude00\"')",
+      "kind": "string",
+      "string": "\\ud83d\\ude00"
+    },
+    {
+      "expr": "fromJSON(needs.test.outputs.m).os[1]",
+      "kind": "string",
+      "string": "mac"
+    },
+    {
+      "expr": "fromJSON('[1,[2,[3]]]')[1][1][0]",
+      "kind": "number",
+      "string": "3"
+    },
+    {
+      "expr": "case(true, 'a', 'b')",
+      "kind": "string",
+      "string": "a"
+    },
+    {
+      "expr": "case(false, 'a', 'b')",
+      "kind": "string",
+      "string": "b"
+    },
+    {
+      "expr": "case(false, 'a', true, 'c', 'd')",
+      "kind": "string",
+      "string": "c"
+    },
+    {
+      "expr": "case(1, 'a', 'b')",
+      "error": "case predicate must evaluate to a boolean value"
+    },
+    {
+      "expr": "case('true', 'a', 'b')",
+      "error": "case predicate must evaluate to a boolean value"
+    },
+    {
+      "expr": "case(true, 'a', fromJSON('{'))",
+      "kind": "string",
+      "string": "a"
+    },
+    {
+      "expr": "case(false, fromJSON('{'), 'b')",
+      "kind": "string",
+      "string": "b"
+    },
+    {
+      "expr": "CASE(true, 'x', 'y')",
+      "kind": "string",
+      "string": "x"
+    },
+    {
+      "expr": "toJson(inputs.n)",
+      "kind": "string",
+      "string": "5"
+    },
+    {
+      "expr": "FromJSON('1')",
+      "kind": "number",
+      "string": "1"
+    },
+    {
+      "expr": "inputs.title",
+      "kind": "string",
+      "string": "${{ github.sha }}"
+    },
+    {
+      "expr": "format('{0}', inputs.title)",
+      "kind": "string",
+      "string": "${{ github.sha }}"
+    },
+    {
+      "expr": "inputs.quote",
+      "kind": "string",
+      "string": "It's"
+    },
+    {
+      "expr": "100000000000000.5",
+      "kind": "number",
+      "string": "100000000000000"
+    },
+    {
+      "expr": "100000000000002.5",
+      "kind": "number",
+      "string": "100000000000002"
+    },
+    {
+      "expr": "-100000000000000.5",
+      "kind": "number",
+      "string": "-100000000000000"
+    },
+    {
+      "expr": "100000000000001.5",
+      "kind": "number",
+      "string": "100000000000002"
+    },
+    {
+      "expr": "inputs.o <= inputs.o",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "inputs.o >= inputs.o",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "inputs.arr <= inputs.arr",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "inputs.arr <= fromJSON('[]')",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "inputs.o >= 1",
+      "kind": "boolean",
+      "string": "false"
+    },
+    {
+      "expr": "null <= null",
+      "kind": "boolean",
+      "string": "true"
+    },
+    {
+      "expr": "null < null",
+      "kind": "boolean",
+      "string": "false"
+    }
+  ]
+}
