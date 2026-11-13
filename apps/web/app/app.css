@@ -475,6 +475,30 @@ code.branch {
   color: var(--danger);
   border-color: var(--danger);
 }
+.required-checks ul {
+  list-style: none;
+  padding-left: 0;
+}
+.required-checks li {
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+.badge.check-passed {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.badge.check-failing {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.badge.check-pending {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.badge.check-expected {
+  color: var(--muted);
+  border-color: var(--muted);
+}
 .review-approved {
   border-color: var(--ok);
 }

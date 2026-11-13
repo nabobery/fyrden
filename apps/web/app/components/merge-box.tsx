@@ -1,6 +1,11 @@
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Link, useFetcher, useRevalidator } from "react-router";
-import { METHOD_LABEL, type MergeMethod, type MergeRules } from "../lib/merge.js";
+import {
+  METHOD_LABEL,
+  type MergeMethod,
+  type MergeRules,
+  type RequiredChecks as RequiredChecksView,
+} from "../lib/merge.js";
 import type { PullRequest } from "../lib/pulls.js";
 
 /** A merge's answer: done, still rebasing in the background, or refused (with the reason). */
@@ -22,6 +27,79 @@ function requirements(rules: MergeRules): string[] {
   if (rules.upToDate) out.push("the head up to date with the base branch");
   if (rules.signatures) out.push("signed commits");
   return out;
+}
+
+/** A required check's state in words, with a mark that is not its only signal. */
+const CHECK_STATE = {
+  passed: { words: "Passed", mark: "✓" },
+  pending: { words: "Pending", mark: "●" },
+  failing: { words: "Failing", mark: "✗" },
+  expected: { words: "Expected", mark: "○" },
+} as const;
+
+/**
+ * The status checks the base branch's rulesets require and where each
+ * stands on the head (the merge decides: a role that bypasses a ruleset
+ * may merge anyway); null when they could not be read.
+ */
+function RequiredChecks({ checks }: { checks: RequiredChecksView | null | undefined }) {
+  const id = useId();
+  if (checks === undefined) return null;
+  if (checks === null)
+    return (
+      <p className="muted">
+        The required checks of this head could not be read; reload the page, or let the merge check
+        them.
+      </p>
+    );
+  if (checks.checks.length === 0) return null;
+  const waiting = checks.checks.filter((c) => c.state !== "passed").length;
+  return (
+    <div className="required-checks">
+      <h3 id={`${id}-title`}>Required checks</h3>
+      {waiting > 0 ? (
+        <p className="error">
+          {waiting} required check{waiting === 1 ? " has" : "s have"} not passed. Merging needs them
+          to pass, or permission to bypass the ruleset.
+        </p>
+      ) : (
+        <p className="ok-text">All required checks passed.</p>
+      )}
+      {/* biome-ignore lint/a11y/noRedundantRoles: without markers, WebKit reads a list as a group unless told. */}
+      <ul role="list" aria-labelledby={`${id}-title`}>
+        {checks.checks.map((check) => {
+          const state = CHECK_STATE[check.state];
+          const links = check.deciding.filter((d) => d.details_url !== null);
+          return (
+            <li key={`${check.context}\u0000${check.integration_id ?? ""}`}>
+              <span className={`badge check-${check.state}`}>
+                <span aria-hidden="true">{state.mark}</span> {state.words}
+              </span>{" "}
+              <code>{check.context}</code>
+              {check.integration_id !== null && (
+                <>
+                  {" "}
+                  from <code>{check.integration_id}</code>
+                </>
+              )}
+              {links.map((d) => (
+                <span key={`${d.kind}\u0000${d.source}`}>
+                  {" "}
+                  <a href={d.details_url ?? undefined} rel="noreferrer nofollow">
+                    Details
+                    <span className="visually-hidden">
+                      {" "}
+                      of {check.context} ({d.kind === "check" ? "check" : "status"} from {d.source})
+                    </span>
+                  </a>
+                </span>
+              ))}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
 }
 
 /** The pull request's mergeability, in words, and what to do about it. */
@@ -91,12 +169,15 @@ function Mergeability({ pull, conflicts }: { pull: PullRequest; conflicts: strin
 export function MergeBox({
   pull,
   rules,
+  requiredChecks,
   conflicts,
   hidden,
   canAct = true,
 }: {
   pull: PullRequest;
   rules: MergeRules | null;
+  /** Where the required checks stand on the head; null when they could not be read. */
+  requiredChecks?: RequiredChecksView | null;
   conflicts: string;
   /** Fields its forms send besides their own (the viewer they were made for). */
   hidden?: ReactNode;
@@ -149,6 +230,7 @@ export function MergeBox({
           )}
         </div>
       )}
+      <RequiredChecks checks={requiredChecks} />
       {rules === null && (
         <p className="muted">
           The base branch's rulesets could not be read; every method is offered.
