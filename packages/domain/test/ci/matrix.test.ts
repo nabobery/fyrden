@@ -286,6 +286,18 @@ describe("expandMatrix: limits", () => {
     ]);
   });
 
+  it("counts only the combinations exclude leaves toward the entry cap", () => {
+    const values = Array.from({ length: 256 }, (_, i) => i).join(", ");
+    const singles = Array.from({ length: 63 }, (_, i) => `k${i}: [x]`).join("\n");
+    // 256 × 64 keys is exactly the cap; excluding half leaves room for a key include adds.
+    const excluded = Array.from({ length: 128 }, (_, i) => `  - n: ${i}`).join("\n");
+    const { combinations } = expand(
+      m(`n: [${values}]\n${singles}\nexclude:\n${excluded}\ninclude:\n  - extra: 1`),
+    );
+    expect(combinations).toHaveLength(128);
+    expect(combinations[0]?.values.get("extra")).toBe(1);
+  }, 60_000);
+
   it("counts keys include adds toward the entry cap", () => {
     const values = Array.from({ length: 256 }, (_, i) => i).join(", ");
     const singles = Array.from({ length: 62 }, (_, i) => `k${i}: [x]`).join("\n");
