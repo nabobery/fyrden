@@ -29,7 +29,12 @@ function categoryOf(
   action: string,
 ): EmailCategory | null {
   if (recipient.state !== "open" || recipient.silent || recipient.kind === "digest") return null;
-  if (ASKS.has(recipient.kind) || recipient.kind === "merge_conflict") return "direct";
+  if (
+    ASKS.has(recipient.kind) ||
+    recipient.kind === "merge_conflict" ||
+    recipient.kind === "ci_failed"
+  )
+    return "direct";
   if (
     recipient.kind === "activity" &&
     recipient.reasons.includes("author") &&

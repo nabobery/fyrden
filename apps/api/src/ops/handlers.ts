@@ -267,6 +267,11 @@ import {
 } from "../repos/rulesets.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import {
+  createStatusOperation,
+  getCombinedStatusOperation,
+  listStatusesOperation,
+} from "../repos/statuses.js";
+import {
   deleteThreadSubscriptionOperation,
   getThreadSubscriptionOperation,
   setThreadSubscriptionOperation,
@@ -688,6 +693,9 @@ export const handlers: Handlers = {
   "repos.commits.list": listCommitsOperation,
   "repos.blame.get": getBlameOperation,
   "repos.commits.get": getCommitOperation,
+  "statuses.create": createStatusOperation,
+  "statuses.list": listStatusesOperation,
+  "statuses.combined": getCombinedStatusOperation,
   "repos.compare": compareCommitsOperation,
   "repos.contents.get": getContentsOperation,
   "repos.contents.root": getRootContentsOperation,

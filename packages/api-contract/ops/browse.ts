@@ -165,7 +165,8 @@ export const getCommit = defineOperation({
   method: "GET",
   path: "/repos/{owner}/{repo}/commits/{ref+}",
   summary: "Get a commit",
-  description: "One commit, named by its SHA or by a branch or tag.",
+  description:
+    "One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (`feature%2Fstatus`): raw, a name ending in `/status` or `/statuses` reads that commit's commit statuses instead.",
   input: z.object({ owner: Owner, repo: Repo, ref: Ref }),
   output: CommitObject,
   permission: "contents:read",

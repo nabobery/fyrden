@@ -30,6 +30,8 @@ export const INBOX_REASONS = [
   "mention",
   "team_mention",
   "assign",
+  // GitHub's reason for a workflow run one triggered or authored completing: here, failing.
+  "ci_activity",
   "author",
   "manual",
   "comment",
@@ -44,6 +46,7 @@ const DIRECT: ReadonlySet<InboxReason> = new Set([
   "mention",
   "team_mention",
   "assign",
+  "ci_activity",
 ]);
 
 const strength = (reason: string) => {
@@ -68,6 +71,8 @@ export function reasonOf(kind: FeedKind, reasons: readonly string[]): InboxReaso
       return "mention";
     case "assigned":
       return "assign";
+    case "ci_failed":
+      return "ci_activity";
     case "approved":
     case "changes_requested":
     case "merge_conflict":

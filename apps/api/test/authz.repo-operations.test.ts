@@ -234,6 +234,14 @@ const CASES: Record<
   "releases.latest": { input: {}, expected: { status: 404, code: "release_not_found" } },
   "releases.get_by_tag": { input: {}, expected: { status: 404, code: "release_not_found" } },
   "releases.get": { input: {}, expected: { status: 404, code: "release_not_found" } },
+  // The repository has no identity yet and no `main`: past authorization, posting a status meets
+  // the first, and reading a ref's statuses finds no commit.
+  "statuses.create": {
+    input: { state: "success" },
+    expected: { status: 409, code: "repo_not_ready" },
+  },
+  "statuses.list": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  "statuses.combined": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "releases.create": {
     input: { tag_name: "checked", draft: true },
     expected: { status: 409, code: "repo_not_ready" },
@@ -384,6 +392,8 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{username}", handle)
     .replace("{branch+}", "main")
     .replace("{ref+}", "main")
+    .replace("{ref}", "main")
+    .replace("{sha}", "0".repeat(40))
     .replace("{basehead+}", "main...main")
     .replace("{path+}", "README.md")
     .replace("{tree_sha+}", "main")

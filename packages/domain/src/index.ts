@@ -1,6 +1,7 @@
 export * from "./authz/evaluate.js";
 export * from "./authz/permissions.js";
 export * from "./authz/roles.js";
+export * from "./checks/checks.js";
 export * from "./codeowners/match.js";
 export * from "./codeowners/owners.js";
 export * from "./codeowners/parse.js";

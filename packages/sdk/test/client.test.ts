@@ -97,6 +97,22 @@ describe("FyrdenClient", () => {
     expect(sent[0]?.headers["Idempotency-Key"]).toBeUndefined();
   });
 
+  it("sends a greedy ref, tag or branch as one encoded segment, so no longer route takes it", async () => {
+    const { sent, fetchFn } = fake([{ body: {} }, { body: {} }]);
+    const client = new FyrdenClient({
+      baseUrl: "https://f.test/api",
+      fetch: fetchFn,
+      token: () => "t",
+    });
+    // Raw, `feature/status` would read as the combined status of `feature`.
+    await client.call("repos.commits.get", { owner: "me", repo: "r", ref: "feature/status" });
+    await client.call("releases.get_by_tag", { owner: "me", repo: "r", tag: "v1/rc" });
+    expect(sent.map((s) => s.url)).toEqual([
+      "https://f.test/api/repos/me/r/commits/feature%2Fstatus",
+      "https://f.test/api/repos/me/r/releases/tags/v1%2Frc",
+    ]);
+  });
+
   it("reuses a given idempotency key, so a retry gets the first answer", async () => {
     const { sent, fetchFn } = fake([
       { status: 201, body: {} },

@@ -106,10 +106,14 @@ export class FyrdenClient {
       // A URL resolves `.` and `..` segments: one could address another route.
       if (text.split("/").some((segment) => segment === "." || segment === ".."))
         throw new TypeError(`${id}: ${name} may not hold a "." or ".." segment`);
-      // A greedy parameter (`{path+}`) keeps its slashes.
-      path = path
-        .replace(`{${name}+}`, text.split("/").map(encodeURIComponent).join("/"))
-        .replace(`{${name}}`, encodeURIComponent(text));
+      // A file path (`{path+}`) keeps its slashes. Any other greedy parameter (a ref, a tag, a
+      // branch) goes as one encoded segment: raw, `feature/status` in `/commits/{ref+}` would be
+      // taken by the longer route `/commits/{ref}/status`. The server decodes either.
+      const greedy =
+        name === "path"
+          ? text.split("/").map(encodeURIComponent).join("/")
+          : encodeURIComponent(text);
+      path = path.replace(`{${name}+}`, greedy).replace(`{${name}}`, encodeURIComponent(text));
     }
     const url = new URL(`${this.#base}${path}`);
     const headers: Record<string, string> = { Accept: "application/json" };

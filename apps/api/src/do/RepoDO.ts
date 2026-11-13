@@ -136,6 +136,7 @@ import {
   type TagPage,
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
+import { type CheckStart, type CheckUpdate, RepoChecks, type StatusInput } from "./repo/checks.js";
 import {
   CODE_OWNER_MERGE_POLICY,
   CodeOwnerFacts,
@@ -490,6 +491,7 @@ export class RepoDO extends MigratingDO {
 
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
+  readonly checks: RepoChecks;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -656,6 +658,7 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
+    this.checks = new RepoChecks({ git: this.git, events: this.events });
     this.releases = new RepoReleases({
       git: this.git,
       events: this.events,
@@ -692,6 +695,7 @@ export class RepoDO extends MigratingDO {
       follow: (pull) => this.#forkPulls.follow(pull),
       view: (pull) => this.#viewed(pull),
       milestone: (number) => this.subjectMeta.milestone(number),
+      checks: (pull, actor) => this.checks.reconcile(pull, actor),
     });
     this.pullSource = new PullSource({
       git: this.git,
@@ -936,6 +940,7 @@ export class RepoDO extends MigratingDO {
         return subject?.kind === kind ? subject.conversation : undefined;
       },
       digestShows: (subject, window, epoch) => this.digests.shows(subject, window, epoch),
+      failingChecks: (number) => this.checks.failingText(number),
     });
     this.#codeOwnerFacts = new CodeOwnerFacts({
       codeOwners: this.codeOwners,
@@ -2384,6 +2389,72 @@ export class RepoDO extends MigratingDO {
     return this.#measured("getLatestRelease", () =>
       this.#refusesReads() ? null : this.releases.latest(),
     );
+  }
+
+  /** Posts a commit status as `actor`, who must write here (checked again in the change). */
+  createStatus(sha: string, input: StatusInput, actor: RefActor) {
+    return this.#pullChange("createStatus", actor, (caller) =>
+      this.#withIdentity(() => this.checks.createStatus(sha, input, caller)),
+    );
+  }
+
+  /** The statuses of the commit `ref` names, newest first, before status id `before`. */
+  listStatuses(ref: string, before: number | null, limit: number) {
+    return this.#statusesAt("listStatuses", ref, (sha) => ({
+      sha,
+      ...this.checks.listStatuses(sha, before, limit),
+    }));
+  }
+
+  /** The combined status of the commit `ref` names, its contexts after key `after`. */
+  combinedStatus(ref: string, after: string | null, limit: number) {
+    return this.#statusesAt("combinedStatus", ref, (sha) => ({
+      sha,
+      ...this.checks.combinedStatus(sha, after, limit),
+    }));
+  }
+
+  /** Reads `read` at the commit `ref` names (a SHA it has, a branch, a tag, a full ref name). */
+  #statusesAt<R>(method: string, ref: string, read: (sha: string) => R) {
+    // Guarded as every browse read: a reader that could not get memory answers busy, not an error.
+    return this.#browse(method, (browse) =>
+      guarded(async (): Promise<Browsed<R>> => {
+        if (this.#refusesReads()) return fail(404, "repo_not_found", REPO_DELETED);
+        const at = await browse.resolveTree(ref);
+        if (!at.ok) return at;
+        return { ok: true, value: read(oidToHex(at.value.commit)) };
+      }),
+    );
+  }
+
+  /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */
+  startCheckAttempts(sha: string, items: readonly CheckStart[]) {
+    return this.#checkChange("startCheckAttempts", () =>
+      this.checks.startCheckAttempts(sha, items),
+    );
+  }
+
+  /** Applies a batch of Fyrden's runs' check updates (see `RepoChecks.recordCheckUpdates`). */
+  recordCheckUpdates(updates: readonly CheckUpdate[]) {
+    return this.#checkChange("recordCheckUpdates", () => this.checks.recordCheckUpdates(updates));
+  }
+
+  /**
+   * A change Fyrden's runs make, with no caller to check: refused, by
+   * throwing, when the repository takes no changes (deleted, transferring).
+   */
+  #checkChange<R>(method: string, change: () => R): Promise<R> {
+    return this.#measured(method, async () => {
+      // Who may hear of a failure, brought up to date before the change (which does not await).
+      await this.feed.prepare();
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      if (!this.events.hasIdentity())
+        throw new Error("repo_not_ready: the repository has no identity yet");
+      const result = change();
+      this.#armOutbox();
+      return result;
+    });
   }
 
   /** Creates a release; one published peels its tag first, and writes nothing until the recheck. */
