@@ -2802,6 +2802,41 @@ export type PullsConflictsGetOutput = {
   })[];
 };
 
+/** Input of `pulls.required_checks.get`: Get a pull request's required checks. */
+export type PullsRequiredChecksGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The pull request's number. */
+  pull_number: number;
+};
+
+/** Output of `pulls.required_checks.get`. */
+export type PullsRequiredChecksGetOutput = {
+  /** The commit the checks are judged on. */
+  head_sha: string;
+  /** A rule also asks the head to contain the base branch's latest commit. */
+  strict: boolean;
+  /** A required check has not passed. */
+  blocking: boolean;
+  checks: ({
+    context: string;
+    /** The publisher it must come from (`ci` or a principal id); null for any. */
+    integration_id: string | null;
+    state: "passed" | "pending" | "failing" | "expected";
+    /** The rulesets requiring it. */
+    rulesets: string[];
+    deciding: ({
+      kind: "status" | "check";
+      /** Who published it: a principal id, or `ci`. */
+      source: string;
+      state: "passed" | "pending" | "failing";
+      details_url: string | null;
+    })[];
+  })[];
+};
+
 /** Input of `pulls.conflicts.resolve`: Resolve a pull request's conflicts. */
 export type PullsConflictsResolveInput = {
   /** The owner's handle. */
@@ -8865,6 +8900,7 @@ export const OPERATIONS = {
   "pulls.update": { method: "PATCH", path: "/repos/{owner}/{repo}/pulls/{pull_number}", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.merge": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/merge", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.conflicts.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: false },
+  "pulls.required_checks.get": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/required-checks", pathParams: ["owner","repo","pull_number"], idempotent: false },
   "pulls.conflicts.resolve": { method: "POST", path: "/repos/{owner}/{repo}/pulls/{pull_number}/conflicts", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.branch.update": { method: "PUT", path: "/repos/{owner}/{repo}/pulls/{pull_number}/update-branch", pathParams: ["owner","repo","pull_number"], idempotent: true },
   "pulls.files.list": { method: "GET", path: "/repos/{owner}/{repo}/pulls/{pull_number}/files", pathParams: ["owner","repo","pull_number"], idempotent: false, items: "files" },
@@ -9179,6 +9215,8 @@ export interface Operations {
   "pulls.merge": { input: PullsMergeInput; output: PullsMergeOutput };
   /** Get a pull request's conflicts. Fyrden: the conflicts of merging the base branch's tip into an open pull request's head (none when they merge cleanly). Files whose lines conflict in text (`content`, `add_add`) are `editable`: their merged content is given with git's conflict markers, the head's side first, each side labelled with its branch (`<<<<<<< <head branch>`, `=======`, `>>>>>>> <base branch>`), up to 50 files and 4 MiB in all. Any other conflict (a file deleted on one side, a mode, a symlink, a submodule, a binary or too large file, a file and a directory; renames are not followed) is listed but needs a merge made by hand. Resolve them with `conflict_snapshot`, which names the base tip and head they were read at. A head in a fork is read as the base last imported it. */
   "pulls.conflicts.get": { input: PullsConflictsGetInput; output: PullsConflictsGetOutput };
+  /** Get a pull request's required checks. Fyrden: the status checks the active rulesets on the pull request's base branch require (`required_status_checks`), each judged on its head as a merge judges it: `passed` (success, skipped or neutral), `pending` (pending, queued, in progress, or a re-run started), `failing` (anything else) or `expected` (not reported). `deciding` lists the statuses and checks that decided each, with their links. `blocking` when any has not passed. Who merges plays no part: a role that bypasses a ruleset, or an actor type it leaves out, may merge anyway, and the merge decides. Needs `statuses:read` too. */
+  "pulls.required_checks.get": { input: PullsRequiredChecksGetInput; output: PullsRequiredChecksGetOutput };
   /** Resolve a pull request's conflicts. Fyrden: merges the base branch's tip into the head branch with the given contents for every file whose lines conflict, as one merge commit (parents: the head, then the base tip) made and signed by the server. Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused when either branch moved since the conflicts were read (409 `head_moved`, `base_moved`), when a conflict cannot be resolved here (422 `not_editable`), when a conflicted file is missing (422 `unresolved`), or when a given file has no conflict (422 `not_conflicted`). Contents that still hold conflict markers are accepted and named in `markers`. */
   "pulls.conflicts.resolve": { input: PullsConflictsResolveInput; output: PullsConflictsResolveOutput };
   /** Update a pull request branch. Merges the base branch's tip into an open pull request's head branch (a merge commit made and signed by the server; parents: the head, then the base tip). Write access; the head branch's rulesets apply. A head branch in a fork is written there: the caller needs write access to the fork, or the pull request's `maintainer_can_modify` (the author still writing the fork); that repository's rulesets apply. Refused (422) when it conflicts (resolve the conflicts instead) or when the head already contains the base tip; refused (409) when `expected_head_sha` is not the head. Done before the answer, which is GitHub's 202. */

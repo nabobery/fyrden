@@ -5,6 +5,7 @@ import {
   protectsBranch,
   type RefChange,
   type RuleActor,
+  requiredChecksOn,
   ruleViolations,
 } from "../../src/rulesets/evaluate.js";
 import {
@@ -568,5 +569,80 @@ describe("required status checks", () => {
       strict_required_status_checks_policy: true,
       do_not_enforce_on_create: false,
     });
+  });
+});
+
+describe("the required checks of a branch", () => {
+  const checks = (
+    name: string,
+    required: { context: string; integration_id?: string }[],
+    over: Partial<Ruleset> = {},
+    parameters: Partial<RequiredStatusChecksParameters> = {},
+  ) =>
+    ruleset({
+      name,
+      rules: [
+        {
+          type: "required_status_checks",
+          parameters: { required_status_checks: required, ...parameters },
+        },
+      ],
+      ...over,
+    });
+
+  it("lists each check the active branch rulesets covering it ask, once, with the rulesets asking", () => {
+    const asked = requiredChecksOn(
+      [
+        checks("a", [{ context: "Build" }, { context: "lint", integration_id: "ci" }]),
+        checks(
+          "b",
+          [{ context: "build" }, { context: "lint" }],
+          {},
+          {
+            strict_required_status_checks_policy: false,
+          },
+        ),
+        checks("off", [{ context: "docs" }], { enforcement: "evaluate" }),
+        checks("tags", [{ context: "tag" }], {
+          target: "tag",
+          conditions: { ref_name: { include: ["~ALL"], exclude: [] } },
+        }),
+        checks("elsewhere", [{ context: "x" }], {
+          conditions: { ref_name: { include: ["refs/heads/release/*"], exclude: [] } },
+        }),
+      ],
+      "refs/heads/main",
+      "main",
+    );
+    expect(asked).toEqual({
+      strict: true,
+      checks: [
+        { check: { context: "Build" }, rulesets: ["a", "b"] },
+        { check: { context: "lint", integration_id: "ci" }, rulesets: ["a"] },
+        { check: { context: "lint" }, rulesets: ["b"] },
+      ],
+    });
+  });
+
+  it("ignores who merges: bypass and actor types decide only at the merge", () => {
+    const asked = requiredChecksOn(
+      [
+        checks("agents", [{ context: "build" }], {
+          actor_types: ["agent"],
+          bypass_actors: [
+            { actor_type: "RepositoryRole", actor_id: "admin", bypass_mode: "always" },
+          ],
+        }),
+      ],
+      "refs/heads/main",
+      "main",
+    );
+    expect(asked.checks).toHaveLength(1);
+  });
+
+  it("asks nothing, and is not strict, without such a rule", () => {
+    expect(
+      requiredChecksOn([ruleset({ rules: [{ type: "deletion" }] })], "refs/heads/main", "main"),
+    ).toEqual({ strict: false, checks: [] });
   });
 });
