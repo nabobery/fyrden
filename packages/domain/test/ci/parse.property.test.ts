@@ -133,9 +133,9 @@ describe("parseWorkflow properties", () => {
     const q = (s: string) => JSON.stringify(s);
     let out = "on: push\njobs:\n";
     for (const job of w.jobs) {
-      out += `  ${job.id}:\n    runs-on: [${job.labels.map(q).join(", ")}]\n`;
+      out += `  ${q(job.id)}:\n    runs-on: [${job.labels.map(q).join(", ")}]\n`;
       if (job.env.length > 0)
-        out += `    env:\n${job.env.map(([k, v]) => `      ${k}: ${q(v)}\n`).join("")}`;
+        out += `    env:\n${job.env.map(([k, v]) => `      ${q(k)}: ${q(v)}\n`).join("")}`;
       out += "    steps:\n";
       for (const step of job.steps) out += `      - ${step.kind}: ${q(step.value)}\n`;
     }

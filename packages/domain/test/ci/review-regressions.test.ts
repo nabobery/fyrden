@@ -139,3 +139,30 @@ describe("timeouts are whole minutes", () => {
     ).toBe("ok");
   });
 });
+
+describe("input the YAML library itself cannot take", () => {
+  it.each([20_000, 100_000])(
+    "a block sequence %i deep is an error, never a throw",
+    (depth) => {
+      const text = `a:\n  ${"- ".repeat(depth)}x\nb: y\n`;
+      expect(() => parse(text)).not.toThrow();
+      const parsed = parse(text);
+      expect(parsed.ok || parsed.errors.map((e) => e.code)).toEqual(["yaml_too_complex"]);
+    },
+    LARGE_INPUT,
+  );
+
+  it.each([
+    ["a scalar", `name: !missing!tag CI\n${JOB.replace("jobs:", "on: push\njobs:")}`],
+    ["a collection", `env: !missing!tag {A: b}\n${JOB.replace("jobs:", "on: push\njobs:")}`],
+  ])("an undeclared tag handle on %s is refused by name", (_, text) => {
+    const parsed = parse(text);
+    expect(parsed.ok || parsed.errors.map((e) => [e.code, e.feature, e.message])).toEqual([
+      [
+        "unsupported_value",
+        "yaml.tags",
+        expect.stringContaining("`!missing!tag` is not supported"),
+      ],
+    ]);
+  });
+});

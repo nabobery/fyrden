@@ -104,18 +104,34 @@ export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
     return wholeFile("invalid_encoding", "A workflow file must be UTF-8.");
   }
   const lines = new LineCounter();
-  const tokens = [...new Parser(lines.addNewLine).parse(text)];
+  // The library tokenizes and composes recursively: input nested deeply enough (a long run of
+  // `- - - …`) overflows the stack there, before any bound of the parser's own applies.
+  const tokens = exhaustible(() => [...new Parser(lines.addNewLine).parse(text)]);
+  if (!tokens) return wholeFile("yaml_too_complex", tooComplex());
   const walk = new Walk(text, lines);
   try {
     walk.checkStream(tokens);
     if (walk.errors.length > 0) return walk.result(undefined);
-    const doc = [...new Composer(YAML_OPTIONS).compose(tokens, true, text.length)][0];
-    if (!doc) return walk.result(undefined);
+    const doc = exhaustible(
+      () => [...new Composer(YAML_OPTIONS).compose(tokens, true, text.length)][0],
+    );
+    if (!doc)
+      return doc === null ? wholeFile("yaml_too_complex", tooComplex()) : walk.result(undefined);
     if (!walk.checkDiagnostics(doc)) return walk.result(undefined);
     if (!walk.resolveAnchors(doc)) return walk.result(undefined);
     return walk.result(readWorkflow(walk, doc.contents, path));
   } catch (error) {
     if (error instanceof Stop) return walk.result(undefined);
+    throw error;
+  }
+}
+
+/** `run()`'s result, or null when it exhausts the stack (V8 throws a RangeError). */
+function exhaustible<T>(run: () => T): T | null {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof RangeError) return null;
     throw error;
   }
 }
@@ -127,6 +143,7 @@ function wholeFile(code: WorkflowErrorCode, message: string): ParsedWorkflow {
 /** The state of one parse: positions, errors, the node budget and the path being walked. */
 class Walk {
   readonly errors: WorkflowError[] = [];
+  readonly #text: string;
   readonly #lines: LineCounter;
   /** Code points before each UTF-16 offset, built only for text with astral characters. */
   #codePoints: Uint32Array | undefined;
@@ -139,6 +156,7 @@ class Walk {
   #full = false;
 
   constructor(text: string, lines: LineCounter) {
+    this.#text = text;
     this.#lines = lines;
     this.#bom = text.startsWith("﻿");
     if (/[\uD800-\uDFFF]/.test(text)) {
@@ -241,20 +259,32 @@ class Walk {
   checkDiagnostics(doc: Document.Parsed): boolean {
     let walkable = true;
     for (const diagnostic of [...doc.errors, ...doc.warnings]) {
-      // Directives were checked from the tokens, and the walk refuses every tagged node it
-      // reaches (resolved or not); anything else the library flags fails closed.
-      if (diagnostic.code === "BAD_DIRECTIVE" || diagnostic.code === "TAG_RESOLVE_FAILED") continue;
-      {
-        const offset = diagnostic.pos[0];
+      // Directives were checked from the tokens.
+      if (diagnostic.code === "BAD_DIRECTIVE") continue;
+      const offset = diagnostic.pos[0];
+      if (diagnostic.code === "TAG_RESOLVE_FAILED") {
+        // A tag the library could not resolve (`!!omap`, `!custom`, an undeclared `!x!y`, which
+        // leaves the node untagged). The walk would refuse the first two again, so it is
+        // skipped; tags the library resolves (`!!str`) give no warning and the walk refuses them.
         walkable = false;
+        const tag = this.#text.slice(offset, diagnostic.pos[1]).trim();
         this.fail(
-          "yaml_syntax",
-          "",
+          "unsupported_value",
+          "yaml.tags",
           "",
           this.position(offset),
-          `Invalid YAML: ${cut(diagnostic.message, 200)}`,
+          `The YAML tag \`${cut(tag, 60)}\` is not supported: ${reasonOf("yaml.tags")}`,
         );
+        continue;
       }
+      walkable = false;
+      this.fail(
+        "yaml_syntax",
+        "",
+        "",
+        this.position(offset),
+        `Invalid YAML: ${cut(diagnostic.message, 200)}`,
+      );
     }
     return walkable;
   }
