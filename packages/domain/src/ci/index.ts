@@ -2,3 +2,6 @@
 // its own (`@fyrden/domain/ci`) so the YAML parser stays out of everything
 // that imports the package root, the web app's client bundle included.
 export * from "./discover.js";
+export * from "./parse.js";
+export * from "./support-matrix.js";
+export * from "./workflow-schema.js";
