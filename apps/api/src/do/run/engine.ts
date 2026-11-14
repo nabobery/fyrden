@@ -78,7 +78,8 @@ export interface RunPolicy {
   /**
    * How often a run writes its record into its repository again, finished or not, so that a
    * restore of the repository that dropped the record cannot hide the run from the
-   * repository's erasure. It bounds how long a run outlives such an erasure. Proposed: 7 days.
+   * repository's erasure. Under healthy service it bounds how long a run outlives such an
+   * erasure; an outage delays that, the check retrying every `sweepMs`. Proposed: 7 days.
    */
   readonly reconcileMs: number;
   /** Nodes one scheduling step decides at most, before it ends its invocation. Proposed. */
