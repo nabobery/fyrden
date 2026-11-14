@@ -48,6 +48,7 @@ export const JOB_KINDS = [
   "ci_dispatch",
   "ci_task_end",
   "run_concurrency",
+  "run_reconcile",
   "concurrency",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
