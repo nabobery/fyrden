@@ -1,5 +1,7 @@
 // Connect unary framing for the runner protocol: which requests are refused,
 // the error bodies, and bounded body reads.
+import { exports } from "cloudflare:workers";
+import { endsLikeUnregisteredRunner } from "@fyrden/domain/ci";
 import { describe, expect, it } from "vitest";
 import {
   CONNECT_HTTP_STATUS,
@@ -11,6 +13,7 @@ import {
   readPrefix,
   UPDATE_LOG_PREFIX_BYTES,
 } from "../src/runner/connect.js";
+import * as runnerErrors from "../src/runner/errors.js";
 
 const ENDPOINT = "https://fyrden.test/api/actions/runner.v1.RunnerService/FetchTask";
 
@@ -49,11 +52,11 @@ describe("the request check", () => {
     ["Connect streaming", "application/connect+proto"],
     ["a look-alike", "application/protobuf"],
     ["nothing", ""],
-  ])("refuses %s as unimplemented", async (_what, contentType) => {
+  ])("refuses %s with 415, as unimplemented", async (_what, contentType) => {
     const body = await expectConnectError(
       checkConnectRequest(request({ headers: { "content-type": contentType } })),
       "unimplemented",
-      501,
+      415,
     );
     expect(body.message).toBe("only binary protobuf is supported");
   });
@@ -218,5 +221,75 @@ describe("readPrefix", () => {
     expect(MAX_SMALL_CALL_BYTES).toBe(64 * 1024);
     expect(MAX_UPDATE_TASK_BYTES).toBe(1.25 * 1024 * 1024);
     expect(UPDATE_LOG_PREFIX_BYTES).toBe(4 * 1024 * 1024);
+  });
+});
+
+describe("the runner service's routes", () => {
+  const post = (method: string, init: { headers?: Record<string, string>; verb?: string } = {}) =>
+    exports.default.fetch(`https://fyrden.test/api/actions/${method}`, {
+      method: init.verb ?? "POST",
+      headers: { "content-type": "application/proto", ...init.headers },
+      ...(init.verb === "GET" ? {} : { body: new Uint8Array(0) }),
+    });
+
+  it.each([
+    "runner.v1.RunnerService/FetchSingleTask",
+    "runner.v1.RunnerService/UpdateStepSummary",
+    "runner.v2.RunnerService/Register",
+    "nothing",
+  ])("answers an unknown method, %s, as unimplemented naming it", async (method) => {
+    const body = await expectConnectError(await post(method), "unimplemented", 501);
+    expect(body.message).toContain(method);
+  });
+
+  it("refuses a GET with 405", async () => {
+    const res = await post("ping.v1.PingService/Ping", { verb: "GET" });
+    expect(res.status).toBe(405);
+    expect(res.headers.get("allow")).toBe("POST");
+  });
+
+  it("refuses JSON with 415 and compressed bodies with 501, as unimplemented", async () => {
+    const json = await post("ping.v1.PingService/Ping", {
+      headers: { "content-type": "application/json" },
+    });
+    expect((await expectConnectError(json, "unimplemented", 415)).message).toBe(
+      "only binary protobuf is supported",
+    );
+    const gzip = await post("ping.v1.PingService/Ping", {
+      headers: { "content-encoding": "gzip" },
+    });
+    await expectConnectError(gzip, "unimplemented", 501);
+  });
+
+  it("refuses a small call's body over its cap", async () => {
+    const res = await exports.default.fetch(
+      "https://fyrden.test/api/actions/ping.v1.PingService/Ping",
+      {
+        method: "POST",
+        headers: { "content-type": "application/proto" },
+        body: new Uint8Array(MAX_SMALL_CALL_BYTES + 1),
+      },
+    );
+    await expectConnectError(res, "resource_exhausted", 429);
+  });
+});
+
+describe("runner-facing error messages", () => {
+  // The runner stops for good on any error whose message ends "unregistered
+  // runner"; a message built from a request's text keeps that text inside.
+  const messages = Object.entries(runnerErrors).map(([name, value]) => [
+    name,
+    typeof value === "function"
+      ? (value as (...args: string[]) => string)("unregistered runner", "unregistered runner")
+      : value,
+  ]);
+
+  it("are all constants or builders of the module", () => {
+    expect(messages.length).toBeGreaterThan(5);
+    for (const [, message] of messages) expect(typeof message).toBe("string");
+  });
+
+  it.each(messages)("%s never reads as an unregistered runner", (_name, message) => {
+    expect(endsLikeUnregisteredRunner(message as string)).toBe(false);
   });
 });

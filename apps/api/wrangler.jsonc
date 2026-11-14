@@ -177,6 +177,14 @@
       "name": "RATE_LIMIT_LIVE",
       "namespace_id": "1009",
       "simple": { "limit": 6, "period": 60 }
+    },
+    // Self-hosted runners' calls, per client address, before any runner lookup. Apart from
+    // RATE_LIMIT_AUTH because runners behind one address share it: an idle runner makes about
+    // 12 calls a minute and a busy one about 45 (measured), so this carries about 60 busy runners.
+    {
+      "name": "RATE_LIMIT_RUNNER",
+      "namespace_id": "1010",
+      "simple": { "limit": 3000, "period": 60 }
     }
   ],
 

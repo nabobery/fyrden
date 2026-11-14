@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -8741,6 +8741,63 @@ export type OrgsTeamsReposRemoveOutput = {
   state: "removed";
 };
 
+/** Input of `orgs.runners.registration_tokens.create`: Create a runner registration token. */
+export type OrgsRunnersRegistrationTokensCreateInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.runners.registration_tokens.create`. */
+export type OrgsRunnersRegistrationTokensCreateOutput = {
+  /** The registration token (`fyrden_run_` prefix): registers one runner, once. Shown once and never stored. */
+  token: string;
+  /** Unix time in milliseconds: an hour after it was made. */
+  expires_at: number;
+};
+
+/** Input of `orgs.runners.list`: List an organization's self-hosted runners. */
+export type OrgsRunnersListInput = {
+  /** The organization's handle. */
+  org: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `orgs.runners.list`. */
+export type OrgsRunnersListOutput = {
+  runners: ({
+    id: number;
+    name: string;
+    /** As the runner last declared them. */
+    labels: string[];
+    /** The runner's version, as it last declared it. */
+    version: string;
+    /** Registered to take one job. */
+    ephemeral: boolean;
+    /** Unix time in milliseconds: when it registered. */
+    created_at: number;
+    /** Unix time in milliseconds: when its daemon last started; null when it never has (a registration whose answer was lost: delete it). */
+    declared_at: number | null;
+    /** Unix time in milliseconds: when it was deleted; its credential stopped working then. */
+    revoked_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `orgs.runners.delete`: Delete a self-hosted runner. */
+export type OrgsRunnersDeleteInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The runner's id. */
+  runner_id: number;
+};
+
+/** Output of `orgs.runners.delete`. */
+export type OrgsRunnersDeleteOutput = null;
+
 /** Input of `uploads.create`: Start a chunked pack upload. */
 export type UploadsCreateInput = {
   /** The owner's handle. */
@@ -9185,6 +9242,9 @@ export const OPERATIONS = {
   "orgs.teams.memberships.remove": { method: "DELETE", path: "/orgs/{org}/teams/{team_slug}/memberships/{username}", pathParams: ["org","team_slug","username"], idempotent: true },
   "orgs.teams.repos.set": { method: "PUT", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.teams.repos.remove": { method: "DELETE", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
+  "orgs.runners.registration_tokens.create": { method: "POST", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
+  "orgs.runners.list": { method: "GET", path: "/orgs/{org}/actions/runners", pathParams: ["org"], idempotent: false, items: "runners" },
+  "orgs.runners.delete": { method: "DELETE", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: true },
   "uploads.create": { method: "POST", path: "/repos/{owner}/{repo}/uploads", pathParams: ["owner","repo"], idempotent: true },
   "uploads.get": { method: "GET", path: "/repos/{owner}/{repo}/uploads/{upload_id}", pathParams: ["owner","repo","upload_id"], idempotent: false },
   "uploads.complete": { method: "POST", path: "/repos/{owner}/{repo}/uploads/{upload_id}/complete", pathParams: ["owner","repo","upload_id"], idempotent: true },
@@ -9659,6 +9719,12 @@ export interface Operations {
   "orgs.teams.repos.set": { input: OrgsTeamsReposSetInput; output: OrgsTeamsReposSetOutput };
   /** Take a team's role on a repository away. Takes a team's role on a repository away; its members keep the roles they have otherwise (members of the organization read). Repositories told of the change stop counting it at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Owners only. */
   "orgs.teams.repos.remove": { input: OrgsTeamsReposRemoveInput; output: OrgsTeamsReposRemoveOutput };
+  /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner serves every repository of the organization whose jobs its labels match. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. */
+  "orgs.runners.registration_tokens.create": { input: OrgsRunnersRegistrationTokensCreateInput; output: OrgsRunnersRegistrationTokensCreateOutput };
+  /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too; never their credentials. Owners only. */
+  "orgs.runners.list": { input: OrgsRunnersListInput; output: OrgsRunnersListOutput };
+  /** Delete a self-hosted runner. Revokes a runner's credential at once: its next call is refused and the runner stops. It stays listed, with `revoked_at`. Deleting it again changes nothing. Owners only. */
+  "orgs.runners.delete": { input: OrgsRunnersDeleteInput; output: OrgsRunnersDeleteOutput };
   /** Start a chunked pack upload. Starts an upload session for a pack too large for one push request: declare the pack's size and the ref updates it carries, upload the parts, then complete. Needs write access to the repository. `fyrden push --chunked` does all of this. */
   "uploads.create": { input: UploadsCreateInput; output: UploadsCreateOutput };
   /** Get a chunked pack upload. Returns an upload session started by the caller: which parts are stored, and the outcome once complete. */

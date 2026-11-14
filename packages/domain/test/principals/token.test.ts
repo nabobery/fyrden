@@ -32,6 +32,12 @@ describe("generateToken", () => {
     expect(() => generateToken("pat", fixedBytes(0xff))).toThrow(/random source/);
   });
 
+  it("makes runner credentials, a type no token row holds", () => {
+    const token = generateToken("rnr", secureRandomBytes);
+    expect(token).toMatch(/^fyrden_rnr_[0-9A-Za-z]{36}$/);
+    expect(parseToken(token)).toEqual({ ok: true, type: "rnr" });
+  });
+
   it("is deterministic for a fixed random source", () => {
     expect(generateToken("job", fixedBytes(0))).toBe(generateToken("job", fixedBytes(0)));
   });
