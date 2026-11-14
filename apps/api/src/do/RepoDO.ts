@@ -2452,7 +2452,9 @@ export class RepoDO extends MigratingDO {
 
   /**
    * Records a CI run of this repository before its run object is created, so
-   * erasing the repository erases the run. Repeating it changes nothing.
+   * erasing the repository erases the run. Repeating it changes nothing. Runs
+   * also call it to learn whether the repository is deleted: `repo_not_found`
+   * means deleted, never a repository still being generated.
    */
   registerRun(input: {
     readonly runId: string;
@@ -2469,6 +2471,11 @@ export class RepoDO extends MigratingDO {
       if (!isUlid(input.runId) || !isFullSha(input.sha) || !input.path || input.path.length > 1024)
         throw new TypeError("invalid run registration");
       const refused = this.#writeRefusal();
+      // A repository still being generated from its template refuses writes as not found, yet
+      // is not deleted, and a restore can bring that state back under runs that exist: runs
+      // ask here whether the repository is deleted, so it answers not ready.
+      if (refused?.code === "repo_not_found" && !this.#refusesReads())
+        return { ok: false, code: "repo_not_ready" };
       if (refused)
         return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
       if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };

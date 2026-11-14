@@ -208,6 +208,18 @@ const repoMeta = (
     r.git.context.storage.sql.exec(`UPDATE repo_meta SET ${column} = ?`, value);
   });
 
+/** Marks the repository as still being generated from a template, as a restore can bring back. */
+const generating = (f: { repo: { id: string } }, on: boolean) =>
+  inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) => {
+    const sql = r.git.context.storage.sql;
+    if (on)
+      sql.exec(
+        "INSERT INTO generation (id, template_id, started_at) VALUES (1, 'template', ?)",
+        Date.now(),
+      );
+    else sql.exec("DELETE FROM generation");
+  });
+
 async function finishedRun(f: Awaited<ReturnType<typeof repoWithCommit>>) {
   const runId = await started(f, one);
   await finish(runId, "a");
@@ -285,6 +297,48 @@ describe("the repository's record of a run", () => {
     await advance(runId, 30 * MIN);
     expect(await recorded(f, runId)).toBe(true);
     expect(await runStub(runId).get()).toMatchObject({ status: "completed", faults: [] });
+  });
+
+  it("keeps the run of a repository restored to while it was being generated from a template", async () => {
+    const f = await repoWithCommit();
+    const runId = await finishedRun(f);
+    await restoredWithout(f, runId);
+    await generating(f, true);
+    await advance(runId, WEEK);
+    expect(await runStub(runId).get()).toMatchObject({ status: "completed" });
+    expect(await recorded(f, runId)).toBe(false);
+    await generating(f, false);
+    await advance(runId, 30 * MIN);
+    expect(await recorded(f, runId)).toBe(true);
+  });
+
+  it("erases an active run whose check meets its deleted repository", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, one);
+    await repoMeta(f, "deleting_at", Date.now());
+    const task = await assignNamed(runId, "a");
+    await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    await advance(runId, 2_000);
+    expect(await runStub(runId).get()).toBeUndefined();
+    expect(await erased(runId)).toBe(true);
+  });
+
+  it("keeps an active run whose check meets a repository being generated, and sends it later", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, one);
+    await generating(f, true);
+    const task = await assignNamed(runId, "a");
+    await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    await advance(runId, 2_000);
+    await advance(runId, 5_000);
+    expect(await runStub(runId).get()).toMatchObject({ status: "completed" });
+    expect((await checksOf(f)).get("a")?.status).not.toBe("completed");
+    await generating(f, false);
+    await advance(runId, 30 * MIN);
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+    });
   });
 
   it("writes nothing to a run erased while its check was in flight", async () => {
