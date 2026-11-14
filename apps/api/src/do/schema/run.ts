@@ -148,6 +148,7 @@ export const runSchema: readonly DoMigration[] = [
         state TEXT NOT NULL
           CHECK (state IN ('admitting', 'pending', 'owner', 'releasing', 'ended')),
         outcome TEXT,
+        cancel_in_progress INTEGER NOT NULL DEFAULT 0,
         generation INTEGER,
         lease_valid_until INTEGER,
         renew_at INTEGER,

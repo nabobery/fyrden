@@ -14,6 +14,14 @@
  * functions in one transaction each.
  */
 
+/** A group's name, in characters. Proposed: GitHub documents none. */
+export const MAX_CONCURRENCY_GROUP_LENGTH = 400;
+
+/** The registry's key for a group: "The concurrency group name is case insensitive" (GitHub). */
+export function concurrencyGroupKey(group: string): string {
+  return group.toLowerCase();
+}
+
 /** Who holds or wants a group: a run and one of its scopes (an attempt, or one job instance). */
 export interface OwnerRef {
   readonly runId: string;
