@@ -2211,6 +2211,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repository_hooks:write",
                         "statuses:read",
                         "statuses:write",
+                        "actions:read",
+                        "actions:write",
                       ],
                       "type": "string",
                     },
@@ -3171,6 +3173,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repository_hooks:write",
                         "statuses:read",
                         "statuses:write",
+                        "actions:read",
+                        "actions:write",
                       ],
                       "type": "string",
                     },
@@ -4565,6 +4569,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repository_hooks:write",
                         "statuses:read",
                         "statuses:write",
+                        "actions:read",
+                        "actions:write",
                       ],
                       "type": "string",
                     },
@@ -8124,6 +8130,736 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
         "summary": "Update a repository",
         "x-fyrden-permission": "administration:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}": {
+      "get": {
+        "description": "A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
+        "operationId": "actions.runs.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actor": {
+                      "additionalProperties": false,
+                      "description": "Who triggered the run: its jobs act with this principal's rights on every attempt.",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                    "completed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "conclusion": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "success",
+                            "failure",
+                            "cancelled",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "created_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "errors": {
+                      "description": "Why the workflow could not run, when it could not.",
+                      "items": {
+                        "type": "string",
+                      },
+                      "type": "array",
+                    },
+                    "event": {
+                      "type": "string",
+                    },
+                    "faults": {
+                      "description": "Fyrden: background work that exhausted its retries and is still being retried periodically.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "count": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "error": {
+                            "type": "string",
+                          },
+                          "kind": {
+                            "type": "string",
+                          },
+                          "since": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "kind",
+                          "error",
+                          "since",
+                          "count",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "head_branch": {
+                      "description": "The branch the run is for, if its ref is one.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "head_sha": {
+                      "type": "string",
+                    },
+                    "id": {
+                      "type": "string",
+                    },
+                    "path": {
+                      "description": "The workflow file.",
+                      "type": "string",
+                    },
+                    "run_attempt": {
+                      "description": "The current attempt: 1, then one more per re-run.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "run_started_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "status": {
+                      "description": "\`pending\`: waiting for its concurrency group.",
+                      "enum": [
+                        "queued",
+                        "pending",
+                        "in_progress",
+                        "completed",
+                      ],
+                      "type": "string",
+                    },
+                    "triggering_actor": {
+                      "additionalProperties": false,
+                      "description": "Who started the current attempt.",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                        },
+                      },
+                      "required": [
+                        "id",
+                      ],
+                      "type": "object",
+                    },
+                    "updated_at": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "run_attempt",
+                    "head_sha",
+                    "head_branch",
+                    "event",
+                    "path",
+                    "status",
+                    "conclusion",
+                    "actor",
+                    "triggering_actor",
+                    "created_at",
+                    "updated_at",
+                    "run_started_at",
+                    "completed_at",
+                    "errors",
+                    "faults",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a workflow run",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel": {
+      "post": {
+        "description": "Cancels a run: queued jobs end, running jobs whose \`if:\` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose \`if:\` still holds (such as \`if: always()\`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 \`run_not_cancellable\` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.runs.cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Accepted: the run is being cancelled.",
+                  "properties": {},
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Cancel a workflow run",
+        "x-fyrden-permission": "actions:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel": {
+      "post": {
+        "description": "Cancels every unfinished job of a run at once, whatever its \`if:\` (for a run that does not respond to a cancel); running jobs' runners are told to stop and their logs may be incomplete. 409 \`run_not_cancellable\` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.runs.force_cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "Accepted: the run is being cancelled.",
+                  "properties": {},
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Accepted",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Force cancel a workflow run",
+        "x-fyrden-permission": "actions:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs": {
+      "get": {
+        "description": "The jobs of a run's attempt (the current one by default), by id: one per matrix combination, and one for a job that never ran (skipped or failed before it started). GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
+        "operationId": "actions.runs.jobs.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "description": "An attempt; the current by default.",
+              "maximum": 51,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "jobs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "check": {
+                            "additionalProperties": false,
+                            "description": "Fyrden: the job's check on the commit.",
+                            "properties": {
+                              "code": {
+                                "description": "Why its check is not published, when it is not (\`duplicate_check\`, …).",
+                                "type": [
+                                  "string",
+                                  "null",
+                                ],
+                              },
+                              "state": {
+                                "description": "The state its check was last given.",
+                                "type": [
+                                  "string",
+                                  "null",
+                                ],
+                              },
+                            },
+                            "required": [
+                              "state",
+                              "code",
+                            ],
+                            "type": "object",
+                          },
+                          "completed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "cancelled",
+                                  "skipped",
+                                  "timed_out",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "error": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "id": {
+                            "description": "The job's id within its run.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "log_complete": {
+                            "description": "Fyrden: whether every log row reached durable storage; null while it runs.",
+                            "type": [
+                              "boolean",
+                              "null",
+                            ],
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "run_attempt": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "run_id": {
+                            "type": "string",
+                          },
+                          "started_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "status": {
+                            "enum": [
+                              "pending",
+                              "queued",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "run_id",
+                          "run_attempt",
+                          "name",
+                          "status",
+                          "conclusion",
+                          "started_at",
+                          "completed_at",
+                          "check",
+                          "log_complete",
+                          "error",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                  },
+                  "required": [
+                    "jobs",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List jobs for a workflow run",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun": {
+      "post": {
+        "description": "Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 \`rerun_limit\`); one still running, or whose workflow could not run (\`errors\`), is 409 \`run_not_completed\`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.runs.rerun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "run_attempt": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "run_attempt",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Re-run a workflow",
+        "x-fyrden-permission": "actions:write",
         "x-fyrden-principals": [
           "user",
           "agent",
@@ -45114,6 +45850,8 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "repository_hooks:write",
                         "statuses:read",
                         "statuses:write",
+                        "actions:read",
+                        "actions:write",
                       ],
                       "type": "string",
                     },

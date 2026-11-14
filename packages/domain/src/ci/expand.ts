@@ -14,7 +14,7 @@
  */
 import { ErrorList } from "./error-list.js";
 import { type ExpressionField, evaluateField, expressionFields } from "./expression-sites.js";
-import { type ExprValue, exprObject, toExprString } from "./expression-values.js";
+import { type ExprObject, type ExprValue, exprObject, toExprString } from "./expression-values.js";
 import { type ExpressionScope, newWorkBudget, type WorkBudget } from "./expressions.js";
 import { buildJobGraph, type JobGraph } from "./graph.js";
 import {
@@ -315,13 +315,7 @@ export function expandJob(
     const within: ExpressionScope = {
       ...outer,
       matrix: exprObject(combination ? combination.values : []),
-      strategy: exprObject([
-        ["fail-fast", failFast],
-        ["job-index", index],
-        ["job-total", total],
-        // The runner's rule: the total unless the job has a matrix and sets max-parallel.
-        ["max-parallel", combination && maxParallel !== undefined ? maxParallel : total],
-      ]),
+      strategy: strategyContext(failFast, index, total, combination !== undefined, maxParallel),
     };
     const instance = expandInstance(job, base, index, total, combination, within, evaluate, errors);
     if (!instance) return fail();
@@ -623,6 +617,26 @@ function expand(spec: MatrixSpec, budget: WorkBudget) {
 
 function addError(errors: ErrorList, e: WorkflowError): void {
   errors.add(e.code, e.feature, e.path, e, e.message);
+}
+
+/**
+ * An instance's `strategy` context, as expansion and every later evaluation of
+ * the instance (its job-level concurrency group) read it. `max-parallel` is
+ * the runner's rule: the total unless the job has a matrix and sets it.
+ */
+export function strategyContext(
+  failFast: boolean,
+  index: number,
+  total: number,
+  hasMatrix: boolean,
+  maxParallel: number | undefined,
+): ExprObject {
+  return exprObject([
+    ["fail-fast", failFast],
+    ["job-index", index],
+    ["job-total", total],
+    ["max-parallel", hasMatrix && maxParallel !== undefined ? maxParallel : total],
+  ]);
 }
 
 /** What `jobPayload` writes for an instance: the strategy only when the job declares one. */

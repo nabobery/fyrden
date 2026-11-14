@@ -1,0 +1,16 @@
+{
+  // A test Worker for the end-to-end tests of CI runs, before triggers exist:
+  // it serves on the dev port, starts runs through the API's run seam and
+  // plays a runner through the run object's calls, and forwards every other
+  // request to fyrden-api. Never deployed.
+  "name": "fyrden-e2e-run-seam",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "services": [{ "binding": "API", "service": "fyrden-api" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REPO", "class_name": "RepoDO", "script_name": "fyrden-api" },
+      { "name": "RUN", "class_name": "RunDO", "script_name": "fyrden-api" }
+    ]
+  }
+}
