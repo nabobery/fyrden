@@ -311,6 +311,24 @@ export const PERMISSIONS = {
     implies: ["statuses:read"],
     writes: true,
   },
+  // GitHub's "Actions" permission: a repository's CI runs, apart from
+  // contents and statuses.
+  "actions:read": {
+    resource: "repo",
+    minRole: "read",
+    summary: "Read the repository's CI runs and their jobs.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "actions:write": {
+    resource: "repo",
+    minRole: "write",
+    summary: "Cancel and re-run the repository's CI runs.",
+    principals: PRINCIPAL_TYPES,
+    implies: ["actions:read"],
+    writes: true,
+  },
 } as const satisfies Record<string, PermissionDef>;
 
 export type Permission = keyof typeof PERMISSIONS;

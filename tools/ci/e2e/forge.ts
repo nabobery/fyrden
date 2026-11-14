@@ -97,8 +97,13 @@ export interface Forge {
 /**
  * Starts fyrden-api under `wrangler dev` with fresh local state, its
  * secrets made for this run, and its cron run only when the test asks.
+ * `primary`, a test Worker's config, serves the port in front of the API
+ * (which it must forward to) when a test needs calls no public route makes.
  */
-export async function startForge(name: string): Promise<Forge> {
+export async function startForge(
+  name: string,
+  options: { readonly primary?: string } = {},
+): Promise<Forge> {
   const scratch = await mkdtemp(join(tmpdir(), `fyrden-e2e-${name}-`));
   await mkdir(join(scratch, "home"), { recursive: true });
   const persist = join(scratch, "state");
@@ -137,6 +142,7 @@ export async function startForge(name: string): Promise<Forge> {
   try {
     server = await startWranglerDev({
       args: [
+        ...(options.primary ? ["-c", options.primary] : []),
         "-c",
         apiConfig,
         "--persist-to",
