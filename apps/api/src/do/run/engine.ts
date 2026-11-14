@@ -9,8 +9,10 @@ import {
   attemptConclusion,
   type CancelMode,
   type CancelReason,
+  concurrencyGroupKey,
   type ExpressionScope,
   type ExprValue,
+  evaluateField,
   evaluateJobCondition,
   expandJob,
   exprObject,
@@ -20,6 +22,8 @@ import {
   type InstanceState,
   type InstanceStatus,
   instanceCheck,
+  isTruthy,
+  MAX_CONCURRENCY_GROUP_LENGTH,
   MAX_EXPRESSION_WORK,
   MAX_RUN_JOBS,
   type NeedResult,
@@ -30,6 +34,8 @@ import {
   promotable,
   type RunnerResult,
   readyNodes,
+  strategyContext,
+  toExprString,
   unreadyNodeStatus,
   type WorkBudget,
 } from "@fyrden/domain/ci";
@@ -92,6 +98,32 @@ export const RUN_DEFAULTS: RunPolicy = {
   maxInstanceOutputBytes: 1024 * 1024,
   maxAttemptOutputBytes: 8 * 1024 * 1024,
 };
+
+/** Grace added to an owner's hold before a cancelled owner is evicted. Proposed (5 minutes). */
+export const HOLD_GRACE_MS = 5 * 60_000;
+
+/** The scope key of an attempt's workflow group. */
+export function workflowScope(attempt: number): string {
+  return `a${attempt}`;
+}
+
+/** The scope key of one instance's job group. */
+export function jobScope(attempt: number, jobId: number): string {
+  return `a${attempt}/j${jobId}`;
+}
+
+export interface OwnerRow {
+  owner_key: string;
+  group_key: string;
+  group_name: string;
+  state: "admitting" | "pending" | "owner" | "releasing" | "ended";
+  outcome: string | null;
+  cancel_in_progress: number;
+  generation: number | null;
+  lease_valid_until: number | null;
+  renew_at: number | null;
+  hold_ms: number | null;
+}
 
 /** GitHub's default `timeout-minutes`. */
 export const DEFAULT_TIMEOUT_MINUTES = 360;
@@ -401,6 +433,7 @@ export class RunEngine {
     const updated = this.instance(row.job_id) as InstanceRow;
     this.publishCheck(updated);
     if (completed) {
+      if (updated.group_key !== null) this.endScope(jobScope(updated.attempt, updated.job_id));
       this.#failFast(updated);
       this.wake();
     }
@@ -748,7 +781,7 @@ export class RunEngine {
       job.instances.length - node.reserved,
       n,
     );
-    for (const instance of job.instances)
+    const rows = job.instances.map((instance) =>
       this.insertInstance({
         attempt: n,
         jobKey,
@@ -761,15 +794,69 @@ export class RunEngine {
         continueOnError: instance.continueOnError,
         timeoutMs:
           Math.min(instance.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES) * MIN,
-      });
+      }),
+    );
+    const concurrency = model.workflow.jobs.find((j) => j.id.value === jobKey)?.concurrency;
+    if (!concurrency) return;
+    // Every instance exists before any is failed, so fail-fast reaches all its siblings.
+    const scope = this.scopeFor(n, jobKey);
+    job.instances.forEach((instance, i) => {
+      const inserted = rows[i] as InstanceRow;
+      const row = this.instance(inserted.job_id) as InstanceRow;
+      if (row.status === "completed") return; // cancelled by a sibling's failure
+      // Job-level groups read matrix and strategy, so each instance has its own.
+      const instanceScope: ExpressionScope = {
+        ...scope,
+        matrix: exprObject([...(instance.matrix ?? new Map())]),
+        strategy: strategyContext(
+          job.failFast,
+          instance.index,
+          instance.total,
+          instance.matrix !== null,
+          job.maxParallel,
+        ),
+      };
+      const group = this.#evaluateGroup(
+        `jobs.${jobKey}.concurrency`,
+        concurrency,
+        instanceScope,
+        budget,
+      );
+      if (!group.ok) {
+        this.applyInstance(row, { kind: "fail" }, { error: group.error });
+        return;
+      }
+      const attempt = this.attempt(n) as AttemptRow;
+      if (attempt.group_key !== null && attempt.group_key === concurrencyGroupKey(group.name)) {
+        this.applyInstance(
+          row,
+          { kind: "fail" },
+          {
+            error: `concurrency_deadlock: job concurrency group "${group.name}" is the workflow's own group, which this run holds while the job waits for it`,
+          },
+        );
+        return;
+      }
+      this.exec(
+        "UPDATE run_instances SET group_key = ?, group_name = ?, group_cancel = ? WHERE job_id = ?",
+        concurrencyGroupKey(group.name),
+        group.name,
+        group.cancel ? 1 : 0,
+        row.job_id,
+      );
+      this.addScope(jobScope(n, row.job_id), group.name, group.cancel);
+    });
   }
 
   /** Queues the node's blocked instances that max-parallel allows (a cancelling one keeps its slot). */
   #promote(node: NodeRow): void {
-    const siblings = this.instances(node.attempt, node.job_key);
-    const states = siblings.map((s) => this.#stateOf(s));
+    // Only instances whose groups are held compete for slots; live ones still count against them.
+    const candidates = this.instances(node.attempt, node.job_key).filter(
+      (row) => row.status !== "blocked" || this.instanceReady(row),
+    );
+    const states = candidates.map((row) => this.#stateOf(row));
     for (const index of promotable(states, node.max_parallel ?? undefined)) {
-      const target = siblings[index];
+      const target = candidates[index];
       if (target) this.applyInstance(target, { kind: "queue" });
     }
   }
@@ -800,6 +887,12 @@ export class RunEngine {
   }
 
   #onAttemptCompleted(n: number): void {
+    this.endScope(workflowScope(n));
+    for (const row of this.rows<{ owner_key: string }>(
+      "SELECT owner_key FROM run_owners WHERE owner_key LIKE ? AND state <> 'ended'",
+      `${workflowScope(n)}/%`,
+    ))
+      this.endScope(row.owner_key);
     this.#settleObsoleteChecks(n);
     this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
     this.#ensure("run_sweep", RUN_JOB.sweep, this.host.policy.sweepMs);
@@ -845,6 +938,148 @@ export class RunEngine {
     }
     this.wake();
     return true;
+  }
+
+  // ---------------------------------------------------------------- concurrency scopes
+
+  owner(key: string): OwnerRow | undefined {
+    return this.rows<OwnerRow>("SELECT * FROM run_owners WHERE owner_key = ?", key)[0];
+  }
+
+  /** A scope that will ask for `group`: the next concurrency slice requests it. */
+  addScope(key: string, group: string, cancelInProgress: boolean): void {
+    this.exec(
+      `INSERT OR IGNORE INTO run_owners (owner_key, group_key, group_name, state, cancel_in_progress)
+       VALUES (?, ?, ?, 'admitting', ?)`,
+      key,
+      concurrencyGroupKey(group),
+      group,
+      cancelInProgress ? 1 : 0,
+    );
+    this.#ensure("run_concurrency", RUN_JOB.concurrency);
+  }
+
+  /** The scope's work is over: whatever it holds or asked for is given back. */
+  endScope(key: string): void {
+    const owner = this.owner(key);
+    if (!owner || owner.state === "ended" || owner.state === "releasing") return;
+    this.exec("UPDATE run_owners SET state = 'releasing' WHERE owner_key = ?", key);
+    this.#ensure("run_concurrency", RUN_JOB.concurrency);
+  }
+
+  /** Whether `key` owns its group with a grant still valid here. */
+  scopeValid(key: string): boolean {
+    const owner = this.owner(key);
+    return (
+      owner?.state === "owner" &&
+      owner.lease_valid_until !== null &&
+      owner.lease_valid_until > this.host.now()
+    );
+  }
+
+  /** Whether an instance may be queued or assigned: every group it needs is held with a valid grant. */
+  instanceReady(row: InstanceRow): boolean {
+    const attempt = this.attempt(row.attempt);
+    if (attempt?.group_key && !this.scopeValid(workflowScope(row.attempt))) return false;
+    if (row.group_key !== null && !this.scopeValid(jobScope(row.attempt, row.job_id))) return false;
+    return true;
+  }
+
+  /** The longest a scope may still need: its unfinished instances' timeouts, plus grace. */
+  holdFor(key: string): number {
+    const now = this.host.now();
+    const [, attemptText, jobText] = /^a(\d+)(?:\/j(\d+))?$/.exec(key) ?? [];
+    const rows = jobText
+      ? [this.instance(Number(jobText))].filter((r): r is InstanceRow => r !== undefined)
+      : this.instances(Number(attemptText));
+    let longest = rows.length === 0 ? DEFAULT_TIMEOUT_MINUTES * MIN : 0;
+    for (const row of rows) {
+      if (row.status === "completed") continue;
+      const left =
+        row.started_at === null
+          ? row.timeout_ms
+          : Math.max(0, row.started_at + row.timeout_ms - now);
+      longest = Math.max(longest, left);
+    }
+    return Math.min(longest, MAX_TIMEOUT_MINUTES * MIN) + HOLD_GRACE_MS;
+  }
+
+  #evaluateGroup(
+    path: string,
+    concurrency: { group: { value: string }; cancelInProgress?: { kind: string; value?: unknown } },
+    scope: ExpressionScope,
+    budget: WorkBudget,
+  ): { ok: true; name: string; cancel: boolean } | { ok: false; error: string } {
+    const model = this.host.model();
+    let name = concurrency.group.value;
+    const groupField = model.fields.get(`${path}.group`);
+    if (groupField) {
+      const value = evaluateField(groupField, scope, budget);
+      if (!value.ok) return { ok: false, error: value.error.message };
+      name = toExprString(value.value);
+    }
+    if (name.length === 0)
+      return { ok: false, error: "concurrency_group: the concurrency group is empty" };
+    if (name.length > MAX_CONCURRENCY_GROUP_LENGTH)
+      return {
+        ok: false,
+        error: `concurrency_group: a concurrency group holds at most ${MAX_CONCURRENCY_GROUP_LENGTH} characters`,
+      };
+    let cancel = false;
+    const cancelValue = concurrency.cancelInProgress;
+    if (cancelValue?.kind === "literal") cancel = cancelValue.value === true;
+    else if (cancelValue) {
+      const field = model.fields.get(`${path}.cancel-in-progress`);
+      if (field) {
+        const value = evaluateField(field, scope, budget);
+        if (!value.ok) return { ok: false, error: value.error.message };
+        cancel = isTruthy(value.value);
+      }
+    }
+    return { ok: true, name, cancel };
+  }
+
+  /**
+   * Starts an attempt: at once when its workflow has no concurrency group;
+   * otherwise its group is requested first and the attempt waits (queued, then
+   * pending) until it owns the group.
+   */
+  admitOrQueue(attempt: AttemptRow): void {
+    const model = this.host.model();
+    const concurrency = model.workflow.concurrency;
+    if (!concurrency) {
+      this.advanceAttempt(attempt, { kind: "admitted" });
+      this.wake();
+      return;
+    }
+    const contexts = this.#contexts();
+    const group = this.#evaluateGroup(
+      "concurrency",
+      concurrency,
+      {
+        github: exprFromJson(contexts.github),
+        inputs: exprFromJson(contexts.inputs),
+        vars: exprFromJson(contexts.vars),
+      },
+      newWorkBudget(),
+    );
+    if (!group.ok) {
+      this.exec(
+        "UPDATE run_attempts SET errors = ? WHERE attempt = ?",
+        JSON.stringify([group.error]),
+        attempt.attempt,
+      );
+      this.advanceAttempt(attempt, { kind: "plan_failed" });
+      return;
+    }
+    this.exec(
+      "UPDATE run_attempts SET group_key = ?, group_name = ?, cancel_in_progress = ? WHERE attempt = ?",
+      concurrencyGroupKey(group.name),
+      group.name,
+      group.cancel ? 1 : 0,
+      attempt.attempt,
+    );
+    this.addScope(workflowScope(attempt.attempt), group.name, group.cancel);
   }
 
   // ---------------------------------------------------------------- deadlines

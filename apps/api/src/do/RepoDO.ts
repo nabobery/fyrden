@@ -158,6 +158,12 @@ import {
   codeOwnersErrors,
 } from "./repo/code-owners-errors.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
+import {
+  type ConcurrencyRequest,
+  type RenewScope,
+  RepoConcurrency,
+  type SignalRow,
+} from "./repo/concurrency.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
   type ContentsView,
@@ -494,6 +500,7 @@ export class RepoDO extends MigratingDO {
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
   readonly checks: RepoChecks;
+  readonly concurrency: RepoConcurrency;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -661,6 +668,12 @@ export class RepoDO extends MigratingDO {
       memoryBlocks: this.#memoryBlocks(),
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
+    });
+    this.concurrency = new RepoConcurrency({
+      git: this.git,
+      wake: (at) => {
+        this.git.jobs.ensure("concurrency", "concurrency", { runAt: at });
+      },
     });
     this.checks = new RepoChecks({
       git: this.git,
@@ -2470,6 +2483,70 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /** Requests concurrency groups for runs' scopes, one receipt each (see `RepoConcurrency.acquire`). */
+  acquireConcurrency(requests: readonly ConcurrencyRequest[]) {
+    return this.#ciChange("acquireConcurrency", () =>
+      requests.map((request) => this.concurrency.acquire(request)),
+    );
+  }
+
+  /** The receipts of runs' scopes as they stand; never a new request. */
+  concurrencyStatus(scopes: readonly { group: string; runId: string; ownerKey: string }[]) {
+    return this.#ciChange("concurrencyStatus", () => this.concurrency.status(scopes));
+  }
+
+  /** Renews a run's lease and answers each scope it owns. */
+  renewConcurrency(runId: string, scopes: readonly RenewScope[]) {
+    return this.#ciChange("renewConcurrency", () => this.concurrency.renew(runId, scopes));
+  }
+
+  /** Gives scopes up by identity: owners release, pending requesters withdraw. */
+  releaseConcurrency(
+    items: readonly { group: string; runId: string; ownerKey: string; generation?: number }[],
+  ) {
+    return this.#ciChange("releaseConcurrency", () =>
+      items.map((item) => this.concurrency.release(item)),
+    );
+  }
+
+  /**
+   * A change Fyrden's runs make to their concurrency groups: refused, by
+   * throwing, when the repository takes no changes.
+   */
+  #ciChange<R>(method: string, change: () => R): Promise<R> {
+    return this.#measured(method, async () => {
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      return change();
+    });
+  }
+
+  /**
+   * The concurrency job: settles groups due now, then delivers due signals to
+   * run objects. A failed delivery is recorded on its signal, never thrown, so
+   * this job never exhausts over a run object that does not answer.
+   */
+  #concurrencyHandler(): JobHandler {
+    return {
+      runSlice: async () => {
+        const now = this.git.context.now();
+        this.git.context.storage.transactionSync(() => this.concurrency.settleDue(now));
+        for (const signal of this.concurrency.dueSignals(now)) {
+          try {
+            await this.env.RUN.getByName(signal.run_id).concurrencySignal(signalOf(signal));
+            this.concurrency.signalDelivered(signal);
+          } catch {
+            this.concurrency.signalFailed(signal);
+          }
+        }
+        const next = this.concurrency.nextAt();
+        return next === undefined
+          ? { done: true }
+          : { done: false, cursor: null, runAfterMs: Math.max(0, next - this.git.context.now()) };
+      },
+    };
+  }
+
   /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */
   startCheckAttempts(sha: string, items: readonly CheckStart[]) {
     return this.#checkChange("startCheckAttempts", () =>
@@ -3786,6 +3863,7 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      concurrency: this.#concurrencyHandler(),
       review_teams: {
         runSlice: async () => {
           await this.checkEpoch();
@@ -4849,4 +4927,14 @@ export class RepoDO extends MigratingDO {
 /** Whether a change asks anything of labels, assignees or the milestone. */
 function hasMeta(meta: MetaInput): boolean {
   return meta.labels !== undefined || meta.assignees !== undefined || meta.milestone !== undefined;
+}
+
+/** A stored signal as the run object receives it. */
+function signalOf(row: SignalRow) {
+  return {
+    ownerKey: row.owner_key,
+    group: row.group_key,
+    kind: row.kind,
+    generation: row.generation,
+  };
 }

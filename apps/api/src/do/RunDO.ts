@@ -25,6 +25,7 @@ import {
   type InstanceRow,
   MAX_RUN_ATTEMPTS,
   type NodeRow,
+  type OwnerRow,
   RUN_DEFAULTS,
   RUN_JOB,
   RunEngine,
@@ -32,6 +33,12 @@ import {
   type RunRow,
 } from "./run/engine.js";
 import { loadModel, type RunModel } from "./run/model.js";
+
+/** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
+const LEASE_MARGIN_MS = 60_000;
+/** How often an owner renews its grant and a pending scope reads its receipt. Proposed. */
+const RENEW_EVERY_MS = 3 * 60_000;
+
 import { type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
 
@@ -235,10 +242,9 @@ export class RunDO extends MigratingDO {
     });
   }
 
-  /** Lets an attempt start: it has no concurrency group to wait for. */
+  /** Lets an attempt start, at once or once it owns its workflow's concurrency group. */
   #admit(attempt: AttemptRow): void {
-    this.engine.advanceAttempt(attempt, { kind: "admitted" });
-    this.engine.wake();
+    this.engine.admitOrQueue(attempt);
   }
 
   // ------------------------------------------------------------------ reads
@@ -402,6 +408,8 @@ export class RunDO extends MigratingDO {
       if (current.attempt.cancel === "force" && row.attempt === current.attempt.attempt)
         return { ok: false, code: "run_cancelled" };
       if (row.status !== "queued") return { ok: false, code: "not_queued" };
+      // Nothing starts on a concurrency grant this object cannot vouch for.
+      if (!this.engine.instanceReady(row)) return { ok: false, code: "not_queued" };
       this.engine.exec("UPDATE runs SET task_seq = task_seq + 1 WHERE id = 1");
       const task = (this.engine.run() as RunRow).task_seq;
       const now = this.context.now();
@@ -566,6 +574,266 @@ export class RunDO extends MigratingDO {
     });
   }
 
+  // ------------------------------------------------------------------ concurrency
+
+  /**
+   * A hint from the repository that a scope's receipt changed. It only wakes
+   * the concurrency slice, which acts through fenced calls.
+   */
+  concurrencySignal(signal: {
+    ownerKey: string;
+    group: string;
+    kind: string;
+    generation: number;
+  }): void {
+    this.#tx(() => {
+      if (this.#erased() || !this.engine.owner(signal.ownerKey)) return;
+      this.engine.exec(
+        "UPDATE run_owners SET renew_at = ? WHERE owner_key = ? AND state IN ('pending', 'owner')",
+        this.context.now(),
+        signal.ownerKey,
+      );
+      this.jobs.ensure("run_concurrency", RUN_JOB.concurrency);
+    });
+  }
+
+  /**
+   * One concurrency step: request new scopes, read pending ones, renew owned
+   * ones and give finished ones back, each kind in one repository call, and
+   * record every answer (for a scope no longer wanted too, then released).
+   */
+  async #concurrencySlice(
+    job: Job,
+  ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+    const run = this.engine.run();
+    if (!run) return { done: true };
+    const owners = this.engine.rows<OwnerRow>("SELECT * FROM run_owners WHERE state <> 'ended'");
+    if (owners.length === 0) return { done: true };
+    const now = this.context.now();
+    // A job's group is asked for only while its attempt's workflow grant is valid here: asking
+    // can cancel another owner (cancel-in-progress), which this run may not do on a lapsed grant.
+    const admitting = owners.filter(
+      (o) => o.state === "admitting" && this.#mayRequest(o.owner_key),
+    );
+    const pending = owners.filter((o) => o.state === "pending" && (o.renew_at ?? 0) <= now);
+    const renewing = owners.filter((o) => o.state === "owner" && (o.renew_at ?? 0) <= now);
+    const releasing = owners.filter((o) => o.state === "releasing");
+    if (admitting.length > 0) {
+      const sentAt = this.context.now();
+      const answers = await this.#repoCall("acquireConcurrency", (repo) =>
+        repo.acquireConcurrency(
+          admitting.map((o) => ({
+            group: o.group_name,
+            runId: run.run_id,
+            ownerKey: o.owner_key,
+            cancelInProgress: o.cancel_in_progress === 1,
+            holdMs: this.engine.holdFor(o.owner_key),
+          })),
+        ),
+      );
+      this.#current(job, () => {
+        admitting.forEach((o, i) => {
+          this.#receive(o.owner_key, answers[i] ?? null, sentAt);
+        });
+      });
+    }
+    if (pending.length > 0) {
+      const sentAt = this.context.now();
+      const answers = await this.#repoCall("concurrencyStatus", (repo) =>
+        repo.concurrencyStatus(
+          pending.map((o) => ({ group: o.group_name, runId: run.run_id, ownerKey: o.owner_key })),
+        ),
+      );
+      this.#current(job, () => {
+        pending.forEach((o, i) => {
+          this.#receive(o.owner_key, answers[i] ?? null, sentAt);
+        });
+      });
+    }
+    if (renewing.length > 0) {
+      const sentAt = this.context.now();
+      const answers = await this.#repoCall("renewConcurrency", (repo) =>
+        repo.renewConcurrency(
+          run.run_id,
+          renewing.map((o) => ({
+            group: o.group_name,
+            ownerKey: o.owner_key,
+            generation: o.generation as number,
+            holdMs: this.engine.holdFor(o.owner_key),
+          })),
+        ),
+      );
+      this.#current(job, () =>
+        renewing.forEach((o, i) => {
+          const answer = answers[i];
+          if (!answer) return;
+          if (answer.ok)
+            this.#receive(
+              o.owner_key,
+              {
+                outcome: "owner",
+                generation: o.generation,
+                leaseRemainingMs: answer.leaseRemainingMs,
+                cancelRequested: answer.cancelRequested,
+              },
+              sentAt,
+            );
+          else
+            this.#receive(
+              o.owner_key,
+              answer.receipt ?? {
+                outcome: "evicted",
+                generation: o.generation,
+                leaseRemainingMs: null,
+                cancelRequested: false,
+              },
+              sentAt,
+            );
+        }),
+      );
+    }
+    if (releasing.length > 0) {
+      await this.#repoCall("releaseConcurrency", (repo) =>
+        repo.releaseConcurrency(
+          releasing.map((o) => ({
+            group: o.group_name,
+            runId: run.run_id,
+            ownerKey: o.owner_key,
+            ...(o.generation === null ? {} : { generation: o.generation }),
+          })),
+        ),
+      );
+      this.#current(job, () => {
+        for (const o of releasing)
+          this.engine.exec(
+            "UPDATE run_owners SET state = 'ended', outcome = 'released' WHERE owner_key = ? AND state = 'releasing'",
+            o.owner_key,
+          );
+      });
+    }
+    const left = this.engine.rows<OwnerRow>("SELECT * FROM run_owners WHERE state <> 'ended'");
+    if (left.length === 0) return { done: true };
+    if (
+      left.some(
+        (o) =>
+          o.state === "releasing" || (o.state === "admitting" && this.#mayRequest(o.owner_key)),
+      )
+    )
+      return { done: false, cursor: null, runAfterMs: 0 };
+    const next = Math.min(
+      ...left.filter((o) => o.state !== "admitting").map((o) => o.renew_at ?? now),
+      now + RENEW_EVERY_MS,
+    );
+    return { done: false, cursor: null, runAfterMs: Math.max(0, next - this.context.now()) };
+  }
+
+  /** A job scope may be requested only while its attempt's workflow grant (if any) is valid. */
+  #mayRequest(key: string): boolean {
+    const [, attemptText, jobText] = /^a(\d+)(?:\/j(\d+))?$/.exec(key) ?? [];
+    if (!jobText) return true;
+    const attempt = this.engine.attempt(Number(attemptText));
+    return !attempt?.group_key || this.engine.scopeValid(`a${attemptText}`);
+  }
+
+  /** Records a scope's receipt and what follows from it. */
+  #receive(
+    key: string,
+    receipt: {
+      outcome: string;
+      generation: number | null;
+      leaseRemainingMs: number | null;
+      cancelRequested: boolean;
+    } | null,
+    sentAt: number,
+  ): void {
+    const owner = this.engine.owner(key);
+    if (!owner || owner.state === "ended" || !receipt) return;
+    const now = this.context.now();
+    const wanted = owner.state !== "releasing";
+    const workflow = !key.includes("/");
+    const attemptNumber = Number(/^a(\d+)/.exec(key)?.[1]);
+    const attempt = this.engine.attempt(attemptNumber);
+    switch (receipt.outcome) {
+      case "owner": {
+        const valid =
+          receipt.leaseRemainingMs === null
+            ? null
+            : sentAt + receipt.leaseRemainingMs - LEASE_MARGIN_MS;
+        this.engine.exec(
+          `UPDATE run_owners SET state = ?, outcome = 'owner', generation = ?, lease_valid_until = ?,
+             renew_at = ? WHERE owner_key = ?`,
+          wanted ? "owner" : "releasing",
+          receipt.generation,
+          valid,
+          now + RENEW_EVERY_MS,
+          key,
+        );
+        if (!wanted) break;
+        const unstarted = attempt && (attempt.status === "queued" || attempt.status === "pending");
+        if (workflow && unstarted && receipt.cancelRequested) {
+          // Promoted and cancelled in one answer: it never started, so it ends, and gives back
+          // the grant it holds (recorded above, released by the completion).
+          this.engine.cancel("concurrency", "graceful");
+          break;
+        }
+        if (workflow && attempt && unstarted)
+          this.engine.advanceAttempt(attempt, { kind: "admitted" });
+        if (receipt.cancelRequested) this.#cancelScope(key, "cancel");
+        this.engine.wake();
+        break;
+      }
+      case "pending":
+        this.engine.exec(
+          "UPDATE run_owners SET state = ?, outcome = 'pending', renew_at = ? WHERE owner_key = ?",
+          wanted ? "pending" : "releasing",
+          now + RENEW_EVERY_MS,
+          key,
+        );
+        if (wanted && workflow && attempt?.status === "queued")
+          this.engine.advanceAttempt(attempt, { kind: "pending" });
+        break;
+      case "displaced":
+      case "evicted":
+        this.engine.exec(
+          "UPDATE run_owners SET state = 'ended', outcome = ? WHERE owner_key = ?",
+          receipt.outcome,
+          key,
+        );
+        if (wanted) this.#cancelScope(key, receipt.outcome === "evicted" ? "evicted" : "displaced");
+        break;
+      default:
+        this.engine.exec(
+          "UPDATE run_owners SET state = 'ended', outcome = ? WHERE owner_key = ?",
+          receipt.outcome,
+          key,
+        );
+    }
+  }
+
+  /**
+   * Cancels what a scope covers: a workflow scope its attempt (graceful on a
+   * cancel request; an attempt that never started ends; an evicted one is
+   * forced), a job scope its instance.
+   */
+  #cancelScope(key: string, reason: "cancel" | "displaced" | "evicted"): void {
+    const [, attemptText, jobText] = /^a(\d+)(?:\/j(\d+))?$/.exec(key) ?? [];
+    if (jobText) {
+      const row = this.engine.instance(Number(jobText));
+      if (!row || row.status === "completed") return;
+      this.engine.applyInstance(
+        row,
+        reason === "evicted" ? { kind: "force_cancel" } : { kind: "cancel", reason },
+      );
+      return;
+    }
+    const attempt = this.engine.attempt(Number(attemptText));
+    if (!attempt || attempt.status === "completed") return;
+    if (reason === "displaced" && attempt.status !== "in_progress")
+      this.engine.advanceAttempt(attempt, { kind: "displaced" });
+    else if (attempt.attempt === this.engine.run()?.attempt)
+      this.engine.cancel("concurrency", reason === "evicted" ? "force" : "graceful");
+  }
+
   // ------------------------------------------------------------------ erasure
 
   /**
@@ -687,6 +955,7 @@ export class RunDO extends MigratingDO {
       },
       run_checks: { runSlice: (job) => this.#flushChecks(job) },
       run_sweep: { runSlice: async () => this.#sweep() },
+      run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       // The runner protocol's slices; until they exist there is nothing to sync or revoke.
       ci_dispatch: {
         runSlice: async (job) => {
@@ -853,7 +1122,7 @@ export class RunDO extends MigratingDO {
     return { done: true };
   }
 
-  /** Whether the run still owes work outside the object: checks unsent, hooks behind. */
+  /** Whether the run still owes work outside the object: checks unsent, scopes to give back, hooks behind. */
   #owed(): boolean {
     const run = this.engine.run();
     if (!run) return false;
@@ -866,6 +1135,13 @@ export class RunDO extends MigratingDO {
     }
     if (run.queue_synced_rev < run.queue_rev) {
       this.jobs.ensure("ci_dispatch", RUN_JOB.dispatch);
+      return true;
+    }
+    const scopes = this.engine.rows(
+      "SELECT 1 FROM run_owners WHERE state IN ('admitting', 'releasing') LIMIT 1",
+    );
+    if (scopes.length > 0) {
+      this.jobs.ensure("run_concurrency", RUN_JOB.concurrency);
       return true;
     }
     if (run.task_end_acked < run.task_end_seq) {
