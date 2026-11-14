@@ -219,6 +219,12 @@ CREATE TABLE check_summaries (
         CHECK ((kind = 'check') = (attempt IS NOT NULL)),
         CHECK ((kind = 'status') = (status_id IS NOT NULL))
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_runs (
+        run_id TEXT PRIMARY KEY,
+        sha TEXT NOT NULL,
+        workflow_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
         network_id TEXT NOT NULL,
