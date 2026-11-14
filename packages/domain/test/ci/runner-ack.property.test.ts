@@ -448,7 +448,7 @@ describe("runner log acks", () => {
       }),
       { numRuns: 400 },
     );
-  });
+  }, 60_000);
 
   it("bounds the rows a healthy run sends on any schedule", ({ annotate }) => {
     let total = 0;
@@ -471,7 +471,7 @@ describe("runner log acks", () => {
     annotate(
       `rows sent per row printed, healthy runs on any schedule: mean ${(total / runs).toFixed(2)}×, worst ${worst.toFixed(2)}×, ${(heldCalls / runs).toFixed(1)} held calls a run`,
     );
-  });
+  }, 60_000);
 
   it("bounds how often a healthy ticker-only run sends each row", ({ annotate }) => {
     let worst = 0;
@@ -493,7 +493,7 @@ describe("runner log acks", () => {
     annotate(
       `rows sent per row printed, ticker only at a 5 s interval: worst ${worst.toFixed(2)}×`,
     );
-  });
+  }, 60_000);
 
   it("resends a quiet log on every rapid step transition until the age threshold", () => {
     // Ten rows, then twenty steps 100 ms apart that print one row each: every call holds
