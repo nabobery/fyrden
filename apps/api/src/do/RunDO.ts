@@ -1031,7 +1031,7 @@ export class RunDO extends MigratingDO {
           const answer = answers[i];
           if (!answer) return;
           if (answer.ok && answer.current) {
-            attempts.set(d.name_key + d.attempt, answer.attempt);
+            attempts.set(`${d.attempt}:${d.name_key}`, answer.attempt);
             this.engine.exec(
               "UPDATE run_checks SET check_attempt = ? WHERE attempt = ? AND name_key = ?",
               answer.attempt,
@@ -1060,7 +1060,7 @@ export class RunDO extends MigratingDO {
     const updatable = dirty
       .map((d) => ({
         ...d,
-        check_attempt: d.check_attempt ?? attempts.get(d.name_key + d.attempt) ?? null,
+        check_attempt: d.check_attempt ?? attempts.get(`${d.attempt}:${d.name_key}`) ?? null,
       }))
       .filter((d): d is Dirty & { check_attempt: number } => d.check_attempt !== null);
     if (updatable.length > 0) {

@@ -616,7 +616,9 @@ export class RunEngine {
 
   /** A job's outputs over its instances in completion order; an empty value never overrides. */
   mergedOutputs(attempt: number, jobKey: string): Record<string, string> {
-    const merged: Record<string, string> = {};
+    // A map, then fromEntries: an output named `__proto__` stays an own key (an assignment
+    // would hit the prototype setter), and the object still crosses RPC (a null prototype would not).
+    const merged = new Map<string, string>();
     for (const row of this.rows<{ outputs: string | null }>(
       `SELECT outputs FROM run_instances WHERE attempt = ? AND job_key = ? AND outputs IS NOT NULL
        ORDER BY completed_at, job_id`,
@@ -626,8 +628,8 @@ export class RunEngine {
       for (const [key, value] of Object.entries(
         JSON.parse(row.outputs as string) as Record<string, string>,
       ))
-        if (value !== "") merged[key] = value;
-    return merged;
+        if (value !== "") merged.set(key, value);
+    return Object.fromEntries(merged);
   }
 
   scopeFor(attempt: number, jobKey: string): ExpressionScope {
