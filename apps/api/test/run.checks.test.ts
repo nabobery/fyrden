@@ -195,6 +195,10 @@ describe("check batches", () => {
     // The next send, once the stale slice's lease ends, delivers the current state.
     await advance(runId, 61_000);
     expect((await checksOf(f)).get("a")?.status).toBe("in_progress");
+    // And it was the retry: the current revision is acknowledged, nothing parked.
+    expect(
+      await inRun(runId, (r) => r.engine.rows("SELECT parked, sent_rev, rev FROM run_checks")),
+    ).toEqual([{ parked: null, sent_rev: 2, rev: 2 }]);
   });
 });
 

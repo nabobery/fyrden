@@ -162,6 +162,24 @@ describe("a step's work", () => {
   });
 });
 
+describe("outputs named like object properties", () => {
+  it("passes on an output named __proto__ like any other", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow([job("a"), job("b", ["needs: a"])].join("\n")));
+    await finish(runId, "a", "success", JSON.parse('{"__proto__":"x","plain":"y"}'));
+    const assigned = (await runStub(runId).assign(
+      (
+        await jobNamed(runId, "b")
+      ).jobId,
+      "k",
+    )) as AssignAnswer;
+    expect(assigned.ok && Object.entries(assigned.needs.a?.outputs ?? {})).toEqual([
+      ["__proto__", "x"],
+      ["plain", "y"],
+    ]);
+  });
+});
+
 describe("tasks", () => {
   it("assigns once per key: a repeat writes nothing, and after completion is task_finished", async () => {
     const f = await repoWithCommit();
