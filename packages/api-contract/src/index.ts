@@ -28,6 +28,7 @@ export * from "../ops/repos.js";
 export * from "../ops/review-comments.js";
 export * from "../ops/reviews.js";
 export * from "../ops/rulesets.js";
+export * from "../ops/runners.js";
 export * from "../ops/search.js";
 export * from "../ops/signing-keys.js";
 export * from "../ops/stars.js";

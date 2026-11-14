@@ -1260,3 +1260,15 @@ to run) from its own environment.
 - Server-side hooks (`pre-receive`, `update`, `post-receive`).
 - Partial clone (`--filter`) and the other fetch features listed above.
 - SSH; git is served over HTTPS.
+
+## CI runners
+
+Self-hosted runners (the stock gitea/runner, v6.0.0 and v5.4.1) speak its Connect protocol at `/api/actions/runner.v1.RunnerService/*` and `/api/actions/ping.v1.PingService/Ping`, binary protobuf only. A runner belongs to one organization and serves its repositories.
+
+| What | Value |
+|---|---|
+| Switch | Runners register only while the deployment sets `FYRDEN_CI_RUNNERS=on` (a Worker variable: off unless set). While off, registering answers `failed_precondition`, minting a registration token answers 409 `runners_off`, and a runner polling for work is told there is none (it keeps polling rather than exiting, so turning the switch off is reversible); runners already registered keep their credentials |
+| Registration tokens | `POST /orgs/{org}/actions/runners/registration-token` (organization owners; `self_hosted_runners:write`), shown once. Each registers one runner and expires after an hour (Proposed; GitHub's tokens also last an hour but register any number of runners). A Register whose answer is lost spends its token: the runner it created never declares, shows in `GET /orgs/{org}/actions/runners` without a declared time, and an owner deletes it and mints another token |
+| Runner credentials | Returned once to the runner at registration and kept only as a hash. `DELETE /orgs/{org}/actions/runners/{runner_id}` revokes one; the runner's next call answers `unauthenticated` and the runner stops |
+| Rate | Every runner call is counted per client address before any lookup, at most 3,000 a minute (Proposed: an idle runner makes about 12 calls a minute and a busy one about 45, so one address carries about 250 idle or 60 busy runners); past it a call answers `resource_exhausted` and the runner retries at its normal backoff. Registering also counts toward the address's sign-in limit |
+| Requests | Bodies of at most 64 KiB for Ping, Register, Declare and FetchTask; a runner name, version and each label at most 255 characters, at most 64 labels; a body that is not binary protobuf answers 415, a compressed one `unimplemented` |

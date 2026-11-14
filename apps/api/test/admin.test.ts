@@ -181,6 +181,9 @@ describe("admin.tokens.create", () => {
     { expires_in_days: 0 },
     { expires_in_days: 366 },
     { type: "job" },
+    // Registration tokens and runner credentials live with their runners, never in tokens.
+    { type: "run" },
+    { type: "rnr" },
     { scopes: [""] },
     { scopes: ["repo"] },
   ])("rejects %j", async (body) => {
