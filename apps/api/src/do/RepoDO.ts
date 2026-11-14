@@ -2,6 +2,7 @@ import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import {
   DERIVED_REF_PREFIX,
   isNetworkId,
+  isUlid,
   type JobHandler,
   type JobKind,
   orphanReaperHandler,
@@ -28,6 +29,7 @@ import {
   type Envelope,
   FEED_HORIZON_MS,
   type FeedSubjectKind,
+  isFullSha,
   type LabelSpec,
   type LockReason,
   protectsBranch,
@@ -2433,6 +2435,39 @@ export class RepoDO extends MigratingDO {
         return { ok: true, value: read(oidToHex(at.value.commit)) };
       }),
     );
+  }
+
+  /**
+   * Records a CI run of this repository before its run object is created, so
+   * erasing the repository erases the run. Repeating it changes nothing.
+   */
+  registerRun(input: {
+    readonly runId: string;
+    readonly sha: string;
+    readonly path: string;
+  }): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+  > {
+    return this.#measured("registerRun", async () => {
+      if (!isUlid(input.runId) || !isFullSha(input.sha) || !input.path || input.path.length > 1024)
+        throw new TypeError("invalid run registration");
+      const refused = this.#writeRefusal();
+      if (refused)
+        return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
+      if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };
+      this.git.context.storage.sql.exec(
+        `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
+        input.runId,
+        input.sha,
+        input.path,
+        this.git.context.now(),
+      );
+      return { ok: true };
+    });
   }
 
   /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */

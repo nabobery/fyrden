@@ -1712,4 +1712,18 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX pull_requests_open_head ON pull_requests (head_sha) WHERE state = 'open';
     `,
   },
+  {
+    version: 52,
+    // Fyrden's CI runs of this repository, recorded before each run object
+    // exists, so erasing the repository finds and erases every run.
+    name: "ci_runs",
+    sql: `
+      CREATE TABLE ci_runs (
+        run_id TEXT PRIMARY KEY,
+        sha TEXT NOT NULL,
+        workflow_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+    `,
+  },
 ];
