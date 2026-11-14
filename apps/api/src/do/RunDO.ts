@@ -908,7 +908,7 @@ export class RunDO extends MigratingDO {
           return result;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (repoGone(message)) {
+          if (repoGone(message) && (await this.#register()) === "gone") {
             await this.#repositoryGone();
             return { done: true };
           }
@@ -1129,37 +1129,46 @@ export class RunDO extends MigratingDO {
    * other refusal or failure is retried at the sweep's interval and never ends the job.
    */
   async #reconcile(): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
-    const run = this.engine.run();
-    if (!run) return { done: true };
-    let gone: boolean;
-    let ok = false;
-    try {
-      // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-      const answer = await this.#repoCall(
-        "registerRun",
-        (repo) =>
-          repo.registerRun({
-            runId: run.run_id,
-            sha: run.sha,
-            path: run.workflow_path,
-          }) as unknown as ReturnType<RepoDO["registerRun"]>,
-      );
-      ok = answer.ok;
-      gone = !answer.ok && answer.code === "repo_not_found";
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      gone = repoGone(message);
-      if (!gone) this.#log.warn("run record not written", { error: message });
-    }
-    if (gone) {
+    if (!this.engine.run()) return { done: true };
+    const outcome = await this.#register();
+    if (outcome === "gone") {
       await this.#repositoryGone();
       return { done: true };
     }
     return {
       done: false,
       cursor: null,
-      runAfterMs: ok ? this.policy.reconcileMs : this.policy.sweepMs,
+      runAfterMs: outcome === "ok" ? this.policy.reconcileMs : this.policy.sweepMs,
     };
+  }
+
+  /**
+   * Writes the run's record into its repository, which also answers whether the repository is
+   * deleted: `gone` only then. Other calls refuse a repository still being generated from its
+   * template as not found too, so a run asks here before erasing itself over such a refusal.
+   */
+  async #register(): Promise<"ok" | "gone" | "retry"> {
+    const run = this.engine.run();
+    if (!run) return "gone";
+    try {
+      const answer = await this.#repoCall(
+        "registerRun",
+        (repo) =>
+          // The RPC stub's type of a union answer is not assignable to the union; it is the union.
+          repo.registerRun({
+            runId: run.run_id,
+            sha: run.sha,
+            path: run.workflow_path,
+          }) as unknown as ReturnType<RepoDO["registerRun"]>,
+      );
+      if (answer.ok) return "ok";
+      return answer.code === "repo_not_found" ? "gone" : "retry";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (repoGone(message)) return "gone";
+      this.#log.warn("run record not written", { error: message });
+      return "retry";
+    }
   }
 
   /** Retries exhausted jobs while anything is owed; ends when nothing is. */
