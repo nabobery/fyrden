@@ -22,6 +22,47 @@ CREATE TABLE audit_segments (
   archived_at INTEGER
 ) STRICT;
 
+-- table ci_dispatch
+CREATE TABLE ci_dispatch (account_id TEXT PRIMARY KEY, tasks_version INTEGER NOT NULL) STRICT;
+
+-- table ci_job_tokens
+CREATE TABLE ci_job_tokens (
+  token_id TEXT PRIMARY KEY, task_id INTEGER NOT NULL, created_at INTEGER NOT NULL
+) STRICT;
+
+-- table ci_pending_jobs
+CREATE TABLE ci_pending_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  job_id INTEGER NOT NULL, attempt INTEGER NOT NULL, labels TEXT NOT NULL, queued_at INTEGER NOT NULL,
+  claimed_by INTEGER, claim_until INTEGER, claim_nonce TEXT,
+  UNIQUE (run_id, job_id)                -- job ids are never reused in a run
+) STRICT;
+
+-- table ci_runner_registrations
+CREATE TABLE ci_runner_registrations (
+  token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, created_by TEXT NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  consumed_at INTEGER, consume_nonce TEXT
+) STRICT;
+
+-- table ci_runners
+CREATE TABLE ci_runners (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, account_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL, name TEXT NOT NULL, version TEXT NOT NULL DEFAULT '',
+  labels TEXT NOT NULL DEFAULT '[]', ephemeral INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL, declared_at INTEGER, revoked_at INTEGER,
+  task_confirmed_at INTEGER,             -- an ephemeral runner's one task was confirmed
+  expires_at INTEGER                     -- a spent ephemeral runner's end: its task's completion + 10 min
+) STRICT;
+
+-- table ci_tasks
+CREATE TABLE ci_tasks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, job_id INTEGER NOT NULL,
+  task INTEGER,                          -- the run's task number, set once the assignment succeeds
+  runner_id INTEGER NOT NULL, offered_version INTEGER NOT NULL,   -- the version echoed with the task
+  created_at INTEGER NOT NULL, confirmed_at INTEGER, ended_at INTEGER, superseded_at INTEGER
+) STRICT;
+
 -- table deployment_settings
 CREATE TABLE deployment_settings (
   name TEXT PRIMARY KEY,
@@ -793,6 +834,21 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 
 -- index audit_segments_to
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
+
+-- index ci_job_tokens_task
+CREATE INDEX ci_job_tokens_task ON ci_job_tokens (task_id);
+
+-- index ci_pending_account
+CREATE INDEX ci_pending_account ON ci_pending_jobs (account_id, id);
+
+-- index ci_pending_claims
+CREATE INDEX ci_pending_claims ON ci_pending_jobs (account_id, claim_until) WHERE claim_until IS NOT NULL;
+
+-- index ci_runners_account
+CREATE INDEX ci_runners_account ON ci_runners (account_id, id);
+
+-- index ci_tasks_runner_open
+CREATE INDEX ci_tasks_runner_open ON ci_tasks (runner_id) WHERE confirmed_at IS NULL AND superseded_at IS NULL AND ended_at IS NULL;
 
 -- index dpop_proofs_expiry
 CREATE INDEX dpop_proofs_expiry ON dpop_proofs (expires_at);

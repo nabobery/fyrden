@@ -208,6 +208,27 @@ export const PERMISSIONS = {
     implies: ["grants:read"],
     writes: true,
   },
+  // GitHub's organization "Self-hosted runners" permission; GitHub asks for
+  // admin access to the organization to list runners as well as to add and
+  // remove them (https://docs.github.com/en/rest/actions/self-hosted-runners,
+  // not rechecked here). A runner runs the account's jobs, so both are an
+  // owner's.
+  "self_hosted_runners:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "See an account's self-hosted runners.",
+    principals: ["user"],
+    implies: [],
+    writes: false,
+  },
+  "self_hosted_runners:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Register self-hosted runners for an account (registration tokens), and remove them.",
+    principals: ["user"],
+    implies: ["self_hosted_runners:read"],
+    writes: true,
+  },
   "metadata:read": {
     resource: "repo",
     minRole: "read",

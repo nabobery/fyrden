@@ -292,6 +292,11 @@ import {
   listSubscriptionsOperation,
   setRepoSubscriptionOperation,
 } from "../repos/watching.js";
+import {
+  createRunnerRegistrationTokenOperation,
+  deleteRunnerOperation,
+  listRunnersOperation,
+} from "../runner/operations.js";
 import { backfillSearchOperation, setSearchIndexingOperation } from "../search/backfill.js";
 import {
   checkSearchIndexOperation,
@@ -513,6 +518,11 @@ export const handlers: Handlers = {
   "orgs.teams.memberships.remove": removeTeamMembershipOperation,
   "orgs.teams.repos.set": setTeamRepoOperation,
   "orgs.teams.repos.remove": removeTeamRepoOperation,
+
+  // Self-hosted runners (runner/operations).
+  "orgs.runners.registration_tokens.create": createRunnerRegistrationTokenOperation,
+  "orgs.runners.list": listRunnersOperation,
+  "orgs.runners.delete": deleteRunnerOperation,
 
   // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,

@@ -2,6 +2,8 @@
 // compressed (measured: the pinned runners send `application/proto` with no
 // content encoding), errors as Connect's JSON body with its HTTP status.
 
+import { encodingUnsupported, PROTOBUF_ONLY } from "./errors.js";
+
 /** Connect's error codes and the HTTP status each is sent with (verified: https://connectrpc.com/docs/protocol#error-codes). */
 export const CONNECT_HTTP_STATUS = {
   canceled: 499,
@@ -31,9 +33,14 @@ export const MAX_UPDATE_TASK_BYTES = 1.25 * 1024 * 1024;
 /** A longer UpdateLog body is read up to this and decoded as a truncated prefix. */
 export const UPDATE_LOG_PREFIX_BYTES = 4 * 1024 * 1024;
 
-export function connectError(code: ConnectCode, message: string): Response {
+/** A Connect error; `status` only where the protocol names another than the code's own. */
+export function connectError(
+  code: ConnectCode,
+  message: string,
+  status: number = CONNECT_HTTP_STATUS[code],
+): Response {
   return new Response(JSON.stringify({ code, message }), {
-    status: CONNECT_HTTP_STATUS[code],
+    status,
     headers: { "content-type": "application/json" },
   });
 }
@@ -52,12 +59,13 @@ export function checkConnectRequest(request: Request): Response | undefined {
   }
   const mediaType = (request.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
   if (mediaType !== "application/proto") {
-    return connectError("unimplemented", "only binary protobuf is supported");
+    // Connect: an unsupported codec "must" be answered 415 (https://connectrpc.com/docs/protocol/).
+    return connectError("unimplemented", PROTOBUF_ONLY, 415);
   }
   for (const header of ["content-encoding", "connect-content-encoding"]) {
     const encoding = request.headers.get(header);
     if (encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-      return connectError("unimplemented", `${header} ${encoding} is not supported`);
+      return connectError("unimplemented", encodingUnsupported(header, encoding));
     }
   }
   return undefined;

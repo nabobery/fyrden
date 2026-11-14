@@ -43,6 +43,9 @@ describe("installLogCapture", () => {
   it.fails("fails a test that logs a token in an extra Error property", () => {
     console.error(Object.assign(new Error("outer"), { credential: token }));
   });
+  it.fails("fails a test that logs a runner credential", () => {
+    console.log(`runner ${generateToken("rnr", secureRandomBytes)}`);
+  });
   it.fails("fails a test that logs a percent-encoded token", () => {
     console.log([...token].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""));
   });

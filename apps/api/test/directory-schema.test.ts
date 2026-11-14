@@ -24,6 +24,12 @@ describe("D1 directory schema", () => {
     expect(results.map((r) => r.name)).toEqual([
       "audit_log",
       "audit_segments",
+      "ci_dispatch",
+      "ci_job_tokens",
+      "ci_pending_jobs",
+      "ci_runner_registrations",
+      "ci_runners",
+      "ci_tasks",
       "deployment_settings",
       "dpop_proofs",
       "email_admissions",
