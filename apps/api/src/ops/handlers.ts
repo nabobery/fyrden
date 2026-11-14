@@ -266,6 +266,13 @@ import {
   listRulesetsOperation,
   updateRulesetOperation,
 } from "../repos/rulesets.js";
+import {
+  cancelWorkflowRunOperation,
+  forceCancelWorkflowRunOperation,
+  getWorkflowRunOperation,
+  listWorkflowRunJobsOperation,
+  rerunWorkflowRunOperation,
+} from "../repos/runs.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import {
   createStatusOperation,
@@ -698,6 +705,11 @@ export const handlers: Handlers = {
   "statuses.create": createStatusOperation,
   "statuses.list": listStatusesOperation,
   "statuses.combined": getCombinedStatusOperation,
+  "actions.runs.get": getWorkflowRunOperation,
+  "actions.runs.jobs.list": listWorkflowRunJobsOperation,
+  "actions.runs.cancel": cancelWorkflowRunOperation,
+  "actions.runs.force_cancel": forceCancelWorkflowRunOperation,
+  "actions.runs.rerun": rerunWorkflowRunOperation,
   "repos.compare": compareCommitsOperation,
   "repos.contents.get": getContentsOperation,
   "repos.contents.root": getRootContentsOperation,

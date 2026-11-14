@@ -1,4 +1,5 @@
 export * from "../ops/access.js";
+export * from "../ops/actions.js";
 export * from "../ops/admin.js";
 export * from "../ops/agents.js";
 export * from "../ops/archives.js";

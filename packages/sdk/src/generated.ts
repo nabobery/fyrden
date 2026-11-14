@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write")[];
+  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -7682,6 +7682,137 @@ export type StatusesCreateOutput = {
   };
 };
 
+/** Input of `actions.runs.get`: Get a workflow run. */
+export type ActionsRunsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+};
+
+/** Output of `actions.runs.get`. */
+export type ActionsRunsGetOutput = {
+  id: string;
+  /** The current attempt: 1, then one more per re-run. */
+  run_attempt: number;
+  head_sha: string;
+  /** The branch the run is for, if its ref is one. */
+  head_branch: string | null;
+  event: string;
+  /** The workflow file. */
+  path: string;
+  /** `pending`: waiting for its concurrency group. */
+  status: "queued" | "pending" | "in_progress" | "completed";
+  conclusion: "success" | "failure" | "cancelled" | null;
+  /** Who triggered the run: its jobs act with this principal's rights on every attempt. */
+  actor: {
+    id: string;
+  };
+  /** Who started the current attempt. */
+  triggering_actor: {
+    id: string;
+  };
+  created_at: number;
+  updated_at: number;
+  run_started_at: number | null;
+  completed_at: number | null;
+  /** Why the workflow could not run, when it could not. */
+  errors: string[];
+  /** Fyrden: background work that exhausted its retries and is still being retried periodically. */
+  faults: {
+    kind: string;
+    error: string;
+    since: number;
+    count: number;
+  }[];
+};
+
+/** Input of `actions.runs.jobs.list`: List jobs for a workflow run. */
+export type ActionsRunsJobsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+  /** An attempt; the current by default. */
+  attempt?: number;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+};
+
+/** Output of `actions.runs.jobs.list`. */
+export type ActionsRunsJobsListOutput = {
+  jobs: ({
+    /** The job's id within its run. */
+    id: number;
+    run_id: string;
+    run_attempt: number;
+    name: string;
+    status: "pending" | "queued" | "in_progress" | "completed";
+    conclusion: "success" | "failure" | "cancelled" | "skipped" | "timed_out" | null;
+    started_at: number | null;
+    completed_at: number | null;
+    /** Fyrden: the job's check on the commit. */
+    check: {
+      /** The state its check was last given. */
+      state: string | null;
+      /** Why its check is not published, when it is not (`duplicate_check`, …). */
+      code: string | null;
+    };
+    /** Fyrden: whether every log row reached durable storage; null while it runs. */
+    log_complete: boolean | null;
+    error: string | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `actions.runs.cancel`: Cancel a workflow run. */
+export type ActionsRunsCancelInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+};
+
+/** Output of `actions.runs.cancel`. */
+export type ActionsRunsCancelOutput = Record<string, never>;
+
+/** Input of `actions.runs.force_cancel`: Force cancel a workflow run. */
+export type ActionsRunsForceCancelInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+};
+
+/** Output of `actions.runs.force_cancel`. */
+export type ActionsRunsForceCancelOutput = Record<string, never>;
+
+/** Input of `actions.runs.rerun`: Re-run a workflow. */
+export type ActionsRunsRerunInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+};
+
+/** Output of `actions.runs.rerun`. */
+export type ActionsRunsRerunOutput = {
+  run_attempt: number;
+};
+
 /** Input of `repos.blame.get`: Blame a file. */
 export type ReposBlameGetInput = {
   /** The owner's handle. */
@@ -9023,6 +9154,11 @@ export const OPERATIONS = {
   "repos.commits.get": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref+}", pathParams: ["owner","repo","ref"], idempotent: false },
   "repos.compare": { method: "GET", path: "/repos/{owner}/{repo}/compare/{basehead+}", pathParams: ["owner","repo","basehead"], idempotent: false },
   "statuses.create": { method: "POST", path: "/repos/{owner}/{repo}/statuses/{sha}", pathParams: ["owner","repo","sha"], idempotent: true },
+  "actions.runs.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}", pathParams: ["owner","repo","run_id"], idempotent: false },
+  "actions.runs.jobs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", pathParams: ["owner","repo","run_id"], idempotent: false, items: "jobs" },
+  "actions.runs.cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
+  "actions.runs.force_cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
+  "actions.runs.rerun": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", pathParams: ["owner","repo","run_id"], idempotent: true },
   "repos.blame.get": { method: "GET", path: "/repos/{owner}/{repo}/blame", pathParams: ["owner","repo"], idempotent: false },
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
@@ -9461,6 +9597,16 @@ export interface Operations {
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };
   /** Create a commit status. Posts a status on a commit: `state` is `pending`, `success`, `failure` or `error`, under a `context` (default `default`, compared ignoring case) that tells one system's statuses from another's. The commit must be one this repository has (422 `commit_not_found`). A commit takes 1,000 statuses of one context and 10,000 in all (422 `status_limit`), and 1,000 status summaries (each publisher's contexts, counted across publishers; 422 `check_limit`). The status is attributed to the principal that posts it (for an agent acting for a user, the agent): it is the status's publisher, and the creator this answers with. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:write` permission. */
   "statuses.create": { input: StatusesCreateInput; output: StatusesCreateOutput };
+  /** Get a workflow run. A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
+  "actions.runs.get": { input: ActionsRunsGetInput; output: ActionsRunsGetOutput };
+  /** List jobs for a workflow run. The jobs of a run's attempt (the current one by default), by id: one per matrix combination, and one for a job that never ran (skipped or failed before it started). GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
+  "actions.runs.jobs.list": { input: ActionsRunsJobsListInput; output: ActionsRunsJobsListOutput };
+  /** Cancel a workflow run. Cancels a run: queued jobs end, running jobs whose `if:` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose `if:` still holds (such as `if: always()`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 `run_not_cancellable` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
+  "actions.runs.cancel": { input: ActionsRunsCancelInput; output: ActionsRunsCancelOutput };
+  /** Force cancel a workflow run. Cancels every unfinished job of a run at once, whatever its `if:` (for a run that does not respond to a cancel); running jobs' runners are told to stop and their logs may be incomplete. 409 `run_not_cancellable` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
+  "actions.runs.force_cancel": { input: ActionsRunsForceCancelInput; output: ActionsRunsForceCancelOutput };
+  /** Re-run a workflow. Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 `rerun_limit`); one still running, or whose workflow could not run (`errors`), is 409 `run_not_completed`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
+  "actions.runs.rerun": { input: ActionsRunsRerunInput; output: ActionsRunsRerunOutput };
   /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
   "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };
   /** List the repository's root directory. The root directory's entries at a branch, tag or commit, a page at a time. */
