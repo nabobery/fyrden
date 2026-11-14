@@ -20,6 +20,7 @@ import { jobPolicy } from "../invocation-calls.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
+import { REPO_DELETED } from "./repo/events.js";
 import {
   type AttemptRow,
   type InstanceRow,
@@ -128,7 +129,12 @@ export interface RunHooks {
   afterRepoCall?: (op: string) => Promise<void> | void;
 }
 
-const REPO_GONE = /^repo_not_found\b/;
+/**
+ * What the repository answers once it is deleted: a refused change, or any call at all while
+ * it erases itself (a deletion is never undone, so neither answer is transient).
+ */
+const repoGone = (message: string): boolean =>
+  /^repo_not_found\b/.test(message) || message === REPO_DELETED;
 
 /**
  * One CI run: its attempts, job graph, job instances and their checks,
@@ -238,6 +244,9 @@ export class RunDO extends MigratingDO {
         );
         this.engine.advanceAttempt(attempt, { kind: "plan_failed" });
       } else this.#admit(attempt);
+      this.jobs.ensure("run_reconcile", RUN_JOB.reconcile, {
+        runAt: now + this.policy.reconcileMs,
+      });
       return { ok: true, created: true, run: this.#view() as RunView };
     });
   }
@@ -899,7 +908,7 @@ export class RunDO extends MigratingDO {
           return result;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (REPO_GONE.test(message)) {
+          if (repoGone(message)) {
             await this.#repositoryGone();
             return { done: true };
           }
@@ -978,6 +987,8 @@ export class RunDO extends MigratingDO {
     };
     for (const [kind, handler] of Object.entries(handlers) as [JobKind, JobHandler][])
       handlers[kind] = this.#marked(kind, handler);
+    // Never exhausts, so never marked: nothing else would visit a finished run again.
+    handlers.run_reconcile = { runSlice: () => this.#reconcile() };
     return handlers;
   }
 
@@ -1109,6 +1120,46 @@ export class RunDO extends MigratingDO {
     return left.length > 0
       ? { done: false, cursor: null, runAfterMs: this.policy.checkFlushMs }
       : { done: true };
+  }
+
+  /**
+   * Writes the run's record into its repository again. Erasing the repository finds runs only
+   * by that record, and a restore of the repository from before the run started drops it, so
+   * every run checks weekly for as long as it exists. A deleted repository erases the run; any
+   * other refusal or failure is retried at the sweep's interval and never ends the job.
+   */
+  async #reconcile(): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+    const run = this.engine.run();
+    if (!run) return { done: true };
+    let gone: boolean;
+    let ok = false;
+    try {
+      // The RPC stub's type of a union answer is not assignable to the union; it is the union.
+      const answer = await this.#repoCall(
+        "registerRun",
+        (repo) =>
+          repo.registerRun({
+            runId: run.run_id,
+            sha: run.sha,
+            path: run.workflow_path,
+          }) as unknown as ReturnType<RepoDO["registerRun"]>,
+      );
+      ok = answer.ok;
+      gone = !answer.ok && answer.code === "repo_not_found";
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      gone = repoGone(message);
+      if (!gone) this.#log.warn("run record not written", { error: message });
+    }
+    if (gone) {
+      await this.#repositoryGone();
+      return { done: true };
+    }
+    return {
+      done: false,
+      cursor: null,
+      runAfterMs: ok ? this.policy.reconcileMs : this.policy.sweepMs,
+    };
   }
 
   /** Retries exhausted jobs while anything is owed; ends when nothing is. */

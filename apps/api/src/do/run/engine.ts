@@ -59,6 +59,7 @@ export const RUN_JOB = {
   dispatch: "dispatch",
   taskEnd: "task-end",
   concurrency: "concurrency",
+  reconcile: "reconcile",
 } as const;
 
 export interface RunPolicy {
@@ -74,6 +75,12 @@ export interface RunPolicy {
   readonly checkFlushMs: number;
   /** How often the sweep retries work that exhausted its attempts. Proposed: 30 min. */
   readonly sweepMs: number;
+  /**
+   * How often a run writes its record into its repository again, finished or not, so that a
+   * restore of the repository that dropped the record cannot hide the run from the
+   * repository's erasure. It bounds how long a run outlives such an erasure. Proposed: 7 days.
+   */
+  readonly reconcileMs: number;
   /** Nodes one scheduling step decides at most, before it ends its invocation. Proposed. */
   readonly nodesPerStep: number;
   /** Expression work one step spends at most before it ends its invocation: four full budgets. */
@@ -93,6 +100,7 @@ export const RUN_DEFAULTS: RunPolicy = {
   heartbeatWriteMs: 30_000,
   checkFlushMs: 1_000,
   sweepMs: 30 * MIN,
+  reconcileMs: 7 * 24 * 60 * MIN,
   nodesPerStep: 32,
   stepWork: 4 * MAX_EXPRESSION_WORK,
   maxInstanceOutputBytes: 1024 * 1024,
@@ -669,12 +677,20 @@ export class RunEngine {
     status: "skipped" | "failed" | "cancelled",
     error: string | null,
   ): void {
+    // The node now holds one instance (the row below), not what the plan reserved for it, so
+    // the rest of its reservation goes back to the attempt for later jobs to expand into.
+    const reserved = this.node(attempt, jobKey)?.reserved ?? 1;
     this.exec(
-      "UPDATE run_nodes SET status = ?, error = ? WHERE attempt = ? AND job_key = ?",
+      "UPDATE run_nodes SET status = ?, error = ?, reserved = 1 WHERE attempt = ? AND job_key = ?",
       status,
       error,
       attempt,
       jobKey,
+    );
+    this.exec(
+      "UPDATE run_attempts SET used_instances = used_instances - ? WHERE attempt = ?",
+      reserved - 1,
+      attempt,
     );
     const conclusion: InstanceConclusion =
       status === "failed" ? "failure" : status === "skipped" ? "skipped" : "cancelled";

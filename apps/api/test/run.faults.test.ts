@@ -2,8 +2,10 @@
 // outage backs off and loses nothing, work that exhausts its attempts marks
 // the run and the sweep keeps retrying it until it succeeds, a reset after
 // a repository call repeats the call harmlessly, a duplicate alarm makes
-// one transition, a repository gone for good erases the run, and the
-// runner protocol's hooks catch up with changes made while they ran.
+// one transition, a repository gone for good erases the run, the run
+// writes its record into the repository again weekly (so a restore of the
+// repository cannot hide it from the repository's erasure), and the runner
+// protocol's hooks catch up with changes made while they ran.
 import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
@@ -26,6 +28,7 @@ import {
 } from "./helpers/runs.js";
 
 const MIN = 60_000;
+const WEEK = 7 * 24 * 60 * MIN;
 const one = workflow(job("a"));
 
 /** Makes every repository call of the run throw `message` while `failing()` holds. */
@@ -170,13 +173,132 @@ describe("faults", () => {
     expect(rows).toEqual([{ status: "cancelling", cancel_reason: "timeout" }]);
   });
 
-  it("cancels and erases the run when its repository is gone for good", async () => {
+  it.each(["repo_not_found: the repository is being deleted", "the repository is being deleted"])(
+    "cancels and erases the run when its repository is gone for good (%s)",
+    async (message) => {
+      const f = await repoWithCommit();
+      const runId = await started(f, one);
+      await failRepo(runId, () => true, message);
+      await advance(runId, 2_000);
+      expect(await runStub(runId).get()).toBeUndefined();
+      expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM run_erasure").length)).toBe(1);
+    },
+  );
+});
+
+/** Whether the repository holds its record of run `runId` (what erasing the repository finds). */
+const recorded = (f: { repo: { id: string } }, runId: string) =>
+  inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) =>
+    r.git.context.storage.sql.exec("SELECT 1 FROM ci_runs WHERE run_id = ?", runId).toArray(),
+  ).then((rows) => rows.length === 1);
+
+/** Drops the repository's record of run `runId`, as a restore of the repository from before it would. */
+const restoredWithout = (f: { repo: { id: string } }, runId: string) =>
+  inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) => {
+    r.git.context.storage.sql.exec("DELETE FROM ci_runs WHERE run_id = ?", runId);
+  });
+
+/** Sets one column of the repository's identity row, standing for its deletion or a transfer. */
+const repoMeta = (
+  f: { repo: { id: string } },
+  column: "deleting_at" | "transfer_id",
+  value: unknown,
+) =>
+  inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) => {
+    r.git.context.storage.sql.exec(`UPDATE repo_meta SET ${column} = ?`, value);
+  });
+
+async function finishedRun(f: Awaited<ReturnType<typeof repoWithCommit>>) {
+  const runId = await started(f, one);
+  await finish(runId, "a");
+  await advance(runId, 2_000);
+  expect(await runStub(runId).get()).toMatchObject({ status: "completed", conclusion: "success" });
+  return runId;
+}
+
+const erased = (runId: string) =>
+  inRun(runId, (r) => r.engine.rows("SELECT * FROM run_erasure").length === 1);
+
+describe("the repository's record of a run", () => {
+  it("is written again weekly, so a restore of the repository that dropped it cannot hide the run", async () => {
     const f = await repoWithCommit();
-    const runId = await started(f, one);
-    await failRepo(runId, () => true, "repo_not_found: the repository was deleted");
-    await advance(runId, 2_000);
+    const runId = await finishedRun(f);
+    expect(await inRun(runId, (r) => r.jobs.get("reconcile")?.state)).toBe("queued");
+    await restoredWithout(f, runId);
+    await advance(runId, WEEK - MIN);
+    expect(await recorded(f, runId)).toBe(false);
+    await advance(runId, MIN);
+    expect(await recorded(f, runId)).toBe(true);
+    await restoredWithout(f, runId);
+    await advance(runId, WEEK);
+    expect(await recorded(f, runId)).toBe(true);
+    expect(await runStub(runId).get()).toMatchObject({ status: "completed", faults: [] });
+  });
+
+  it("is kept from a run whose workflow failed to plan", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, "jobs: [");
+    expect(await runStub(runId).get()).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+    });
+    await restoredWithout(f, runId);
+    await advance(runId, WEEK);
+    expect(await recorded(f, runId)).toBe(true);
+  });
+
+  it("erases a finished run once its repository answers that it is deleted", async () => {
+    const f = await repoWithCommit();
+    const runId = await finishedRun(f);
+    await restoredWithout(f, runId);
+    await repoMeta(f, "deleting_at", Date.now());
+    await advance(runId, WEEK);
     expect(await runStub(runId).get()).toBeUndefined();
-    expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM run_erasure").length)).toBe(1);
+    expect(await erased(runId)).toBe(true);
+  });
+
+  it("erases the run when the repository is mid-erase and refuses every call", async () => {
+    const f = await repoWithCommit();
+    const runId = await finishedRun(f);
+    await failRepo(runId, () => true, "the repository is being deleted");
+    await advance(runId, WEEK);
+    expect(await erased(runId)).toBe(true);
+  });
+
+  it("keeps the run through a transfer and an outage, never giving up, and writes it once they end", async () => {
+    const f = await repoWithCommit();
+    const runId = await finishedRun(f);
+    await restoredWithout(f, runId);
+    await repoMeta(f, "transfer_id", "t-1");
+    await advance(runId, WEEK);
+    await repoMeta(f, "transfer_id", null);
+    let down = true;
+    await failRepo(runId, () => down);
+    // Far past ten attempts of the queue's backoff.
+    for (let i = 0; i < 30; i++) await advance(runId, 30 * MIN);
+    expect(await recorded(f, runId)).toBe(false);
+    expect(await inRun(runId, (r) => r.jobs.get("reconcile"))).toMatchObject({
+      state: "queued",
+      attempts: 0,
+    });
+    down = false;
+    await advance(runId, 30 * MIN);
+    expect(await recorded(f, runId)).toBe(true);
+    expect(await runStub(runId).get()).toMatchObject({ status: "completed", faults: [] });
+  });
+
+  it("writes nothing to a run erased while its check was in flight", async () => {
+    const f = await repoWithCommit();
+    const runId = await finishedRun(f);
+    await inRun(runId, (r) => {
+      r.hooks = { afterRepoCall: () => r.erase() };
+    });
+    await advance(runId, WEEK);
+    const left = await inRun(runId, (r) => ({
+      jobs: r.engine.rows("SELECT * FROM jobs").length,
+      erased: r.engine.rows("SELECT * FROM run_erasure").length,
+    }));
+    expect(left).toEqual({ jobs: 0, erased: 1 });
   });
 });
 

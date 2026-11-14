@@ -180,6 +180,33 @@ describe("outputs named like object properties", () => {
   });
 });
 
+describe("instance budget", () => {
+  it("gives a skipped matrix's reservation back for a later job to expand into", async () => {
+    const f = await repoWithCommit();
+    const values = Array.from({ length: 250 }, (_, i) => i).join(", ");
+    const source = workflow(
+      [
+        job("define", ["outputs:", `  list: ${expr("steps.s.outputs.list")}`]),
+        job("big", ["if: false", "strategy:", "  matrix:", `    n: [${values}]`]),
+        job("dyn", [
+          "needs: [define, big]",
+          "if: always()",
+          "strategy:",
+          "  matrix:",
+          `    n: ${expr("fromJSON(needs.define.outputs.list)")}`,
+        ]),
+      ].join("\n"),
+    );
+    const runId = await started(f, source);
+    const hundred = JSON.stringify(Array.from({ length: 100 }, (_, i) => i));
+    await finish(runId, "define", "success", { list: hundred });
+    const jobs = (await runStub(runId).listJobs(undefined, 0, 256))?.jobs ?? [];
+    // define, big (skipped, one row), and dyn's 100 instances: 102 in all, within the run's 256.
+    expect(jobs.filter((j) => j.jobKey === "dyn")).toHaveLength(100);
+    expect(jobs.find((j) => j.jobKey === "big")?.conclusion).toBe("skipped");
+  });
+});
+
 describe("tasks", () => {
   it("assigns once per key: a repeat writes nothing, and after completion is task_finished", async () => {
     const f = await repoWithCommit();
