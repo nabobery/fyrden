@@ -180,6 +180,7 @@ export function pushCommitter(
           actChain: decision.actChain ?? [],
           requestId: decision.requestId ?? null,
           via,
+          pushId: request.uploadId,
           ...(maintainerFor && { maintainerFor }),
         },
         fastForward: request.fastForward,

@@ -45,6 +45,7 @@ import {
   discretionaryAllowance,
   type ResourceVector,
 } from "../effects/discretionary.js";
+import { publicOrigin } from "../email/notifications.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -106,6 +107,7 @@ import {
 import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
 import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import { resolveRepo } from "../repos/directory.js";
+import { runnersOn } from "../runner/service.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -140,6 +142,7 @@ import {
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
 import { type CheckStart, type CheckUpdate, RepoChecks, type StatusInput } from "./repo/checks.js";
+import { CI_TRIGGERS_JOB, CiTriggers } from "./repo/ci-triggers.js";
 import {
   CODE_OWNER_MERGE_POLICY,
   CodeOwnerFacts,
@@ -496,6 +499,8 @@ export class RepoDO extends MigratingDO {
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
   readonly checks: RepoChecks;
+  /** CI runs started from this repository's pushes and pull request events. */
+  readonly ciTriggers: CiTriggers;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -664,6 +669,25 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
+    this.ciTriggers = new CiTriggers({
+      git: this.git,
+      memoryBlocks: () => this.#memoryBlocks(),
+      enabled: () => runnersOn(this.env),
+      repoId: () => this.#repoId(),
+      roleOf: (principalId) => this.acl.roleOf(principalId, "write"),
+      rootOf: async (principalId, grantId) =>
+        rootIdentity({
+          principalId,
+          grantId,
+          ceilingIds: await this.#authority.rolesPulled(principalId, grantId),
+        }),
+      registrar: this,
+      origin: () => publicOrigin(this.env),
+      log: () => this.#log(),
+    });
+    this.ciTriggers.bindings = { RUN: env.RUN, DIRECTORY: env.DIRECTORY };
+    this.events.onPushed = (refs, actor, sourceSeq) =>
+      this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
@@ -706,6 +730,8 @@ export class RepoDO extends MigratingDO {
       view: (pull) => this.#viewed(pull),
       milestone: (number) => this.subjectMeta.milestone(number),
       checks: (pull, actor) => this.checks.reconcile(pull, actor),
+      ci: (action, pull, actor, sourceSeq, capture) =>
+        this.ciTriggers.recordPull(action, pull, actor, sourceSeq, capture),
     });
     this.pullSource = new PullSource({
       git: this.git,
@@ -3851,6 +3877,7 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      [CI_TRIGGERS_JOB]: this.ciTriggers.handler(),
       review_teams: {
         runSlice: async () => {
           await this.checkEpoch();

@@ -7719,7 +7719,19 @@ export type ActionsRunsGetOutput = {
   run_started_at: number | null;
   completed_at: number | null;
   /** Why the workflow could not run, when it could not. */
-  errors: string[];
+  errors: {
+    /** The error's code, such as `unsupported_key`. */
+    code: string;
+    /** The workflow feature it concerns; empty for none. */
+    feature: string;
+    /** Where in the file, such as `jobs.build.steps[0].uses`. */
+    path: string;
+    /** From 1; 0 for the file as a whole. */
+    line: number;
+    /** From 1; 0 for the file as a whole. */
+    column: number;
+    message: string;
+  }[];
   /** Fyrden: background work that exhausted its retries and is still being retried periodically. */
   faults: {
     kind: string;

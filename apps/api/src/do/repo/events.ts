@@ -11,7 +11,7 @@ import {
   REPO_ENTITY,
   type RepoRow,
 } from "@fyrden/domain";
-import { oidToHex } from "@fyrden/git-core";
+import { type Oid, oidToHex } from "@fyrden/git-core";
 import { type Blob, CaptureCache, type CaptureValue, captureTree } from "../../webhooks/capture.js";
 import { CAPTURE_DEADLINE_MS, CAPTURE_VERSION, userOf } from "../../webhooks/captures.js";
 import { webhookEventOf } from "../../webhooks/events.js";
@@ -202,6 +202,17 @@ export class RepoEvents {
 
   /** Where captures' blobs are kept (see `routeCaptures`). */
   #storeCapture: CaptureStore = () => {};
+
+  /**
+   * Told of a commit's branch and tag moves in its transaction, with the
+   * actor and the sequence number of the commit's first event (CI triggers
+   * record them there).
+   */
+  onPushed: (
+    refs: readonly { name: string; oldOid: Oid | null; newOid: Oid | null }[],
+    actor: RefActor | undefined,
+    sourceSeq: number,
+  ) => void = () => {};
 
   /**
    * Text values already encoded and hashed in the change being made (equal
@@ -670,7 +681,7 @@ export class RepoEvents {
     if (refUpdates.length === 0) return;
     this.#exec("events.pushed_at", "UPDATE repo_meta SET pushed_at = ? WHERE id = 1", context.now);
     const who = { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])] };
-    this.#emit("repo.updated", { ...who, data: null }, true);
+    const updated = this.#emit("repo.updated", { ...who, data: null }, true);
     // A commit may move thousands of refs (a fork's first commit): one event
     // per slice keeps a stored payload under the 2 MB row limit.
     const parts = Math.ceil(refUpdates.length / REFS_PER_EVENT);
@@ -695,6 +706,7 @@ export class RepoEvents {
       via: actor?.via ?? null,
       refs: refUpdates.length,
     });
+    this.onPushed(refUpdates, actor, updated.source_seq);
   }
 
   /**
@@ -759,14 +771,14 @@ export class RepoEvents {
     /** The entity is gone: its snapshot carries no row. */
     deleted = false,
     capture?: CaptureBuilder,
-  ): void {
+  ): number {
     this.#assertCanEmit();
-    this.#emit(
+    return this.#emit(
       type,
       { actor: actor?.principal ?? null, actChain: [...(actor?.actChain ?? [])], data },
       { ...entity, deleted, row: deleted ? null : entity.row },
       capture,
-    );
+    ).source_seq;
   }
 
   /**
@@ -865,7 +877,7 @@ export class RepoEvents {
     event: Pick<NewEvent, "actor" | "actChain" | "data">,
     snapshot: boolean | EntitySnapshot = false,
     capture?: CaptureBuilder,
-  ): MetaRow {
+  ): MetaRow & { source_seq: number } {
     const cursor = this.#storage.sql.exec<MetaRow & { source_seq: number }>(
       `UPDATE repo_meta SET source_seq = source_seq + 1, version = version + ?
        WHERE id = 1 RETURNING source_seq, ${META_COLUMNS}`,

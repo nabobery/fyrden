@@ -10,6 +10,12 @@ CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
 CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
 CREATE INDEX check_summaries_settled ON check_summaries (sha, settled);
+CREATE INDEX ci_approvals_waiting ON ci_approvals (pull_number, trigger_kind, workflow_path)
+        WHERE state = 'waiting';
+CREATE INDEX ci_events_done ON ci_events (done_at) WHERE state = 'done';
+CREATE INDEX ci_events_pending ON ci_events (id) WHERE state = 'pending';
+CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
+CREATE INDEX ci_trigger_cache_used ON ci_trigger_cache (used_at);
 CREATE UNIQUE INDEX code_owner_evaluations_key
         ON code_owner_evaluations (merge_base, head, file_blob, version);
 CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
@@ -53,6 +59,8 @@ CREATE INDEX pull_listings_created ON pull_listings (created_at);
 CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
+CREATE INDEX pull_requests_merged_author ON pull_requests (author_root)
+        WHERE state = 'merged';
 CREATE INDEX pull_requests_open_head ON pull_requests (head_sha) WHERE state = 'open';
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
@@ -225,15 +233,87 @@ CREATE TABLE check_summaries (
         CHECK ((kind = 'check') = (attempt IS NOT NULL)),
         CHECK ((kind = 'status') = (status_id IS NOT NULL))
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_approvals (
+        run_id TEXT PRIMARY KEY,
+        pull_number INTEGER NOT NULL,
+        trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('pull_request', 'pull_request_target')),
+        workflow_path TEXT NOT NULL,
+        binding TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('waiting', 'approved', 'superseded', 'cancelled', 'expired')),
+        decided_by TEXT,
+        decided_at INTEGER,
+        delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_event_runs (
+        event_id INTEGER NOT NULL,
+        trigger_kind TEXT NOT NULL,
+        workflow_path TEXT NOT NULL,
+        run_id TEXT NOT NULL UNIQUE,
+        run_number INTEGER NOT NULL,
+        workflow_blob TEXT NOT NULL,
+        approval INTEGER NOT NULL DEFAULT 0 CHECK (approval IN (0, 1)),
+        outcome TEXT,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        PRIMARY KEY (event_id, trigger_kind, workflow_path)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('push', 'pull_request', 'schedule',
+          'workflow_dispatch', 'schedule_refresh')),
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done')),
+        outcome TEXT,
+        actor_id TEXT,
+        facts TEXT NOT NULL,
+        resolved TEXT,
+        pass INTEGER NOT NULL DEFAULT 0,
+        file INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        faults INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        done_at INTEGER,
+        CHECK ((state = 'done') = (done_at IS NOT NULL))
+      ) STRICT;
 CREATE TABLE ci_meta (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         generation INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE ci_run_numbers (
+        workflow_path TEXT PRIMARY KEY,
+        last INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_run_specs (
+        run_id TEXT PRIMARY KEY,
+        spec TEXT NOT NULL,
+        source TEXT NOT NULL
       ) STRICT;
 CREATE TABLE ci_runs (
         run_id TEXT PRIMARY KEY,
         sha TEXT NOT NULL,
         workflow_path TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_schedules (
+        workflow_path TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        workflow_blob TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        next_at INTEGER NOT NULL,
+        last_fired_at INTEGER,
+        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workflow_path, cron)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_trigger_cache (
+        blob TEXT PRIMARY KEY,
+        triggers TEXT NOT NULL,
+        used_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,

@@ -58,7 +58,7 @@ function runOutput(view: RunView): Output<typeof getWorkflowRun> {
     updated_at: view.updatedAt,
     run_started_at: view.startedAt,
     completed_at: view.completedAt,
-    errors: [...view.errors],
+    errors: view.errors.map((e) => ({ ...e })),
     faults: view.faults.map((f) => ({ ...f })),
   };
 }

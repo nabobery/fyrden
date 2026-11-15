@@ -41,6 +41,7 @@ import {
 } from "@fyrden/domain/ci";
 import { decodeInstance, encodeInstance, exprFromJson, outputsExpr } from "./codec.js";
 import { nodeName, type RunModel } from "./model.js";
+import { isReservedCheckName, WORKFLOW_FILE_PREFIX } from "./plan-check.js";
 
 /*
  * A run's state in its object's SQLite: every transition reads its guard
@@ -163,6 +164,8 @@ export interface RunRow {
   queue_synced_rev: number;
   created_at: number;
   updated_at: number;
+  trust: "trusted" | "untrusted";
+  fork: number;
 }
 
 export interface AttemptRow {
@@ -533,6 +536,15 @@ export class RunEngine {
   publishCheck(row: InstanceRow): void {
     const check = instanceCheck(this.#stateOf(row));
     if (!check) return;
+    // The name space of plan-failure checks: a job never publishes into it.
+    if (isReservedCheckName(row.name)) {
+      if (row.check_code === null)
+        this.exec(
+          "UPDATE run_instances SET check_code = 'reserved_name' WHERE job_id = ?",
+          row.job_id,
+        );
+      return;
+    }
     const desired = check.status === "completed" ? (check.conclusion as string) : check.status;
     const [existing] = this.rows<{ job_id: number; desired: string }>(
       "SELECT job_id, desired FROM run_checks WHERE attempt = ? AND name_key = ?",
@@ -799,6 +811,16 @@ export class RunEngine {
       return;
     }
     const job = expanded.job;
+    const reserved = job.instances.find((instance) => isReservedCheckName(instance.name));
+    if (reserved) {
+      this.#concludeNode(
+        n,
+        jobKey,
+        "failed",
+        `The job's check name "${reserved.name}" starts with "${WORKFLOW_FILE_PREFIX}", which names the checks of workflow files that could not run.`,
+      );
+      return;
+    }
     this.exec(
       `UPDATE run_nodes SET status = 'running', fail_fast = ?, max_parallel = ?, declares = ?
        WHERE attempt = ? AND job_key = ?`,

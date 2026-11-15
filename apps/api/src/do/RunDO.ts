@@ -7,7 +7,7 @@ import {
   JobQueue,
 } from "@fyrden/adapters-cloudflare/git";
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
-import { MAX_CHECK_BATCH } from "@fyrden/domain";
+import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
   type InstanceConclusion,
   jobPayload,
@@ -54,6 +54,7 @@ const LEASE_MARGIN_MS = 60_000;
 /** How often an owner renews its grant and a pending scope reads its receipt. Proposed. */
 const RENEW_EVERY_MS = 3 * 60_000;
 
+import { workflowFileCheckName } from "./run/plan-check.js";
 import { type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
 
@@ -81,13 +82,36 @@ export interface RunView {
   readonly cancel: AttemptRow["cancel"];
   /** Who started the current attempt. */
   readonly triggeringActor: string;
-  readonly errors: readonly string[];
+  /** Whether the run's code is trusted (from its trigger). */
+  readonly trust: "trusted" | "untrusted";
+  /** Whether the run is a fork job (its pull request's head is in another repository). */
+  readonly fork: boolean;
+  /** Why the workflow could not run, when it could not. */
+  readonly errors: readonly RunError[];
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly startedAt: number | null;
   readonly completedAt: number | null;
   /** Background work that exhausted its attempts and is still being retried. */
   readonly faults: readonly { kind: string; error: string; since: number; count: number }[];
+}
+
+/** One error of a workflow that could not run, as the parser and planner name it. */
+export interface RunError {
+  readonly code: string;
+  readonly feature: string;
+  readonly path: string;
+  readonly line: number;
+  readonly column: number;
+  readonly message: string;
+}
+
+/** Stored errors: objects, or (rows written before they were) messages alone. */
+function storedErrors(text: string | null): RunError[] {
+  if (!text) return [];
+  return (JSON.parse(text) as (RunError | string)[]).map((e) =>
+    typeof e === "string" ? { code: "", feature: "", path: "", line: 0, column: 0, message: e } : e,
+  );
 }
 
 export interface JobView {
@@ -318,6 +342,7 @@ export class RunDO extends MigratingDO {
   async create(spec: RunSpec): Promise<CreateAnswer> {
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
+    const planCheck = await workflowFileCheckName(spec.workflow.path);
     return this.#tx((): CreateAnswer => {
       const reserved = this.#reserve(spec, digest);
       if (!reserved.ok) return reserved;
@@ -329,8 +354,8 @@ export class RunDO extends MigratingDO {
       const now = this.context.now();
       this.engine.exec(
         `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
-           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
         spec.runId,
         spec.repoId,
         spec.sha,
@@ -343,6 +368,8 @@ export class RunDO extends MigratingDO {
         digest,
         now,
         now,
+        spec.trust,
+        spec.fork ? 1 : 0,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
       this.engine.insertAttempt(1, spec.actor, loaded.ok ? loaded.model : undefined);
@@ -350,14 +377,41 @@ export class RunDO extends MigratingDO {
       if (!loaded.ok) {
         this.engine.exec(
           "UPDATE run_attempts SET errors = ? WHERE attempt = 1",
-          JSON.stringify(loaded.errors.map((e) => e.message)),
+          JSON.stringify(
+            loaded.errors.map(({ code, feature, path, line, column, message }) => ({
+              code,
+              feature,
+              path,
+              line,
+              column,
+              message,
+            })),
+          ),
         );
         this.engine.advanceAttempt(attempt, { kind: "plan_failed" });
+        this.#publishPlanFailure(spec.runId, planCheck);
       } else this.#admit(attempt);
       this.jobs.ensure("run_reconcile", RUN_JOB.reconcile, {
         runAt: now + this.policy.reconcileMs,
       });
       return { ok: true, created: true, run: this.#view() as RunView };
+    });
+  }
+
+  /**
+   * Queues the failed plan's one check in the outbox (it has no job: id 0),
+   * so the commit shows the workflow file that could not run.
+   */
+  #publishPlanFailure(runId: string, name: string): void {
+    this.engine.exec(
+      `INSERT INTO run_checks (attempt, name_key, name, start_key, job_id, desired, rev)
+       VALUES (1, ?, ?, ?, 0, 'failure', 1)`,
+      checkNameKey(name),
+      name,
+      `${runId}/a1/plan`,
+    );
+    this.jobs.ensure("run_checks", RUN_JOB.checks, {
+      runAt: this.context.now() + this.policy.checkFlushMs,
     });
   }
 
@@ -393,7 +447,9 @@ export class RunDO extends MigratingDO {
       conclusion: attempt.conclusion,
       cancel: attempt.cancel,
       triggeringActor: attempt.triggering_actor_id,
-      errors: attempt.errors ? (JSON.parse(attempt.errors) as string[]) : [],
+      trust: run.trust,
+      fork: run.fork !== 0,
+      errors: storedErrors(attempt.errors),
       createdAt: run.created_at,
       updatedAt: run.updated_at,
       startedAt: attempt.started_at,

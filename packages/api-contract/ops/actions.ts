@@ -39,7 +39,18 @@ export const WorkflowRun = z.object({
   updated_at: z.number().int(),
   run_started_at: z.number().int().nullable(),
   completed_at: z.number().int().nullable(),
-  errors: z.array(z.string()).describe("Why the workflow could not run, when it could not."),
+  errors: z
+    .array(
+      z.object({
+        code: z.string().describe("The error's code, such as `unsupported_key`."),
+        feature: z.string().describe("The workflow feature it concerns; empty for none."),
+        path: z.string().describe("Where in the file, such as `jobs.build.steps[0].uses`."),
+        line: z.number().int().describe("From 1; 0 for the file as a whole."),
+        column: z.number().int().describe("From 1; 0 for the file as a whole."),
+        message: z.string(),
+      }),
+    )
+    .describe("Why the workflow could not run, when it could not."),
   faults: z
     .array(
       z.object({

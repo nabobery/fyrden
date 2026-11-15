@@ -41,7 +41,13 @@ export interface RefActor {
   readonly actChain?: readonly string[];
   /** The request that made the change. */
   readonly requestId?: string | null;
-  readonly via: "push" | "merge" | "api" | "import";
+  /**
+   * The push this commit belongs to (its upload): a push without `atomic`
+   * commits each ref on its own, and each of its commits carries it.
+   */
+  readonly pushId?: string;
+  /** `fork`: a new fork's refs set from its parent's, which starts no CI run. */
+  readonly via: "push" | "merge" | "api" | "import" | "fork";
   /**
    * A maintainer of a pull request's base repository writing its head
    * branch here, as the pull request's author allows: the repository
@@ -454,7 +460,8 @@ export class SqliteRefStore implements RefStore {
           actor?.onBehalfOf ?? null,
           actor?.grantId ?? null,
           actor?.tokenId ?? null,
-          actor?.via ?? null,
+          // The reflog's frozen CHECK predates `fork`: a fork's refs are recorded as the API's.
+          actor?.via === "fork" ? "api" : (actor?.via ?? null),
           request.uploadId ?? null,
           now,
         );

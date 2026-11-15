@@ -8525,7 +8525,45 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "errors": {
                       "description": "Why the workflow could not run, when it could not.",
                       "items": {
-                        "type": "string",
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "description": "The error's code, such as \`unsupported_key\`.",
+                            "type": "string",
+                          },
+                          "column": {
+                            "description": "From 1; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "feature": {
+                            "description": "The workflow feature it concerns; empty for none.",
+                            "type": "string",
+                          },
+                          "line": {
+                            "description": "From 1; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "message": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "description": "Where in the file, such as \`jobs.build.steps[0].uses\`.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "code",
+                          "feature",
+                          "path",
+                          "line",
+                          "column",
+                          "message",
+                        ],
+                        "type": "object",
                       },
                       "type": "array",
                     },

@@ -171,7 +171,8 @@ export default {
     if (action === "recorded" && !runId) return json(recorded);
     const body = request.method === "POST" ? await request.json() : {};
     if (action === "start") {
-      const spec = { runId: ulid(), ...body };
+      // A same-repository run unless the body says otherwise.
+      const spec = { runId: ulid(), trust: "trusted", fork: false, ...body };
       return json({ runId: spec.runId, answer: await startRun(env, spec) });
     }
     if (!runId) return json({ error: "no run" }, 400);

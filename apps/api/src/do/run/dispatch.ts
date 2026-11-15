@@ -1,6 +1,7 @@
 import type { Job, SliceResult } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { NeedResult, RunnerResult } from "@fyrden/domain/ci";
+import { SHOWN_HANDLE } from "../../accounts/handles.js";
 import type { ConnectCode } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
@@ -339,12 +340,17 @@ export class RunDispatch {
       throw error;
     }
     host.log.info("job token minted", { taskId: wireId, task: ref.task, tokenId: minted.id });
+    const github = jsonObject(assigned.github);
     return {
       task: encodeTask({
         id: wireId,
         workflowPayload: assigned.payload,
         context: {
-          ...jsonObject(assigned.github),
+          ...github,
+          // The attempt's own: a re-run reuses the run's context, whose `actor` stays the
+          // original trigger's.
+          run_attempt: String(assigned.attempt),
+          triggering_actor: await this.#triggeringActor(assigned, github),
           token: minted.token,
           // Where the runner resolves short-form `uses:` actions: GitHub, as Gitea's default (a
           // runner's own `github_mirror` replaces it). Left empty, the runner resolves them against
@@ -381,6 +387,26 @@ export class RunDispatch {
       ...(tokenId !== undefined && { tokenId }),
     });
     return { refused: "tokens_exhausted" };
+  }
+
+  /**
+   * The handle of who started the attempt: the context's `actor` when that
+   * is the run's original trigger, else read from the directory (a re-run
+   * by someone else); empty when it cannot be read.
+   */
+  async #triggeringActor(
+    assigned: Extract<AssignAnswer, { ok: true }>,
+    github: Record<string, unknown>,
+  ): Promise<string> {
+    if (assigned.triggeringActorId === assigned.actorId && typeof github.actor === "string")
+      return github.actor;
+    this.#count("ci_triggering_actor");
+    const row = await this.host.env.DIRECTORY.prepare(
+      `SELECT ${SHOWN_HANDLE} AS handle FROM principals p WHERE p.id = ?`,
+    )
+      .bind(assigned.triggeringActorId)
+      .first<{ handle: string | null }>();
+    return row?.handle ?? "";
   }
 
   /**

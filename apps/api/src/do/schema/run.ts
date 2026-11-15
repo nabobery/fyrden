@@ -294,4 +294,13 @@ export const runSchema: readonly DoMigration[] = [
       CREATE INDEX ci_log_tickets_expiry ON ci_log_tickets (expires_at);
     `,
   },
+  {
+    version: 6,
+    name: "run_origin",
+    sql: `
+      ALTER TABLE runs ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'
+        CHECK (trust IN ('trusted', 'untrusted'));
+      ALTER TABLE runs ADD COLUMN fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1));
+    `,
+  },
 ];

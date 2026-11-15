@@ -186,7 +186,8 @@ export async function forkRepository(
       ...(request.act && { actChain: request.act }),
       ...(request.grantId && { grantId: request.grantId }),
       requestId: request.requestId ?? null,
-      via: "api",
+      // Setting a fork's refs is no push: it starts no CI run.
+      via: "fork",
     });
     if (!(await network.completeFork({ networkId, forkRepoId: forkId })))
       throw new Error("the fork is no longer joining its network");
