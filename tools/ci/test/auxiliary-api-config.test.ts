@@ -16,6 +16,7 @@ it("loads generated auxiliary secrets despite a conflicting developer file and p
       main: "worker.ts",
       compatibility_date: "2026-10-01",
       secrets: { required: ["BOOTSTRAP_SECRET"] },
+      vars: { FYRDEN_CI_RUNNERS: "off", EXISTING: "kept" },
       d1_databases: [
         { binding: "DIRECTORY", database_name: "test-directory", migrations_dir: "migrations" },
       ],
@@ -29,7 +30,7 @@ it("loads generated auxiliary secrets despite a conflicting developer file and p
     await writeFile(join(sourceDirectory, ".dev.vars"), "BOOTSTRAP_SECRET=developer-value\n");
     const envFile = join(scratch, "test.env");
     await writeFile(envFile, "BOOTSTRAP_SECRET=generated-test-value\n");
-    const path = await auxiliaryApiConfig(source, join(scratch, "isolated"), envFile);
+    const path = await auxiliaryApiConfig(source, join(scratch, "isolated"), envFile, { FYRDEN_CI_RUNNERS: "on" });
     const config = unstable_readConfig({ config: path }, { hideWarnings: true });
     const bindings = unstable_getVarsForDev(
       config.userConfigPath,
@@ -43,6 +44,7 @@ it("loads generated auxiliary secrets despite a conflicting developer file and p
       type: "secret_text",
       value: "generated-test-value",
     });
+    expect(config.vars).toEqual({ FYRDEN_CI_RUNNERS: "on", EXISTING: "kept" });
     expect(config.main).toBe(join(sourceDirectory, "worker.ts"));
     expect(config.tsconfig).toBeUndefined();
     expect(resolve(dirname(path), config.d1_databases[0]?.migrations_dir ?? "")).toBe(

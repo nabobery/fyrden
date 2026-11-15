@@ -121,6 +121,32 @@ jobs:
           "$FYRDEN_GIT_BINARY" --version
           pnpm --filter @fyrden/ci-tools test:interop
 
+  # The pinned gitea/runner releases against fyrden-api under wrangler dev,
+  # whatever changed (CI runs it only when runner paths change, and on main).
+  runner:
+    name: gitea/runner against wrangler dev (6.0.0, 5.4.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cached runner binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-runner
+          key: gitea-runner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/runner/binary.ts') }}
+      - name: gitea/runner 6.0.0
+        env:
+          RUNNER_VERSION: "6.0.0"
+        run: pnpm --filter @fyrden/ci-tools test:runner
+      - name: gitea/runner 5.4.1
+        if: success() || failure()
+        env:
+          RUNNER_VERSION: "5.4.1"
+        run: pnpm --filter @fyrden/ci-tools test:runner
+
   # Long-budget mutation fuzzing of the byte parsers (pack, idx, delta,
   # pkt-line and protocol v2, receive-pack bodies, objects, .gitmodules).
   # A finding fails the job and its input is kept as an artifact.

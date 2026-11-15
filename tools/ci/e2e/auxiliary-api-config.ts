@@ -7,6 +7,7 @@ export async function auxiliaryApiConfig(
   source: string,
   directory: string,
   envFile: string,
+  vars?: Readonly<Record<string, string>>,
 ): Promise<string> {
   const config = parseJsonc<Unstable_RawConfig>(await readFile(source, "utf8"));
   if (typeof config.main !== "string") throw new Error("The API config needs a main path.");
@@ -20,6 +21,7 @@ export async function auxiliaryApiConfig(
     JSON.stringify({
       ...config,
       main: relocated(config.main),
+      ...(vars && { vars: { ...config.vars, ...vars } }),
       d1_databases: config.d1_databases?.map((database) => ({
         ...database,
         ...(database.migrations_dir && { migrations_dir: relocated(database.migrations_dir) }),
