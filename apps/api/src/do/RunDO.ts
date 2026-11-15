@@ -39,6 +39,7 @@ import {
   type RunPolicy,
   type RunRow,
 } from "./run/engine.js";
+import { type AppendLogAnswer, type LogHooks, RunLogs } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -134,7 +135,7 @@ export type TaskAnswer<T> =
   | { readonly ok: false; readonly code: "task_finished" | "unknown_task" | "run_not_found" };
 
 /** Pause or fail points around each call to the repository and in the runner protocol's work, for tests. */
-export interface RunHooks extends DispatchHooks {
+export interface RunHooks extends DispatchHooks, LogHooks {
   beforeRepoCall?: (op: string) => Promise<void> | void;
   afterRepoCall?: (op: string) => Promise<void> | void;
 }
@@ -164,7 +165,9 @@ export class RunDO extends MigratingDO {
   readonly jobs: JobQueue;
   readonly engine: RunEngine;
   readonly #dispatch: RunDispatch;
-  readonly #memory = createDoMemoryBudget(16 * 1024 * 1024);
+  readonly #logs: RunLogs;
+  /** The object's memory pool (NetworkDO's size, proposed): job slices and log requests reserve from it. */
+  readonly memory = createDoMemoryBudget(16 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
   #model: { source: string; model: RunModel } | undefined;
 
@@ -211,6 +214,24 @@ export class RunDO extends MigratingDO {
       taskLive: (ref) => host.taskLive(ref),
       updateTask: (ref) => host.updateTask(ref),
       completeTask: (ref, report) => host.completeTask(ref, report),
+      logComplete: (task) => host.#logs.complete(task),
+      logEnded: (task) => host.#logs.taskEnded(task),
+    });
+    this.#logs = new RunLogs({
+      env,
+      engine: this.engine,
+      get hooks() {
+        return host.hooks;
+      },
+      metrics: this.context.metrics,
+      log: this.#log,
+      memory: this.memory,
+      now: () => host.context.now(),
+      erased: () => host.#erased(),
+      tx: (fn) => host.#tx(fn),
+      confirm: (wireId, runnerId) => host.#dispatch.confirm(wireId, runnerId),
+      updateTask: (ref) => host.updateTask(ref),
+      markLogComplete: (ref) => host.markLogComplete(ref),
     });
   }
 
@@ -659,6 +680,20 @@ export class RunDO extends MigratingDO {
     return this.#dispatch.reportTask(wireId, body, runnerId);
   }
 
+  /**
+   * A runner's UpdateLog for wire task `wireId`, as the Worker received it
+   * (`truncated`: the first 4 MiB of a longer body). New rows are stored
+   * before they are acked; the answer carries the stored ack.
+   */
+  appendLog(
+    wireId: number,
+    body: Uint8Array,
+    truncated: boolean,
+    runnerId: number,
+  ): Promise<AppendLogAnswer> {
+    return this.#logs.append(wireId, body, truncated, runnerId);
+  }
+
   // ------------------------------------------------------------------ concurrency
 
   /**
@@ -952,6 +987,8 @@ export class RunDO extends MigratingDO {
         "run_owners",
         "run_faults",
         "ci_tasks",
+        "ci_logs",
+        "ci_log_chunks",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1298,7 +1335,7 @@ export class RunDO extends MigratingDO {
     await measureInvocation(
       this.context.metrics,
       { where: "do", op: "alarm", doClass: "RunDO" },
-      () => this.jobs.runDue(this.#handlers(), this.#memory, this.context.now() + ALARM_BUDGET_MS),
+      () => this.jobs.runDue(this.#handlers(), this.memory, this.context.now() + ALARM_BUDGET_MS),
     );
   }
 }

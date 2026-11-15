@@ -14,8 +14,6 @@ export function unknownMethod(method: string): string {
   return `method ${method} is not implemented by this server`;
 }
 
-export const NOT_AVAILABLE = "this method is not available yet on this server";
-
 export const BODY_TOO_LARGE = "the request body is larger than this method accepts";
 
 export const INVALID_MESSAGE = "the request is not a valid protobuf message";
@@ -51,3 +49,5 @@ export const TASK_SUPERSEDED = "the task was never assigned; fetch another";
 export const TASK_RESULT_UNKNOWN = "the task's result is not one the protocol defines";
 
 export const TASK_UNAVAILABLE = "the task cannot be answered now; retry";
+
+export const LOG_INDEX_AHEAD = "log index ahead of stored rows";

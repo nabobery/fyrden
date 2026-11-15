@@ -28,6 +28,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * v3 (the runner protocol):
  * - `ci_tasks`: the directory task id, local job and task numbers, offered runner,
  *   and the time the runner first reported.
+ *
+ * v4 (job logs):
+ * - `ci_logs`: contiguous stored rows, acknowledgement and completion state per task.
+ * - `ci_log_chunks`: the stored ranges and their authoritative R2 objects.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -217,6 +221,31 @@ export const runSchema: readonly DoMigration[] = [
         confirmed_at INTEGER
       ) STRICT;
       CREATE INDEX ci_tasks_task ON ci_tasks (task);
+    `,
+  },
+  {
+    version: 4,
+    name: "ci_logs",
+    sql: `
+      CREATE TABLE ci_logs (
+        task INTEGER PRIMARY KEY,
+        ack_index INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'streaming'
+          CHECK (state IN ('streaming', 'complete', 'incomplete')),
+        rows INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
+
+      CREATE TABLE ci_log_chunks (
+        task INTEGER NOT NULL,
+        start_index INTEGER NOT NULL,
+        end_index INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        r2_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (task, start_index)
+      ) STRICT, WITHOUT ROWID;
     `,
   },
 ];

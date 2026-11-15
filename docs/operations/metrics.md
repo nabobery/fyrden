@@ -197,6 +197,8 @@ that is gone, possible only after an early purge and a restore, logs
 `release asset object missing` at error level and answers 404
 `asset_missing`.
 
+Job logs are in the `fyrden-ci` bucket: `r2.class_a` `op` `put_log_chunk`, one per stored chunk. A chunk whose write lost to another flush of the same rows, or whose run was erased meanwhile, is deleted; R2 deletes are free, so that delete counts only against the invocation's `internal` budget, not as `r2.class_a`.
+
 `r2.*`, `do.request` and `d1.query` are also what the `internal` budget of
 `subrequests` counts. A D1 batch is counted once per statement here, while the
 platform counts it once, so the `internal` figure can be slightly higher than

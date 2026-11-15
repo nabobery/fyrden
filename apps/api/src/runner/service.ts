@@ -6,6 +6,7 @@ import { generateToken, hashToken, parseToken, secureRandomBytes } from "@fyrden
 import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
 import type { ReportTaskAnswer } from "../do/run/dispatch.js";
+import type { AppendLogAnswer } from "../do/run/logs.js";
 import { clock } from "../services.js";
 import { admitEveryRunner, type RunnerAdmission } from "./admission.js";
 import {
@@ -16,6 +17,7 @@ import {
   MAX_UPDATE_TASK_BYTES,
   protoResponse,
   readPrefix,
+  UPDATE_LOG_PREFIX_BYTES,
 } from "./connect.js";
 import { dispatchTask, TaskUnavailable } from "./dispatch.js";
 import {
@@ -24,7 +26,6 @@ import {
   FIELD_TOO_LONG,
   INVALID_MESSAGE,
   NAME_REQUIRED,
-  NOT_AVAILABLE,
   RATE_LIMITED,
   REGISTRATION_OFF,
   REGISTRATION_REFUSED,
@@ -102,7 +103,7 @@ const METHODS: Readonly<Record<string, Method>> = {
   "runner.v1.RunnerService/Declare": declare,
   "runner.v1.RunnerService/FetchTask": fetchTask,
   "runner.v1.RunnerService/UpdateTask": updateTask,
-  "runner.v1.RunnerService/UpdateLog": notYet,
+  "runner.v1.RunnerService/UpdateLog": updateLog,
 };
 
 /** Mounts the runner service; before the REST routes, which share the /api prefix. */
@@ -317,17 +318,11 @@ async function fetchTask(call: CallContext): Promise<Response> {
   );
 }
 
-/**
- * The runner's report on its task, routed by the task id scanned from the
- * body (the Worker decodes no steps or outputs) to the task's run, which
- * decodes, confirms, heartbeats or completes it and answers.
- */
-async function updateTask(call: CallContext): Promise<Response> {
-  const { bytes, truncated } = await readPrefix(call.c.req.raw, MAX_UPDATE_TASK_BYTES);
-  const taskId = truncated ? undefined : scanTaskId(bytes, "update_task");
-  const { runner, task } = await authenticate(call, taskId === undefined ? {} : { taskId });
-  if (truncated) throw new Refusal("resource_exhausted", BODY_TOO_LARGE);
-  if (taskId === undefined) throw new Refusal("invalid_argument", TASK_ID_MISSING);
+/** The task a report names, as the directory has it: refused unless it is the runner's, assigned and not superseded. */
+function reportedTask(
+  call: CallContext,
+  { runner, task }: RunnerAuthentication,
+): NonNullable<RunnerAuthentication["task"]> {
   if (!task) throw new Refusal("not_found", TASK_NOT_FOUND);
   if (task.runnerId !== runner.id) throw new Refusal("permission_denied", TASK_OF_ANOTHER_RUNNER);
   if (task.superseded) throw new Refusal("failed_precondition", TASK_SUPERSEDED);
@@ -335,12 +330,20 @@ async function updateTask(call: CallContext): Promise<Response> {
   if (!task.assigned) throw new Refusal("not_found", TASK_NOT_FOUND);
   call.log = call.log.child({ taskId: task.id, runId: task.runId });
   call.c.set("log", call.log);
-  call.metrics.count("do.request", { class: "RunDO", method: "reportTask" });
-  let answer: ReportTaskAnswer;
+  return task;
+}
+
+/** Answers a run's report: its encoded response, or its Connect error; the run unreachable is `unavailable`. */
+async function fromRun(
+  call: CallContext,
+  what: string,
+  ask: () => Promise<ReportTaskAnswer | AppendLogAnswer>,
+): Promise<Response> {
+  let answer: ReportTaskAnswer | AppendLogAnswer;
   try {
-    answer = await call.env.RUN.getByName(task.runId).reportTask(task.id, bytes, runner.id);
+    answer = await ask();
   } catch (error) {
-    call.log.warn("task report failed", {
+    call.log.warn(`${what} failed`, {
       error: error instanceof Error ? error.message : String(error),
     });
     throw new Refusal("unavailable", TASK_UNAVAILABLE);
@@ -349,7 +352,46 @@ async function updateTask(call: CallContext): Promise<Response> {
   return protoResponse(answer.response);
 }
 
-async function notYet(call: CallContext): Promise<Response> {
-  await authenticate(call);
-  throw new Refusal("unimplemented", NOT_AVAILABLE);
+/**
+ * The runner's report on its task, routed by the task id scanned from the
+ * body (the Worker decodes no steps or outputs) to the task's run, which
+ * decodes, confirms, heartbeats or completes it and answers.
+ */
+async function updateTask(call: CallContext): Promise<Response> {
+  const { bytes, truncated } = await readPrefix(call.c.req.raw, MAX_UPDATE_TASK_BYTES);
+  const taskId = truncated ? undefined : scanTaskId(bytes, "update_task");
+  const found = await authenticate(call, taskId === undefined ? {} : { taskId });
+  if (truncated) throw new Refusal("resource_exhausted", BODY_TOO_LARGE);
+  if (taskId === undefined) throw new Refusal("invalid_argument", TASK_ID_MISSING);
+  const task = reportedTask(call, found);
+  call.metrics.count("do.request", { class: "RunDO", method: "reportTask" });
+  return fromRun(call, "task report", () =>
+    call.env.RUN.getByName(task.runId).reportTask(task.id, bytes, found.runner.id),
+  );
+}
+
+/**
+ * The runner's log rows for its task: at most the first 4 MiB of the body
+ * (a longer one is passed on as a prefix, whose complete rows may be
+ * stored), routed by the scanned task id to the task's run, which decodes
+ * the rows, stores what it takes and answers with the stored ack.
+ */
+async function updateLog(call: CallContext): Promise<Response> {
+  const { bytes, truncated } = await readPrefix(call.c.req.raw, UPDATE_LOG_PREFIX_BYTES);
+  let taskId: number | undefined;
+  let unreadable: unknown;
+  try {
+    taskId = scanTaskId(bytes, "update_log");
+  } catch (error) {
+    // Bad credentials are answered as such whatever the body.
+    unreadable = error;
+  }
+  const found = await authenticate(call, taskId === undefined ? {} : { taskId });
+  if (unreadable !== undefined) throw unreadable;
+  if (taskId === undefined) throw new Refusal("invalid_argument", TASK_ID_MISSING);
+  const task = reportedTask(call, found);
+  call.metrics.count("do.request", { class: "RunDO", method: "appendLog" });
+  return fromRun(call, "log append", () =>
+    call.env.RUN.getByName(task.runId).appendLog(task.id, bytes, truncated, found.runner.id),
+  );
 }

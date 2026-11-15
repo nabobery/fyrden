@@ -2,6 +2,24 @@ CREATE INDEX ci_tasks_task ON ci_tasks (task);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX run_checks_dirty ON run_checks (attempt) WHERE parked IS NULL AND sent_rev < rev;
 CREATE INDEX run_instances_live ON run_instances (attempt, status);
+CREATE TABLE ci_log_chunks (
+        task INTEGER NOT NULL,
+        start_index INTEGER NOT NULL,
+        end_index INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        r2_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (task, start_index)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_logs (
+        task INTEGER PRIMARY KEY,
+        ack_index INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'streaming'
+          CHECK (state IN ('streaming', 'complete', 'incomplete')),
+        rows INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE ci_tasks (
         wire_id INTEGER PRIMARY KEY,
         job_id INTEGER NOT NULL,

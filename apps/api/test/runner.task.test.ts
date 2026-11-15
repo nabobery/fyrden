@@ -82,7 +82,7 @@ describe("UpdateTask", () => {
     expect((await taskRow(task.id))?.confirmed_at).toBe(confirmed);
   });
 
-  it("completes the task with its result and outputs, the log not complete yet", async () => {
+  it("completes the task with its result and outputs, its log incomplete with no final log stored", async () => {
     const { runId, runner, task } = await withTask();
     const outputs = new Map([
       ["version", "1.2.3"],

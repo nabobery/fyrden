@@ -21,6 +21,7 @@ import {
   encodeUpdateLogRequest,
   encodeUpdateTaskRequest,
 } from "./helpers/runner-proto.js";
+import { stateOf } from "./helpers/runners.js";
 import { logs } from "./setup/log-capture.js";
 
 const ORIGIN = "https://fyrden.test";
@@ -480,16 +481,16 @@ describe("runner authentication", () => {
       );
   });
 
-  it("answers the method not served yet as unimplemented after authenticating", async () => {
+  it("answers reports on a task it never had as not_found after authenticating", async () => {
     const owner = await who();
     const org = await newOrg(owner);
     const runner = await register(org.login, owner);
-    for (const [method, body] of AUTHENTICATED.slice(3))
-      await connectError(
-        await runnerCall(method, body, { credentials: runner }),
-        "unimplemented",
-        501,
-      );
+    const unknown: [string, Uint8Array][] = [
+      ["UpdateTask", encodeUpdateTaskRequest({ state: stateOf(2 ** 40), outputs: new Map() })],
+      ["UpdateLog", encodeUpdateLogRequest({ taskId: 2 ** 40, index: 0, rows: [], noMore: false })],
+    ];
+    for (const [method, body] of unknown)
+      await connectError(await runnerCall(method, body, { credentials: runner }), "not_found", 404);
   });
 
   it("over the runner limiter: resource_exhausted before any D1 lookup", async () => {

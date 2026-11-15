@@ -95,6 +95,10 @@ export interface DispatchHost {
     ref: TaskRef,
     report: { result: RunnerResult; outputs?: Record<string, string>; logComplete: boolean },
   ): TaskAnswer<{ conclusion: string }>;
+  /** Whether the task's stored log is complete. */
+  logComplete(task: number): boolean;
+  /** The task completed: a log not complete by now ends incomplete. */
+  logEnded(task: number): void;
 }
 
 /** A job token reads its repository's contents, nothing else. */
@@ -324,7 +328,7 @@ export class RunDispatch {
     const map = host.engine.rows<MapRow>("SELECT * FROM ci_tasks WHERE wire_id = ?", wireId)[0];
     if (!map) return { ok: false, code: "not_found", message: TASK_NOT_FOUND };
     const ref: TaskRef = { jobId: map.job_id, task: map.task };
-    if (map.confirmed_at === null) await this.#confirm(wireId, runnerId);
+    if (map.confirmed_at === null) await this.confirm(wireId, runnerId);
 
     if (result === Result.UNSPECIFIED) {
       const beat = host.updateTask(ref);
@@ -334,11 +338,16 @@ export class RunDispatch {
       return answer(Result.CANCELLED);
     }
     const outputs = Object.fromEntries(request.outputs);
-    const done = host.completeTask(ref, {
-      result: RUNNER_RESULT[result] as RunnerResult,
-      ...(request.outputs.size > 0 && { outputs }),
-      // Logs are not stored yet, so none is complete.
-      logComplete: false,
+    // The log as stored now: one still streaming ends incomplete, never waited for. A whole
+    // final UpdateLog that lands later still completes it.
+    const done = host.tx(() => {
+      const completed = host.completeTask(ref, {
+        result: RUNNER_RESULT[result] as RunnerResult,
+        ...(request.outputs.size > 0 && { outputs }),
+        logComplete: host.logComplete(ref.task),
+      });
+      if (completed.ok) host.logEnded(ref.task);
+      return completed;
     });
     if (done.ok) {
       const stored = host.engine.instance(ref.jobId)?.outputs ?? null;
@@ -350,8 +359,8 @@ export class RunDispatch {
     return answer(Result.CANCELLED, [...request.outputs.keys()]);
   }
 
-  /** The first report of a task: its row, and an ephemeral runner's, record it. */
-  async #confirm(wireId: number, runnerId: number): Promise<void> {
+  /** The first report of a task (UpdateTask or UpdateLog): its row, and an ephemeral runner's, record it. */
+  async confirm(wireId: number, runnerId: number): Promise<void> {
     const { host } = this;
     const now = host.now();
     const db = host.env.DIRECTORY;
