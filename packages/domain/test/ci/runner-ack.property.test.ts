@@ -32,7 +32,9 @@ import {
   LOG_FLUSH_AGE_MS,
   LOG_FLUSH_BYTES,
   LOG_FLUSH_ROWS,
+  LOG_HOLD_MAX_ROWS,
   type LogFlushRequest,
+  settleFlush,
 } from "../../src/ci/index.js";
 
 const RUNNER_BATCH = 100;
@@ -69,7 +71,8 @@ type Action =
   /** A step starts or ends: an immediate call, `after` ms from the last event. */
   | { kind: "step"; after: number; send: SendOptions }
   | { kind: "reset" }
-  | { kind: "final"; send: SendOptions };
+  /** The runner closes, `after` ms (default 0) from the last event, and makes its final call. */
+  | { kind: "final"; send: SendOptions; after?: number };
 
 interface Chunk {
   start: number;
@@ -177,11 +180,16 @@ class FakeStore {
     this.firstUnackedSeenAt = undefined;
   }
 
-  /** Handles one request the way the log path does; answers the ack to send. */
+  /**
+   * Handles one request the way the log path does; answers the ack to send.
+   * `held`, when set, is how many of the request's new rows masking leaves
+   * unsettled, and the hold rule decides what is stored.
+   */
   handle(
     request: LogFlushRequest,
     now: number,
     fault: Fault,
+    held: number | null = null,
   ): { ack: number; committed: boolean; final: boolean; held: boolean } {
     const decision = decideLogFlush(
       { ackIndex: this.ack, firstUnackedSeenAt: this.firstUnackedSeenAt },
@@ -195,7 +203,24 @@ class FakeStore {
       // The decision's ack is what the runner hears; it must be the durable one.
       return { ack: decision.ackIndex, committed: false, final: false, held: true };
     }
-    const { start, end, lines, final } = decision;
+    let { start, end, lines, final } = decision;
+    let seenAfter: number | undefined;
+    if (held !== null) {
+      const settled = Math.max(0, decision.end - decision.start - held);
+      const settle = settleFlush(
+        decision,
+        settled,
+        { ackIndex: this.ack, firstUnackedSeenAt: this.firstUnackedSeenAt },
+        now,
+      );
+      if (settle.kind === "hold") {
+        expect(settle.ackIndex).toBe(this.ack);
+        this.firstUnackedSeenAt = settle.firstUnackedSeenAt;
+        return { ack: this.ack, committed: false, final: false, held: true };
+      }
+      ({ start, end, lines, final } = settle);
+      seenAfter = settle.firstUnackedSeenAt;
+    }
     const failed = () => {
       // The rows stay unacked, so their clock keeps running.
       this.firstUnackedSeenAt ??= now;
@@ -217,7 +242,7 @@ class FakeStore {
       return { ack: this.ack, committed: false, final: false, held: false };
     }
     this.commit(start, end, lines, final, key);
-    this.firstUnackedSeenAt = undefined;
+    this.firstUnackedSeenAt = seenAfter;
     return { ack: this.ack, committed: true, final, held: false };
   }
 
@@ -408,8 +433,21 @@ interface RunResult {
   overhead: number;
 }
 
-function run(olderRelease: boolean, interval: number, script: readonly Action[]): RunResult {
+/**
+ * `holds`, when set, makes the server apply the hold rule: each request's
+ * unsettled row count is taken in turn from the list.
+ */
+function run(
+  olderRelease: boolean,
+  interval: number,
+  script: readonly Action[],
+  holds: readonly number[] | null = null,
+): RunResult {
   const runner = new ModelRunner(olderRelease);
+  let calls = 0;
+  /** When the server first decoded each position; checked only while nothing unhealthy happened. */
+  const firstSeen: number[] = [];
+  let clean = true;
   const store = new FakeStore();
   let now = 0;
   let lastAck = 0;
@@ -437,7 +475,16 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
     const fresh = Math.max(0, request.index + request.rows.length - before);
     const freshRows = request.rows.slice(Math.max(0, before - request.index));
     const seen = store.firstUnackedSeenAt;
-    const answer = store.handle(request, now, options.fault);
+    const unsettled = holds === null ? null : (holds[calls++ % holds.length] as number);
+    if (options.lost || options.fault !== "none") clean = false;
+    // A request that carries no new row makes the server forget when unacked rows were
+    // first seen (the flush rule remembers nothing then), so the bound cannot hold past it.
+    const decodedEnd = request.index + request.rows.length;
+    if (decodedEnd <= store.ack && firstSeen.length > store.ack) clean = false;
+    for (let p = Math.max(request.index, store.ack); p < request.index + request.rows.length; p++) {
+      firstSeen[p] ??= now;
+    }
+    const answer = store.handle(request, now, options.fault, unsettled);
 
     expect(answer.ack).toBe(store.ack);
     if (answer.held) expect(answer.ack).toBe(before);
@@ -453,7 +500,22 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
     lastAck = store.ack;
     checkStore(store, runner);
 
-    if (request.whole && options.fault === "none") {
+    if (holds !== null && clean) {
+      // Every row is stored by the first request 15 s after the server first saw it that
+      // carries it: a cut request cannot store rows past its cut, which it never read.
+      const decoded = Math.min(firstSeen.length, request.index + request.rows.length);
+      for (let p = store.ack; p < decoded; p++) {
+        expect((firstSeen[p] as number) + LOG_FLUSH_AGE_MS).toBeGreaterThan(now);
+      }
+    }
+    if (cut && answer.committed) {
+      // Storing a cut request's rows restarts the age clock, so rows past the cut count as
+      // first seen when a request next carries them.
+      firstSeen.length = Math.min(firstSeen.length, request.index + request.rows.length);
+    }
+    if (holds !== null) {
+      checkHeld(request, options, before, fresh, seen, now, answer, store.firstUnackedSeenAt);
+    } else if (request.whole && options.fault === "none") {
       const due =
         fresh >= LOG_FLUSH_ROWS ||
         contentBytes(freshRows) >= LOG_FLUSH_BYTES ||
@@ -464,7 +526,7 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
         expect(store.ack).toBe(request.index + request.rows.length);
       }
     }
-    if (!request.whole) {
+    if (holds === null && !request.whole) {
       expect(answer.final).toBe(false);
       expect(store.complete).toBe(wasComplete);
       if (request.oversizedFirstRow !== undefined) {
@@ -513,9 +575,11 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
         if (runner.buffered() > 0) send(action.send);
         break;
       case "reset":
+        clean = false;
         store.reset();
         break;
       case "final":
+        now += action.after ?? 0;
         runner.close();
         send(action.send);
         break;
@@ -535,10 +599,54 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
   checkStore(store, runner);
   // Holds on any schedule: a clean flush sends each of its rows once, as distinct positions; a
   // clean hold sends fewer than LOG_FLUSH_ROWS rows; everything else is counted as overhead.
-  expect(runner.rowsSent).toBeLessThanOrEqual(
-    runner.positions + (LOG_FLUSH_ROWS - 1) * held + overhead,
-  );
+  if (holds === null) {
+    expect(runner.rowsSent).toBeLessThanOrEqual(
+      runner.positions + (LOG_FLUSH_ROWS - 1) * held + overhead,
+    );
+  }
   return { runner, store, held, overhead };
+}
+
+/** What the hold rule guarantees for one request: acks behind storage, few rows left, no row past its age. */
+function checkHeld(
+  request: LogFlushRequest,
+  options: SendOptions,
+  before: number,
+  fresh: number,
+  seen: number | undefined,
+  now: number,
+  answer: { ack: number; committed: boolean; final: boolean; held: boolean },
+  seenAfter: number | undefined,
+): void {
+  const sentEnd = request.index + request.rows.length;
+  // Rows left unacked keep an age clock that has started, so the age rule can store them.
+  if (fresh > 0 && answer.ack < sentEnd && (answer.held || answer.committed)) {
+    expect(seenAfter).toBeDefined();
+    expect(seenAfter).toBeLessThanOrEqual(now);
+  }
+  const omissionEnd =
+    !request.whole &&
+    request.rows.length === 0 &&
+    request.index === before &&
+    request.oversizedFirstRow !== undefined
+      ? before + 1
+      : before;
+  expect(answer.ack).toBeGreaterThanOrEqual(before);
+  expect(answer.ack).toBeLessThanOrEqual(Math.max(omissionEnd, sentEnd));
+  if (answer.committed) expect(sentEnd - answer.ack).toBeLessThanOrEqual(LOG_HOLD_MAX_ROWS);
+  if (options.fault !== "none") return;
+  // A final call stores everything; a cut final call always advances over new rows.
+  if (request.noMore && request.whole) {
+    expect(answer.committed).toBe(true);
+    expect(answer.ack).toBe(sentEnd);
+  }
+  if (request.noMore && fresh > 0) expect(answer.ack).toBeGreaterThan(before);
+  if (!request.whole) expect(answer.final).toBe(false);
+  // Rows first seen 15 s ago are stored by this request.
+  if (fresh > 0 && seen !== undefined && now - seen >= LOG_FLUSH_AGE_MS) {
+    expect(answer.committed).toBe(true);
+    expect(answer.ack).toBeGreaterThan(before);
+  }
 }
 
 /** Rows sent per position, and the bound that holds when calls come only on the log ticker. */
@@ -559,6 +667,37 @@ describe("runner log acks", () => {
       fc.property(fc.boolean(), intervals, actions(false), (olderRelease, interval, script) => {
         run(olderRelease, interval, script);
       }),
+      { numRuns: 400 },
+    );
+  }, 60_000);
+
+  it("acks only stored rows and leaves at most 8 unacked when masking holds rows", () => {
+    // A healthy run that ends in a final call the decoder cut, possibly long after rows
+    // were first held: the cut final reports its trigger before age.
+    const endsInCutFinal = fc
+      .tuple(actions(true), fc.integer({ min: 0, max: 30_000 }), fc.integer({ min: 0, max: 400 }))
+      .map(([script, after, cut]): Action[] => [
+        ...script,
+        { kind: "final", after, send: { ...healthy, cut } },
+      ]);
+    const holds = fc.array(
+      fc.oneof(
+        fc.constant(0),
+        fc.integer({ min: 1, max: LOG_HOLD_MAX_ROWS }),
+        fc.integer({ min: LOG_HOLD_MAX_ROWS + 1, max: 120 }),
+      ),
+      { minLength: 1, maxLength: 20 },
+    );
+    fc.assert(
+      fc.property(
+        fc.boolean(),
+        intervals,
+        fc.oneof(actions(true), actions(false), endsInCutFinal),
+        holds,
+        (olderRelease, interval, script, held) => {
+          run(olderRelease, interval, script, held);
+        },
+      ),
       { numRuns: 400 },
     );
   }, 60_000);
