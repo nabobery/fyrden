@@ -233,6 +233,8 @@ describe("FetchTask", () => {
     if (!again.ok) throw new Error(again.code);
     expect(task.workflowPayload).toEqual(again.payload);
     expect(task.context).toMatchObject({ ref: "refs/heads/main", event_name: "push" });
+    // Short-form `uses:` actions resolve against this, not against the forge.
+    expect(task.context).toMatchObject({ gitea_default_actions_url: "https://github.com" });
     expect(task.vars.size).toBe(0);
     const token = jobTokenOf(task);
     const [minted] = await jobTokensOf(task.id);

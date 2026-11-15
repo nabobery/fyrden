@@ -253,7 +253,15 @@ export class RunDispatch {
       task: encodeTask({
         id: wireId,
         workflowPayload: assigned.payload,
-        context: { ...jsonObject(assigned.github), token: minted.token },
+        context: {
+          ...jsonObject(assigned.github),
+          token: minted.token,
+          // Where the runner resolves short-form `uses:` actions: GitHub, as Gitea's default (a
+          // runner's own `github_mirror` replaces it). Left empty, the runner resolves them against
+          // this forge, which hosts none (runner `run/runner.go` getDefaultActionsURL, v6.0.0 and
+          // v5.4.1; measured with a real runner).
+          gitea_default_actions_url: DEFAULT_ACTIONS_URL,
+        },
         // Never empty: the pinned runner writes into this map (measured).
         secrets: new Map([
           ["GITHUB_TOKEN", minted.token],
@@ -583,6 +591,9 @@ export class RunDispatch {
       : { done: true };
   }
 }
+
+/** The actions instance the runner fetches `uses:` actions from. */
+const DEFAULT_ACTIONS_URL = "https://github.com";
 
 /** The `github` context as a JSON object (none: an empty one). */
 function jsonObject(value: unknown): JsonObject {
