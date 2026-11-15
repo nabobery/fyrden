@@ -1,6 +1,14 @@
+CREATE INDEX ci_tasks_task ON ci_tasks (task);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX run_checks_dirty ON run_checks (attempt) WHERE parked IS NULL AND sent_rev < rev;
 CREATE INDEX run_instances_live ON run_instances (attempt, status);
+CREATE TABLE ci_tasks (
+        wire_id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL,
+        task INTEGER NOT NULL,
+        runner_id INTEGER NOT NULL,
+        confirmed_at INTEGER
+      ) STRICT;
 CREATE TABLE jobs (
         job_id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,

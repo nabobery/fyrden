@@ -1,4 +1,5 @@
 import type { TokenRecord, VerifyMode, VerifyResult } from "@fyrden/adapters-cloudflare/auth";
+import { parseToken } from "@fyrden/domain";
 import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { problem } from "../http/problem.js";
@@ -101,7 +102,7 @@ export const extractToken = (header: string | undefined): string | undefined =>
  * with the `DPoP` scheme and a fresh proof by its key naming this request
  * and the token (each proof taken once); a bearer one not with the `DPoP`
  * scheme; and, where an acting agent's owner requires DPoP, only a
- * DPoP-bound token, except a git token used by git itself (`git`: git
+ * DPoP-bound token, except a git or job token used by git itself (`git`: git
  * cannot send proofs; the same token at the REST API or MCP is refused).
  */
 async function presentedAsBound(
@@ -112,7 +113,7 @@ async function presentedAsBound(
 ): Promise<boolean> {
   if (record.dpopJkt === null) {
     if (credential.scheme === "dpop") return false;
-    return !(record.requiresDpop && !(git && record.type === "git"));
+    return !(record.requiresDpop && !(git && (record.type === "git" || record.type === "job")));
   }
   const proof = c.req.header("DPoP");
   if (credential.scheme !== "dpop" || !proof) return false;
@@ -138,11 +139,13 @@ export type Authentication =
  * client address before the token is looked up, so a stream of made-up
  * tokens cannot drive unbounded D1 reads. On success the request's logger
  * names the principal. `git`: the request is git's own (smart HTTP).
+ * `gitRead`: git's read of a repository, the one place a CI job token is
+ * taken (always checked on the primary); everywhere else it is refused.
  */
 export async function authenticate(
   c: Context<{ Bindings: Env; Variables: AuthVariables }>,
   mode: VerifyMode,
-  options: { readonly git?: boolean } = {},
+  options: { readonly git?: boolean; readonly gitRead?: boolean } = {},
 ): Promise<Authentication> {
   const credential = extractCredential(c.req.header("Authorization"));
   if (!credential) {
@@ -161,11 +164,17 @@ export async function authenticate(
     return { ok: false, reason: "rate_limited" };
   }
 
+  const parsed = parseToken(token);
+  const job = parsed.ok && parsed.type === "job";
+  if (job && !options.gitRead) return { ok: false, reason: "invalid" };
+  // A job token stops with its task, so it is never taken from a cache.
+  const verifyMode: VerifyMode = job ? "write" : mode;
+
   const store = tokenStore(c.env, {
     defer: (p) => c.executionCtx.waitUntil(p),
     metrics: c.get("metrics"),
   });
-  const result = await store.verify(token, mode);
+  const result = await store.verify(token, verifyMode);
   c.get("metrics").count("auth.token", {
     type: result.ok ? result.record.type : "unknown",
     outcome: result.ok ? "ok" : result.reason,
@@ -186,7 +195,7 @@ export async function authenticate(
     ok: true,
     state: {
       record: result.record,
-      mode,
+      mode: verifyMode,
       verifyForWrite: () => store.verify(token, "write"),
     },
   };

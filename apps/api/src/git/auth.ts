@@ -9,6 +9,7 @@ import {
   type RepoEntry,
   resolveRepo,
 } from "../repos/directory.js";
+import { jobTokenTask } from "../runner/job-tokens.js";
 import { type GitContext, gitText } from "./http.js";
 
 /** Token types a git client may use: git tokens and personal access tokens. */
@@ -31,6 +32,8 @@ export type GitAccess =
  *   GitHub). Every repository is private for now.
  * - Writes verify the token on the D1 primary, so a revoked token cannot
  *   push from a stale cache, and read the directory from the primary.
+ * - A CI job token reads its one repository, verified on the primary, and
+ *   only while its task is live; 503 when that cannot be told.
  */
 export async function authorizeGit(
   c: GitContext,
@@ -43,7 +46,10 @@ export async function authorizeGit(
   const fail = (response: Response): GitAccess => ({ ok: false, response });
   const challenge = { "WWW-Authenticate": 'Basic realm="Fyrden"' };
 
-  const authn = await authenticate(c, access === "write" ? "write" : "read", { git: true });
+  const authn = await authenticate(c, access === "write" ? "write" : "read", {
+    git: true,
+    gitRead: access === "read",
+  });
   if (!authn.ok) {
     if (authn.reason === "rate_limited")
       return fail(
@@ -57,8 +63,9 @@ export async function authorizeGit(
   }
   const auth = authn.state.record;
   // An access token for another resource (RFC 8707: the MCP server's) is not taken here.
+  const job = auth.type === "job" && access === "read";
   if (
-    !tokenTypes.has(auth.type) ||
+    !(job || tokenTypes.has(auth.type)) ||
     !audienceAllows(auth.audience, new URL(c.req.url).origin, "api")
   ) {
     return fail(
@@ -68,6 +75,13 @@ export async function authorizeGit(
         "This token cannot be used with git. Use a git token or a personal access token.",
       ),
     );
+  }
+
+  if (job) {
+    const task = await jobTokenTask(c.env, auth.id, c.get("metrics"));
+    if (task === "unavailable")
+      return fail(gitText(c, 503, "The job's task cannot be checked now. Try again later."));
+    if (task === "ended") return fail(gitText(c, 401, "Invalid username or token.", challenge));
   }
 
   const limiter = access === "write" ? c.env.RATE_LIMIT_WRITE : c.env.RATE_LIMIT_READ;

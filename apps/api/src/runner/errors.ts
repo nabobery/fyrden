@@ -34,3 +34,20 @@ export const FIELD_TOO_LONG = "a runner name, version or label is too long";
 export const TOO_MANY_LABELS = "a runner may declare at most 64 labels";
 
 export const CREDENTIALS_REFUSED = "the runner's credentials are not valid";
+
+export const RUNNER_SPENT = "this ephemeral runner has had its task and may only report on it";
+
+export const TASK_ID_MISSING = "the request names no task";
+
+export const TASK_ID_MISMATCH =
+  "the task id in the decoded request differs from the one it was routed by";
+
+export const TASK_NOT_FOUND = "no such task";
+
+export const TASK_OF_ANOTHER_RUNNER = "the task was given to another runner";
+
+export const TASK_SUPERSEDED = "the task was never assigned; fetch another";
+
+export const TASK_RESULT_UNKNOWN = "the task's result is not one the protocol defines";
+
+export const TASK_UNAVAILABLE = "the task cannot be answered now; retry";

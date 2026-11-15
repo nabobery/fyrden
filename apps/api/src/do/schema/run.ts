@@ -24,6 +24,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `run_identity`: the immutable repository and spec reservation, made before registration.
  * - `jobs`: this object's background work (the same table the repository
  *   objects use, so the same job queue runs it).
+ *
+ * v3 (the runner protocol):
+ * - `ci_tasks`: the directory task id, local job and task numbers, offered runner,
+ *   and the time the runner first reported.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -199,6 +203,20 @@ export const runSchema: readonly DoMigration[] = [
       ) STRICT;
       INSERT INTO run_identity (id, repo_id, spec_digest)
         SELECT id, repo_id, spec_digest FROM runs;
+    `,
+  },
+  {
+    version: 3,
+    name: "ci_tasks",
+    sql: `
+      CREATE TABLE ci_tasks (
+        wire_id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL,
+        task INTEGER NOT NULL,
+        runner_id INTEGER NOT NULL,
+        confirmed_at INTEGER
+      ) STRICT;
+      CREATE INDEX ci_tasks_task ON ci_tasks (task);
     `,
   },
 ];

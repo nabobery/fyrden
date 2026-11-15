@@ -480,11 +480,11 @@ describe("runner authentication", () => {
       );
   });
 
-  it("answers the methods not served yet as unimplemented after authenticating", async () => {
+  it("answers the method not served yet as unimplemented after authenticating", async () => {
     const owner = await who();
     const org = await newOrg(owner);
     const runner = await register(org.login, owner);
-    for (const [method, body] of AUTHENTICATED.slice(1))
+    for (const [method, body] of AUTHENTICATED.slice(3))
       await connectError(
         await runnerCall(method, body, { credentials: runner }),
         "unimplemented",

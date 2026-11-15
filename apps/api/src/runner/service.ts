@@ -5,6 +5,7 @@ import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { generateToken, hashToken, parseToken, secureRandomBytes } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
+import type { ReportTaskAnswer } from "../do/run/dispatch.js";
 import { clock } from "../services.js";
 import { admitEveryRunner, type RunnerAdmission } from "./admission.js";
 import {
@@ -12,9 +13,11 @@ import {
   checkConnectRequest,
   connectError,
   MAX_SMALL_CALL_BYTES,
+  MAX_UPDATE_TASK_BYTES,
   protoResponse,
   readPrefix,
 } from "./connect.js";
+import { dispatchTask, TaskUnavailable } from "./dispatch.js";
 import {
   BODY_TOO_LARGE,
   CREDENTIALS_REFUSED,
@@ -25,6 +28,12 @@ import {
   RATE_LIMITED,
   REGISTRATION_OFF,
   REGISTRATION_REFUSED,
+  RUNNER_SPENT,
+  TASK_ID_MISSING,
+  TASK_NOT_FOUND,
+  TASK_OF_ANOTHER_RUNNER,
+  TASK_SUPERSEDED,
+  TASK_UNAVAILABLE,
   TOO_MANY_LABELS,
   unknownMethod,
 } from "./errors.js";
@@ -38,12 +47,14 @@ import {
   encodePingResponse,
   encodeRegisterResponse,
   type Runner,
+  scanTaskId,
 } from "./proto/messages.js";
 import { ProtoError } from "./proto/wire.js";
 import {
   type AuthenticatedRunner,
   authenticateRunner,
   declareRunner,
+  type RunnerAuthentication,
   registerRunner,
 } from "./registry.js";
 
@@ -90,7 +101,7 @@ const METHODS: Readonly<Record<string, Method>> = {
   "runner.v1.RunnerService/Register": register,
   "runner.v1.RunnerService/Declare": declare,
   "runner.v1.RunnerService/FetchTask": fetchTask,
-  "runner.v1.RunnerService/UpdateTask": notYet,
+  "runner.v1.RunnerService/UpdateTask": updateTask,
   "runner.v1.RunnerService/UpdateLog": notYet,
 };
 
@@ -122,6 +133,7 @@ async function serve(c: Context<AppEnv>): Promise<Response> {
   } catch (error) {
     if (error instanceof Refusal) return connectError(error.code, error.message);
     if (error instanceof ProtoError) return connectError("invalid_argument", INVALID_MESSAGE);
+    if (error instanceof TaskUnavailable) return connectError("unavailable", TASK_UNAVAILABLE);
     throw error;
   }
 }
@@ -227,26 +239,37 @@ function runnerMessage(
  * The runner whose `x-runner-uuid` and `x-runner-token` the request carries,
  * or `unauthenticated`, which makes the runner stop (measured). Its id and
  * uuid are added to every later log line of the request; its token never is.
+ * The same read brings the task the call names, or FetchTask's view.
  */
-async function authenticate(call: CallContext): Promise<AuthenticatedRunner> {
+async function authenticate(
+  call: CallContext,
+  options: { taskId?: number; fetchVersion?: number } = {},
+): Promise<RunnerAuthentication> {
   const uuid = call.c.req.header("x-runner-uuid") ?? "";
   const token = call.c.req.header("x-runner-token") ?? "";
   const parsed = parseToken(token);
   if (!UUID.test(uuid) || !parsed.ok || parsed.type !== "rnr")
     throw new Refusal("unauthenticated", CREDENTIALS_REFUSED);
-  const runner = await authenticateRunner(
+  const found = await authenticateRunner(
     call.env.DIRECTORY,
-    { uuid, tokenHash: await hashToken(token), now: call.now },
+    { uuid, tokenHash: await hashToken(token), now: call.now, ...options },
     call.metrics,
   );
-  if (!runner) throw new Refusal("unauthenticated", CREDENTIALS_REFUSED);
+  if (!found) throw new Refusal("unauthenticated", CREDENTIALS_REFUSED);
+  const { runner } = found;
   call.log = call.log.child({ runnerId: runner.id, runnerUuid: runner.uuid });
   call.c.set("log", call.log);
-  return runner;
+  return found;
+}
+
+/** A spent ephemeral runner may only report on its task. */
+function notSpent(runner: AuthenticatedRunner): void {
+  if (runner.spent) throw new Refusal("unauthenticated", RUNNER_SPENT);
 }
 
 async function declare(call: CallContext): Promise<Response> {
-  const runner = await authenticate(call);
+  const { runner } = await authenticate(call);
+  notSpent(runner);
   const request = decodeDeclareRequest(await smallBody(call));
   checkDeclared(request.version, request.labels);
   await declareRunner(
@@ -263,13 +286,67 @@ async function declare(call: CallContext): Promise<Response> {
 }
 
 async function fetchTask(call: CallContext): Promise<Response> {
-  const runner = await authenticate(call);
-  const request = decodeFetchTaskRequest(await smallBody(call));
+  // The version is read before authenticating, which reads the account's state with the runner.
+  let request: ReturnType<typeof decodeFetchTaskRequest>;
+  try {
+    request = decodeFetchTaskRequest(await smallBody(call));
+  } catch (error) {
+    // Bad credentials are answered as such whatever the body.
+    await authenticate(call);
+    throw error;
+  }
+  const { runner, dispatch } = await authenticate(call, { fetchVersion: request.tasksVersion });
+  notSpent(runner);
   // Off: no task, with the runner's own version, so it keeps polling idle.
-  if (!runnersOn(call.env))
+  if (!runnersOn(call.env) || !dispatch)
     return protoResponse(encodeFetchTaskResponse({ tasksVersion: request.tasksVersion }));
   await call.admission.onFetch(runner, call.now);
-  throw new Refusal("unimplemented", NOT_AVAILABLE);
+  return protoResponse(
+    await dispatchTask(
+      {
+        env: call.env,
+        metrics: call.metrics,
+        log: call.log,
+        now: call.now,
+        timeoutHeader: call.c.req.header("connect-timeout-ms"),
+      },
+      runner,
+      dispatch,
+      request.tasksVersion,
+    ),
+  );
+}
+
+/**
+ * The runner's report on its task, routed by the task id scanned from the
+ * body (the Worker decodes no steps or outputs) to the task's run, which
+ * decodes, confirms, heartbeats or completes it and answers.
+ */
+async function updateTask(call: CallContext): Promise<Response> {
+  const { bytes, truncated } = await readPrefix(call.c.req.raw, MAX_UPDATE_TASK_BYTES);
+  const taskId = truncated ? undefined : scanTaskId(bytes, "update_task");
+  const { runner, task } = await authenticate(call, taskId === undefined ? {} : { taskId });
+  if (truncated) throw new Refusal("resource_exhausted", BODY_TOO_LARGE);
+  if (taskId === undefined) throw new Refusal("invalid_argument", TASK_ID_MISSING);
+  if (!task) throw new Refusal("not_found", TASK_NOT_FOUND);
+  if (task.runnerId !== runner.id) throw new Refusal("permission_denied", TASK_OF_ANOTHER_RUNNER);
+  if (task.superseded) throw new Refusal("failed_precondition", TASK_SUPERSEDED);
+  // An offer whose assignment the directory never recorded is no task of this runner's yet.
+  if (!task.assigned) throw new Refusal("not_found", TASK_NOT_FOUND);
+  call.log = call.log.child({ taskId: task.id, runId: task.runId });
+  call.c.set("log", call.log);
+  call.metrics.count("do.request", { class: "RunDO", method: "reportTask" });
+  let answer: ReportTaskAnswer;
+  try {
+    answer = await call.env.RUN.getByName(task.runId).reportTask(task.id, bytes, runner.id);
+  } catch (error) {
+    call.log.warn("task report failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw new Refusal("unavailable", TASK_UNAVAILABLE);
+  }
+  if (!answer.ok) throw new Refusal(answer.code, answer.message);
+  return protoResponse(answer.response);
 }
 
 async function notYet(call: CallContext): Promise<Response> {

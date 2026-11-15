@@ -344,7 +344,8 @@ function writeRunner(runner: Runner): Uint8Array {
   return w.bool(10, runner.ephemeral).finish();
 }
 
-function encodeTask(task: Task): Uint8Array {
+/** A `Task`, encoded where it is built (the run's object) and sent inside a FetchTaskResponse. */
+export function encodeTask(task: Task): Uint8Array {
   const w = new Writer().uint64(1, task.id);
   if (task.workflowPayload) w.bytes(2, task.workflowPayload, true);
   if (task.context) w.message(3, encodeStruct(task.context));
@@ -461,9 +462,17 @@ export function decodeFetchTaskRequest(bytes: Uint8Array): FetchTaskRequest {
 }
 
 export function encodeFetchTaskResponse(response: FetchTaskResponse): Uint8Array {
+  return encodeFetchTaskAnswer(response.task && encodeTask(response.task), response.tasksVersion);
+}
+
+/** A FetchTaskResponse around a task already encoded (`encodeTask`), or none. */
+export function encodeFetchTaskAnswer(
+  task: Uint8Array | undefined,
+  tasksVersion: number,
+): Uint8Array {
   const w = new Writer();
-  if (response.task) w.message(1, encodeTask(response.task));
-  return w.uint64(2, response.tasksVersion).finish();
+  if (task) w.message(1, task);
+  return w.uint64(2, tasksVersion).finish();
 }
 
 export function decodeUpdateTaskRequest(bytes: Uint8Array): UpdateTaskRequest {
