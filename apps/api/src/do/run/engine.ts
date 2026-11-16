@@ -58,6 +58,7 @@ export const RUN_JOB = {
   sweep: "sweep",
   dispatch: "dispatch",
   taskEnd: "task-end",
+  logClose: "log-close",
   concurrency: "concurrency",
   reconcile: "reconcile",
 } as const;
@@ -235,6 +236,10 @@ export interface EngineHost {
   now(): number;
   /** The run's workflow, parsed and planned (the run's plan succeeded). */
   model(): RunModel;
+  /** Task `task`'s instance completed at `completedAt`, by any path: its log ends. */
+  logEnded(task: number, completedAt: number): void;
+  /** Whether task `task`'s stored log is complete (a whole final request committed). */
+  logComplete(task: number): boolean;
 }
 
 type Bindable = string | number | null;
@@ -406,12 +411,16 @@ export class RunEngine {
       this.exec("UPDATE runs SET task_end_seq = task_end_seq + 1 WHERE id = 1");
       taskEnd = (this.run() as RunRow).task_end_seq;
       this.#ensure("ci_task_end", RUN_JOB.taskEnd);
+      this.host.logEnded(row.task, now);
     }
-    // Complete stays complete: rows that reached durable storage do not leave it.
+    // Complete stays complete: rows that reached durable storage do not leave it. Without a
+    // runner's word, the stored log decides: a forced end leaves a complete log complete.
     let log = row.log_complete;
     if (completed && row.task !== null && log !== 1) {
       if (extra.logComplete === true) log = 1;
-      else if (extra.logComplete === false || forced) log = 0;
+      else if (extra.logComplete === false) log = 0;
+      else if (this.host.logComplete(row.task)) log = 1;
+      else if (forced) log = 0;
     }
     this.exec(
       `UPDATE run_instances SET status = ?, conclusion = ?, cancel_reason = ?,

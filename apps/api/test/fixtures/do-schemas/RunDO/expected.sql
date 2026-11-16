@@ -11,6 +11,14 @@ CREATE TABLE ci_log_chunks (
         created_at INTEGER NOT NULL,
         PRIMARY KEY (task, start_index)
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_log_masks (
+        task INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask')),
+        from_index INTEGER NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (task, seq)
+      ) STRICT;
 CREATE TABLE ci_logs (
         task INTEGER PRIMARY KEY,
         ack_index INTEGER NOT NULL DEFAULT 0,
@@ -19,7 +27,7 @@ CREATE TABLE ci_logs (
         rows INTEGER NOT NULL DEFAULT 0,
         bytes INTEGER NOT NULL DEFAULT 0,
         omitted_rows INTEGER NOT NULL DEFAULT 0 CHECK (omitted_rows >= 0),
-        updated_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL, mask_carry TEXT, ended_at INTEGER, gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0), finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
         CHECK (state <> 'complete' OR omitted_rows = 0)
       ) STRICT;
 CREATE TABLE ci_tasks (

@@ -186,6 +186,24 @@ function commandData(row: string): string | null {
 export interface LogMask {
   readonly value: string;
   readonly fromIndex: number;
+  /** Counted inside `reserve` rather than toward the caps (see `MaskRowsOptions.reserve`). */
+  readonly reserved?: boolean | undefined;
+}
+
+/**
+ * Raw UTF-16 units after an omitted row that may finish a crossing variant
+ * registered by that row's position. Protecting this prefix does not need
+ * the omitted text. Row-local variants cannot cross the gap.
+ */
+export function maskGapLength(masks: readonly LogMask[], index: number): number {
+  let length = 0;
+  for (const mask of masks) {
+    if (mask.fromIndex > index) continue;
+    for (const variant of variantsOf(mask.value)) {
+      if (variant.crosses) length = Math.max(length, variant.text.length - 1);
+    }
+  }
+  return length;
 }
 
 /**
@@ -206,6 +224,15 @@ export interface MaskRowsOptions {
   readonly final?: boolean | undefined;
   /** The rows are stored now whatever is settled: a trailing partial match of 4+ chars is masked. */
   readonly force?: boolean | undefined;
+  /** Raw UTF-16 units of the leading stream to mask after an omission, across rows and requests. */
+  readonly gapRemaining?: number | undefined;
+  /**
+   * A fixed allowance kept out of the caps (values and UTF-8 bytes) for the
+   * masks marked `reserved`, given now or later: a row's value is registered
+   * only if it fits beside the allowance, so reserved masks appearing within
+   * it never change which values register. Reserved masks past it count.
+   */
+  readonly reserve?: { readonly values: number; readonly bytes: number } | undefined;
   /** Counts transition lookups made while scanning the rows, so tests can bound the work. */
   readonly work?: { lookups: number } | undefined;
 }
@@ -217,6 +244,11 @@ export interface MaskRowsResult {
   readonly settled: number;
   /** The carry at boundary `k` (after `k` rows), for `k` from 0 to the row count. */
   carryAt(k: number): LogMaskCarry | null;
+  /**
+   * Remaining gap protection after `k` rows. An end-of-row high surrogate
+   * retains one unit of protection for a possible following low surrogate.
+   */
+  gapRemainingAt(k: number): number;
   /** Values the rows registered, in order: appended to the mask list once their row is stored. */
   readonly added: readonly { readonly value: string; readonly index: number }[];
   /** `::add-mask::` values not registered because the task is at a cap. */
@@ -254,13 +286,20 @@ export function maskRows(
   options: MaskRowsOptions,
 ): MaskRowsResult {
   const { start } = options;
+  let gapRemaining = options.gapRemaining ?? 0;
+  if (!Number.isSafeInteger(gapRemaining) || gapRemaining < 0) {
+    throw new RangeError("gapRemaining must be a nonnegative safe integer");
+  }
   const final = options.final === true;
   const force = !final && options.force === true;
+  const reserved = options.reserve ?? { values: 0, bytes: 0 };
 
   const entries: Entry[] = [];
   const pending = new Map<number, Entry[]>();
   const known = new Set<string>();
   let bytes = 0;
+  let reservedValues = 0;
+  let reservedBytes = 0;
   for (const mask of masks) {
     const entry: Entry = {
       variants: variantsOf(mask.value),
@@ -271,7 +310,10 @@ export function maskRows(
     if (mask.fromIndex >= start)
       pending.set(mask.fromIndex, [...(pending.get(mask.fromIndex) ?? []), entry]);
     known.add(mask.value);
-    bytes += utf8Length(mask.value);
+    if (mask.reserved === true) {
+      reservedValues++;
+      reservedBytes += utf8Length(mask.value);
+    } else bytes += utf8Length(mask.value);
   }
 
   const work = options.work;
@@ -286,12 +328,21 @@ export function maskRows(
   const dropped: { index: number; reason: "values" | "bytes" }[] = [];
   const ranges = new Ranges();
   const rowStarts: number[] = [];
+  const gaps = [gapRemaining];
   let pos = 0;
   let lastCut = 0;
 
   rows.forEach((row, t) => {
     const index = start + t;
     rowStarts.push(pos);
+    let gapEnd = Math.min(gapRemaining, row.length);
+    if (gapEnd > 0 && isHighSurrogate(row.charCodeAt(gapEnd - 1))) {
+      if (gapEnd < row.length && isLowSurrogate(row.charCodeAt(gapEnd))) gapEnd++;
+      else if (gapEnd === row.length && gapRemaining === row.length) gapRemaining++;
+    }
+    ranges.add(pos, pos + gapEnd);
+    gapRemaining = Math.max(0, gapRemaining - row.length);
+    gaps.push(gapRemaining);
     let changed = false;
     for (const entry of pending.get(index) ?? []) {
       entry.from = pos;
@@ -304,8 +355,10 @@ export function maskRows(
       commandEnd = pos + COMMAND.length + data.length;
       if (value.length >= MASK_MIN_LENGTH && !known.has(value)) {
         const size = utf8Length(value);
-        if (entries.length >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
-        else if (bytes + size > MASK_MAX_TEXT_BYTES) dropped.push({ index, reason: "bytes" });
+        const values = entries.length - reservedValues + Math.max(reserved.values, reservedValues);
+        if (values >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
+        else if (bytes + Math.max(reserved.bytes, reservedBytes) + size > MASK_MAX_TEXT_BYTES)
+          dropped.push({ index, reason: "bytes" });
         else {
           entries.push({ variants: variantsOf(value), fromIndex: index, from: pos });
           known.add(value);
@@ -356,9 +409,23 @@ export function maskRows(
       }
       return carries[k] ?? null;
     },
+    gapRemainingAt(k: number): number {
+      if (!Number.isInteger(k) || k < 0 || k > rows.length) {
+        throw new RangeError(`no row boundary ${k} in ${rows.length} rows`);
+      }
+      return gaps[k] as number;
+    },
     added,
     dropped,
   };
+}
+
+function isHighSurrogate(unit: number): boolean {
+  return unit >= 0xd800 && unit <= 0xdbff;
+}
+
+function isLowSurrogate(unit: number): boolean {
+  return unit >= 0xdc00 && unit <= 0xdfff;
 }
 
 /** The carry if it names a crossing variant of a mask in effect before `start`, else null. */

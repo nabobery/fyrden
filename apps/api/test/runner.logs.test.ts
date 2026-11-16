@@ -324,7 +324,7 @@ describe("UpdateLog", () => {
     const taskB = (await fetchTask(b, 0)).task;
     if (!taskA || !taskB) throw new Error("no tasks");
     const numberB = (await taskRow(taskB.id))?.task as number;
-    // 60 rows of 64 KiB: just under 4 MiB, so a request reserves about 11.8 MiB of the 16.
+    // 60 rows of 64 KiB: just under 4 MiB, so a request reserves about 15.7 MiB of the 16.
     const big = (from: number) => rowsAt(from, 60, (i) => `${i}`.padEnd(64 * KiB, "x"));
     const held = gate();
     await hook(runId, () => ({ beforeLogStore: () => held.hold() }));
@@ -770,7 +770,7 @@ describe("a row too large for any request", () => {
     expect(await ackOf(runner, { taskId: task.id, index: 1, rows: tail, noMore: true })).toBe(4);
     const lines = await storedLines(runId, number);
     expect(lines.map((l) => l.i)).toEqual([0, 1, 2, 3]);
-    expect(lines.slice(1).map((l) => l.c)).toEqual(tail.map((r) => r.content));
+    expect(lines.slice(1).map((l) => l.c)).toEqual(tail.map(() => "***"));
     expect(await logOf(runId, number)).toMatchObject({
       ack_index: 4,
       rows: 3,
@@ -865,6 +865,15 @@ describe("a row too large for any request", () => {
     // One byte more: omitted.
     const over = exactly(2, (n) => "c".repeat(n + 1));
     expect(await send(2, [...over, ...rowsAt(3, 1)])).toBe(3);
+    const protectedPrefix = await inRun(
+      runId,
+      (r) =>
+        r.engine.rows<{ gap_remaining: number }>(
+          "SELECT gap_remaining FROM ci_logs WHERE task = ?",
+          number,
+        )[0]?.gap_remaining ?? 0,
+    );
+    expect(protectedPrefix).toBeGreaterThan(0);
     // Multibyte content: a two-byte character ending exactly at the prefix's end is stored whole …
     const wide = exactly(3, (n) => `${"d".repeat(n - 2)}é`);
     expect(await send(3, [...wide, ...rowsAt(4, 1)])).toBe(4);
@@ -880,12 +889,12 @@ describe("a row too large for any request", () => {
       whole[0]?.content.length,
       atEnd[0]?.content.length,
       "omitted",
-      wide[0]?.content.length,
+      (wide[0]?.content.length ?? 0) - protectedPrefix + 3,
       "omitted",
-      "line 5".length,
+      "***".length,
     ]);
     expect(lines[0]?.c).toBe(whole[0]?.content);
-    expect(lines[3]?.c).toBe(wide[0]?.content);
+    expect(lines[3]?.c).toBe(`***${wide[0]?.content.slice(protectedPrefix)}`);
     expect(lines[2]).toEqual({ i: 2, omitted: LOG_ROW_TOO_LARGE, bytes: declared(over) });
     expect(await logOf(runId, number)).toMatchObject({
       ack_index: 6,

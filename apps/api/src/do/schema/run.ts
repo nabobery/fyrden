@@ -254,4 +254,24 @@ export const runSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    version: 5,
+    name: "ci_log_masks",
+    sql: `
+      CREATE TABLE ci_log_masks (
+        task INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask')),
+        from_index INTEGER NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (task, seq)
+      ) STRICT;
+
+      ALTER TABLE ci_logs ADD COLUMN mask_carry TEXT;
+      ALTER TABLE ci_logs ADD COLUMN ended_at INTEGER;
+      ALTER TABLE ci_logs ADD COLUMN gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0);
+      ALTER TABLE ci_logs ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1));
+      UPDATE ci_logs SET finalized = 1 WHERE state = 'complete';
+    `,
+  },
 ];

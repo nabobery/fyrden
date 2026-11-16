@@ -436,6 +436,53 @@ describe("mask caps", () => {
     expect(result.dropped).toEqual([{ index: 1, reason: "bytes" }]);
   });
 
+  it("keeps reserved room out of both caps when registering", () => {
+    const reserve = { values: 3, bytes: 300 };
+    const byCount = mask(values(252), ["::add-mask::fits-last", "::add-mask::over-count"], {
+      reserve,
+    });
+    expect(byCount.added).toEqual([{ value: "fits-last", index: 0 }]);
+    expect(byCount.dropped).toEqual([{ index: 1, reason: "values" }]);
+    const fits = "a".repeat(MASK_MAX_TEXT_BYTES - 300);
+    const byBytes = mask([], [`::add-mask::${fits}`, "::add-mask::bb"], { reserve });
+    expect(byBytes.added).toEqual([{ value: fits, index: 0 }]);
+    expect(byBytes.dropped).toEqual([{ index: 1, reason: "bytes" }]);
+    // Masks already given are never dropped, reserve or not.
+    expect(mask(values(256), ["value-255"], { reserve }).lines).toEqual(["***"]);
+  });
+
+  it("counts reserved masks inside the reserve, so one appearing never changes what registers", () => {
+    const token = `fyrden_job_${"A".repeat(36)}`;
+    const reserve = { values: 8, bytes: 8 * token.length };
+    const fits = `K-${"X".repeat(MASK_MAX_TEXT_BYTES - reserve.bytes - 4)}-Z`;
+    const over = `${fits}!`;
+    for (const value of [fits, over]) {
+      const rows = [`::add-mask::${value}`, `v=${value}`, "end!"];
+      const before = mask([], rows, { reserve });
+      const after = mask([{ value: token, fromIndex: 0, reserved: true }], rows, { reserve });
+      expect(after.added).toEqual(before.added);
+      expect(after.dropped).toEqual(before.dropped);
+      expect(after.lines).toEqual(before.lines);
+      expect(after.settled).toEqual(before.settled);
+    }
+    expect(mask([], [`::add-mask::${fits}`], { reserve }).added).toHaveLength(1);
+    expect(mask([], [`::add-mask::${over}`], { reserve }).dropped).toEqual([
+      { index: 0, reason: "bytes" },
+    ]);
+    // Eight reserved values leave 248 for rows, with or without them present.
+    const tokens = Array.from({ length: 8 }, (_, i) => ({
+      value: `fyrden_job_${String(i).repeat(36)}`,
+      fromIndex: 0,
+      reserved: true,
+    }));
+    const rows = Array.from({ length: 249 }, (_, i) => `::add-mask::row-value-${i}`);
+    for (const given of [[], tokens]) {
+      const result = mask(given, rows, { reserve });
+      expect(result.added).toHaveLength(248);
+      expect(result.dropped).toEqual([{ index: 248, reason: "values" }]);
+    }
+  });
+
   it("registers only the lines of a value over 4 KiB", () => {
     const big = `${"Z".repeat(4096)}-tail`;
     const result = mask([{ value: big, fromIndex: 0 }], [big, b64(big)]);

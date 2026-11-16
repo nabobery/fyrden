@@ -70,6 +70,8 @@ export interface DispatchHooks {
   /** After a job token is minted and mapped to its task, before liveness is checked again. */
   afterMint?: (token: string) => Promise<void> | void;
   beforeTokenRotation?: () => Promise<void> | void;
+  /** Before the minted token is registered to be masked in the task's log. */
+  beforeTokenMask?: () => Promise<void> | void;
   /** When a report arrives, before anything is decoded or written. */
   beforeReport?: () => Promise<void> | void;
   /** On every liveness question about a task. */
@@ -100,8 +102,13 @@ export interface DispatchHost {
   ): TaskAnswer<{ conclusion: string }>;
   /** Whether the task's stored log is complete. */
   logComplete(task: number): boolean;
-  /** The task completed: a log not complete by now ends incomplete. */
-  logEnded(task: number): void;
+  /**
+   * Registers the task's job token to be masked in its log rows; false when
+   * the task has had as many tokens as its log keeps.
+   */
+  addJobTokenMask(task: number, token: string): boolean;
+  /** Whether the task has had as many job tokens as its log keeps: no more may be minted. */
+  jobTokensFull(task: number): boolean;
 }
 
 /** A job token reads its repository's contents, nothing else. */
@@ -187,6 +194,9 @@ export class RunDispatch {
     const assigned = host.assign(jobId, `t${wireId}`);
     if (!assigned.ok) return { refused: assigned.code };
     const ref = assigned.task;
+    // A task out of token masks is never given another: refused before anything is written or
+    // minted. Overlapping re-offers can both pass this; registering the token decides.
+    if (host.jobTokensFull(ref.task)) return this.#tokensFull(wireId, ref);
     host.tx(() =>
       host.engine.exec(
         `INSERT INTO ci_tasks (wire_id, job_id, task, runner_id) VALUES (?, ?, ?, ?)
@@ -226,55 +236,83 @@ export class RunDispatch {
       ttlMs: Math.min(assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS, JOB_TOKEN_MAX_MS),
       audit: { actorId: null },
     });
-    this.#count("ci_job_token_map");
-    await db
-      .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
-      .bind(minted.id, wireId, host.now())
-      .run();
-    await host.hooks.beforeTokenRotation?.();
-    const eligible = `id IN (SELECT value FROM json_each(?1)) AND revoked_at IS NULL
-      AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?2 AND confirmed_at IS NULL)`;
-    const at = host.now();
-    this.#count("ci_job_token_rotate", 3);
-    const [, , rotated] = await db.batch([
-      db
-        .prepare(
-          `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
-         SELECT ?3, NULL, NULL, 'token.revoke', id, NULL, NULL FROM tokens WHERE ${eligible}`,
-        )
-        .bind(JSON.stringify(previous), wireId, at),
-      db
-        .prepare(`UPDATE tokens SET revoked_at = ?3 WHERE ${eligible}`)
-        .bind(JSON.stringify(previous), wireId, at),
-      db.prepare("SELECT confirmed_at FROM ci_tasks WHERE id = ?").bind(wireId),
-    ]);
-    const state = rotated?.results[0] as { confirmed_at: number | null } | undefined;
-    if (!state || state.confirmed_at !== null) {
+    // Whatever fails from here, this request's token is never left live: it is revoked before
+    // the error goes on. Confirmed tasks are excluded from token rotation.
+    let ownRevoked = false;
+    const revokeOwn = async () => {
+      ownRevoked = true;
       await store.revoke(minted.id, { actorId: null });
-      return { refused: state ? "confirmed" : "released" };
-    }
-    await host.hooks.afterMint?.(minted.token);
-    // The task may have ended while the token was minted: such a token is never handed out.
-    if (!host.taskLive(ref)) {
-      await store.revoke(minted.id, { actorId: null });
-      return { refused: "task_finished" };
-    }
-    // Read again before the answer. A transfer that began after the first read and before this
-    // one makes this assignment lose: no task is handed out, its token is revoked, and the
-    // instance, assigned but run by nobody, is ended by run-state's heartbeat deadline. A
-    // transfer that begins after this read meets an assignment made while the runner's account
-    // owned the repository, like any task already running, which keeps reporting.
-    if (run) {
-      const refused = await this.#notOwnedBy(run.repo_id, accountId);
-      if (refused) {
-        await store.revoke(minted.id, { actorId: null });
-        host.log.info("task withheld: its repository changed hands", {
-          taskId: wireId,
-          task: ref.task,
-          code: refused,
-        });
-        return { refused };
+    };
+    try {
+      this.#count("ci_job_token_map");
+      await db
+        .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
+        .bind(minted.id, wireId, host.now())
+        .run();
+      await host.hooks.afterMint?.(minted.token);
+      await host.hooks.beforeTokenMask?.();
+      if (!host.addJobTokenMask(ref.task, minted.token)) {
+        await revokeOwn();
+        return this.#tokensFull(wireId, ref, minted.id);
       }
+      await host.hooks.beforeTokenRotation?.();
+      const eligible = `id IN (SELECT value FROM json_each(?1)) AND revoked_at IS NULL
+        AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?2 AND confirmed_at IS NULL)`;
+      const at = host.now();
+      this.#count("ci_job_token_rotate", 3);
+      const [, , rotated] = await db.batch([
+        db
+          .prepare(
+            `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+           SELECT ?3, NULL, NULL, 'token.revoke', id, NULL, NULL FROM tokens WHERE ${eligible}`,
+          )
+          .bind(JSON.stringify(previous), wireId, at),
+        db
+          .prepare(`UPDATE tokens SET revoked_at = ?3 WHERE ${eligible}`)
+          .bind(JSON.stringify(previous), wireId, at),
+        db.prepare("SELECT confirmed_at FROM ci_tasks WHERE id = ?").bind(wireId),
+      ]);
+      const state = rotated?.results[0] as { confirmed_at: number | null } | undefined;
+      if (!state || state.confirmed_at !== null) {
+        await revokeOwn();
+        return { refused: state ? "confirmed" : "released" };
+      }
+      // The task may have ended while the token was minted: such a token is never handed out.
+      if (!host.taskLive(ref)) {
+        await revokeOwn();
+        return { refused: "task_finished" };
+      }
+      // Read again before the answer. A transfer that began after the first read and before this
+      // one makes this assignment lose: no task is handed out, its token is revoked, and the
+      // instance, assigned but run by nobody, is ended by run-state's heartbeat deadline. A
+      // transfer that begins after this read meets an assignment made while the runner's account
+      // owned the repository, like any task already running, which keeps reporting.
+      if (run) {
+        const refused = await this.#notOwnedBy(run.repo_id, accountId);
+        if (refused) {
+          await revokeOwn();
+          host.log.info("task withheld: its repository changed hands", {
+            taskId: wireId,
+            task: ref.task,
+            code: refused,
+          });
+          return { refused };
+        }
+      }
+    } catch (error) {
+      if (!ownRevoked) {
+        try {
+          await store.revoke(minted.id, { actorId: null });
+        } catch (revocation) {
+          host.log.warn("job token of a failed assignment not revoked", {
+            taskId: wireId,
+            task: ref.task,
+            tokenId: minted.id,
+            error: revocation instanceof Error ? revocation.message : String(revocation),
+          });
+        }
+      }
+      throw error;
     }
     host.log.info("job token minted", { taskId: wireId, task: ref.task, tokenId: minted.id });
     return {
@@ -305,6 +343,19 @@ export class RunDispatch {
         vars: new Map(),
       }),
     };
+  }
+
+  /**
+   * Refuses a task whose log masks no more job tokens; the Worker answers
+   * `unavailable`, as any failure after the assignment.
+   */
+  #tokensFull(wireId: number, ref: TaskRef, tokenId?: string): never {
+    this.host.log.warn("job token withheld: the task's log masks no more tokens", {
+      taskId: wireId,
+      task: ref.task,
+      ...(tokenId !== undefined && { tokenId }),
+    });
+    throw new Error("the task's log masks no more job tokens");
   }
 
   /**
@@ -374,17 +425,15 @@ export class RunDispatch {
       return answer(Result.CANCELLED);
     }
     const outputs = Object.fromEntries(request.outputs);
-    // The log as stored now: one still streaming ends incomplete, never waited for. A whole
-    // final UpdateLog that lands later still completes it.
-    const done = host.tx(() => {
-      const completed = host.completeTask(ref, {
+    // The log as stored now: one still streaming ends incomplete (the run ends it with the
+    // instance), never waited for. A whole final UpdateLog that lands later still completes it.
+    const done = host.tx(() =>
+      host.completeTask(ref, {
         result: RUNNER_RESULT[result] as RunnerResult,
         ...(request.outputs.size > 0 && { outputs }),
         logComplete: host.logComplete(ref.task),
-      });
-      if (completed.ok) host.logEnded(ref.task);
-      return completed;
-    });
+      }),
+    );
     if (done.ok) {
       const stored = host.engine.instance(ref.jobId)?.outputs ?? null;
       return answer(result, stored === null ? [] : Object.keys(outputs));

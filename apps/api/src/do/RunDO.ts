@@ -39,7 +39,13 @@ import {
   type RunPolicy,
   type RunRow,
 } from "./run/engine.js";
-import { type AppendLogAnswer, type LogHooks, RunLogs } from "./run/logs.js";
+import {
+  type AppendLogAnswer,
+  type LogHooks,
+  type MaskSource,
+  NO_MASK_SOURCE,
+  RunLogs,
+} from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -160,6 +166,8 @@ export class RunDO extends MigratingDO {
   policy: RunPolicy = RUN_DEFAULTS;
   /** Pause points for tests. */
   hooks: RunHooks = {};
+  /** Values to mask in job logs that are fetched rather than stored (none yet). */
+  maskSource: MaskSource = NO_MASK_SOURCE;
 
   readonly context: GitStorageContext;
   readonly jobs: JobQueue;
@@ -195,6 +203,8 @@ export class RunDO extends MigratingDO {
       },
       now: () => host.context.now(),
       model: () => host.#loadModel(),
+      logEnded: (task, completedAt) => host.#logs.taskEnded(task, completedAt),
+      logComplete: (task) => host.#logs.complete(task),
     });
     this.#dispatch = new RunDispatch({
       env,
@@ -215,7 +225,8 @@ export class RunDO extends MigratingDO {
       updateTask: (ref) => host.updateTask(ref),
       completeTask: (ref, report) => host.completeTask(ref, report),
       logComplete: (task) => host.#logs.complete(task),
-      logEnded: (task) => host.#logs.taskEnded(task),
+      addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
+      jobTokensFull: (task) => host.#logs.jobTokensFull(task),
     });
     this.#logs = new RunLogs({
       env,
@@ -232,6 +243,10 @@ export class RunDO extends MigratingDO {
       confirm: (wireId, runnerId) => host.#dispatch.confirm(wireId, runnerId),
       updateTask: (ref) => host.updateTask(ref),
       markLogComplete: (ref) => host.markLogComplete(ref),
+      ensureLogClose: (runAt) => host.jobs.ensure("ci_log_close", RUN_JOB.logClose, { runAt }),
+      get masks() {
+        return host.maskSource;
+      },
     });
   }
 
@@ -989,6 +1004,7 @@ export class RunDO extends MigratingDO {
         "ci_tasks",
         "ci_logs",
         "ci_log_chunks",
+        "ci_log_masks",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1100,6 +1116,7 @@ export class RunDO extends MigratingDO {
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
       ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
+      ci_log_close: { runSlice: async () => this.#logs.closeSlice() },
     };
     for (const [kind, handler] of Object.entries(handlers) as [JobKind, JobHandler][])
       handlers[kind] = this.#marked(kind, handler);

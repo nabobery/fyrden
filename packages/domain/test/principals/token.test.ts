@@ -8,6 +8,7 @@ import {
   secureRandomBytes,
   TOKEN_TYPES,
   type TokenType,
+  tokenLength,
 } from "../../src/principals/token.js";
 
 const fixedBytes = (byte: number) => (n: number) => new Uint8Array(n).fill(byte);
@@ -98,5 +99,14 @@ describe("hashToken", () => {
     expect(await hashToken("abc")).toBe(
       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     );
+  });
+});
+
+describe("tokenLength", () => {
+  it("is the length of every token of a type", () => {
+    for (const type of TOKEN_TYPES) {
+      expect(generateToken(type, secureRandomBytes).length).toBe(tokenLength(type));
+      expect(generateToken(type, fixedBytes(7)).length).toBe(tokenLength(type));
+    }
   });
 });
