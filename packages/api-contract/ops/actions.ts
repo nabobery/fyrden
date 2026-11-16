@@ -279,3 +279,35 @@ export const approveWorkflowRun = defineOperation({
     readOnly: false,
   },
 });
+
+export const dispatchWorkflow = defineOperation({
+  id: "actions.workflows.dispatch",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
+  summary: "Create a workflow dispatch event",
+  description: `Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`, and \`ci_off\` while this deployment runs no CI. ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
+  input: z.object({
+    ...RepoInput,
+    workflow_id: z.string().min(1).max(255).describe("The workflow's file name, such as `ci.yml`."),
+    ref: z.string().min(1).max(1024).describe("A branch or tag name, or a full ref."),
+    inputs: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+      .optional()
+      .describe("The workflow's inputs by name (at most 25)."),
+  }),
+  output: z.object({
+    workflow_run_id: z.string().describe("The run's id."),
+    run_url: z.string().describe("The run in the REST API."),
+    html_url: z.string(),
+  }),
+  permission: "actions:write",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "dispatch_workflow",
+    title: "Run a workflow",
+    description: "Run a workflow that has a workflow_dispatch trigger, with inputs.",
+    readOnly: false,
+  },
+});

@@ -251,6 +251,11 @@ const CASES: Record<
   "actions.runs.force_cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.rerun": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.approve": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  // CI is off in this file: refused first, before the ref or the workflow is read.
+  "actions.workflows.dispatch": {
+    input: { ref: "main" },
+    expected: { status: 409, code: "ci_off" },
+  },
   "releases.create": {
     input: { tag_name: "checked", draft: true },
     expected: { status: 409, code: "repo_not_ready" },
@@ -389,6 +394,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{upload_id}", UPLOAD_ID)
     .replace("{run_id}", UPLOAD_ID)
     .replace("{job_id}", "1")
+    .replace("{workflow_id}", "ci.yml")
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")

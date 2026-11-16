@@ -29,6 +29,7 @@ import {
   skipDirectiveApplies,
   type Trigger,
   type TriggerEvent,
+  validateDispatchInputs,
   type WorkflowDirectory,
   type WorkflowFile,
 } from "@fyrden/domain/ci";
@@ -60,7 +61,7 @@ import { approvalBinding } from "../../ci/approval.js";
 import { type RunRegistrar, type StartRunAnswer, startRunFrom } from "../../ci/runs.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import type { RunDO } from "../RunDO.js";
-import { type RunSpec, validateRunSpec } from "../run/spec.js";
+import { MAX_RUN_CONTEXTS_BYTES, type RunSpec, validateRunSpec } from "../run/spec.js";
 import { BROWSE_POLICY } from "./browse.js";
 import {
   type HeldReads,
@@ -88,6 +89,25 @@ import type { ApprovalRequest } from "./run-approvals.js";
  */
 
 export const CI_TRIGGERS_JOB = "ci_triggers";
+
+/** What a `workflow_dispatch` request is answered. */
+export type DispatchAnswer =
+  | { readonly ok: true; readonly runId: string }
+  | {
+      readonly ok: false;
+      readonly code:
+        | "ci_off"
+        | "repo_not_ready"
+        | "ref_not_found"
+        | "workflow_not_found"
+        | "workflow_not_dispatchable"
+        | "busy";
+    }
+  | {
+      readonly ok: false;
+      readonly code: "invalid_inputs" | "invalid_workflow";
+      readonly errors: readonly Readonly<Record<string, string | number | null>>[];
+    };
 
 /**
  * Work one alarm invocation spends on triggers: workflow blobs read or
@@ -158,6 +178,11 @@ const TAG = "refs/tags/";
 const lossy = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 
 type PassKind = "push" | "pull_request" | "pull_request_target";
+/** A trigger kind a run is allocated under (`ci_event_runs.trigger_kind`). */
+type RunKind = PassKind | "workflow_dispatch";
+
+const isPull = (kind: RunKind): kind is "pull_request" | "pull_request_target" =>
+  kind === "pull_request" || kind === "pull_request_target";
 
 /** What a push recorded. */
 interface PushFacts {
@@ -519,6 +544,9 @@ export class CiTriggers {
   async #slice(): Promise<SliceResult> {
     this.#prune();
     if (!this.deps.enabled()) {
+      // Off means off, also for a dispatch already answered with its run's id whose run was not
+      // created yet: it closes here and the run never exists (an accepted exception: switching
+      // CI off is a rare operator action).
       const now = this.#now();
       const off = this.#sql().exec(
         "UPDATE ci_events SET state = 'done', outcome = 'ci_off', done_at = ? WHERE state = 'pending'",
@@ -533,21 +561,7 @@ export class CiTriggers {
       return { done: true };
     }
     const budget = { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0 };
-    let reader: ObjectReader | undefined;
-    const open = async (): Promise<ObjectReader | undefined> => {
-      if (this.hooks.withoutReader) return undefined;
-      reader ??= await transient(() =>
-        openLiveReader(
-          { git: this.deps.git, memoryBlocks: this.deps.memoryBlocks() },
-          {
-            deltaBaseCacheBytes: 4 * 1024 * 1024,
-            maxCacheCalls: BROWSE_POLICY.cacheCalls,
-            maxReads: MAX_READER_READS,
-          },
-        ),
-      );
-      return reader;
-    };
+    const opened = this.#reader();
     try {
       for (;;) {
         const row = this.#sql()
@@ -558,25 +572,12 @@ export class CiTriggers {
           )
           .toArray()[0];
         if (!row) break;
-        let stopped: Stopped | undefined;
-        try {
-          stopped = await new Evaluation(this, row, budget, open).run();
-        } catch (error) {
-          if (error instanceof SliceAborted) throw error.cause;
-          stopped = this.#failed(row, error);
-        }
-        if (!stopped) continue;
-        if (stopped.kind === "spent") return { done: false, cursor: null, endInvocation: true };
-        if (stopped.kind === "starts") return { done: false, cursor: null, runAfterMs: 0 };
-        this.#sql().exec(
-          "UPDATE ci_events SET next_at = ?, attempts = attempts + ? WHERE id = ?",
-          this.#now() + stopped.afterMs,
-          stopped.counted ? 1 : 0,
-          row.id,
-        );
+        const stopped = await this.#evaluateRow(row, budget, opened.open);
+        if (stopped?.kind === "spent") return { done: false, cursor: null, endInvocation: true };
+        if (stopped?.kind === "starts") return { done: false, cursor: null, runAfterMs: 0 };
       }
     } finally {
-      (reader as { release?: () => void } | undefined)?.release?.();
+      opened.release();
     }
     const next = this.#sql()
       .exec<{ at: number | null }>(
@@ -654,6 +655,404 @@ export class CiTriggers {
         this.#sql().exec("DELETE FROM ci_event_runs WHERE event_id = ?", id);
         this.#sql().exec("DELETE FROM ci_events WHERE id = ?", id);
       }
+    });
+  }
+
+  /**
+   * A `workflow_dispatch` (by API): the workflow file `input.file` at
+   * `input.ref`, which must also be on the default branch (GitHub runs a
+   * dispatch only for such a file; the version at the ref runs), with its
+   * inputs checked. Every read and check comes first; then one transaction
+   * records the event under `input.key` and allocates its run with its
+   * spec, and the run is started inline (the job retries it after any
+   * failure, so the answer names the run once it is recorded). The same
+   * key again answers the run it recorded.
+   */
+  async dispatch(input: {
+    readonly file: string;
+    readonly ref: string;
+    readonly inputs: unknown;
+    readonly actor: string;
+    readonly key: string;
+    /** Why nothing may be written now, if anything stops it. */
+    readonly refusal: () => DispatchAnswer | undefined;
+  }): Promise<DispatchAnswer> {
+    const key = `dispatch:${input.key}`;
+    const recorded = (): DispatchAnswer | undefined => {
+      if (!this.deps.enabled()) return { ok: false, code: "ci_off" };
+      const [known] = this.#sql()
+        .exec<{ run_id: string }>(
+          `SELECT r.run_id FROM ci_events e JOIN ci_event_runs r ON r.event_id = e.id
+           WHERE e.key = ?`,
+          key,
+        )
+        .toArray();
+      if (known) return { ok: true, runId: known.run_id };
+      return input.refusal();
+    };
+    const early = recorded();
+    if (early) return early;
+    const ref = this.#dispatchRef(input.ref);
+    if (!ref) return { ok: false, code: "ref_not_found" };
+    const head = this.deps.git.refStore.head();
+    const defaultBranch = head?.startsWith(BRANCH) ? head.slice(BRANCH.length) : "";
+    const defaultTip = this.#tip(`${BRANCH}${defaultBranch}`);
+    // A workflow id is a file name: no numeric ids, and no paths (only direct entries count).
+    if (/^\d+$/.test(input.file) || input.file.includes("/") || !defaultTip)
+      return { ok: false, code: "workflow_not_found" };
+    const opened = this.#reader();
+    try {
+      const reader = await opened.open();
+      if (!reader) return { ok: false, code: "repo_not_ready" };
+      const sha = await peel(reader, ref.oid);
+      if (!sha) return { ok: false, code: "ref_not_found" };
+      // A failed read of storage is a transient failure (answered busy), as in the job.
+      const reads = <T>(use: (r: HeldReads) => Promise<T>) =>
+        transient(async () => {
+          await this.hooks.beforeRead?.();
+          return withHeldReads(
+            reader,
+            this.deps.git.memory,
+            { maxTreeBytes: MAX_TREE_BYTES, maxReadBytes: 64 * MAX_TREE_BYTES },
+            use,
+          );
+        });
+      const fileAt = async (commit: string): Promise<WorkflowFile | undefined> => {
+        const [row] = this.deps.git.commitGraph.readSync([oidFromHex(commit) as Oid], "verified");
+        if (!row) return undefined;
+        const found = await reads((r) => discoverIn(row.tree, (oid) => r.readTree(oid)));
+        return found.ok ? found.files.find((f) => f.name === input.file) : undefined;
+      };
+      if (!(await fileAt(defaultTip))) return { ok: false, code: "workflow_not_found" };
+      const file = await fileAt(sha);
+      if (!file) return { ok: false, code: "workflow_not_found" };
+      const bytes = await reads((r) => r.readBlob(oidFromHex(file.oid) as Oid, MAX_WORKFLOW_BYTES));
+      if (!bytes)
+        return {
+          ok: false,
+          code: "invalid_workflow",
+          errors: [
+            {
+              code: "file_too_large",
+              feature: "",
+              path: "",
+              line: 0,
+              column: 0,
+              message: `The workflow file is larger than ${MAX_WORKFLOW_BYTES} bytes.`,
+            },
+          ],
+        };
+      const parsed = parseTriggers(file.path, bytes);
+      if (!parsed.ok)
+        return {
+          ok: false,
+          code: "invalid_workflow",
+          errors: parsed.errors.map(({ code, feature, path, line, column, message }) => ({
+            code,
+            feature,
+            path,
+            line,
+            column,
+            message,
+          })),
+        };
+      const trigger = parsed.triggers.find((t) => t.event === "workflow_dispatch");
+      if (trigger?.event !== "workflow_dispatch")
+        return { ok: false, code: "workflow_not_dispatchable" };
+      const checked = validateDispatchInputs(trigger.inputs, input.inputs);
+      if (!checked.ok)
+        return {
+          ok: false,
+          code: "invalid_inputs",
+          errors: checked.errors.map((e) => ({ input: e.input, message: e.message })),
+        };
+      // The directory unreachable: busy, like a failed read.
+      const names = await transient(() => this.readNames([input.actor]));
+      const workflow = parseWorkflow(file.path, bytes);
+      const name = workflow.ok ? workflow.workflow.name?.value : undefined;
+      const repoId = this.deps.repoId();
+      const origin = names.origin ?? "";
+      const source = lossy.decode(bytes);
+      const build = (runId: string, runNumber: number): RunSpec => ({
+        runId,
+        repoId,
+        sha,
+        ref: ref.name,
+        event: "workflow_dispatch",
+        actor: input.actor,
+        workflow: { path: file.path, source },
+        // A dispatch runs the repository's own code, by someone who may write it.
+        trust: "trusted",
+        fork: false,
+        inputs: checked.inputs,
+        github: githubContext({
+          serverUrl: origin,
+          apiUrl: origin ? `${origin}/api` : "",
+          repository: contextRepository(repoId, names, defaultBranch),
+          actor: { id: input.actor, login: names.logins[input.actor] ?? "" },
+          workflow: { path: file.path, ...(name ? { name } : {}) },
+          runId,
+          runNumber,
+          event: { kind: "workflow_dispatch", ref: ref.name, sha, inputs: checked.eventInputs },
+        }),
+      });
+      // Inputs and defaults show twice in the contexts (typed, and as event strings): a spec
+      // past the contexts' size is refused here, before anything is recorded, rather than by
+      // the allocation's own check (which stays, and would fail the request).
+      try {
+        validateRunSpec(build(newUlid(this.#now()), Number.MAX_SAFE_INTEGER));
+      } catch (error) {
+        if (!(error instanceof TypeError) || !/contexts exceed/.test(error.message)) throw error;
+        return {
+          ok: false,
+          code: "invalid_inputs",
+          errors: [
+            {
+              input: null,
+              message: `The run's contexts, the inputs and their defaults included, would exceed ${MAX_RUN_CONTEXTS_BYTES} bytes.`,
+            },
+          ],
+        };
+      }
+      const resolved: Resolved = { passes: [], defaultBranch, baseTip: null, names };
+      const made = this.deps.git.context.storage.transactionSync(
+        (): DispatchAnswer | { eventId: number; runId: string } => {
+          // Read again with no await before the write: a request with the same key may have
+          // recorded it meanwhile, or the repository been frozen.
+          const again = recorded();
+          if (again) return again;
+          const [event] = this.#sql()
+            .exec<{ id: number }>(
+              `INSERT INTO ci_events (key, kind, state, actor_id, facts, resolved, created_at)
+               VALUES (?, 'workflow_dispatch', 'pending', ?, ?, ?, ?) RETURNING id`,
+              key,
+              input.actor,
+              JSON.stringify({
+                ref: ref.name,
+                sha,
+                path: file.path,
+                inputs: checked.inputs,
+                eventInputs: checked.eventInputs,
+              }),
+              JSON.stringify(resolved),
+              this.#now(),
+            )
+            .toArray();
+          const id = (event as { id: number }).id;
+          const spec = this.allocateRun(id, "workflow_dispatch", file.path, file.oid, build);
+          this.deps.git.jobs.ensure(CI_TRIGGERS_JOB, CI_TRIGGERS_JOB);
+          return { eventId: id, runId: spec.runId };
+        },
+      );
+      if ("ok" in made) return made;
+      try {
+        await this.decideNow(made.eventId);
+      } catch (error) {
+        // Recorded: the job starts the run, and the answer names it.
+        this.deps.log().warn("starting a dispatched run failed", { error, runId: made.runId });
+      }
+      return { ok: true, runId: made.runId };
+    } catch (error) {
+      // Before the record, a read that may succeed shortly (memory other work holds, the object
+      // store unreachable): a refusal to retry, never an error that spends the request's key.
+      if (error instanceof ReadsMemoryBusy || error instanceof TransientFailure)
+        return { ok: false, code: "busy" };
+      throw error;
+    } finally {
+      opened.release();
+    }
+  }
+
+  /** The full ref a dispatch names (a branch first, then a tag, of that name) and its value. */
+  #dispatchRef(ref: string): { name: string; oid: string } | undefined {
+    const candidates =
+      ref.startsWith(BRANCH) || ref.startsWith(TAG)
+        ? [ref]
+        : ref.startsWith("refs/")
+          ? []
+          : [`${BRANCH}${ref}`, `${TAG}${ref}`];
+    for (const name of candidates) {
+      const oid = this.#tip(name);
+      if (oid) return { name, oid };
+    }
+    return undefined;
+  }
+
+  /** A direct ref's value, or undefined. */
+  #tip(name: string): string | undefined {
+    const row = this.#sql()
+      .exec<{ oid: ArrayBuffer | null }>(
+        "SELECT oid FROM refs WHERE name = ? AND kind = 'direct'",
+        name,
+      )
+      .toArray()[0];
+    return row?.oid ? oidToHex(new Uint8Array(row.oid) as Oid) : undefined;
+  }
+
+  /**
+   * Decides the event `eventId` now, as the job would, with its own reader:
+   * for a request that answers with the event's run. Any failure is the
+   * job's to retry (the event was recorded, and the job ensured, first).
+   */
+  async decideNow(eventId: number): Promise<void> {
+    const row = this.#sql()
+      .exec<EventRow>(
+        `SELECT id, key, kind, actor_id, facts, resolved, pass, file, attempts, faults, outcome
+         FROM ci_events WHERE id = ? AND state = 'pending'`,
+        eventId,
+      )
+      .toArray()[0];
+    if (!row || !this.deps.enabled()) return;
+    const budget = { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0 };
+    const opened = this.#reader();
+    try {
+      await this.#evaluateRow(row, budget, opened.open);
+    } finally {
+      opened.release();
+    }
+  }
+
+  /**
+   * One event's evaluation and what follows from it: done, or its retry
+   * deadline set (`next_at`, `attempts`). A spent budget or the start cap
+   * is the caller's to act on.
+   */
+  async #evaluateRow(
+    row: EventRow,
+    budget: { trees: number; blobs: number; starts: number },
+    open: () => Promise<ObjectReader | undefined>,
+  ): Promise<Stopped | undefined> {
+    let stopped: Stopped | undefined;
+    try {
+      stopped = await new Evaluation(this, row, budget, open).run();
+    } catch (error) {
+      if (error instanceof SliceAborted) throw error.cause;
+      stopped = this.#failed(row, error);
+    }
+    if (stopped?.kind === "retry")
+      this.#sql().exec(
+        "UPDATE ci_events SET next_at = ?, attempts = attempts + ? WHERE id = ?",
+        this.#now() + stopped.afterMs,
+        stopped.counted ? 1 : 0,
+        row.id,
+      );
+    return stopped;
+  }
+
+  /** A reader opened on first use, for one slice or one request; released by the caller. */
+  #reader(): { open: () => Promise<ObjectReader | undefined>; release: () => void } {
+    let reader: ObjectReader | undefined;
+    return {
+      open: async () => {
+        if (this.hooks.withoutReader) return undefined;
+        reader ??= await transient(() =>
+          openLiveReader(
+            { git: this.deps.git, memoryBlocks: this.deps.memoryBlocks() },
+            {
+              deltaBaseCacheBytes: 4 * 1024 * 1024,
+              maxCacheCalls: BROWSE_POLICY.cacheCalls,
+              maxReads: MAX_READER_READS,
+            },
+          ),
+        );
+        return reader;
+      },
+      release: () => (reader as { release?: () => void } | undefined)?.release?.(),
+    };
+  }
+
+  /**
+   * The names runs' contexts carry: the repository's owner and name, its
+   * visibility, the deployment's origin, and the handles of `ids` (and the
+   * owner), in one directory query.
+   * @internal
+   */
+  async readNames(principals: Iterable<string>): Promise<Names> {
+    const meta = this.#sql()
+      .exec<{ owner_id: string | null; name: string | null; visibility: string | null }>(
+        "SELECT owner_id, name, visibility FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    const ownerId = meta?.owner_id ?? "";
+    const ids = new Set<string>([ownerId, ...principals]);
+    ids.delete("");
+    const logins: Record<string, string> = {};
+    if (ids.size > 0) {
+      this.deps.git.context.metrics.count("d1.query", { db: "directory", op: "ci_names" });
+      const { results } = await this.boundTo()
+        .DIRECTORY.prepare(
+          `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
+           WHERE p.id IN (SELECT value FROM json_each(?1))`,
+        )
+        .bind(JSON.stringify([...ids].sort()))
+        .all<{ id: string; handle: string | null }>();
+      for (const r of results) logins[r.id] = r.handle ?? "";
+    }
+    return {
+      owner: logins[ownerId] ?? "",
+      ownerId,
+      repo: meta?.name ?? "",
+      private: meta?.visibility !== "public",
+      origin: this.deps.origin(),
+      logins,
+    };
+  }
+
+  /**
+   * In one transaction: the next run number of the workflow, a new run id,
+   * and the run's spec, kept for event `eventId` before the run is created,
+   * so its start can be repeated without reading git again. The spec is
+   * stored as its JSON without the workflow source, and the source as text:
+   * at most 500,000 bytes of source and 1 MiB of contexts
+   * (`validateRunSpec`), so a row stays within about 1.55 MB, kept to here
+   * as a conservative target (Durable Object SQLite allows larger rows:
+   * verified 2026-11-16,
+   * https://developers.cloudflare.com/durable-objects/platform/limits/#sql-storage-limits).
+   * Throws {@link InvalidSpec}, allocating nothing, for a spec that does not validate.
+   * @internal
+   */
+  allocateRun(
+    eventId: number,
+    kind: RunKind,
+    path: string,
+    blob: string,
+    build: (runId: string, runNumber: number) => RunSpec,
+  ): RunSpec {
+    const now = this.#now();
+    return this.deps.git.context.storage.transactionSync(() => {
+      const number = this.#sql()
+        .exec<{ last: number }>(
+          `INSERT INTO ci_run_numbers (workflow_path, last) VALUES (?, 1)
+           ON CONFLICT (workflow_path) DO UPDATE SET last = last + 1 RETURNING last`,
+          path,
+        )
+        .one().last;
+      const runId = newUlid(now);
+      const spec = build(runId, number);
+      try {
+        validateRunSpec(spec);
+      } catch (error) {
+        throw new InvalidSpec("invalid run spec", { cause: error });
+      }
+      this.#sql().exec(
+        `INSERT INTO ci_event_runs (event_id, trigger_kind, workflow_path, run_id, run_number,
+             workflow_blob, approval, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        eventId,
+        kind,
+        path,
+        runId,
+        number,
+        blob,
+        spec.approval ? 1 : 0,
+        now,
+      );
+      this.#sql().exec(
+        "INSERT INTO ci_run_specs (run_id, spec, source) VALUES (?, ?, ?)",
+        runId,
+        JSON.stringify({ ...spec, workflow: { path: spec.workflow.path, source: "" } }),
+        spec.workflow.source,
+      );
+      return spec;
     });
   }
 
@@ -776,6 +1175,8 @@ class Evaluation {
         this.#saveProgress();
         return reconciled;
       }
+      // A dispatch's run is allocated with its record: once it started, the event is decided.
+      if (this.#row.kind === "workflow_dispatch") return this.#done(this.#outcome);
       const reader = await this.#open();
       if (!reader) return this.#done("unreadable");
       const resolved = await this.#resolve(reader);
@@ -818,7 +1219,7 @@ class Evaluation {
     const open = this.#t
       .sql()
       .exec<{
-        trigger_kind: PassKind;
+        trigger_kind: RunKind;
         workflow_path: string;
         run_id: string;
         spec: string | null;
@@ -941,37 +1342,9 @@ class Evaluation {
   async #names(): Promise<Names> {
     const resolved = this.#resolved as Resolved;
     if (resolved.names) return resolved.names;
-    const meta = this.#t
-      .sql()
-      .exec<{ owner_id: string | null; name: string | null; visibility: string | null }>(
-        "SELECT owner_id, name, visibility FROM repo_meta WHERE id = 1",
-      )
-      .toArray()[0];
-    const ownerId = meta?.owner_id ?? "";
-    const ids = new Set<string>([ownerId, this.#actor()]);
+    const ids = new Set<string>([this.#actor()]);
     if (this.#row.kind === "pull_request") usersIn(this.#facts<PullFacts>().payload, ids);
-    ids.delete("");
-    const logins: Record<string, string> = {};
-    if (ids.size > 0) {
-      this.#t.repo.git.context.metrics.count("d1.query", { db: "directory", op: "ci_names" });
-      const { results } = await this.#t
-        .boundTo()
-        .DIRECTORY.prepare(
-          `SELECT p.id, ${SHOWN_HANDLE} AS handle FROM principals p
-           WHERE p.id IN (SELECT value FROM json_each(?1))`,
-        )
-        .bind(JSON.stringify([...ids].sort()))
-        .all<{ id: string; handle: string | null }>();
-      for (const r of results) logins[r.id] = r.handle ?? "";
-    }
-    const names: Names = {
-      owner: logins[ownerId] ?? "",
-      ownerId,
-      repo: meta?.name ?? "",
-      private: meta?.visibility !== "public",
-      origin: this.#t.repo.origin(),
-      logins,
-    };
+    const names = await this.#t.readNames(ids);
     const next: Resolved = { ...resolved, names };
     this.#t
       .sql()
@@ -1069,7 +1442,7 @@ class Evaluation {
 
   /** Whether a run of this pass would wait for a maintainer's approval (a fork's first-time contributor). */
   async #wouldWaitForApproval(kind: PassKind): Promise<boolean> {
-    if (kind === "push") return false;
+    if (!isPull(kind)) return false;
     const facts = this.#facts<PullFacts>();
     const fork = isForkJob(this.#t.repo.repoId(), facts.head_repo_id);
     if (!fork) return false;
@@ -1136,27 +1509,7 @@ class Evaluation {
     const root = this.#rootTree(sha);
     if (!root) throw new UnreadableObjectError();
     const trees = new Map<string, readonly TreeEntry[]>();
-    return this.#reads(reader, (reads) =>
-      discoverWorkflows({
-        list: async (path: WorkflowDirectory): Promise<DirectoryListing> => {
-          let entries = await this.#tree(reads, root, trees);
-          const names = path.split("/");
-          for (const [i, name] of names.entries()) {
-            const entry = entries.find((e) => lossy.decode(e.name) === name);
-            if (!entry) return { kind: "absent" };
-            const last = i === names.length - 1;
-            if (!isTreeMode(entry.mode))
-              return last ? { kind: "not-a-directory" } : { kind: "absent" };
-            entries = await this.#tree(reads, entry.oid, trees);
-          }
-          if (entries.length > MAX_LISTED_ENTRIES) return { kind: "too-large" };
-          return {
-            kind: "directory",
-            entries: entries.map((e) => ({ name: e.name, mode: e.mode, oid: oidToHex(e.oid) })),
-          };
-        },
-      }),
-    );
+    return this.#reads(reader, (reads) => discoverIn(root, (oid) => this.#tree(reads, oid, trees)));
   }
 
   #rootTree(sha: string): Oid | undefined {
@@ -1295,11 +1648,7 @@ class Evaluation {
   }
 
   /** Starts an allocated run from its spec and records the answer. */
-  async #launch(
-    kind: PassKind,
-    path: string,
-    spec: RunSpec,
-  ): Promise<Stopped | "gone" | undefined> {
+  async #launch(kind: RunKind, path: string, spec: RunSpec): Promise<Stopped | "gone" | undefined> {
     this.#budget.starts++;
     const binding = await approvalBinding(spec);
     let answer: StartRunAnswer;
@@ -1320,7 +1669,7 @@ class Evaluation {
     const held = binding !== null && answer.ok && answer.run.approval !== null;
     // A pull request run's creation may tell its approvers (a request, or a supersede): the ACL
     // is pulled first; if it cannot be, the approvals' job tells them later.
-    if (answer.ok && kind !== "push") await this.#t.repo.refreshAccess().catch(() => {});
+    if (answer.ok && isPull(kind)) await this.#t.repo.refreshAccess().catch(() => {});
     if (answer.ok) {
       this.#t.repo.git.context.storage.transactionSync(() => {
         this.#t.sql().exec(
@@ -1334,7 +1683,7 @@ class Evaluation {
         // The run object holds the spec now.
         this.#t.sql().exec("DELETE FROM ci_run_specs WHERE run_id = ?", spec.runId);
         // Only now that the run exists may anyone approve or supersede it.
-        if (kind !== "push") {
+        if (isPull(kind)) {
           const run = {
             runId: spec.runId,
             eventId: this.#row.id,
@@ -1368,7 +1717,7 @@ class Evaluation {
   }
 
   /** Decides an allocated run without a start: its stored spec is no longer needed. */
-  #mark(kind: PassKind, path: string, outcome: string): void {
+  #mark(kind: RunKind, path: string, outcome: string): void {
     this.#t.repo.git.context.storage.transactionSync(() => {
       const [run] = this.#t
         .sql()
@@ -1403,45 +1752,7 @@ class Evaluation {
     blob: string,
     build: (runId: string, runNumber: number) => RunSpec,
   ): RunSpec {
-    const now = this.#t.now();
-    return this.#t.repo.git.context.storage.transactionSync(() => {
-      const number = this.#t
-        .sql()
-        .exec<{ last: number }>(
-          `INSERT INTO ci_run_numbers (workflow_path, last) VALUES (?, 1)
-           ON CONFLICT (workflow_path) DO UPDATE SET last = last + 1 RETURNING last`,
-          path,
-        )
-        .one().last;
-      const runId = newUlid(now);
-      const spec = build(runId, number);
-      try {
-        validateRunSpec(spec);
-      } catch (error) {
-        throw new InvalidSpec("invalid run spec", { cause: error });
-      }
-      this.#t.sql().exec(
-        `INSERT INTO ci_event_runs (event_id, trigger_kind, workflow_path, run_id, run_number,
-             workflow_blob, approval, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        this.#row.id,
-        kind,
-        path,
-        runId,
-        number,
-        blob,
-        spec.approval ? 1 : 0,
-        now,
-      );
-      this.#t
-        .sql()
-        .exec(
-          "INSERT INTO ci_run_specs (run_id, spec, source) VALUES (?, ?, ?)",
-          runId,
-          JSON.stringify({ ...spec, workflow: { path: spec.workflow.path, source: "" } }),
-          spec.workflow.source,
-        );
-      return spec;
-    });
+    return this.#t.allocateRun(this.#row.id, kind, path, blob, build);
   }
 
   /**
@@ -1462,24 +1773,15 @@ class Evaluation {
     const actorId = this.#actor();
     const parsed = parseWorkflow(path, bytes);
     const name = parsed.ok ? parsed.workflow.name?.value : undefined;
-    const fork = pass.kind !== "push" && isForkJob(repoId, this.#facts<PullFacts>().head_repo_id);
+    const fork = isPull(pass.kind) && isForkJob(repoId, this.#facts<PullFacts>().head_repo_id);
     const origin = names.origin ?? "";
-    const full = `${names.owner}/${names.repo}`;
     const event = await this.#contextEvent(reader, pass, names);
     const source = lossy.decode(bytes);
     return (runId, runNumber) => {
       const input: GithubContextInput = {
         serverUrl: origin,
         apiUrl: origin ? `${origin}/api` : "",
-        repository: {
-          id: repoId,
-          name: names.repo,
-          owner: { id: names.ownerId, login: names.owner },
-          defaultBranch: resolved.defaultBranch,
-          private: names.private,
-          htmlUrl: origin ? `${origin}/${full}` : "",
-          cloneUrl: origin ? `${origin}/${full}.git` : "",
-        },
+        repository: contextRepository(repoId, names, resolved.defaultBranch),
         actor: { id: actorId, login: names.logins[actorId] ?? "" },
         workflow: { path, ...(name ? { name } : {}) },
         runId,
@@ -1549,6 +1851,50 @@ class Evaluation {
       payload,
     };
   }
+}
+
+/** The workflow files under the tree `root`, read through `readTree` (see `discoverWorkflows`). */
+function discoverIn(
+  root: Oid,
+  readTree: (oid: Oid) => Promise<readonly TreeEntry[]>,
+): Promise<Discovery> {
+  return discoverWorkflows({
+    list: async (path: WorkflowDirectory): Promise<DirectoryListing> => {
+      let entries = await readTree(root);
+      const names = path.split("/");
+      for (const [i, name] of names.entries()) {
+        const entry = entries.find((e) => lossy.decode(e.name) === name);
+        if (!entry) return { kind: "absent" };
+        const last = i === names.length - 1;
+        if (!isTreeMode(entry.mode)) return last ? { kind: "not-a-directory" } : { kind: "absent" };
+        entries = await readTree(entry.oid);
+      }
+      if (entries.length > MAX_LISTED_ENTRIES) return { kind: "too-large" };
+      return {
+        kind: "directory",
+        entries: entries.map((e) => ({ name: e.name, mode: e.mode, oid: oidToHex(e.oid) })),
+      };
+    },
+  });
+}
+
+/** The `repository` of a run's `github` context, from the names resolved for it. */
+function contextRepository(
+  repoId: string,
+  names: Names,
+  defaultBranch: string,
+): GithubContextInput["repository"] {
+  const origin = names.origin ?? "";
+  const full = `${names.owner}/${names.repo}`;
+  return {
+    id: repoId,
+    name: names.repo,
+    owner: { id: names.ownerId, login: names.owner },
+    defaultBranch,
+    private: names.private,
+    htmlUrl: origin ? `${origin}/${full}` : "",
+    cloneUrl: origin ? `${origin}/${full}.git` : "",
+  };
 }
 
 /** The commit `sha` names, through annotated tags; undefined when it names none. */

@@ -142,7 +142,7 @@ import {
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
 import { type CheckStart, type CheckUpdate, RepoChecks, type StatusInput } from "./repo/checks.js";
-import { CI_TRIGGERS_JOB, CiTriggers } from "./repo/ci-triggers.js";
+import { CI_TRIGGERS_JOB, CiTriggers, type DispatchAnswer } from "./repo/ci-triggers.js";
 import {
   CODE_OWNER_MERGE_POLICY,
   CodeOwnerFacts,
@@ -2540,6 +2540,29 @@ export class RepoDO extends MigratingDO {
       if (refused) return { ok: false, code: "run_not_found" };
       return this.ciApprovals.approve(input.runId, input.approver);
     });
+  }
+
+  /**
+   * A `workflow_dispatch` by API (see `CiTriggers.dispatch`): `key` is the
+   * request's idempotency claim, or a fresh id for a request without a key.
+   */
+  dispatchWorkflow(input: {
+    readonly file: string;
+    readonly ref: string;
+    readonly inputs: unknown;
+    readonly actor: string;
+    readonly key: string;
+  }): Promise<DispatchAnswer> {
+    return this.#measured("dispatchWorkflow", () =>
+      this.ciTriggers.dispatch({
+        ...input,
+        // Being generated, transferred or deleted, or without an identity yet: not now.
+        refusal: () =>
+          this.#writeRefusal() || !this.events.hasIdentity()
+            ? { ok: false, code: "repo_not_ready" }
+            : undefined,
+      }),
+    );
   }
 
   /** A held run ended unapproved (cancelled, expired): told by its run object (see `CiApprovals.settle`). */

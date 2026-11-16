@@ -1,6 +1,8 @@
+import { newUlid } from "@fyrden/adapters-cloudflare/git";
 import type {
   approveWorkflowRun,
   cancelWorkflowRun,
+  dispatchWorkflow,
   forceCancelWorkflowRun,
   getWorkflowRun,
   Input,
@@ -10,6 +12,8 @@ import type {
 } from "@fyrden/api-contract";
 import type { RepoDO } from "../do/RepoDO.js";
 import type { JobView, RunDO, RunView } from "../do/RunDO.js";
+import type { DispatchAnswer } from "../do/repo/ci-triggers.js";
+import { publicOrigin } from "../email/notifications.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -251,4 +255,70 @@ export async function approveWorkflowRunOperation(
     await repo.settleApproval({ runId: input.run_id, outcome: ended.state });
   }
   throw notPending();
+}
+
+const DISPATCH_REFUSALS: Record<
+  Exclude<DispatchAnswer, { ok: true }>["code"],
+  { status: 404 | 409 | 422 | 503; detail: string }
+> = {
+  busy: { status: 503, detail: "The repository is busy. Try again shortly." },
+  ci_off: { status: 409, detail: "This deployment runs no CI." },
+  repo_not_ready: { status: 409, detail: "The repository cannot run workflows yet." },
+  ref_not_found: { status: 422, detail: "No branch or tag has that name." },
+  workflow_not_found: {
+    status: 404,
+    detail: "No workflow file has that name at the ref and on the default branch.",
+  },
+  workflow_not_dispatchable: {
+    status: 422,
+    detail: "The workflow has no workflow_dispatch trigger.",
+  },
+  invalid_inputs: { status: 422, detail: "The inputs do not match the workflow's." },
+  invalid_workflow: { status: 422, detail: "The workflow file's triggers cannot be read." },
+};
+
+/**
+ * The `actions.workflows.dispatch` operation. The dispatch is recorded
+ * under the request's idempotency claim (a later request with the same
+ * key past its window is a new claim, so a new run), or under a fresh id
+ * without a key, as GitHub makes one run per such request.
+ */
+export async function dispatchWorkflowOperation(
+  ctx: OpContext,
+  input: Input<typeof dispatchWorkflow>,
+): Promise<Output<typeof dispatchWorkflow>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "dispatchWorkflow" });
+  const answer = (await ctx.env.REPO.getByName(entry.id).dispatchWorkflow({
+    file: input.workflow_id,
+    ref: input.ref,
+    inputs: input.inputs,
+    // The token's principal, as a push by the same token records: a delegated agent acts for its
+    // user, whose role the run's job token reads with (the agent alone may have none).
+    actor: ctx.auth.principalId,
+    // MCP calls carry no key yet, so each is a dispatch of its own (a retried tool call makes a
+    // second run); a caller-supplied key through the MCP mount is a recorded follow-up.
+    key: ctx.idempotencyClaim ?? newUlid(Date.now()),
+  })) as unknown as DispatchAnswer;
+  if (!answer.ok) {
+    const refusal = DISPATCH_REFUSALS[answer.code];
+    throw new OperationError(
+      refusal.status,
+      answer.code,
+      refusal.detail,
+      undefined,
+      undefined,
+      refusal.status === 503 ? 1 : undefined,
+      undefined,
+      undefined,
+      "errors" in answer ? answer.errors : undefined,
+    );
+  }
+  const path = `${entry.ownerHandle}/${entry.name}/actions/runs/${answer.runId}`;
+  return {
+    workflow_run_id: answer.runId,
+    run_url: `${ctx.requestOrigin}/api/repos/${path}`,
+    // No run page exists yet: where it will be, on the deployment's public origin.
+    html_url: `${publicOrigin(ctx.env) ?? ctx.requestOrigin}/${path}`,
+  };
 }

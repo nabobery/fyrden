@@ -7855,6 +7855,29 @@ export type ActionsRunsJobsLiveTicketOutput = {
   url: string;
 };
 
+/** Input of `actions.workflows.dispatch`: Create a workflow dispatch event. */
+export type ActionsWorkflowsDispatchInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The workflow's file name, such as `ci.yml`. */
+  workflow_id: string;
+  /** A branch or tag name, or a full ref. */
+  ref: string;
+  /** The workflow's inputs by name (at most 25). */
+  inputs?: Record<string, string | number | boolean>;
+};
+
+/** Output of `actions.workflows.dispatch`. */
+export type ActionsWorkflowsDispatchOutput = {
+  /** The run's id. */
+  workflow_run_id: string;
+  /** The run in the REST API. */
+  run_url: string;
+  html_url: string;
+};
+
 /** Input of `repos.blame.get`: Blame a file. */
 export type ReposBlameGetInput = {
   /** The owner's handle. */

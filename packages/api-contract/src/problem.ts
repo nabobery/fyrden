@@ -39,6 +39,12 @@ export const Problem = z.object({
     .describe(
       "Fyrden: with a live hints refusal, which check refused it. Diagnostic only: names may change.",
     ),
+  errors: z
+    .array(z.record(z.string(), z.union([z.string(), z.number(), z.null()])))
+    .optional()
+    .describe(
+      "Fyrden: with a refusal of several things at once, each one: `invalid_inputs` (`input`, `message`), `invalid_workflow` (`code`, `feature`, `path`, `line`, `column`, `message`).",
+    ),
 });
 
 export type Problem = z.infer<typeof Problem>;
@@ -55,6 +61,7 @@ export interface ProblemInit {
   retryAfter?: number;
   retryAt?: number;
   reason?: string;
+  errors?: readonly Readonly<Record<string, string | number | null>>[];
 }
 
 /**
@@ -74,5 +81,6 @@ export function makeProblem(init: ProblemInit): Problem {
     ...(init.retryAfter !== undefined && { retry_after: init.retryAfter }),
     ...(init.retryAt !== undefined && { retry_at: init.retryAt }),
     ...(init.reason !== undefined && { reason: init.reason }),
+    ...(init.errors !== undefined && { errors: init.errors.map((e) => ({ ...e })) }),
   };
 }

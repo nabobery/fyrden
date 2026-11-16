@@ -20,6 +20,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "detail": {
             "type": "string",
           },
+          "errors": {
+            "description": "Fyrden: with a refusal of several things at once, each one: \`invalid_inputs\` (\`input\`, \`message\`), \`invalid_workflow\` (\`code\`, \`feature\`, \`path\`, \`line\`, \`column\`, \`message\`).",
+            "items": {
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "null",
+                ],
+              },
+              "propertyNames": {
+                "type": "string",
+              },
+              "type": "object",
+            },
+            "type": "array",
+          },
           "missing_permission": {
             "type": "string",
           },
@@ -9439,6 +9456,135 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Re-run a workflow",
+        "x-fyrden-permission": "actions:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": {
+      "post": {
+        "description": "Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`, and \`ci_off\` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.workflows.dispatch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "description": "The workflow's file name, such as \`ci.yml\`.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "inputs": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                      ],
+                    },
+                    "description": "The workflow's inputs by name (at most 25).",
+                    "propertyNames": {
+                      "type": "string",
+                    },
+                    "type": "object",
+                  },
+                  "ref": {
+                    "description": "A branch or tag name, or a full ref.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "ref",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "html_url": {
+                      "type": "string",
+                    },
+                    "run_url": {
+                      "description": "The run in the REST API.",
+                      "type": "string",
+                    },
+                    "workflow_run_id": {
+                      "description": "The run's id.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "workflow_run_id",
+                    "run_url",
+                    "html_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a workflow dispatch event",
         "x-fyrden-permission": "actions:write",
         "x-fyrden-principals": [
           "user",

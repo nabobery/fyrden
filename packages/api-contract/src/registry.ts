@@ -12,6 +12,7 @@ import {
 import {
   approveWorkflowRun,
   cancelWorkflowRun,
+  dispatchWorkflow,
   forceCancelWorkflowRun,
   getWorkflowRun,
   issueJobLogTicket,
@@ -482,6 +483,7 @@ export const registry = defineRegistry([
   rerunWorkflowRun,
   issueJobLogTicket,
   approveWorkflowRun,
+  dispatchWorkflow,
   getBlame,
   getRootContents,
   getContents,

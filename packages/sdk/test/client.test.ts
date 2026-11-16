@@ -181,6 +181,29 @@ describe("FyrdenClient", () => {
     expect(second).toMatchObject({ code: "stale", currentVersion: undefined });
   });
 
+  it("carries a refusal's list of errors, for each input or each workflow error", async () => {
+    const inputs = [{ input: "env", message: "Input `env` is required." }];
+    const workflow = [
+      { code: "yaml_syntax", feature: "", path: "", line: 1, column: 5, message: "Bad YAML." },
+    ];
+    const { fetchFn } = fake([
+      { status: 422, body: { status: 422, code: "invalid_inputs", detail: "d", errors: inputs } },
+      {
+        status: 422,
+        body: { status: 422, code: "invalid_workflow", detail: "d", errors: workflow },
+      },
+      { status: 404, body: { status: 404, code: "workflow_not_found", detail: "d" } },
+    ]);
+    const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+    const input = { owner: "me", repo: "r", workflow_id: "ci.yml", ref: "main" };
+    const first = await client.call("actions.workflows.dispatch", input).catch((e: unknown) => e);
+    expect(first).toMatchObject({ status: 422, code: "invalid_inputs", errors: inputs });
+    const second = await client.call("actions.workflows.dispatch", input).catch((e: unknown) => e);
+    expect(second).toMatchObject({ status: 422, code: "invalid_workflow", errors: workflow });
+    const third = await client.call("actions.workflows.dispatch", input).catch((e: unknown) => e);
+    expect(third).toMatchObject({ code: "workflow_not_found", errors: undefined });
+  });
+
   it("carries how long to wait before asking again, from the problem or its Retry-After", async () => {
     const busy = { status: 503, code: "blame_busy", detail: "busy" };
     const { fetchFn } = fake([

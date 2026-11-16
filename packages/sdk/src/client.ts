@@ -45,6 +45,12 @@ export class FyrdenError extends Error {
     readonly currentVersion?: number,
     /** With a 429 or a 503: seconds to wait before asking again (`retry_after`, or the `Retry-After` header). */
     readonly retryAfter?: number,
+    /**
+     * With a refusal of several things at once, each one: `invalid_inputs`
+     * (`input`, `message`), `invalid_workflow` (`code`, `feature`, `path`,
+     * `line`, `column`, `message`).
+     */
+    readonly errors?: readonly Readonly<Record<string, string | number | null>>[],
   ) {
     super(`${code}: ${detail}`);
   }
@@ -156,6 +162,12 @@ export class FyrdenClient {
         typeof problem.resync === "string" ? problem.resync : undefined,
         typeof problem.current_version === "number" ? problem.current_version : undefined,
         retryAfterOf(problem, response, this.options.now ?? Date.now),
+        Array.isArray(problem.errors)
+          ? (problem.errors as unknown[]).filter(
+              (e): e is Record<string, string | number | null> =>
+                typeof e === "object" && e !== null && !Array.isArray(e),
+            )
+          : undefined,
       );
     }
     // An operation that answers nothing (204, 205) gives null, as its output type says.
