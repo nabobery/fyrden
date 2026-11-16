@@ -9,11 +9,13 @@ import {
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
 import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
+  effectiveScope,
   type InstanceConclusion,
   jobPayload,
   type NeedResult,
   nodeOutcome,
   type RunnerResult,
+  type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
 import { jobPolicy } from "../invocation-calls.js";
@@ -171,6 +173,12 @@ export type AssignAnswer =
       readonly triggeringActorId: string;
       readonly github: unknown;
       readonly timeoutMinutes: number;
+      /**
+       * The job token's scopes, from the immutable workflow and the run's trust: empty when the
+       * job is granted none, and then it gets no token (an empty list on a token means its
+       * principal's full rights).
+       */
+      readonly tokenScopes: readonly TokenScope[];
     }
   | {
       readonly ok: false;
@@ -814,6 +822,11 @@ export class RunDO extends MigratingDO {
       triggeringActorId: attempt.triggering_actor_id,
       github: JSON.parse(run.contexts).github,
       timeoutMinutes: Math.round(row.timeout_ms / 60_000),
+      tokenScopes: effectiveScope({
+        workflowPermissions: model.workflow.permissions,
+        jobPermissions: model.workflow.jobs.find((j) => j.id.value === row.job_key)?.permissions,
+        trust: run.trust,
+      }),
     };
   }
 
@@ -833,6 +846,17 @@ export class RunDO extends MigratingDO {
     return (
       "row" in found && (found.row.status === "in_progress" || found.row.status === "cancelling")
     );
+  }
+
+  /**
+   * Read only: for a task in progress or cancelling, its run's repository
+   * and checkout commit, which the task's job token may fetch even once no
+   * ref reaches it; null otherwise.
+   */
+  liveTaskCheckout(ref: TaskRef): { readonly repoId: string; readonly sha: string } | null {
+    if (!this.taskLive(ref)) return null;
+    const run = this.engine.run();
+    return run ? { repoId: run.repo_id, sha: run.sha } : null;
   }
 
   /** A heartbeat; `cancel` tells the runner to stop. */

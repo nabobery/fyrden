@@ -18,7 +18,18 @@ export const GIT_TOKEN_TYPES: ReadonlySet<string> = new Set(["git", "pat"]);
 export const REPO_NOT_FOUND = "Repository not found.";
 
 export type GitAccess =
-  | { ok: true; auth: TokenRecord; repo: RepoEntry }
+  | {
+      ok: true;
+      auth: TokenRecord;
+      repo: RepoEntry;
+      /**
+       * For a CI job token, its run's checkout commit (hex), read from the
+       * task the token was verified against: upload-pack also serves it and
+       * its history, though no ref may reach it any more. Never from the
+       * client.
+       */
+      runCommit?: string;
+    }
   | { ok: false; response: Response };
 
 /**
@@ -33,7 +44,8 @@ export type GitAccess =
  * - Writes verify the token on the D1 primary, so a revoked token cannot
  *   push from a stale cache, and read the directory from the primary.
  * - A CI job token reads its one repository, verified on the primary, and
- *   only while its task is live; 503 when that cannot be told.
+ *   only while its task is live; 503 when that cannot be told. It may also
+ *   fetch its run's checkout commit (`runCommit`).
  */
 export async function authorizeGit(
   c: GitContext,
@@ -77,11 +89,15 @@ export async function authorizeGit(
     );
   }
 
+  let runCommit: string | undefined;
+  let runRepoId: string | undefined;
   if (job) {
     const task = await jobTokenTask(c.env, auth.id, c.get("metrics"));
     if (task === "unavailable")
       return fail(gitText(c, 503, "The job's task cannot be checked now. Try again later."));
     if (task === "ended") return fail(gitText(c, 401, "Invalid username or token.", challenge));
+    runCommit = task.sha;
+    runRepoId = task.repoId;
   }
 
   const limiter = access === "write" ? c.env.RATE_LIMIT_WRITE : c.env.RATE_LIMIT_READ;
@@ -98,5 +114,12 @@ export async function authorizeGit(
 
   c.set("auth", auth);
   c.set("authState", authn.state);
-  return { ok: true, auth, repo };
+  // The token's repository list already confines it to its run's repository; the run's commit
+  // is offered only there.
+  return {
+    ok: true,
+    auth,
+    repo,
+    ...(runCommit !== undefined && runRepoId === repo.id && { runCommit }),
+  };
 }

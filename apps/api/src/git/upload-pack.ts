@@ -28,11 +28,15 @@ import {
 
 const SERVICE = "git-upload-pack";
 
-/** One protocol v2 command: the request as parsed, for an authorized repository. */
+/**
+ * One protocol v2 command: the request as parsed, for an authorized
+ * repository; `runCommit` is a CI job token's run commit (`GitAccess`).
+ */
 export type UploadPackCommand = (
   c: GitContext,
   repo: RepoEntry,
   request: V2CommandRequest,
+  runCommit: string | undefined,
 ) => Promise<Response>;
 
 const lsRefs: UploadPackCommand = async (c, repo, request) => {
@@ -42,7 +46,8 @@ const lsRefs: UploadPackCommand = async (c, repo, request) => {
   return gitPayload(body as Uint8Array<ArrayBuffer>, contentType.result(SERVICE));
 };
 
-const fetchPack: UploadPackCommand = (c, repo, request) => fetchCommand(c, repo, request.args);
+const fetchPack: UploadPackCommand = (c, repo, request, runCommit) =>
+  fetchCommand(c, repo, request.args, runCommit);
 
 /** Every advertised command has a handler here. */
 export const UPLOAD_PACK_COMMANDS: Readonly<Record<string, UploadPackCommand>> = {
@@ -82,7 +87,7 @@ export async function uploadPack(c: GitContext): Promise<Response> {
   const command = UPLOAD_PACK_COMMANDS[request.command];
   if (!command) return gitError(SERVICE, `invalid command '${request.command}'`);
   try {
-    return await command(c, access.repo, request);
+    return await command(c, access.repo, request, access.runCommit);
   } catch (error) {
     if (error instanceof ProtocolError) return gitError(SERVICE, error.message);
     throw error;

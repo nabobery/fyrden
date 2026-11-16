@@ -180,4 +180,144 @@ describe("upload-pack.wants-reachable", () => {
       planFetch(loaded.repository, args, { framing: "transport", limits: { wantWalkCommits: 50 } }),
     ).resolves.toBeDefined();
   });
+
+  describe("with an extra tip (a commit the caller vouches for, never advertised)", () => {
+    // main: a <- b <- c, then reset to a; d, a child of a on a deleted branch, is reachable from
+    // neither main nor c. The caller vouches for c.
+    async function forcePushed() {
+      const source = await sourceRepo(scratch);
+      const a = await commit(source, { "a.txt": "1\n" }, "a");
+      const b = await commit(source, { "b.txt": "b\n" }, "b");
+      const c = await commit(source, { "c.txt": "c\n" }, "c");
+      await source.git(["checkout", "-q", "-b", "side", a]);
+      const d = await commit(source, { "d.txt": "d\n" }, "d");
+      await source.git(["checkout", "-q", "main"]);
+      await source.git(["branch", "-q", "-D", "side"]);
+      await source.git(["reset", "-q", "--hard", a]);
+      const loaded = await openUploadPackRepo(await serve(scratch, source));
+      return { source, loaded, a, b, c, d };
+    }
+
+    const withExtra = (
+      loaded: Awaited<ReturnType<typeof openUploadPackRepo>>,
+      extraTips: readonly string[],
+    ) => ({ ...loaded, repository: { ...loaded.repository, extraTips: extraTips.map(hexOid) } });
+
+    async function sentObjects(pack: Uint8Array, oids: readonly string[]): Promise<string[]> {
+      const check = await scratch.sandbox();
+      await check.git(["init", "-q"]);
+      await check.git(["index-pack", "--stdin"], { input: pack });
+      const { stdout } = await check.git(["cat-file", "--batch-check"], {
+        input: oids.map((o) => `${o}\n`).join(""),
+      });
+      return stdout.trim().split("\n");
+    }
+
+    it("serves it and its ancestors, and still refuses a commit neither reaches", async () => {
+      const { loaded, a, b, c, d } = await forcePushed();
+      const extra = withExtra(loaded, [c]);
+      for (const want of [c, b]) {
+        const { bytes } = await planAndRender(extra, fetchArgs({ wants: [hexOid(want)] }));
+        const sent = await sentObjects(parseFetchResponse(bytes).pack as Uint8Array, [want, a]);
+        expect(sent.map((line) => line.split(" ")[1])).toEqual(["commit", "commit"]);
+      }
+      const refused = await rejection(
+        planFetch(extra.repository, fetchArgs({ wants: [hexOid(d)] }), { framing: "transport" }),
+      );
+      expect(refused.message).toBe(`upload-pack: not our ref ${d}`);
+      // Without the extra tip, the same request is refused.
+      const plain = await rejection(
+        planFetch(loaded.repository, fetchArgs({ wants: [hexOid(c)] }), { framing: "transport" }),
+      );
+      expect(plain.message).toBe(`upload-pack: not our ref ${c}`);
+    });
+
+    it("serves it shallow and lifts a boundary below it", async () => {
+      const { loaded, b, c } = await forcePushed();
+      const extra = withExtra(loaded, [c]);
+      const shallow = parseFetchResponse(
+        (await planAndRender(extra, fetchArgs({ wants: [hexOid(c)], deepen: 1 }))).bytes,
+      );
+      expect(shallow.shallowInfo).toEqual([`shallow ${c}`]);
+      const whole = parseFetchResponse(
+        (
+          await planAndRender(
+            extra,
+            fetchArgs({
+              wants: [hexOid(c)],
+              haves: [hexOid(c)],
+              shallow: [hexOid(c)],
+              deepen: 2147483647,
+            }),
+          )
+        ).bytes,
+      );
+      expect(whole.shallowInfo).toEqual([`unshallow ${c}`]);
+      const [sentB] = await sentObjects(whole.pack as Uint8Array, [b]);
+      expect(sentB).toMatch(new RegExp(`^${b} commit `));
+    });
+
+    it("ignores an extra tip that is not a stored commit", async () => {
+      const { loaded, a } = await forcePushed();
+      const unknown = "0123456789abcdef0123456789abcdef01234567";
+      const extra = withExtra(loaded, [unknown]);
+      const refused = await rejection(
+        planFetch(extra.repository, fetchArgs({ wants: [hexOid(unknown)] }), {
+          framing: "transport",
+        }),
+      );
+      expect(refused.message).toBe(`upload-pack: not our ref ${unknown}`);
+      await expect(
+        planFetch(extra.repository, fetchArgs({ wants: [hexOid(a)] }), { framing: "transport" }),
+      ).resolves.toBeDefined();
+    });
+
+    // Lifting the client's boundary at c depends on who vouches for c, so the regenerated pack
+    // does too: a pack cached for one caller is never served to the other.
+    describe("and the regenerated pack cache", () => {
+      const lift = (a: string, c: string) =>
+        fetchArgs({ wants: [hexOid(a)], shallow: [hexOid(c)], deepen: 2147483647 });
+
+      async function planned(
+        loaded: Awaited<ReturnType<typeof openUploadPackRepo>>,
+        args: ReturnType<typeof fetchArgs>,
+        b: string,
+      ) {
+        const { plan, bytes } = await planAndRender(loaded, args);
+        const response = parseFetchResponse(bytes);
+        const [sentB] = await sentObjects(response.pack as Uint8Array, [b]);
+        return { cached: plan.pack?.cached, shallowInfo: response.shallowInfo ?? [], sentB };
+      }
+
+      it("serves the vouching caller's pack, then regenerates for one without the tip", async () => {
+        const { loaded, a, b, c } = await forcePushed();
+        const job = await planned(withExtra(loaded, [c]), lift(a, c), b);
+        expect(job.shallowInfo).toEqual([`unshallow ${c}`]);
+        expect(job.sentB).toMatch(new RegExp(`^${b} commit `));
+
+        const other = await planned(loaded, lift(a, c), b);
+        expect(other.cached).toBe(false);
+        expect(other.shallowInfo).not.toContain(`unshallow ${c}`);
+        expect(other.sentB).toBe(`${b} missing`);
+      });
+
+      it("serves a caller without the tip first, then regenerates for the vouching one", async () => {
+        const { loaded, a, b, c } = await forcePushed();
+        const other = await planned(loaded, lift(a, c), b);
+        expect(other.sentB).toBe(`${b} missing`);
+
+        const job = await planned(withExtra(loaded, [c]), lift(a, c), b);
+        expect(job.cached).toBe(false);
+        expect(job.shallowInfo).toEqual([`unshallow ${c}`]);
+        expect(job.sentB).toMatch(new RegExp(`^${b} commit `));
+      });
+
+      it("shares one pack between callers vouching for the same tips, in any order", async () => {
+        const { loaded, a, b, c } = await forcePushed();
+        const first = await planned(withExtra(loaded, [c]), lift(a, c), b);
+        const again = await planned(withExtra(loaded, [c, c]), lift(a, c), b);
+        expect([first.cached, again.cached]).toEqual([false, true]);
+      });
+    });
+  });
 });

@@ -149,7 +149,7 @@ export function decodeFetchTaskResponse(bytes: Uint8Array): FetchTaskResponse {
   return response;
 }
 
-function decodeTask(bytes: Uint8Array): Task {
+export function decodeTask(bytes: Uint8Array): Task {
   const task: Task = {
     id: 0,
     secrets: new Map(),

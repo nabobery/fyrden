@@ -7,9 +7,10 @@ import type { PackId } from "../ports/pack-store.js";
  * canonical description), safe to use in storage keys as they are.
  *
  * A regenerated pack depends on the repository, its refs and pack
- * registry, and everything in the request that changes the bytes: wants,
- * common haves, shallow and deepen arguments, and the ofs-delta,
- * thin-pack and include-tag capabilities. Identical
+ * registry, the extra tips its caller vouches for (they decide which of
+ * the client's shallow boundaries are lifted), and everything in the
+ * request that changes the bytes: wants, common haves, shallow and deepen
+ * arguments, and the ofs-delta, thin-pack and include-tag capabilities. Identical
  * requests then share one pack until refs or the registry move (CI fleets
  * cloning one commit at depth 1). A framed copy of stored packs depends
  * only on those packs, which never change, and the frame size.
@@ -31,6 +32,8 @@ export interface RegeneratedKeyInput {
   readonly includeTag: boolean;
   /** Side-band payload size of a framed pack; undefined for raw pack bytes. */
   readonly framedPayload: number | undefined;
+  /** The commits the caller vouches for besides the refs (`UploadPackRepository.extraTips`). */
+  readonly extraTips?: readonly Oid[];
 }
 
 const sortedHex = (oids: readonly Oid[]) => [...new Set(oids.map(oidToHex))].sort();
@@ -44,8 +47,13 @@ function digest(description: unknown): string {
 }
 
 export function regeneratedPackKey(input: RegeneratedKeyInput): string {
+  const extraTips = sortedHex(input.extraTips ?? []);
+  // Without extra tips, the description (and so the key) is the one keys had before they
+  // existed, so packs already stored are found again. With them, its own tag and one more
+  // field: no description of either form equals one of the other.
   return digest([
-    "fyrden-fetch-pack-v1",
+    extraTips.length === 0 ? "fyrden-fetch-pack-v1" : "fyrden-fetch-pack-v1-tips",
+    ...(extraTips.length === 0 ? [] : [extraTips]),
     input.repoId,
     input.refsVersion,
     input.registryVersion,

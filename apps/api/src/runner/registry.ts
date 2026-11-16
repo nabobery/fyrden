@@ -144,6 +144,21 @@ function liveOffer(now: string): string {
 }
 
 /**
+ * Whether the job of row `x` (a pending job or a task offer, with its
+ * `repo_id` and `fork`) may be given to a runner: never a fork job, and
+ * only while its repository is active and not public, as this statement
+ * reads it. `internal` repositories are served. No runner can opt in yet,
+ * and its labels play no part: the head workflow chooses those. The claim
+ * and the re-offer are the cutoff; nothing checks again before the answer,
+ * so one assignment whose read passed completes, like a task already
+ * running when its repository goes public.
+ */
+function eligible(x: string): string {
+  return `${x}.fork = 0 AND EXISTS (SELECT 1 FROM repos e WHERE e.id = ${x}.repo_id
+    AND e.visibility <> 'public' AND e.state = 'active')`;
+}
+
+/**
  * The runner authentication read, by what the call needs: the runner alone
  * (`?1` uuid), with the task it names (`?2` task id), or FetchTask's view
  * (`?2` now, `?3` the request's version).
@@ -154,7 +169,8 @@ export function runnerAuthQuery(kind: "runner" | "task" | "fetch"): string {
       ? `, COALESCE(d.tasks_version, 0) AS tasks_version,
        EXISTS (SELECT 1 FROM ci_pending_jobs p WHERE p.account_id = r.account_id
                AND p.claim_until IS NOT NULL AND p.claim_until < ?2) AS expired_claims,
-       (SELECT count(*) FROM ci_tasks o WHERE o.runner_id = r.id AND ${liveOffer("?2")}) AS live_offers`
+       (SELECT count(*) FROM ci_tasks o WHERE o.runner_id = r.id AND ${liveOffer("?2")}) AS live_offers,
+       CASE WHEN t.id IS NULL THEN 0 WHEN ${eligible("t")} THEN 1 ELSE 0 END AS task_eligible`
       : "";
   const taskJoin =
     kind === "fetch"
@@ -195,8 +211,11 @@ export interface DispatchView {
   readonly expiredClaims: boolean;
   /** The runner's live offers: unconfirmed, and assigned or within their claim's lease. */
   readonly liveOffers: number;
-  /** The runner's live offer made at the request's version, when it is not 0. */
-  readonly reoffer: RoutedTask | undefined;
+  /**
+   * The runner's live offer made at the request's version, when it is not
+   * 0, and whether its job may still be given to a runner (read with it).
+   */
+  readonly reoffer: (RoutedTask & { readonly eligible: boolean }) | undefined;
 }
 
 export type RunnerAuthentication = {
@@ -248,6 +267,7 @@ export async function authenticateRunner(
         tasks_version?: number;
         expired_claims?: number;
         live_offers?: number;
+        task_eligible?: number;
       }
     >();
   if (!row || !sameHash(row.token_hash, credentials.tokenHash)) return undefined;
@@ -283,7 +303,7 @@ export async function authenticateRunner(
         tasksVersion: row.tasks_version ?? 0,
         expiredClaims: row.expired_claims === 1,
         liveOffers: row.live_offers ?? 0,
-        reoffer: task,
+        reoffer: task && { ...task, eligible: row.task_eligible === 1 },
       },
     }),
   };
@@ -418,7 +438,8 @@ export interface Claimed {
 }
 
 /**
- * Claims the account's oldest pending job whose labels are all among the
+ * Claims the account's oldest pending job that may be given to a runner at
+ * all (`eligible`, read in this statement) and whose labels are all among the
  * runner's (case-insensitive, ASCII), unclaimed or with a lapsed claim, for
  * `CLAIM_LEASE_MS`, and inserts the task row offered with `version`: one
  * batch, the insert reading only the row stamped with this claim's nonce, so
@@ -462,6 +483,7 @@ export async function claimPending(
                NOT EXISTS (SELECT 1 FROM ci_tasks o WHERE o.runner_id = ?1 AND ${liveOffer("?5")})
                AND NOT EXISTS (SELECT 1 FROM ci_runners r
                                WHERE r.id = ?1 AND r.task_confirmed_at IS NOT NULL)))
+             AND ${eligible("p")}
              AND json_array_length(p.labels) > 0
              AND NOT EXISTS (SELECT 1 FROM json_each(p.labels) l
                              WHERE lower(l.value) NOT IN (SELECT lower(r.value) FROM json_each(?6) r))
@@ -480,8 +502,9 @@ export async function claimPending(
       ),
     db
       .prepare(
-        `INSERT INTO ci_tasks (run_id, job_id, runner_id, offered_version, created_at)
-         SELECT run_id, job_id, claimed_by, ?1, ?2 FROM ci_pending_jobs WHERE claim_nonce = ?3
+        `INSERT INTO ci_tasks (run_id, job_id, runner_id, offered_version, created_at, repo_id, fork)
+         SELECT run_id, job_id, claimed_by, ?1, ?2, repo_id, fork FROM ci_pending_jobs
+         WHERE claim_nonce = ?3
          RETURNING id`,
       )
       .bind(claim.version, claim.now, nonce),
@@ -559,4 +582,40 @@ export async function releaseClaim(
       )
       .bind(claim.accountId),
   ]);
+}
+
+/**
+ * Supersedes offer `taskId` while it was never assigned, so no assignment
+ * of it can follow (the run records a task only on an offer not
+ * superseded); false when it was assigned or ended meanwhile. Its pending
+ * row keeps its claim until the lease lapses.
+ */
+export async function supersedeOffer(
+  db: D1Database,
+  offer: { taskId: number; now: number },
+  metrics?: Metrics,
+): Promise<boolean> {
+  count(metrics, "runner_offer_supersede");
+  const result = await db
+    .prepare(
+      "UPDATE ci_tasks SET superseded_at = ? WHERE id = ? AND task IS NULL AND superseded_at IS NULL",
+    )
+    .bind(offer.now, offer.taskId)
+    .run();
+  return result.meta.changes > 0;
+}
+
+/**
+ * The statement that makes every runner of `accountId` search again: an
+ * idle runner skips the claim query while its version is the account's.
+ * Whatever widens which pending jobs may be claimed without publishing one
+ * (a repository made private) runs it in the same batch as that change.
+ */
+export function bumpTasksVersion(db: D1Database, accountId: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO ci_dispatch (account_id, tasks_version) VALUES (?, 1)
+       ON CONFLICT (account_id) DO UPDATE SET tasks_version = tasks_version + 1`,
+    )
+    .bind(accountId);
 }

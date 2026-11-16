@@ -393,6 +393,13 @@ export function newRepoStatements(
                 ${OWNER_REMAINS("?1")} AS owner`,
       )
       .bind(row.ownerId, row.name, agent?.agentId ?? null),
+    // `repos.visibility` is written only when a row is inserted (here, and a held-back fork's
+    // row, already being deleted, in network/fork.ts): no operation changes it yet. Runner
+    // claims and re-offers read it to refuse a public repository's jobs. A future change that
+    // makes a repository private or internal widens which of its queued jobs runners may claim
+    // without publishing one, and idle runners skip the claim while their version is current,
+    // so that change's batch must include `bumpTasksVersion` (runner/registry.ts) for the owner
+    // account. Making one public needs nothing more: the next claim or re-offer refuses its jobs.
     db
       .prepare(
         `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, parent_id,
