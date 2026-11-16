@@ -4,7 +4,6 @@ import { expect } from "vitest";
 import type { Interop, Remotes } from "../harness.ts";
 
 export interface Seeded {
-  /** The working repository the history was made in. */
   readonly work: string;
   readonly remotes: Remotes;
 }
@@ -82,7 +81,6 @@ export async function expectSameRepository(
   expect(await t.objects(dirs.fyrden)).toEqual(await t.objects(dirs.oracle));
 }
 
-/** Both remotes list the same refs. */
 export async function expectSameRefs(t: Interop, remotes: Remotes): Promise<void> {
   expect(await t.lsRemote(remotes.fyrden)).toEqual(await t.lsRemote(remotes.oracle));
 }

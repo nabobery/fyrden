@@ -7,11 +7,9 @@ export interface SmokeResult {
   name: string;
   ok: boolean;
   detail: string;
-  /** Something to look at that does not fail the deployment. */
   warning?: string;
 }
 
-/** What a passing check found: its detail, and a warning if any. */
 export interface Passed {
   detail: string;
   warning?: string;

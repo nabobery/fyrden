@@ -91,7 +91,6 @@ const afterOf = (cursor: string | undefined) => {
   return after === "" ? 0 : Number(after);
 };
 
-/** The `pulls.comments.list` operation. */
 export async function listReviewCommentsOperation(
   ctx: OpContext,
   input: Input<typeof listReviewComments>,
@@ -112,7 +111,6 @@ export async function listReviewCommentsOperation(
   };
 }
 
-/** The `pulls.comments.get` operation. */
 export async function getReviewCommentOperation(
   ctx: OpContext,
   input: Input<typeof getReviewComment>,
@@ -167,7 +165,6 @@ export async function createReviewCommentOperation(
   return commentOutput(result.comment, result.comparison);
 }
 
-/** The `pulls.comments.update` operation. */
 export async function updateReviewCommentOperation(
   ctx: OpContext,
   input: Input<typeof updateReviewComment>,
@@ -182,7 +179,6 @@ export async function updateReviewCommentOperation(
   return commentOutput(result.comment, result.comparison);
 }
 
-/** The `pulls.comments.delete` operation. */
 export async function deleteReviewCommentOperation(
   ctx: OpContext,
   input: Input<typeof deleteReviewComment>,
@@ -196,7 +192,6 @@ export async function deleteReviewCommentOperation(
   return { id: input.comment_id, state: "deleted" };
 }
 
-/** The `pulls.threads.list` operation. */
 export async function listReviewThreadsOperation(
   ctx: OpContext,
   input: Input<typeof listReviewThreads>,
@@ -235,13 +230,11 @@ async function resolution(
   return threadOutput(result.thread, result.comparison);
 }
 
-/** The `pulls.threads.resolve` operation. */
 export const resolveReviewThreadOperation = (
   ctx: OpContext,
   input: Input<typeof resolveReviewThread>,
 ) => resolution(ctx, input, true);
 
-/** The `pulls.threads.unresolve` operation. */
 export const unresolveReviewThreadOperation = (
   ctx: OpContext,
   input: Input<typeof unresolveReviewThread>,
@@ -250,7 +243,6 @@ export const unresolveReviewThreadOperation = (
 /** GitHub's message for applied suggestions. */
 const SUGGESTIONS_MESSAGE = "Apply suggestions from code review";
 
-/** The `pulls.suggestions.apply` operation. */
 export async function applySuggestionsOperation(
   ctx: OpContext,
   input: Input<typeof applySuggestions>,

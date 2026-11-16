@@ -30,7 +30,6 @@ export function renderMarkdown(source: string, at?: MarkdownPlace): string {
 
 /** A link's or image's URL (as micromark wrote it: encoded, `&` escaped) in the repository. */
 function local(url: string, at: MarkdownPlace, image: boolean): string {
-  // Another site, the page's own anchors and other schemes stay as they are.
   if (url === "" || url.startsWith("#") || url.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(url))
     return url;
   const top = "https://repo.invalid/";

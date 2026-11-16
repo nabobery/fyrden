@@ -169,7 +169,6 @@ describe("the labels page", () => {
     });
     expect(away).toContain("Your unsent text");
     expect(away).toContain("gone one");
-    // Another viewer's draft is never shown.
     const theirs = renderPage(Labels, "/ada/demo/labels", pageData(), {
       error: "x",
       scope: { ...scope, viewer: "usr_other" },

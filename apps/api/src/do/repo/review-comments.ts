@@ -6,7 +6,6 @@ import type { RepoEvents } from "./events.js";
 import type { PullCaller, RepoPulls } from "./pulls.js";
 import type { ReactionCounts } from "./reactions.js";
 
-/** The entity type review comment snapshots travel as in events. */
 export const REVIEW_COMMENT_ENTITY = "pull_request_review_comment";
 
 /** Where a thread is anchored: lines of one file, on one side, at a head the pull request has had. */
@@ -43,7 +42,6 @@ export function isOutdated(anchor: ThreadAnchor, now: Comparison | null): boolea
   );
 }
 
-/** Whether judging `anchor` needs the comparison's merge base worked out. */
 export function needsMergeBase(anchor: ThreadAnchor, headSha: string): boolean {
   return anchor.mergeBaseSha !== null && anchor.commitSha === headSha;
 }
@@ -53,7 +51,6 @@ export interface ThreadRecord extends ThreadAnchor {
   readonly number: number;
   readonly resolvedAt: number | null;
   readonly resolvedBy: string | null;
-  /** Its comments now. */
   readonly comments: number;
   readonly version: number;
 }

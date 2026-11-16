@@ -13,7 +13,6 @@ export type BlameAnswer = Output<typeof getBlame>;
 export type Range = BlameAnswer["ranges"][number];
 export type CommitFacts = BlameAnswer["commits"][string];
 
-/** One window of a blamed file as the page draws it: its lines, and the ranges over them. */
 export interface BlameView {
   readonly owner: string;
   readonly repo: string;
@@ -53,7 +52,6 @@ export function blamePath(owner: string, repo: string, ref: string, path: string
   return `/${owner}/${repo}/blame/${encodeURIComponent(ref)}/${encodePath(path)}`;
 }
 
-/** A path's history from `commit`, where a group's commit leads. */
 export function historyPath(owner: string, repo: string, commit: string, path: string): string {
   return `/${owner}/${repo}/commits/${encodeURIComponent(commit)}/${encodePath(path)}`;
 }
@@ -250,7 +248,6 @@ export function displayGroups(ranges: readonly Range[], first: number, last: num
 
 type Reason = Extract<Range, { unresolved: unknown }>["unresolved"];
 
-/** Why lines aren't attributed, in words, one sentence a reason (none offers to continue). */
 const UNRESOLVED: Record<Reason, string> = {
   parent_too_large:
     "Not attributed: an earlier version of this file is over blame's 1 MiB or 100,000-line limit, so it couldn't be compared.",
@@ -281,7 +278,6 @@ export function unresolvedSentence(reason: string): string {
     : `Not attributed (${reason}).`;
 }
 
-/** What the page says when the API refuses to blame the file, in the page's own words. */
 const REFUSALS: Record<string, string> = {
   file_too_large: "This file is too large to blame.",
   object_limit:

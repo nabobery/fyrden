@@ -192,7 +192,6 @@ export const dismissReview = defineOperation({
     description:
       "Dismiss a standing approval or request for changes on an open pull request, giving a reason. Needs write access.",
     readOnly: false,
-    // A second dismissal of the same review is refused.
     idempotent: false,
   },
 });

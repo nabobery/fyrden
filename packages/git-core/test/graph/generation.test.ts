@@ -45,7 +45,6 @@ describe("generation numbers", () => {
 
   it("corrected commit date: the commit date, or one more than the highest parent", () => {
     expect(correctedCommitDate(1000, 0)).toBe(1000);
-    // Clock skew: a child older than its parent.
     expect(correctedCommitDate(50, 100)).toBe(101);
     expect(correctedCommitDate(100, 100)).toBe(101);
     expect(correctedCommitDate(101, 100)).toBe(101);
@@ -75,7 +74,6 @@ describe("generation numbers", () => {
 describe("computeGenerations", () => {
   it("computes both numbers for a batch in any order, using known parents outside it", () => {
     const known = new Map([[oidToHex(oid(1)), { level: 4, generation: 500 }]]);
-    // 4 merges 2 and 3; 2 and 3 have parent 1 (outside the batch); 3 is skewed.
     const rows = computeGenerations(
       [commit(4, [2, 3], 450), commit(3, [1], 100), commit(2, [1], 600)],
       (o) => known.get(oidToHex(o)),
@@ -85,7 +83,6 @@ describe("computeGenerations", () => {
     expect(byOid.get(oidToHex(oid(2)))).toMatchObject({ level: 5, generation: 600 });
     expect(byOid.get(oidToHex(oid(3)))).toMatchObject({ level: 5, generation: 501 });
     expect(byOid.get(oidToHex(oid(4)))).toMatchObject({ level: 6, generation: 601 });
-    // Parents come before children, so rows can be inserted in order.
     expect(rows.map((r) => r.oid[0]).at(-1)).toBe(4);
   });
 

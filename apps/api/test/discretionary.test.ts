@@ -188,7 +188,6 @@ describe("a watch effect", () => {
       do_rows_written: 2 * WATCH_PRICE.recipient.do_rows_written,
       queue_ops: WATCH_PRICE.effect.queue_ops,
     });
-    // Watchers alone (no one else told) still make one.
     expect(feedSink.plan(event("rep_0", 2, block(2, [], ["usr_w1"]))).map((p) => p.target)).toEqual(
       ["watch"],
     );
@@ -203,7 +202,7 @@ describe("admission", () => {
       applyEnvelope(on, envelope(repoId, [event(repoId, seq, block(seq, ["usr_p"], watchers))]), {
         sinks: [feedSink],
       });
-    await apply(1, ["usr_w1", "usr_w2"]); // 2 of 3: admitted
+    await apply(1, ["usr_w1", "usr_w2"]);
     await apply(2, ["usr_w3", "usr_w4"]); // 4 of 3: refused
     await apply(3, ["usr_w5"]); // 3 of 3 would fit, but the day has refused: refused
     expect(
@@ -262,7 +261,6 @@ describe("admission", () => {
     await applyEnvelope(on, envelope(repoId, [event(repoId, 2, block(2, [], ["usr_w2"]))]), {
       sinks: [feedSink],
     });
-    // 2 + 1 fits; 2 + 1 + 1 does not.
     expect((await effects(repoId)).map((e) => e.effect_id)).toEqual([`${repoId}:1:1:feed:watch`]);
   });
 
@@ -295,7 +293,6 @@ describe("admission", () => {
   it("admits nothing for a deleted repository's events", async () => {
     const repoId = await listedRepo();
     const { on } = deployment({ FYRDEN_DISCRETIONARY_DAILY: "do_requests=10" });
-    // The read model's tombstone for it.
     await admitted()
       .prepare(
         `INSERT INTO repos (repo_id, owner_id, name, visibility, deleted, epoch_gen, version,
@@ -424,7 +421,6 @@ describe("the delivery a feed reports", () => {
     // Within the minute: what the isolate read.
     expect(await deliveryState(env.ORG_READ, now + 1_000)).toBe("complete");
     expect(await deliveryState(env.ORG_READ, now + 60_000)).toBe("degraded");
-    // Past the warning.
     expect(await deliveryState(env.ORG_READ, now + DAY + 60_000)).toBe("complete");
   });
 
@@ -644,7 +640,6 @@ describe("a watch effect's price", () => {
         now: () => t0,
         publish,
       };
-      // Overdue: the cron sends it again.
       await recoverEffects({ ...deps, now: () => t0 + 20 * 60 * 1000 });
       const ids = [`${repoId}:1:1:feed:watch`, `${repoId}:1:1:feed:feed`].slice(
         watchers.length > 0 ? 0 : 1,

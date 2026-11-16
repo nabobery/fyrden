@@ -333,7 +333,6 @@ async function build(
           commit: built.commit,
           tree: built.tree,
           blobs: built.blobs,
-          // As any reader of the commit will find it.
           verification: await checkSignature(
             built.objects.find((o) => o.type === "commit")?.data ?? new Uint8Array(0),
           ),

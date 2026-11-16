@@ -48,7 +48,6 @@ export class MaintenanceDO extends DurableObject<Env> {
    */
   repairSearch(): Promise<void> {
     if (this.#repairing) return this.#repairing;
-    // It writes the read model: not while its maintenance holds ordinary work back.
     if (readModelMaintenance(this.env)) return Promise.resolve();
     const metrics = createMetrics(this.env.METRICS);
     this.#repairing = measureInvocation(

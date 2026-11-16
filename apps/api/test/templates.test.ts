@@ -110,7 +110,6 @@ async function generateThrough(
   return res;
 }
 
-/** `stub` with `method` replaced. */
 function replacing<K extends keyof RepoDO>(
   stub: DurableObjectStub<RepoDO>,
   method: K,
@@ -240,7 +239,6 @@ describe("templates", () => {
     expect(made.status).toBe(409);
     expect(made.body.code).toBe("repo_empty");
     expect((await api("GET", `/repos/${reader.handle}/${name}`, reader.token)).status).toBe(404);
-    // The name is free again.
     expect((await api("POST", "/user/repos", reader.token, { name })).status).toBe(201);
   });
 

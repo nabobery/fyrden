@@ -38,7 +38,6 @@ export async function inNetwork<R>(
   throw new Error(outcome.message);
 }
 
-/** The directory entry of a test repository. */
 export async function entryOf(owner: Owner, repo: TestRepo): Promise<RepoEntry> {
   const entry = await resolveRepo(env, handleOf(owner), repo.name, { consistency: "primary" });
   if (!entry) throw new Error(`no directory row for ${repo.name}`);

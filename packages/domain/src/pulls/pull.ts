@@ -11,7 +11,6 @@ export const MAX_PULL_TITLE_LENGTH = 256;
 /** The longest body, in characters (GitHub's). */
 export const MAX_PULL_BODY_LENGTH = 65_536;
 
-/** The entity type pull request snapshots travel as in events. */
 export const PULL_ENTITY = "pull_request";
 
 /** The ref the server keeps at a pull request's head revision; clients may fetch it, not push it. */
@@ -22,7 +21,6 @@ export function pullHeadRef(number: number): string {
 const sha = z.string().regex(/^[0-9a-f]{40}$/);
 const branch = z.string().min(1).max(1024);
 
-/** A pull request as events carry it. */
 export const PullRequestRowSchema = z.strictObject({
   number: z.number().int().positive(),
   title: z.string().min(1).max(MAX_PULL_TITLE_LENGTH),

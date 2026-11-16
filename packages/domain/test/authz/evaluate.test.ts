@@ -96,7 +96,6 @@ describe("evaluate: token narrowing", () => {
       allow: false,
       reason: "scope",
     });
-    // A scope never adds to the role.
     expect(request("contents:write", role("read"), scoped(["contents:write"]))).toEqual({
       allow: false,
       reason: "rights",

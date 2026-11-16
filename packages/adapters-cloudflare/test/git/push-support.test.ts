@@ -32,7 +32,6 @@ describe("push storage support", () => {
       await first.write(new Uint8Array([1, 2, 3]));
       await first.finish();
       const afterFirst = git.registry.get(packId)?.state;
-      // The attempt died after finishing: the next attempt starts the pack over.
       const second = git.packStore.rewritePack(packId);
       const reset = git.registry.get(packId)?.state;
       await second.write(new Uint8Array([4, 5]));
@@ -144,7 +143,6 @@ describe("push storage support", () => {
   it("commits an upload whose received pack was empty (never written) with its completion-free unit", async () => {
     const { stub, networkId } = await newProbe();
     const result = await inProbe(stub, async ({ git }) => {
-      // A base commit, live, for the new ref to point at.
       const base = git.uploads.begin(uploadInput(networkId));
       const baseWriter = git.packStore.rewritePack(base.packId as NonNullable<typeof base.packId>);
       await baseWriter.write(new Uint8Array([1]));
@@ -158,7 +156,6 @@ describe("push storage support", () => {
         expectedVersion: 0,
         uploadId: base.uploadId,
       });
-      // The second push sends an empty pack: its writer aborts.
       const upload = git.uploads.begin(uploadInput(networkId));
       git.uploads.markBodyStored(upload.uploadId);
       const writer = git.packStore.rewritePack(upload.packId as NonNullable<typeof upload.packId>);
@@ -207,7 +204,6 @@ describe("push storage support", () => {
           unitId: upload.uploadId,
           uploadId: upload.uploadId,
         });
-      // The first completion writer fails and is discarded; the retry succeeds.
       const failed = completion();
       await failed.write(new Uint8Array([2]));
       await failed.abort();
@@ -222,7 +218,6 @@ describe("push storage support", () => {
         expectedVersion: 0,
         uploadId: upload.uploadId,
       });
-      // A tail merge compacts the unit's live packs into one.
       const merged = git.packStore.beginPack();
       await merged.write(new Uint8Array([4]));
       await merged.finish();
@@ -253,7 +248,6 @@ describe("push storage support", () => {
       const policy = { leaseMs: 1_000, maxAttempts: 3, backoffMs: 100, memoryRetryMs: 500 };
       const jobs = new JobQueue(context, (at) => alarms.push(at), policy);
       const id = indexJobId("01J00000000000000000000000");
-      // Scheduled for later; runJob runs it now anyway.
       jobs.ensure("index", id, { runAt: clock.now + 60_000 });
       const slices: string[] = [];
       let nested: unknown;
@@ -263,7 +257,6 @@ describe("push storage support", () => {
         {
           async runSlice(job) {
             slices.push(job.jobId);
-            // A second runner meanwhile finds the job taken.
             nested = await jobs.runJob(id, { runSlice: async () => ({ done: true }) }, memory, 0);
             clock.now += 10;
             return slices.length < 3 ? { done: false, cursor: null } : { done: true };
@@ -296,7 +289,6 @@ describe("push storage support", () => {
         alarms: alarms.length > 0,
       };
     });
-    // Two slices fit before the deadline; the job is queued again for the alarm.
     expect(result).toEqual({
       ran: { slices: 2, state: "queued" },
       nested: { slices: 0, state: "busy" },

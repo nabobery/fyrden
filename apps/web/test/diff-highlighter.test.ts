@@ -39,7 +39,6 @@ describe("the diff highlighter's steps", () => {
     choice.subscribe(() => seen.push(choice.current()));
     const stepped = choice.fail(0);
     expect(choice.current()).toBeNull();
-    // The same failure reported again, and an earlier pool's, change nothing.
     await choice.fail(0);
     release();
     await stepped;

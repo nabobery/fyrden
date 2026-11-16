@@ -39,7 +39,6 @@ import type { WriteContext } from "./write-context.js";
 const FOLLOWS_PER_SLICE = 20;
 /** When to try again after a head's repository could not be told. Proposed. */
 const FOLLOW_RETRY_MS = 30_000;
-/** The one job telling heads' repositories which branches to follow. */
 const PULL_FOLLOW_JOB = "pull-follow";
 
 /** Calls to other objects opening a pull request from another repository may make. Proposed. */

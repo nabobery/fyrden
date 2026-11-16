@@ -4,7 +4,6 @@ export const MAX_RELEASE_ASSETS = 100;
 export const MAX_ASSET_UPLOADS = 20;
 /** An asset name's UTF-8 bytes at most, as most file systems take. */
 export const MAX_ASSET_NAME_BYTES = 255;
-/** The content type of an asset that declares none. */
 export const ASSET_CONTENT_TYPE_DEFAULT = "application/octet-stream";
 
 export type AssetName =

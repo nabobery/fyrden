@@ -524,7 +524,6 @@ describe("repository events", () => {
     const events = await inRepo(stub, (repo) => {
       const { storage } = repo.git.context;
       storage.transactionSync(() => repo.git.refStore.setHead("refs/heads/master"));
-      // The same target again changes nothing.
       storage.transactionSync(() => repo.git.refStore.setHead("refs/heads/master"));
       return outboxEvents(repo);
     });
@@ -578,7 +577,6 @@ describe("repository events", () => {
       repo.sendEvents = async (envelope) => {
         sent.push(envelope);
       };
-      // Due now.
       state.storage.sql.exec("UPDATE outbox_state SET next_drain_at = 1");
     });
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -614,7 +612,6 @@ describe("repository events", () => {
       .first<{ epoch_gen: number }>();
     expect(epoch?.epoch_gen).toBe(1);
     const events = await inRepo(env.REPO.getByName(id), outboxEvents);
-    // Its default labels are created with it.
     expect(events.map((e) => [e.type, e.id.epochGen, e.entity?.row?.name])).toEqual([
       ["repo.created", 1, name],
       ...GITHUB_DEFAULT_LABELS.map((l) => ["label.created", 1, l.name]),

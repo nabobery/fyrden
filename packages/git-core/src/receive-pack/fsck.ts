@@ -93,7 +93,6 @@ type PushFsckIdOf<S extends FsckSeverity> = {
   [K in PushFsckId]: (typeof PUSH_FSCK_SEVERITY)[K] extends S ? K : never;
 }[PushFsckId];
 
-/** What a level means for a push: refuse it, report it, or say nothing. */
 export type PushFsckLevel = "error" | "warn" | "ignore";
 
 export interface PushFsckPolicy {
@@ -159,7 +158,6 @@ const SYMLINK_MESSAGES: Record<SpecialFile, [PushFsckId, string]> = {
 const LEGACY_GROUP_WRITABLE = 0o100664;
 const BACKSLASH = 0x5c;
 
-/** A parsed object's outgoing links, for the connectivity check. */
 export interface ObjectLinks {
   readonly commit?: {
     readonly tree: Oid;
@@ -185,7 +183,6 @@ export class PushFsck {
   readonly #gitmodulesDone = new OidTable();
   readonly #gitattributes = new OidTable();
   readonly #gitattributesDone = new OidTable();
-  /** Non-refusing findings, for the client's progress channel. */
   readonly warnings: PushFsckFinding[] = [];
 
   constructor(policy: PushFsckPolicy = {}) {
@@ -193,7 +190,6 @@ export class PushFsck {
     this.#levels = policy.levels ?? {};
   }
 
-  /** The level a finding has under this policy. */
   level(id: PushFsckId): PushFsckLevel {
     const configured = this.#levels[id];
     if (configured) return configured;

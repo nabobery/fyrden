@@ -213,9 +213,7 @@ describe("a pull request's conversation", () => {
       "merged",
     ]);
     expect(data.timeline[2]).toMatchObject({ edited: true, agents: ["agt_x"] });
-    // The next navigation reads the API's next page from its start.
     expect(data.commentPages.next).toBe("/ada/demo/pull/7?comments=%3Amore");
-    // Markdown goes as its source: the page renders it in the browser.
     expect(data.body).toBe("Some **words**");
     expect(JSON.stringify(data)).not.toContain("<strong>");
   });
@@ -291,12 +289,10 @@ describe("a pull request's conversation", () => {
       "Allow edits by maintainers",
     );
     expect(page({ head_repo_id: null }, VIEWER)).not.toContain("Allow edits by maintainers");
-    // Draft or ready, closed or reopened: the buttons the state allows.
     expect(page({ draft: true }, VIEWER)).toContain("Ready for review");
     expect(page({}, VIEWER)).toContain("Convert to draft");
     expect(page({ state: "closed" }, VIEWER)).toContain("Reopen pull request");
     expect(page({ state: "closed", merged: true }, VIEWER)).not.toContain("Reopen pull request");
-    // Every form names the viewer it was made for, so another's session sends none of them.
     const html = page({ head_repo_id: "rep_fork", user: { id: VIEWER, login: "ada" } }, VIEWER);
     const forms = html.match(/<form[\s\S]*?<\/form>/g) ?? [];
     expect(forms.length).toBeGreaterThan(5);
@@ -361,7 +357,6 @@ describe("changing a pull request", () => {
   });
 
   it("edits only at the version the form was opened at, keeping the text it refuses", async () => {
-    // A form that says no version sends nothing: it would overwrite whatever changed since.
     expect(await act({ intent: "edit", title: "New", body: "mine" })).toEqual({
       outcome: {
         error: NO_VERSION,
@@ -412,12 +407,10 @@ describe("changing a pull request", () => {
           kept: { title: "Mine", body: "my <text>", version: 4, viewer: VIEWER },
         },
       );
-    // Another viewer (signed in from another tab while it was sent) never sees it.
     const other = page("usr_other");
     expect(other).not.toContain("my &lt;text&gt;");
     expect(other).toContain('<input type="hidden" name="version" value="5"/>');
     const html = page(VIEWER);
-    // Refused, its text is checked against the version it was written from until read anew.
     expect(html).toContain('<input type="hidden" name="version" value="4"/>');
     expect(html).toContain("my &lt;text&gt;");
   });
@@ -504,7 +497,6 @@ describe("reactions on a pull request", () => {
         context,
         params,
       } as never);
-      // No rulesets for a closed one: the merge box is not shown.
       expect(calls.map(pathOf)).not.toContain("GET /api/repos/ada/demo/rulesets");
       return renderPage(Pull, "/ada/demo/pull/7", data);
     };
@@ -597,7 +589,6 @@ describe("a pull request comment's permalink", () => {
     const { listed, reviewed } = await load("?comments=29%3AC25&reviews=4%3AR2");
     expect(listed).toBe("GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=29");
     expect(reviewed).toBe("GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&after=4");
-    // An API page not yet gone into: its cursor.
     expect((await load("?reviews=%3AR2")).reviewed).toBe(
       "GET /api/repos/ada/demo/pulls/7/reviews?per_page=25&cursor=R2",
     );
@@ -659,7 +650,6 @@ describe("a pull request page whose session could not be checked", () => {
     expect(html).not.toContain("Edit title and description");
     expect(html).not.toContain('name="intent" value="comment"');
     expect(html).not.toContain("Close pull request");
-    // What stands in the way of a merge is shown; merging and updating the branch are not offered.
     expect(html).toContain("Merging and updating the branch need you signed in");
     expect(html).not.toContain('name="intent" value="merge"');
     expect(html).not.toContain('name="intent" value="update-branch"');

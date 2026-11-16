@@ -155,7 +155,6 @@ describe("contents", () => {
     expect((await json(`${base}/contents/README.md?ref=nope`)).body).toMatchObject({
       code: "ref_not_found",
     });
-    // A file at an older commit, and gone at the tip.
     const old = await json(`${base}/contents/src/lib/util.ts?ref=v1`);
     expect(old.body).toMatchObject({ type: "file", path: "src/lib/util.ts" });
     expect((await json(`${base}/contents/src/lib/util.ts`)).status).toBe(404);
@@ -195,7 +194,6 @@ describe("contents", () => {
 
   it("finds the README", async () => {
     const readme = fx.files["README.md"] as { sha: string; base64: string };
-    // README.md wins over README.MD.
     expect((await json(`${base}/readme`)).body).toMatchObject({
       type: "file",
       path: "README.md",

@@ -47,7 +47,6 @@ describe("blame with no room left", () => {
       };
       const roomy = new RepoBlame(deps);
       const full = new RepoBlame({ ...deps, livePacks: () => NO_ROOM_PACKS });
-      // A run this request would start.
       const start = failure(await full.answer({ path: "f.txt" }));
       // A run with a checkpoint, then loaded where there's no room.
       const first = ok(await roomy.answer({ path: "f.txt" }));

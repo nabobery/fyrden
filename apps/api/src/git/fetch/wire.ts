@@ -10,7 +10,6 @@ import type { PackBlockStats } from "../cache/pack-blocks.js";
  */
 export type WorkersPlan = "free" | "paid";
 
-/** What the Worker asks the repository object to plan. */
 export interface FetchPlanRequest {
   /** The repository's immutable id (cache keys of materialised packs include it). */
   readonly repoId: string;

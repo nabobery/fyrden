@@ -60,7 +60,6 @@ export interface EffectBudget {
   started: boolean;
 }
 
-/** Adds `id` to `key`'s list in `map`. */
 function group<K>(map: Map<K, string[]>, key: K, id: string): void {
   const ids = map.get(key);
   if (ids) ids.push(id);

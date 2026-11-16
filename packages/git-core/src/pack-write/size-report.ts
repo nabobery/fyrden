@@ -25,7 +25,6 @@ export interface PackSizeReport {
   >;
 }
 
-/** The size report of a parsed pack (`ParsedPack.entries`). */
 export function packSizeReport(entries: PackEntries): PackSizeReport {
   const tally = () => ({ count: 0, bytes: 0 });
   const byType = Object.fromEntries(

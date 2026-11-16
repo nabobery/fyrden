@@ -34,7 +34,6 @@ export interface WrittenPack {
 export interface UnpackFailure {
   /** The `unpack` status, git's "index-pack abnormal exit". */
   readonly status: string;
-  /** Lines for the client's progress channel. */
   readonly messages: readonly string[];
 }
 
@@ -63,7 +62,6 @@ export interface IndexState {
   deps: PackId[];
   /** Per-command refusals from the checks, by command index. */
   tipErrors: [number, string][];
-  /** Non-fatal lines for the client (fsck warnings). */
   messages: string[];
   failure: UnpackFailure | null;
 }
@@ -158,7 +156,6 @@ interface Header {
   failure: UnpackFailure | null;
 }
 
-/** Encodes the state as cursor bytes. */
 export function encodeCursor(state: IndexState): Uint8Array<ArrayBuffer> {
   const w = new Writer();
   w.push(Uint8Array.from(MAGIC));
@@ -211,7 +208,6 @@ export function decodeCursor(bytes: Uint8Array): IndexState {
     return decode(bytes);
   } catch (error) {
     if (error instanceof RangeError) throw error;
-    // A damaged header (bad JSON, wrong shapes).
     throw new RangeError(`index cursor is damaged: ${(error as Error).message}`);
   }
 }

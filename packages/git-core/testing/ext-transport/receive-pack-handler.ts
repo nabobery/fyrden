@@ -49,7 +49,6 @@ async function readConfig(dir: string): Promise<ExtConfig> {
   }
 }
 
-/** Records every chunk read through it. */
 function recording(source: AsyncIterable<Uint8Array>): {
   stream: AsyncIterable<Uint8Array>;
   chunks: Uint8Array[];
@@ -92,7 +91,6 @@ export const receivePackHandler: GitServiceHandler = async (io) => {
   if (request.commands.length === 0) return;
   if (request.commands.some((c) => c.newOid.some((b) => b !== 0))) {
     for await (const _ of reader.rest()) {
-      // Recorded.
     }
   }
   const body = concatBytes(input.chunks);

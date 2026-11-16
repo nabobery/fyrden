@@ -31,7 +31,6 @@ export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescript
   return [{ title: `Conflicts · ${title} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
-/** Editable files a resolution carries at most (the API's limit). */
 const MAX_FILES = 50;
 /** A resolved file's content at most, in UTF-8 bytes (the API's limit). */
 export const MAX_FILE_BYTES = 1024 * 1024;
@@ -224,7 +223,6 @@ export async function action({ request, context, params }: Route.ActionArgs): Pr
   };
 }
 
-/** Whether `body` reads as the API's answer to a resolution. */
 function isMerge(body: unknown): body is Resolution {
   if (typeof body !== "object" || body === null || !("sha" in body) || !("markers" in body))
     return false;
@@ -234,7 +232,6 @@ function isMerge(body: unknown): body is Resolution {
   );
 }
 
-/** What the editor works on: the conflicts as read, and the branch names their markers carry. */
 interface Editing {
   conflicts: NonNullable<Route.ComponentProps["loaderData"]["conflicts"]>;
   labels: { head: string; base: string };
@@ -275,7 +272,6 @@ export default function PullConflicts({ loaderData }: Route.ComponentProps) {
     answer,
   });
   const readAgain = () => {
-    // A failed read is asked for again; the editors stay as they are meanwhile.
     if (view.readAgain === "revalidate") return void revalidator.revalidate();
     // The text edited so far stays at hand, apart from the fresh conflicts.
     if (form.current) {

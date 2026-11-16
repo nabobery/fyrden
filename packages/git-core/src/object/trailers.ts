@@ -119,7 +119,6 @@ function blockEnd(lines: readonly Line[], end: number): number {
   // The title runs to the first blank line; comments do not end it.
   const titleEnd = lines.findIndex((line, i) => i < end && line.kind === "blank");
   if (titleEnd === -1) return -1;
-  // The last paragraph: back from the end to the blank line before it.
   let first = end;
   while (first > titleEnd + 1 && lines[first - 1]?.kind !== "blank") first--;
   let trailers = 0;

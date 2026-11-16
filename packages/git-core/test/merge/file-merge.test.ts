@@ -46,7 +46,6 @@ describe("mergeFiles", () => {
       bytes: ours,
       approximate: false,
     });
-    // Our side's two changed lines cost more than one step to align; theirs is the base.
     expect(mergeFiles(base, ours, base, { maxCost: 1 })).toEqual({
       kind: "clean",
       bytes: ours,

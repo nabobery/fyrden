@@ -283,7 +283,6 @@ describe("a list that cannot be had", () => {
 });
 
 describe("a list that goes on and on", () => {
-  /** A loader whose every answer goes on: a tree of endless empty directories. */
   function endless() {
     const queries: PathQuery[] = [];
     const loader = new PathLoader({
@@ -315,7 +314,6 @@ describe("a list that goes on and on", () => {
     expect(loader.status).toBe("partial");
   });
 
-  /** A list of `length` pages holding one path each. */
   function pagesOf(length: number) {
     const queries: PathQuery[] = [];
     const loader = new PathLoader({

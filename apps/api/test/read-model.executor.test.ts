@@ -110,7 +110,6 @@ describe("the read model's admission", () => {
     ).rejects.toThrow(/read_model_admission_required/);
     expect(await admission()).toMatchObject({ open: 0, seq: sequence });
     expect([await epochOf(kept), await epochOf(refused)]).toEqual([{ epoch_gen: 1 }, null]);
-    // Nothing counted any more.
     expect((await admission())?.stray).toBe(before?.stray);
   });
 

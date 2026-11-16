@@ -30,19 +30,16 @@ export const OWNERS = 2;
 /** The event that settles team requests without a webhook of its own (a merge, a transfer). */
 export const SETTLED_EVENT = "pull_request.review_requests_settled";
 
-/** A team as a request names it. */
 export interface RequestedTeam {
   readonly id: string;
   readonly slug: string;
   readonly name: string;
 }
 
-/** A team's request, as kept. */
 export interface TeamRequest {
   readonly requestId: number;
   readonly number: number;
   readonly team: RequestedTeam;
-  /** How many members it asked. */
   readonly members: number;
   /** Whether its members are still kept (not after its pull request merged). */
   readonly audience: boolean;

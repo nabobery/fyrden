@@ -19,13 +19,11 @@
  * its caller allows.
  */
 
-/** A part of a segment's glob: a run of literal text, `?` or `*`. */
 type GlobPart =
   | { readonly kind: "literal"; readonly text: string }
   | { readonly kind: "one" }
   | { readonly kind: "any" };
 
-/** One segment of a compiled pattern. */
 type Element =
   /** `**`: any number of segments (at least one when it ends the pattern). */
   | { readonly kind: "dirs"; readonly atLeastOne: boolean }
@@ -39,7 +37,6 @@ export interface CompiledPattern {
   readonly descendants: boolean;
 }
 
-/** Why a pattern cannot be used, as a CODEOWNERS error says it. */
 export type PatternRefusal =
   | "empty"
   | "negation"
@@ -117,7 +114,6 @@ function refusalOf(pattern: string): PatternRefusal | undefined {
 function partsOf(segment: string): GlobPart[] {
   const parts: GlobPart[] = [];
   let pieces: string[] = [];
-  // Where the literal text not yet taken starts.
   let from = 0;
   const flush = (to: number) => {
     if (to > from) pieces.push(segment.slice(from, to));
@@ -239,7 +235,6 @@ function segmentMatches(parts: readonly GlobPart[], segment: string, budget: Mat
   return p === parts.length;
 }
 
-/** A path ready to match: its segments. */
 export interface PreparedPath {
   readonly segments: readonly string[];
 }

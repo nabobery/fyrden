@@ -63,7 +63,6 @@ describe("upload-pack.regen-materialised", () => {
       const [part] = packs as [Extract<FetchResponsePart, { kind: "pack" }>];
       expect(part.framed).toBe(framing === "stored");
       expect(plan.leasePacks).toEqual([part.packId]);
-      // The bytes are already in the store, whole.
       const stored = await loaded.packStore.openRange(part.packId, 0, part.length);
       expect(stored.length).toBe(part.length);
       expect(await materialisedKeys(dir)).toHaveLength(1);
@@ -84,7 +83,6 @@ describe("upload-pack.regen-materialised", () => {
     const second = await planFetch(loaded.repository, args, { framing: "stored" });
     expect(second.pack).toMatchObject({ kind: "as-is", cached: true });
     expect(await materialisedKeys(dir)).toHaveLength(1);
-    // Transport framing reads the stored pack itself: nothing is materialised.
     const direct = await planFetch(loaded.repository, args, { framing: "transport" });
     expect(direct.parts.filter((p) => p.kind === "pack")).toMatchObject([
       { framed: false, offset: 0 },

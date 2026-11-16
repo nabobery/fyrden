@@ -29,7 +29,6 @@ const encoder = new TextEncoder();
 const parse = (text: string) => parseCodeOwners(encoder.encode(text));
 const budget = () => new MatchBudget(1_000_000);
 
-/** Whether `pattern` owns `path`. */
 function owns(pattern: string, path: string): boolean {
   const compiled = compilePattern(pattern);
   if (!compiled.ok) throw new Error(`${pattern}: ${compiled.refusal}`);
@@ -62,40 +61,31 @@ describe("CODEOWNERS patterns", () => {
   });
 
   it.each([
-    // Case-sensitive.
     ["*.JS", "a.js", false],
     ["Docs/", "docs/a.md", false],
-    // `?` is one character within a segment.
     ["a?.txt", "ab.txt", true],
     ["a?.txt", "abc.txt", false],
     ["/a?b", "a/b", false],
-    // `*` stays within a segment; as a whole segment it is one segment.
     ["/src/*.ts", "src/a/b.ts", false],
     ["/src/*/index.ts", "src/a/index.ts", true],
     ["/src/*/index.ts", "src/a/b/index.ts", false],
-    // `**` in the middle is any number of directories, none included.
     ["/src/**/index.ts", "src/index.ts", true],
     ["/src/**/index.ts", "src/a/b/index.ts", true],
-    // As the last segment, everything beneath (not the directory itself).
     ["/src/**", "src/a", true],
     ["/src/**", "src", false],
-    // A name owns what is beneath a directory of that name; a lone `*` does not.
     ["/vendor", "vendor/lib/a.c", true],
     ["/vendor/*", "vendor/lib/a.c", false],
     ["*.d", "x/y.d/z", true],
-    // A slash anywhere but the end anchors at the root.
     ["src/app", "lib/src/app", false],
     ["src/app", "src/app", true],
     ["src/app/", "lib/src/app/x", false],
     ["src/app/", "src/app/x", true],
-    // Escapes: a space, a star; brackets are literal, escaped or not.
     ["my\\ file.txt", "my file.txt", true],
     ["/a\\*b", "a*b", true],
     ["/a\\*b", "axb", false],
     ["/page/\\[id\\].tsx", "page/[id].tsx", true],
     ["/page/[id].tsx", "page/[id].tsx", true],
     ["/page/[id].tsx", "page/i.tsx", false],
-    // Non-ASCII is matched by character, a surrogate pair as one.
     ["/ä?ö", "äüö", true],
     ["/a?b", "a\u{1F600}b", true],
     ["/a*b", "a\u{1F600}\u{1F600}b", true],
@@ -135,7 +125,6 @@ describe("CODEOWNERS patterns", () => {
     const linear = new MatchBudget(1_000_000);
     expect(matchesPath(stars.pattern, preparePath("a".repeat(2_000), linear), linear)).toBe(false);
     expect(linear.spent).toBeLessThan(10_000);
-    // `**` between names over a deep path is the costly shape: refused past the budget.
     const dirs = compilePattern(`/${"**/a/".repeat(20)}**/b`);
     if (!dirs.ok) throw new Error("compiled");
     const deep = `${"a/".repeat(500)}c`;
@@ -143,7 +132,6 @@ describe("CODEOWNERS patterns", () => {
     expect(() => matchesPath(dirs.pattern, preparePath(deep, small), small)).toThrow(
       MatchBudgetExceeded,
     );
-    // A budget is shared by every match made under it.
     const shared = new MatchBudget(1_000_000);
     expect(matchesPath(dirs.pattern, preparePath(`${"a/".repeat(30)}b`, shared), shared)).toBe(
       true,
@@ -291,14 +279,12 @@ describe("CODEOWNERS files", () => {
         message: expect.stringContaining(String(MAX_CODEOWNERS_RULES)),
       }),
     ]);
-    // Invalid lines count too: a malformed file stops at the cap, with one error a line read.
     const malformed = parse("!\n".repeat(1_400_000));
     expect(malformed.rules).toEqual([]);
     expect(malformed.errors).toHaveLength(MAX_CODEOWNERS_RULES + 1);
     expect(malformed.errors.at(-1)).toMatchObject({ kind: "Too many rules" });
     const names = Array.from({ length: MAX_RULE_OWNERS + 1 }, (_, i) => `@u${i}`);
     const crowded = parse(`* ${names.join(" ")}`);
-    // At the first owner past the cap.
     expect(crowded.errors).toEqual([
       expect.objectContaining({
         kind: "Too many owners",
@@ -319,7 +305,6 @@ describe("CODEOWNERS files", () => {
         message: expect.stringContaining(String(MAX_PATTERN_BYTES)),
       }),
     ]);
-    // At the cap exactly, it is a pattern.
     expect(parse(`/${"a".repeat(MAX_PATTERN_BYTES - 1)} @a`).errors).toEqual([]);
   });
 
@@ -386,11 +371,9 @@ describe("CODEOWNERS files", () => {
       ok: false,
       refusal: "too_many_wildcards",
     });
-    // Escaped, they are literal, and do not count.
     expect(compilePattern(`/${"\\?".repeat(MAX_PATTERN_WILDCARDS + 1)}`)).toMatchObject({
       ok: true,
     });
-    // A file of patterns all wildcards: every rule refused, with a reason.
     const crowded = parse(`/${"a?".repeat(2_047)}a @x\n`.repeat(3));
     expect(crowded.rules).toEqual([]);
     expect(crowded.errors.map((e) => e.message)).toEqual(
@@ -405,7 +388,6 @@ describe("CODEOWNERS files", () => {
       ok: false,
       refusal: "too_many_segments",
     });
-    // A file of deep patterns: every rule refused, with a reason.
     const deep = parse(`${"/a".repeat(1_499)}\n`.repeat(3));
     expect(deep.rules).toEqual([]);
     expect(deep.errors.map((e) => e.message)).toEqual(
@@ -420,10 +402,8 @@ describe("CODEOWNERS files", () => {
   });
 
   it("stop reading a line at its caps, not after taking all of it", () => {
-    // A line of three million owners: one error, at the first past the cap.
     const many = parse(`* ${"a ".repeat(1_400_000)}`);
     expect(many.errors).toEqual([expect.objectContaining({ kind: "Too many owners" })]);
-    // A pattern far past its cap: refused, at its column.
     const long = parse(`  /${"b".repeat(2_000_000)} @a`);
     expect(long.errors).toEqual([expect.objectContaining({ kind: "Pattern too long", column: 3 })]);
   });
@@ -438,7 +418,6 @@ describe("CODEOWNERS files", () => {
     expect(parse(`/${"\u{1F600}".repeat(1_024)} @a`).errors).toEqual([
       expect.objectContaining({ kind: "Pattern too long" }),
     ]);
-    // An escaped character counts too.
     expect(parse(`/${"\\\u{1F600}".repeat(1_024)} @a`).errors).toEqual([
       expect.objectContaining({ kind: "Pattern too long" }),
     ]);

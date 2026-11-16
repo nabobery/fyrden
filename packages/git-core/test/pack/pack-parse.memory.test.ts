@@ -74,7 +74,6 @@ describe("pack-parse memory bound", () => {
     // Growing the arrays holds the old and new copies for a moment; the child
     // lists of the second pass take 4 bytes per entry and per delta.
     expect(memory.peak()).toBeLessThanOrEqual(2 * records + 4 * (COUNT + 1) + 4 * COUNT + cache);
-    // Afterwards only the records stay reserved, at their final size.
     expect(memory.held()).toBe(records);
     pack.release();
     expect(memory.held()).toBe(0);
@@ -90,7 +89,6 @@ describe("pack-parse memory bound", () => {
   });
 
   it("refuses with a PackError when the entry records need more than the whole budget", async () => {
-    // One entry's record is ENTRY_RECORD_BYTES.
     const { bytes } = buildPack([{ kind: "blob", data: text("one") }]);
     const memory = trackingBudget(ENTRY_RECORD_BYTES - 1);
     expect(await parseCode(bytes, { memory })).toBe("exceeds-memory-budget");

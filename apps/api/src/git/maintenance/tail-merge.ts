@@ -27,7 +27,6 @@ import { type CapUnit, type PackCapPolicy, selectTailMerge } from "./tail-merge-
  * transaction and refuses.
  */
 
-/** A compacted pack waiting for its commit. */
 export interface TailMerge {
   /** The new pack, in `indexing`. */
   readonly packId: PackId;

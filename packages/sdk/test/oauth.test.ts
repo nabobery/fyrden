@@ -40,7 +40,6 @@ describe("DPoP proofs", () => {
       b64(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("tok"))),
     );
     expect(Math.abs((claims.iat as number) - Date.now() / 1000)).toBeLessThan(5);
-    // A new jti each time; none bound to a token at the token endpoint.
     const again = decode(
       (await key.proof("POST", "https://fyrden.test/oauth/token")).split(".")[1] ?? "",
     );

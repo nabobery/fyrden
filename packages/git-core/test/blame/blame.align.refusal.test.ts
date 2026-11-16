@@ -213,7 +213,6 @@ describe("alignFiles: a close call", () => {
     const new_ = lines("top", "8x", "3y", "8x", "3y", "bot", "bot");
     const result = aligned(old, new_);
     expect(result.unsettled).toEqual([{ start: 1, end: 5 }]);
-    // The raw pick still answers, and pairs outside the range stand.
     expect(result.oldOfNew[0]).toBe(0);
     expect(result.oldOfNew[5]).toBe(3);
     expect(result.oldOfNew[6]).toBe(4);

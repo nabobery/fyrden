@@ -1,7 +1,6 @@
 import { Link } from "react-router";
 import { type Entry, encodePath } from "../lib/types.js";
 
-/** A directory's entries, linked to their pages. */
 export function Listing({
   owner,
   repo,

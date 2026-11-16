@@ -36,7 +36,6 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 
-# A release pinned with a C standard builds as it; git's own flags are kept.
 std="$(awk -v v="$version" '$1 == v { print $3 }' "$here/git-versions.txt")"
 flags=()
 if [ -n "$std" ]; then

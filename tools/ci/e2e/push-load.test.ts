@@ -88,7 +88,6 @@ beforeAll(async () => {
     body: JSON.stringify({ name: "load" }),
   });
   expect(made.status, await made.clone().text()).toBe(201);
-  // A first commit on main, for the agents to branch from.
   const first = await fetch(`${origin}/api/repos/${handle}/load/file-commits`, {
     method: "POST",
     headers: {
@@ -123,7 +122,6 @@ describe("agents pushing at once", () => {
     expect(report.errors).toEqual([]);
     expect(report).toMatchObject({ pushes: 12, failed: 0 });
     expect(report.pushesPerSecond).toBeGreaterThan(0);
-    // Every push made a commit: each branch is three commits past main.
     for (let i = 0; i < 4; i++) {
       const commits = await fetch(
         `${origin}/api/repos/${handle}/load/commits?sha=load/e2e/agent-${i}&per_page=10`,

@@ -549,9 +549,7 @@ describe("a listen stream", () => {
           },
         },
       }),
-      // A required header missing.
       await listenOf({ headers: { "Mcp-Method": null } }),
-      // A batch.
       await listenOf({
         body: [
           {

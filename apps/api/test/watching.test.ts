@@ -401,7 +401,6 @@ describe("a preference command's copy", () => {
       status: 503,
       body: { code: "preferences_recovering" },
     });
-    // The copy kept the acknowledged level.
     expect(await copied(reader.principalId, repo.id)).toEqual({ level: "watching", revision: 1 });
   });
 

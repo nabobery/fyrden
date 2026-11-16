@@ -33,7 +33,6 @@ class Loads {
   readonly started: string[] = [];
   readonly #open = new Map<string, PromiseWithResolvers<HeldPackIndex>>();
 
-  /** Loads started and not finished. */
   get inFlight(): number {
     return this.#open.size;
   }
@@ -78,7 +77,6 @@ describe("pack index cache", () => {
       return idx;
     };
     expect(cache.get("p1")).toBeUndefined();
-    // Two callers at once share one load.
     const [a, b] = await Promise.all([
       cache.load("p1", bytesOf(10), load),
       cache.load("p1", bytesOf(10), load),
@@ -105,7 +103,6 @@ describe("pack index cache", () => {
     // A fanout takes its 1 KiB: the oldest index makes room.
     await cache.load("f", 1024, async () => idx.fanout);
     expect(cache.bytes).toBe(3 * bytesOf(100) + 1024);
-    // The reads above left "a" the least recently used.
     expect(cache.get("a")).toBeUndefined();
     expect(cache.get("f")).toBe(idx.fanout);
   });
@@ -168,7 +165,6 @@ describe("pack index cache", () => {
     const loads = new Loads();
     const ids = Array.from({ length: 10 }, (_, i) => `p${i}`);
     const results = ids.map((id) => cache.load(id, 1024, loads.of(id)));
-    // Room for four: the other six wait instead of evicting a load in flight.
     expect(loads.started).toEqual(["p0", "p1", "p2", "p3"]);
     expect(cache.bytes).toBe(4096);
     expect(cache.count).toBe(10);
@@ -180,7 +176,6 @@ describe("pack index cache", () => {
       expect(cache.bytes).toBeLessThanOrEqual(cache.maxBytes);
     }
     expect(loads.started).toEqual(ids);
-    // Each settled load made room for a waiting one; the last four are held.
     expect(cache.bytes).toBe(4096);
     for (const id of ["p6", "p7", "p8", "p9"]) expect(cache.get(id)).toBeDefined();
     expect(cache.get("p5")).toBeUndefined();
@@ -196,7 +191,6 @@ describe("pack index cache", () => {
     loads.resolve("a", held);
     expect(await first[0]).toBe(held);
     expect(await again).toBe(held);
-    // "a" settling made room for "e"; nothing loaded "a" twice.
     expect(loads.started).toEqual(["a", "b", "c", "d", "e"]);
   });
 
@@ -235,7 +229,6 @@ describe("pack index cache", () => {
     const first = cache.load("gone", 1024, loads.of("gone"));
     cache.retain(new Set(["live"]));
     expect(cache.bytes).toBe(1024);
-    // A lookup while it loads still shares the load.
     const again = cache.load("gone", 1024, loads.of("gone"));
     expect(loads.started).toEqual(["gone"]);
     const held = fanout();

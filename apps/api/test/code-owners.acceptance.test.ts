@@ -316,7 +316,6 @@ describe("teams and code owners, acceptance", () => {
     expect(refused.body.detail).toContain(
       `code owners must approve: line 1 (src/a.ts: @${alice.handle})`,
     );
-    // Asked once on this pull request: not again.
     expect(await requested()).toEqual([]);
   });
 
@@ -519,7 +518,6 @@ describe("a busy thread's recipients, each once an item", () => {
         .all<{ state: string }>()
     ).results.map((row) => row.state);
     expect(new Set(states)).toEqual(new Set(["done"]));
-    // Every effect delivered twice: nothing told again, no version moved.
     expect(await snapshot()).toEqual(first);
     const kinds = (id: string) => (first.get(id) ?? []).map((k) => k.split("@")[0]);
     const requestedSet = new Set([...coreMembers, ...docsMembers]);

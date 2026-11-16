@@ -46,7 +46,6 @@ function deps(runner: WranglerRunner, overrides: Partial<DeployDeps> = {}) {
     randomSecret: () => "s3cret-value",
     onSecretGenerated: (s) => generated.push(s),
     log: (l) => lines.push(l),
-    // The deployed API, asked which read model protocol it serves.
     fetch: async () => Response.json({ readModel: { protocol: 1 } }),
     ...overrides,
   };
@@ -92,7 +91,6 @@ describe("fyrden deploy", () => {
     await deploy(d);
     expect(fake.state.secrets.get("BOOTSTRAP_SECRET")).toBe("s3cret-value");
     expect(generated).toEqual(["s3cret-value"]);
-    // Never in a command line; the file is gone after the deploy.
     expect(fake.calls.some((c) => c.args.join(" ").includes("s3cret-value"))).toBe(false);
     const file = fake.calls.find((c) => c.args.includes("--secrets-file"))?.args.at(-1) as string;
     await expect(stat(file)).rejects.toThrow();
@@ -142,7 +140,6 @@ describe("fyrden deploy", () => {
     expect(fake.calls.some((c) => c.args.join(" ").includes(key))).toBe(false);
     await deploy(deps(fake.runner).d);
     expect(fake.state.secrets.get("SIGNING_KEY")).toBe(key);
-    // A deployment from before signing gets one with its next deploy.
     fake.state.secrets.delete("SIGNING_KEY");
     await deploy(deps(fake.runner).d);
     expect(fake.state.secrets.get("SIGNING_KEY")).not.toBe(key);
@@ -237,7 +234,6 @@ describe("fyrden deploy", () => {
     await deploy(deps(fake.runner).d);
     expect(fake.state.deployed).toEqual(["fyrden-api", "fyrden-web", "fyrden-api"]);
     expect(fake.state.tailAttached).toBe(true);
-    // Later deploys find fyrden-web and deploy the API once, with the consumer.
     await deploy(deps(fake.runner).d);
     expect(fake.state.deployed.slice(3)).toEqual(["fyrden-api", "fyrden-web"]);
     expect(fake.state.tailAttached).toBe(true);
@@ -272,7 +268,6 @@ describe("fyrden deploy", () => {
     generated = await generatedConfig();
     expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "50000" });
     expect(generated.limits).toEqual({ subrequests: 50_000 });
-    // Left out again: back to 1,000, not whatever the last deploy set.
     await deploy(deps(fake.runner).d);
     generated = await generatedConfig();
     expect(generated.vars).toMatchObject({ FYRDEN_INTERNAL_CALLS: "1000" });
@@ -292,7 +287,6 @@ describe("fyrden deploy", () => {
       "queues resume-delivery fyrden-events",
     ]);
     expect(fake.state.paused.size).toBe(0);
-    // A failed deploy resumes it too.
     fake.state.failApiDeploy = true;
     await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
     expect(fake.state.paused.size).toBe(0);
@@ -310,7 +304,6 @@ describe("fyrden deploy", () => {
         await expect(deploy(deps(fake.runner).d)).rejects.toThrow();
         expect(fake.state.deployed).toEqual([]);
         expect(await readdir(own)).toEqual([]);
-        // A pause whose answer was lost is resumed too.
         expect(fake.state.paused.size, when).toBe(0);
       }
     } finally {
@@ -345,10 +338,8 @@ describe("fyrden deploy", () => {
     });
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_SENDING");
     expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_first0001");
-    // A new key rotates it.
     await deploy(deps(fake.runner, { email: { ...email, apiKey: "re_second002" } }).d);
     expect(fake.state.secrets.get("RESEND_API_KEY")).toBe("re_second002");
-    // Left out: no provider (the key stays, unused).
     await deploy(deps(fake.runner).d);
     generated = await generatedConfig();
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_PROVIDER");
@@ -393,13 +384,10 @@ describe("fyrden deploy", () => {
     // The API first without it, then again with the web Worker's URL.
     const origins = () => fake.state.apiVersions.map((v) => v.vars.FYRDEN_PUBLIC_ORIGIN);
     expect(origins()).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
-    // Every deploy sending does so again (its configuration is rebuilt from the committed file).
     await deploy(deps(fake.runner, { email }).d);
     expect(origins().slice(2)).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
-    // A custom origin: set with the first API deploy, no second one.
     await deploy(deps(fake.runner, { email: { ...email, publicOrigin: "https://git.example" } }).d);
     expect(origins().slice(4)).toEqual(["https://git.example"]);
-    // Not sending: none, and no second deploy.
     await deploy(deps(fake.runner, { email: { ...email, sending: false } }).d);
     expect(origins().slice(5)).toEqual([undefined]);
   });
@@ -435,12 +423,10 @@ describe("fyrden deploy", () => {
     });
     await deploy(answered.d);
     expect(asked).toEqual(["https://fyrden-api.acct.workers.dev/healthz"]);
-    // Its own shard's barrier only.
     expect(recorded).toEqual([
       "fyrden-directory: UPDATE read_model_barriers SET executor_version = 1 WHERE shard = 'default' RETURNING shard",
     ]);
     expect(answered.lines).toContain("ok   fyrden-api serves read model protocol 1 (recorded)");
-    // No barrier row to record it in: not said to be recorded.
     barriers = [];
     const missing = deps(fake.runner, {
       fetch: async () => Response.json({ readModel: { protocol: 1 } }),
@@ -451,7 +437,6 @@ describe("fyrden deploy", () => {
       "WARN the read model protocol the API serves is not verified: the directory has no barrier for its read model",
     );
     barriers = [{ shard: "default" }];
-    // An API that does not answer, or names no protocol: nothing recorded, and said so.
     for (const fetch of [
       async () => {
         throw new TypeError("fetch failed");
@@ -590,7 +575,6 @@ describe("fyrden deploy", () => {
     const migrated = fake.calls.findLastIndex((c) => c.args.join(" ").includes("migrations apply"));
     expect(migrated).toBeLessThan(lookedAt);
     expect(lookedAt).toBeLessThan(bookmarked);
-    // A later deploy keeps it: never another, never an earlier one.
     fake.state.bookmark = "00000099-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683";
     const again = deps(fake.runner);
     await deploy(again.d);
@@ -604,7 +588,6 @@ describe("fyrden deploy", () => {
     await expect(deploy(deps(fake.runner).d)).rejects.toThrow(/no restore floor recorded/);
     expect(fake.state.floor).toBeNull();
     expect(fake.calls.some((c) => c.args[1] === "time-travel")).toBe(false);
-    // An interrupted recording (enforced, but no floor yet) is made by the next deploy.
     fake.state.readModel = { protocol: 2, open: 0 };
     await deploy(deps(fake.runner).d);
     expect(fake.state.floor).toBe(fake.state.bookmark);
@@ -612,7 +595,6 @@ describe("fyrden deploy", () => {
 
   it("installs enforcement over a read model with data only once told the deployment is quiesced", async () => {
     const fake = fakeWrangler();
-    // A deployment from before enforcement, with data.
     fake.state.d1.set("fyrden-org", "org-id");
     fake.state.d1Migrations.set("fyrden-org", ["0017_read_model_executor.sql"]);
     const committed = parseExpectedSchema(
@@ -806,7 +788,6 @@ describe("Cloudflare account selection", () => {
     );
     await deploy(d);
     expect(lines[0]).toMatch(/\(acct-1\)$/);
-    // Without an explicit account there is nothing to trust.
     await expect(
       deploy(
         deps({
@@ -960,7 +941,6 @@ describe("fyrden doctor", () => {
       "ok   fyrden-directory schema matches apps/api/migrations/directory.expected.sql",
     );
 
-    // A deployment from a later checkout than this one.
     fake.state.d1Migrations.set("fyrden-org", [...applied, "9999_later.sql"]);
     ({ report, lines } = await doctorLines(fake));
     expect(report.schemaDrift).toEqual([]);
@@ -968,7 +948,6 @@ describe("fyrden doctor", () => {
       "WARN fyrden-org schema not compared: applied but not in this checkout: 9999_later.sql (check out the commit it runs)",
     );
 
-    // A database no migration has been applied to yet.
     fake.state.d1Migrations.delete("fyrden-directory");
     ({ lines } = await doctorLines(fake));
     expect(lines.find((l) => l.startsWith("WARN fyrden-directory"))).toMatch(
@@ -1010,7 +989,6 @@ describe("fyrden doctor", () => {
         (l) => l.includes("search indexing") || l.includes("search's state"),
       );
     expect(await line()).toMatch(/^info search indexing is off \(generation 1\)/);
-    // Off, the read model is not read.
     expect(asked).toEqual([]);
     settings = [
       { name: "search_indexing", value: "on" },
@@ -1024,7 +1002,6 @@ describe("fyrden doctor", () => {
     expect(await line()).toMatch(
       /^WARN search indexing is on \(generation 3\), but rep_old is not yet/,
     );
-    // A read that fails says so, never that all is well.
     fake.state.d1Query = () => undefined;
     expect(await line()).toMatch(/^WARN could not read search's state/);
   });

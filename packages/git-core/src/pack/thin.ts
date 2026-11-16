@@ -5,7 +5,6 @@ import { receivedObjectId } from "./object-id.js";
 import type { ExternalBaseLookup, PackLimits } from "./parse.js";
 import type { Resolver } from "./resolve.js";
 
-/** Most missing bases named in the error message. */
 const MAX_NAMED = 10;
 
 /*

@@ -38,10 +38,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** A reviewers page's answer is about its viewer and pull request. */
 type ReviewersScope = Scope & { owner: string; repo: string; number: number; page: "reviewers" };
 
-/** A principal or team id as the API names one (it checks it is one). */
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export async function action({
@@ -113,7 +111,6 @@ const DONE: Record<string, string> = {
   "withdraw-team": "Request withdrawn.",
 };
 
-/** Who a pull request's review is asked of and has not reviewed yet: users, agents and teams. */
 export default function Reviewers({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";

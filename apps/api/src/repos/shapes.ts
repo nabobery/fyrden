@@ -214,7 +214,6 @@ export const subjectOutput = (subject: Subject, readable: readonly SubjectKind[]
     ? issueOutput(subject.issue, readable, subject.meta)
     : pullAsIssue(subject.pull, subject.meta, readable);
 
-/** A conversation comment as the API answers it. */
 export function commentOutput(comment: Reacted<CommentRecord>): Output<typeof getComment> {
   return {
     id: comment.id,

@@ -212,7 +212,6 @@ describe("receive-pack commands, judged by git", () => {
     for (let pkt = reader.read(); pkt && pkt.kind !== "flush"; pkt = reader.read()) {}
     expect(band1(ours.response)).toEqual(band1(reader.rest()));
     expect(ours.result?.pushOptions.map((o) => Buffer.from(o).toString())).toEqual(["ci.skip"]);
-    // The response ends with the flush that closes side-band.
     expect(Buffer.from(ours.response.subarray(-4)).toString()).toBe("0000");
   });
 
@@ -295,7 +294,6 @@ describe("atomic and non-atomic commits", () => {
       ...local.finalizeEnv(),
       commit: async (r) => {
         calls.push(r.updates.map((u) => u.name));
-        // Another push moved b after the plan.
         return { ok: false, reason: "ref-conflict", ref: "refs/heads/b" };
       },
     });
@@ -414,7 +412,6 @@ describe("atomic and non-atomic commits", () => {
       const { request: req } = await readPushBody(bytesBody(body), { pushOptionsAdvertised: true });
       const plan = planPush(req, await local.refStore.readRefs());
       expect(plan.commands.map((c) => c.error)).toEqual([undefined, undefined]);
-      // Another push creates refs/heads/r between the plan and the commit.
       const other = await local.push(
         request([{ new: c1, ref: "refs/heads/r" }], await packOf(sandbox, [])),
       );

@@ -49,7 +49,6 @@ async function captured(
   };
 }
 
-/** The effect the sink plans for `event`. */
 function effectOf(event: DomainEvent, claimedAt = Date.now()): Effect & { planned: PlannedEffect } {
   const [planned] = sink().plan(event);
   if (!planned) throw new Error("the event makes no webhook effect");

@@ -99,7 +99,6 @@ export interface OperationDef<
  */
 export const NoContent = z.null().describe("No content.");
 
-/** Whether `def` answers no content. */
 export const answersNothing = (def: Pick<OperationDef, "output">): boolean =>
   def.output === NoContent;
 

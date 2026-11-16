@@ -27,12 +27,10 @@ describe("parseSuggestion", () => {
     "```js\ncode\n```",
     "```suggestion\na\n```\n```suggestion\nb\n```",
     "````suggestion\nx\n```",
-    // Shown as one block of code, with a suggestion fence inside it.
     "````md\n```suggestion\nx\n```\n````",
     // An indented fence closes the block: what follows is not part of it, and a second block
     // after it makes two.
     "```suggestion\nGOOD\n  ```\nExplanation\n```suggestion\nx\n```",
-    // Four spaces: an indented code block, not a fence.
     "    ```suggestion\nx\n    ```",
     "~~~suggestion\nx\n~~~",
     // Indented: in a list item, it ends with the item, before the fence that would close it.
@@ -46,7 +44,6 @@ describe("parseSuggestion", () => {
     "- item\n\n  ```js\n  inside\n````md\n```\n```suggestion\nBAD\n```\n````",
     // A bare carriage return is a line break to Markdown.
     "```suggestion\nGOOD\r```\rOUTSIDE\n```",
-    // NUL is shown replaced.
     "```suggestion\nA\u0000B\n```",
     "\uFEFF````md\n```suggestion\nBAD\n```\n````\n```suggestion\nGOOD\n```",
     "````md\u2028x\n```suggestion\nBAD\n```\n````\n```suggestion\nGOOD\n```",

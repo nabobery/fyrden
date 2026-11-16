@@ -57,28 +57,23 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const listed = bodyOf(page, request);
   return {
     repo,
-    // The repository as this page's URL names it: its answers are scoped by the same.
     at: { owner: params.owner, repo: params.repo },
     origin: url.origin,
     state,
     milestones: listed.milestones,
     pages: pageLinks(url, "cursor", listed.next_cursor),
     viewer: session.state === "signed-in" ? session.user.id : null,
-    // A session check that failed says nothing of who is viewing: the page keeps the last known.
     viewerKnown: session.state !== "unknown",
   };
 }
 
-/** A milestones page's answer is about its viewer and repository. */
 type MilestonesScope = Scope & { owner: string; repo: string; page: "milestones" };
 
-/** The number of the milestone a form is of, else none. */
 const milestoneNumber = (form: FormData): number | null => {
   const value = field(form, "number");
   return /^[1-9][0-9]{0,14}$/.test(value) ? Number(value) : null;
 };
 
-/** What a milestone form wrote, as its refused draft keeps it. */
 function draftOf(form: FormData): Written | undefined {
   const fields = {
     title: field(form, "title"),
@@ -188,7 +183,6 @@ const DONE: Record<string, string> = {
 
 type ActionData = Awaited<ReturnType<typeof action>> | undefined;
 
-/** The milestones page's editors: the new milestone's, and each milestone's. */
 const EDITORS: DraftEditors = {
   ofDraft: (draft) => (draft.target === undefined ? "new-milestone" : `milestone-${draft.target}`),
   ofAnswer: (ok, target) => {
@@ -199,7 +193,6 @@ const EDITORS: DraftEditors = {
   },
 };
 
-/** What a kept draft's field is, as its recovery shows it. */
 function unsentLabel(editor: string, field: string): string {
   const what = editor === "new-milestone" ? "New milestone" : "Your edit of a milestone";
   if (field === "due_on") return `${what}: due date`;
@@ -207,7 +200,6 @@ function unsentLabel(editor: string, field: string): string {
   return what;
 }
 
-/** A milestone's title, due date and description fields, filled from `shown`. */
 function MilestoneFields({
   id,
   shown,
@@ -239,11 +231,9 @@ function MilestoneFields({
   );
 }
 
-/** What a milestone form records as it is written. */
 const written = (event: FormEvent<HTMLFormElement>) =>
   fieldsOf(event, ["title", "due_on", "description"]);
 
-/** A milestone's editor, from the version it was opened at. */
 function MilestoneEditor({
   milestone,
   own,
@@ -308,7 +298,6 @@ function MilestoneEditor({
   );
 }
 
-/** How far along a milestone is: its closed items of all it has. */
 function progress(milestone: Milestone): string {
   const total = milestone.open_issues + milestone.closed_issues;
   if (total === 0) return "Nothing in it yet";

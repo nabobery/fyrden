@@ -166,7 +166,6 @@ describe("archives", () => {
       });
       expect(outcome.parts.length).toBeGreaterThan(5);
       const bytes = new Uint8Array(outcome.parts.reduce((n, p) => n + p.length, 0));
-      // What the archive says it holds is what its segments hold, replays or not.
       expect(outcome.bytes, format).toBe(bytes.length);
       let at = 0;
       for (const part of outcome.parts) {
@@ -299,7 +298,6 @@ describe("archives", () => {
       const status = await archives.request(input);
       return status.ok && status.value.state === "ready" ? status.value.keys.length : -1;
     });
-    // One segment per three entries.
     expect(outcome).toBe(Math.ceil((fx.trees.recursive.length + 1) / 3));
   });
 

@@ -17,7 +17,7 @@ const SIZE = 16 * MIB;
 const CHUNK = 64 * 1024;
 
 function megabytesPerSecond(hash: (data: Uint8Array) => void, data: Uint8Array): number {
-  hash(data.subarray(0, 2 * MIB)); // warm up the JIT
+  hash(data.subarray(0, 2 * MIB));
   let best = Number.POSITIVE_INFINITY;
   for (let run = 0; run < 3; run++) {
     const start = clock();

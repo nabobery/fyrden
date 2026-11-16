@@ -47,7 +47,6 @@ describe("an archive download", () => {
     const res = await building.response;
     expect(res.status).toBe(202);
     expect(res.headers.get("Retry-After")).toBe("5");
-    // Asks again for the commit being built, not the branch, which may move on.
     expect(res.headers.get("Refresh")).toBe(`5; url=/ada/demo/archive/zip?ref=${"a".repeat(40)}`);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
     expect(await res.text()).toContain("being prepared");

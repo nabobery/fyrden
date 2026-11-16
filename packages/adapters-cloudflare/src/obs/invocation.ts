@@ -157,7 +157,6 @@ export class Invocation {
   readonly #options: InvocationOptions;
   readonly #now: () => number;
   readonly #startedAt: number;
-  /** Held points by dataset, then by metric and dimensions. */
   readonly #held = new Map<AnalyticsEngineDataset, Map<string, PendingPoint>>();
   #heldCount = 0;
   #samples = 0;
@@ -340,7 +339,6 @@ export function atInvocationEnd(key: string, fn: () => void): void {
   else invocation.atEnd(key, fn);
 }
 
-/** The invocation the caller runs in, if any. */
 export function currentInvocation(): Invocation | undefined {
   return scope.getStore();
 }

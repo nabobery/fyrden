@@ -1,6 +1,5 @@
 import type { CursorName, DiffCursor } from "@fyrden/git-core";
 
-/** Whether two resumable diff positions are the same place. */
 export function sameCursor(a: DiffCursor | null, b: DiffCursor | null): boolean {
   if (a === null || b === null) return a === b;
   if (a.enter !== b.enter || a.path.length !== b.path.length) return false;

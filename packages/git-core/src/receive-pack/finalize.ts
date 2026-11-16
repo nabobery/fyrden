@@ -83,7 +83,6 @@ export interface FinalizeEnv {
   readonly denyNonFastForwards?: boolean;
 }
 
-/** A live command as the rules see it. */
 export interface CheckedCommand {
   readonly index: number;
   readonly name: string;

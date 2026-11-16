@@ -27,7 +27,6 @@ import { ORIGIN } from "./helpers/git-http.js";
 import { testSession } from "./helpers/oauth.js";
 import { scopedToken } from "./helpers/principals.js";
 
-/** Messages the injected provider was handed. */
 let sent: EmailMessage[] = [];
 
 const recording: EmailProvider = {
@@ -144,7 +143,6 @@ describe("notification addresses", () => {
       status: 200,
       body: { email: address, primary: true, verified: true },
     });
-    // Adding it again changes nothing and mails nothing.
     expect((await add(who, [address.toUpperCase()])).body).toEqual([
       { email: address, primary: true, verified: true, visibility: null, deliverable: true },
     ]);

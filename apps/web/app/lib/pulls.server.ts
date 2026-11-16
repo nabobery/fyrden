@@ -16,7 +16,6 @@ export interface PullParams {
   number: string;
 }
 
-/** A pull request page's pull request and who is viewing it. */
 export async function loadPull(
   context: Readonly<RouterContextProvider>,
   request: Request,
@@ -41,12 +40,10 @@ export async function loadPull(
   };
 }
 
-/** An action's answer: what was done, or why not. */
 export type ActionResult =
   | {
       ok: string;
       error?: undefined;
-      /** The version an edit's save made. */
       version?: number | undefined;
     }
   | {
@@ -103,7 +100,6 @@ export async function submitReview(
   );
 }
 
-/** A merge's answer: done, still rebasing in the background, or refused (with the reason). */
 export type MergeResult = ActionResult | { pending: true; ok?: undefined; error?: undefined };
 
 /** Merges with the form's method, at the head it showed; a long rebase answers `pending`. */

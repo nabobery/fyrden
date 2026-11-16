@@ -74,7 +74,6 @@ export interface PushPlan {
   readonly shallow: readonly Oid[];
   /** Whether a pack follows: false only when every command is a deletion (git `delete_only`). */
   readonly expectsPack: boolean;
-  /** `error: ...` lines for the client's progress channel. */
   readonly messages: string[];
 }
 
@@ -279,7 +278,6 @@ export function failAtomically(plan: PushPlan): void {
   for (const cmd of plan.commands) cmd.error ??= "atomic push failure";
 }
 
-/** Commands still going ahead. */
 export function liveCommands(plan: PushPlan): PushCommandState[] {
   return plan.commands.filter((c) => c.error === undefined);
 }

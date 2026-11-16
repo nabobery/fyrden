@@ -44,7 +44,6 @@ const states: fc.Arbitrary<BlameState> = fc
         list.push(line + 5, line);
         byCommit.set(place, list);
       } else if (!stateLimit || place < 5) {
-        // A settled line of its own, by commit or by reason.
         settled.push(
           line,
           1,

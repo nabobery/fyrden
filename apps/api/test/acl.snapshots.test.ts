@@ -92,7 +92,6 @@ describe("organization repositories", () => {
     expect(repo.full_name).toBe(`${login}/shared`);
     const path = `/repos/${login}/shared`;
     expect((await api("GET", path, member.token)).status).toBe(200);
-    // A member reads; it may not administer.
     expect((await api("PATCH", path, member.token, { description: "no" })).status).toBe(404);
     expect((await api("PATCH", path, owner.token, { description: "yes" })).status).toBe(200);
     const stranger = await who();

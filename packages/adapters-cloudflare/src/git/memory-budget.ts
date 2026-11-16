@@ -69,7 +69,6 @@ export interface DoMemoryBudget extends MemoryBudget {
   stats(): MemoryBudgetStats;
 }
 
-/** The work that starts operations on the pool: each admission is recorded under one of these. */
 export type MemoryConsumer = "blame" | "fetch_plan" | "push_index";
 
 export interface BeginOptions {
@@ -196,7 +195,6 @@ export function createDoMemoryBudget(
 
   const fitsShare = (share: Share, bytes: number) =>
     !share.ended && bytes <= share.bytes - share.used;
-  /** Whether the operation already waits for more: its later reservations wait behind it. */
   const waitsFor = (share: Share) => waiting.some((waiter) => waiter.share === share);
 
   /**

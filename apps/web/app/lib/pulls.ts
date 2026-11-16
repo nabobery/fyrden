@@ -1,8 +1,3 @@
-/**
- * Pull requests as the pages read them: the API's own shapes, from its
- * contract (types only: nothing of it is in the browser's bundle).
- */
-
 import type {
   getPull,
   listComments,
@@ -15,16 +10,13 @@ import { data } from "react-router";
 
 export type PullRequest = Output<typeof getPull>;
 
-/** A page of a pull request's conversation comments. */
 export type IssueCommentsPage = Output<typeof listComments>;
 export type IssueComment = IssueCommentsPage["comments"][number];
 
-/** A page of a pull request's reviews. */
 export type ReviewsPage = Output<typeof listReviews>;
 export type Review = ReviewsPage["reviews"][number];
 export type ReviewState = Review["state"];
 
-/** What a page calls a pull request's state. */
 export type PullStatus = "open" | "draft" | "closed" | "merged";
 
 export function statusOf(pull: Pick<PullRequest, "state" | "merged" | "draft">): PullStatus {
@@ -33,15 +25,12 @@ export function statusOf(pull: Pick<PullRequest, "state" | "merged" | "draft">):
   return pull.draft ? "draft" : "open";
 }
 
-/** `/repos/{owner}/{repo}` for the API. */
 export const repoApiPath = (owner: string, repo: string): string =>
   `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
-/** `/repos/{owner}/{repo}/pulls/{number}` for the API. */
 export const pullApiPath = (owner: string, repo: string, number: number | string): string =>
   `${repoApiPath(owner, repo)}/pulls/${encodeURIComponent(String(number))}`;
 
-/** A pull request's page in the web app. */
 export const pullPage = (owner: string, repo: string, number: number | string): string =>
   `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pull/${encodeURIComponent(String(number))}`;
 
@@ -63,13 +52,11 @@ export function who(id: string, viewer: string | null): string {
   return id === viewer ? "you" : id;
 }
 
-/** A problem's message from the API, or `fallback`. */
 export function problemDetail(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null)?.detail;
   return typeof detail === "string" && detail ? detail : fallback;
 }
 
-/** A problem's stable code from the API, if any. */
 export function problemCode(body: unknown): string | undefined {
   const code = (body as { code?: unknown } | null)?.code;
   return typeof code === "string" ? code : undefined;
@@ -87,17 +74,14 @@ export function rawField(form: FormData, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** A page of the comments on a pull request's diff. */
 export type ReviewCommentsPage = Output<typeof listReviewComments>;
 export type ReviewComment = ReviewCommentsPage["comments"][number];
 export type DiffSide = ReviewComment["side"];
 
-/** A page of the files a pull request changes. */
 export type PullFilesPage = Output<typeof listPullFiles>;
 export type PullFile = PullFilesPage["files"][number];
 export type PatchOmitted = NonNullable<PullFile["patch_omitted"]>;
 
-/** Why a file's changes are not shown, in words. */
 export const OMITTED_REASON: Record<PatchOmitted, string> = {
   binary: "Binary file: its changes are not shown.",
   too_large: "This file is too large to compare here.",
@@ -106,7 +90,6 @@ export const OMITTED_REASON: Record<PatchOmitted, string> = {
   budget: "This file's changes could not be read on this page; open the next page or reload.",
 };
 
-/** One comment of a review thread, as the files page shows it. */
 export interface ThreadComment {
   id: number;
   author: string;

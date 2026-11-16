@@ -26,10 +26,8 @@ import {
 import { forgetLineEntry, useLineLinks } from "../lib/use-line-links.js";
 import type { FileViewStatus } from "./diff/file-view.client.js";
 
-// The renderer is loaded in the browser only, once the page is hydrated.
 const FileView = lazy(() => import("./diff/file-view.client.js"));
 
-/** The lines of one block or file, as the server draws them. */
 function PlainLines({ file, selection }: { file: TextFile; selection: LineRange | null }) {
   const lines = splitLines(file.text);
   const digits = String(file.totalLines).length;

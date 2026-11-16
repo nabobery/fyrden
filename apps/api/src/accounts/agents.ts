@@ -91,7 +91,6 @@ async function agentFor(
   return row;
 }
 
-/** The `agents.create` operation. */
 export async function createAgentOperation(
   ctx: OpContext,
   input: Input<typeof createAgent>,
@@ -185,7 +184,6 @@ export async function listAgentsOperation(
   };
 }
 
-/** The `agents.get` operation. */
 export async function getAgentOperation(
   ctx: OpContext,
   input: Input<typeof getAgent>,
@@ -217,7 +215,6 @@ export async function disableAgentOperation(
   return output({ ...agent, disabled_at: now });
 }
 
-/** The `agents.tokens.create` operation. */
 export async function createAgentTokenOperation(
   ctx: OpContext,
   input: Input<typeof createAgentToken>,

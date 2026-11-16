@@ -22,7 +22,6 @@ import { GroupLabel } from "../blame-table.js";
 import { Drawn, type FileViewStatus } from "./file-view.client.js";
 import { WindowVirtualizer } from "./window-virtualizer.js";
 
-/** What an annotation row says: its group, and the commit's facts when it names one. */
 export interface Note {
   readonly group: Group;
   readonly facts: CommitFacts | undefined;
@@ -32,10 +31,8 @@ export interface Note {
 /** The room left above a line brought into view, as the plain view's `scroll-margin-top`. */
 const SCROLL_MARGIN = 16;
 
-/** Keys that scroll the page: the viewer has taken over. */
 const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]);
 
-/** One stable function for every row, reading only the row's own data. */
 function renderNote(annotation: LineAnnotation<Note>): ReactNode {
   const { group, facts, history } = annotation.metadata;
   return (
@@ -109,7 +106,6 @@ export default function BlameView({
     [onSelect, target],
   );
 
-  // The viewer scrolling stops any line still being brought into view.
   useEffect(() => {
     const stop = () => target.cancel();
     const key = (event: KeyboardEvent) => {

@@ -114,7 +114,6 @@ export const suspendUser = defineOperation({
   },
 });
 
-/** A user deletion, as its job stands. */
 export const UserDeletion = z.object({
   id: z
     .string()

@@ -60,7 +60,6 @@ describe("Sha1 (pure TypeScript)", () => {
         let sha = new Sha1();
         for (const chunk of chunks(input)) {
           sha.update(chunk);
-          // A writer evicted mid-stream resumes from the saved state alone.
           sha = Sha1.fromState(sha.saveState());
         }
         expect(hex(sha.digest())).toBe(nodeSha1(input.data));

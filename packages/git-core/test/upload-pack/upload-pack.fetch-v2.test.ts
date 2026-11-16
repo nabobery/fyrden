@@ -69,7 +69,6 @@ describe("fetch response sections", () => {
   it("ACKs common commits only, and is ready once every want reaches one", async () => {
     const { source, loaded, two, three, other } = await linear();
     const tree = (await source.git(["rev-parse", `${two}^{tree}`])).stdout.trim();
-    // `other` does not reach `two`: not ready yet.
     const partial = parseFetchResponse(
       (
         await planAndRender(
@@ -107,7 +106,6 @@ describe("fetch response sections", () => {
     expect(response.acknowledgments).toBeUndefined();
     const { stdout } = await source.git(["rev-list", "--objects", three, `^${two}`]);
     expect(plan.pack?.objectCount).toBe(stdout.trim().split("\n").length);
-    // commit three, its root tree, a.txt and b.txt: lib/ is unchanged.
     expect(plan.pack?.objectCount).toBe(4);
   });
 
@@ -205,7 +203,6 @@ describe("include-tag", () => {
     );
     expect(withTags).toContain(await rev("v2"));
     expect(withTags).toContain(await rev("v2-again"));
-    // v1's target is not sent (the client has it); v-elsewhere's is not wanted.
     expect(withTags).not.toContain(await rev("v1"));
     expect(withTags).not.toContain(await rev("v-elsewhere"));
 

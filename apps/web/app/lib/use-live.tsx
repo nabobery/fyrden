@@ -125,7 +125,6 @@ export function useLiveHints(wants: (stream: LiveStream) => boolean): LiveStatus
   );
 }
 
-/** Says why live updates are not coming, while they are not: nothing otherwise. */
 export function LiveNote({ status }: { status: LiveStatus }) {
   if (status.kind === "paused") {
     const until = new Date(status.retryAt);

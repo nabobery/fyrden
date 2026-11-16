@@ -1,4 +1,3 @@
-// Test-only Worker for this package's workerd tests. Never deployed.
 import { DurableObject } from "cloudflare:workers";
 import { applyDoMigrations, type DoMigration, dumpSchema } from "../src/migrations/index.js";
 

@@ -84,7 +84,6 @@ async function readAll(deltaBaseCacheBytes?: number) {
     stats,
     ...(deltaBaseCacheBytes ? { limits: { deltaBaseCacheBytes } } : {}),
   });
-  // The cache's bytes are reserved for the whole operation.
   if (!deltaBaseCacheBytes) expect(memory.tryReserve(1)).toBeUndefined();
   try {
     for (const oid of shuffled([...expected.keys()], prng(5))) {
@@ -103,11 +102,9 @@ describe("reader.delta-base-cache", () => {
   it("reads 10k objects in depth-16 chains reading each base at most once", async () => {
     expect(expected.size).toBe(CHAINS * (DEPTH + 1));
     const { inflates, stats, store } = await readAll();
-    // One inflate per entry: no entry, base or not, was read twice.
     expect(inflates).toBe(expected.size);
     expect(stats.objectsRead).toBe(expected.size);
     expect(stats.deltaBaseHits).toBeGreaterThan(0);
-    // With the block cache, each block came from the store once.
     expect(stats.storeBytes).toBeLessThanOrEqual(pack.length);
     expect(store.calls.reduce((n, c) => n + c.length, 0)).toBe(stats.storeBytes);
   }, 60_000);

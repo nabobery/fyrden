@@ -38,7 +38,6 @@ async function pushed(): Promise<{ stub: DurableObjectStub<RepoDO>; repoId: stri
 
 type Repo = Parameters<Parameters<typeof inRepo>[1]>[0];
 
-/** Every metric point counted, in order. */
 function recording(): { metrics: Metrics; refused: () => Record<string, number> } {
   const points: { name: string; dimensions: Record<string, string>; value: number }[] = [];
   return {
@@ -59,7 +58,6 @@ function recording(): { metrics: Metrics; refused: () => Record<string, number> 
   };
 }
 
-/** `git` with its metrics replaced, and `bucket` too when given. */
 function withMetrics(git: RepoGitStorage, metrics: Metrics, bucket?: R2Bucket): RepoGitStorage {
   const context = { ...git.context, metrics };
   return new Proxy(git, {

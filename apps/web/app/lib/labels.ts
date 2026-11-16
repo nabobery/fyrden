@@ -56,6 +56,5 @@ export function labelIssues(
   return `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${query}`;
 }
 
-/** `/repos/{owner}/{repo}/labels/{name}` for the API. */
 export const labelApiPath = (repoApi: string, name: string): string =>
   `${repoApi}/labels/${encodeURIComponent(name)}`;

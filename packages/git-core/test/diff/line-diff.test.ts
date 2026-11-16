@@ -2,7 +2,6 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { diffSequences, type Edit } from "../../src/diff/line-diff.js";
 
-/** The new side, rebuilt from the old one and the edits. */
 function apply(a: readonly number[], b: readonly number[], edits: readonly Edit[]): number[] {
   const out: number[] = [];
   let oldAt = 0;
@@ -53,7 +52,6 @@ describe("diffSequences", () => {
         expect(approximate).toBe(false);
         expect(apply(a, b, edits)).toEqual(b);
         expect(changed(edits)).toBe(fewest(a, b));
-        // Runs alternate in kind: no two of a kind side by side.
         for (let i = 1; i < edits.length; i++) expect(edits[i]?.kind).not.toBe(edits[i - 1]?.kind);
       }),
       { numRuns: 2_000 },
@@ -73,7 +71,6 @@ describe("diffSequences", () => {
   });
 
   it("slides a deletion between repeated lines to its last place", () => {
-    // Deleting one of two equal lines reads as deleting the second.
     const { edits } = diffSequences([1, 2, 2, 3], [1, 2, 3]);
     expect(edits).toEqual([
       { kind: "equal", oldStart: 0, newStart: 0, length: 2 },

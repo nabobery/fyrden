@@ -46,7 +46,6 @@ describe("mergeTrees, directories", () => {
       ["g", "100644", oidToHex(s.blob("G\n"))],
       ["sub", "40000", oidToHex(sub)],
     ]);
-    // The directory and the root, nothing more.
     expect(merged.objects.map((o) => o.type)).toEqual(["tree", "tree"]);
   });
 

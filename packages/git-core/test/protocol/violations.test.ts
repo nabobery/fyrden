@@ -29,7 +29,6 @@ describe("protocol-violation corpus", () => {
   it.each(CORPUS.map((c) => [c.name, c] as const))("refuses %s", async (_name, c) => {
     const bytes = caseBytes(c);
     expect((await protocolError(() => runTarget(c.target, bytes, c.limits))).code).toBe(c.code);
-    // The same verdict from a stream, whether bytes arrive one at a time or in uneven chunks.
     const cuts =
       bytes.length <= 4096
         ? Array.from({ length: bytes.length }, (_, i) => i)

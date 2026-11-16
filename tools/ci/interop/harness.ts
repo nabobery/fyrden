@@ -20,7 +20,6 @@ export interface RunOptions {
   input?: string | undefined;
 }
 
-/** Runs a command to completion, collecting its output. */
 export function run(command: string, args: string[], options: RunOptions = {}): Promise<Run> {
   return new Promise((done, fail) => {
     const child = spawn(command, args, {
@@ -43,7 +42,6 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
   });
 }
 
-/** Both ends of a case: the Fyrden repository and the oracle with the same name. */
 export interface Remotes {
   readonly fyrden: string;
   readonly oracle: string;
@@ -52,24 +50,20 @@ export interface Remotes {
 export interface Interop {
   /** The scratch directory of this case; relative paths in `cwd` resolve against it. */
   readonly scratch: string;
-  /** The Fyrden server (shared by every case of the run). */
   readonly server: Server;
   /** This case's own token (git gets it from a credential helper). */
   readonly token: string;
-  /** The version of the git under test, e.g. "2.43.7". */
   readonly gitVersion: string;
   git(args: string[], options?: RunOptions): Promise<Run>;
   /** Runs git and fails the case unless it exits 0; returns stdout. */
   ok(args: string[], cwd?: string): Promise<string>;
   /** Creates an empty Fyrden repository and an empty oracle. */
   remotes(name: string): Promise<Remotes>;
-  /** The Fyrden repository name `remotes(name)` created. */
   repoName(name: string): string;
   /** `git init -b main` at `name` in the scratch directory, with one commit. */
   work(name: string): Promise<string>;
   /** Writes files (null deletes) and commits them one day after the previous commit. */
   commit(cwd: string, files: Record<string, string | null>, message?: string): Promise<string>;
-  /** `git ls-remote` as `{ ref: oid }`. */
   lsRemote(url: string): Promise<Record<string, string>>;
   /** Every object reachable from any ref, sorted. */
   objects(cwd: string): Promise<string[]>;
@@ -85,7 +79,6 @@ const ORACLE_CONFIG: [string, string][] = [
   // Fyrden advertises push options and refuses pushes to pull request refs.
   ["receive.advertisePushOptions", "true"],
   ["receive.hideRefs", "refs/pull/"],
-  // It applies fsck checks to every pushed object.
   ["receive.fsckObjects", "true"],
 ];
 

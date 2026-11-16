@@ -222,7 +222,6 @@ describe("PackBuilder refuses packs git would reject", () => {
       { oid: e.baseOid(delta) as Uint8Array },
     );
     await expect(builder.finish()).rejects.toMatchObject({ code: "missing-base" });
-    // Nothing after the entries reached the sink: no trailer for a broken pack.
     expect(sink.bytes().length).toBe(e.entryLength(delta) + 12);
     pack.release();
   });

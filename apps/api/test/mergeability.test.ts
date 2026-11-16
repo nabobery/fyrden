@@ -127,7 +127,6 @@ const waiting = () =>
       )
       .toArray(),
   );
-/** When the queue's job runs next. */
 const jobAt = () =>
   inRepo(
     stub(),
@@ -171,7 +170,6 @@ describe("mergeability", () => {
     expect(await mergeabilityEvents()).toEqual([
       expect.objectContaining({ number: 1, state: "clean", mergeable: true }),
     ]);
-    // Listed with it too.
     const listed = await json<{ pull_requests: Pull[] }>(api("GET", `${path}/pulls`, owner.token));
     expect(listed.body.pull_requests[0]).toMatchObject({ mergeable: true });
   });
@@ -476,7 +474,6 @@ describe("mergeability", () => {
     const moved = await kept();
     expect(moved).toMatchObject({ head_sha: head, state: "unknown", attempts: 1 });
     expect(moved.retry_at - moved.computed_at).toBe(MERGEABILITY_RETRY.firstMs);
-    // So does the base.
     const tip = await commitOn("main", [{ path: "y.txt", content: "y\n" }]);
     await runJobs();
     expect(await kept()).toMatchObject({ base_sha: tip, state: "unknown", attempts: 1 });

@@ -4,7 +4,6 @@ import { fakeApi, json } from "./context.js";
 
 export const VIEWER = "usr_viewer";
 
-/** A subject's or comment's reactions with none counted. */
 export const NO_REACTIONS = {
   total_count: 0,
   "+1": 0,

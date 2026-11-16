@@ -63,7 +63,6 @@ export class RangedPackIdx {
   readonly fanout: Uint32Array;
   readonly #read: IdxRangeReader;
   readonly #layout: IdxLayout;
-  /** Most oids one read of the table may cover in `find` and `lookup`. */
   readonly #pageOids: number;
 
   private constructor(
@@ -254,7 +253,6 @@ export class RangedPackIdx {
         const [lo, hi] = fanoutBucket(this.fanout, first);
         return { lo, hi, items: byBucket.get(first) as number[] };
       });
-    // An empty bucket answers without a read.
     for (const bucket of buckets) {
       if (bucket.hi === bucket.lo) for (const i of bucket.items) positions[i] = -1;
     }

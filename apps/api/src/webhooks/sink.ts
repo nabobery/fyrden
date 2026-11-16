@@ -115,7 +115,6 @@ type Planned = PlannedDeliveries | PlannedCapture;
 
 const isCapture = (planned: Planned): planned is PlannedCapture => "capture" in planned;
 
-/** The queue message for a delivery's next attempt. */
 export interface DeliveryMessage {
   readonly delivery: string;
 }
@@ -217,7 +216,6 @@ const MATERIALIZE_CALLS = 7;
  * hooks.
  */
 const CAPTURE_CALLS = MATERIALIZE_CALLS - 1 + 6;
-/** Directory queries reading the logins of `users` principals. */
 const loginCalls = (users: number) => Math.ceil(users / LOGIN_BATCH);
 /**
  * Calls one first attempt costs at most (its claim, body and hook are the
@@ -228,7 +226,6 @@ const loginCalls = (users: number) => Math.ceil(users / LOGIN_BATCH);
 const ATTEMPT_CALLS = 7;
 
 export interface WebhookSinkOptions {
-  /** First attempts made per event (`FIRST_ATTEMPTS`). */
   readonly firstAttempts?: number;
   /** The SSRF guard's resolver (tests replace it). */
   readonly resolver?: DeliveryDeps["resolver"];
@@ -373,7 +370,6 @@ async function materialize(
   }
 }
 
-/** The body an event's deliveries share, as `makeDeliveries` makes them. */
 interface Body {
   readonly key: string;
   /** Its bytes; none when its deliveries are `dropped`. */

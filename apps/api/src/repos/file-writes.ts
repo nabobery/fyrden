@@ -187,7 +187,6 @@ async function write(
   );
 }
 
-/** The `repos.contents.put` operation. */
 export async function putContentsOperation(
   ctx: OpContext,
   input: Input<typeof putContents>,
@@ -212,7 +211,6 @@ export async function putContentsOperation(
   };
 }
 
-/** The `repos.contents.delete` operation. */
 export async function deleteContentsOperation(
   ctx: OpContext,
   input: Input<typeof deleteContents>,
@@ -226,7 +224,6 @@ export async function deleteContentsOperation(
   return { content: null, commit: await resolveOne(ctx, result.commit) };
 }
 
-/** The `repos.file_commits.create` operation. */
 export async function createFileCommitOperation(
   ctx: OpContext,
   input: Input<typeof createFileCommit>,

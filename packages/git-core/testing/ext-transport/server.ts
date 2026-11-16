@@ -13,7 +13,6 @@
 export type GitServiceName = "git-receive-pack" | "git-upload-pack";
 
 export interface GitServiceIo {
-  /** The repository directory named on the command line. */
   readonly repoDir: string;
   /** The client's bytes, until it closes its end. */
   readonly input: AsyncIterable<Uint8Array>;

@@ -12,10 +12,8 @@ import { framedCopyKey } from "./cache-key.js";
 import type { PlannedPack, UploadPackRepository } from "./fetch.js";
 import { materialise, writeFramed } from "./materialise.js";
 
-/** What the pack registry knows about one pack of the view, for verbatim plans. */
 export interface VerbatimCandidate {
   readonly packId: PackId;
-  /** The count in the pack's header. */
   readonly objectCount: number;
   /**
    * Every object in the pack is reachable from the current refs (the

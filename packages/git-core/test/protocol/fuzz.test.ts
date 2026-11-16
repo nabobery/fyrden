@@ -118,7 +118,6 @@ const mutationArb: fc.Arbitrary<Mutation> = fc.oneof(
         return concat(x.subarray(0, p + n), x.subarray(p));
       },
   ),
-  // Rewrites four bytes as a plausible (or nearly plausible) length.
   fc.tuple(fc.nat(), fc.array(hexDigit, { minLength: 4, maxLength: 4 })).map(
     ([i, digits]): Mutation =>
       (x) => {

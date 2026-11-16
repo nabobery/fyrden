@@ -63,7 +63,6 @@ describe("webhooks", () => {
       ["ping", "pending", 1],
       ["push", "pending", 1],
     ]);
-    // Made again: nothing more.
     expect(t.sent.map((s) => s.delivery).sort()).toEqual(rows.map((r) => r.delivery_id).sort());
     const push = rows[1] as (typeof rows)[number];
     expect(push.delivery_id).toBe(
@@ -94,7 +93,6 @@ describe("webhooks", () => {
       attempts: 1,
       last_status: 200,
     });
-    // Done: another message makes no attempt.
     await attemptDelivery(t.deps(), push.delivery_id);
     expect(t.received).toHaveLength(1);
   });

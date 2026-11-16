@@ -187,8 +187,6 @@ const LIVE_RETRY_MS = 60_000;
 /** How long a feed's sockets are told to wait after its successor's grant was refused for now. */
 const LIVE_PAUSED_MS = 5 * 60_000;
 
-/** A socket's id, from its attachment. */
-/** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
 /**
  * What a turn's grant paid for, in rows, on `day` (the ledger's day it runs
  * on); with the day not known (right at a midnight), the least of its days.
@@ -205,6 +203,7 @@ function turnBudget(envelope: LiveEnvelope, day: number | null): TurnRows {
   };
 }
 
+/** Whether `kind`'s refill is queued and due (one whose grant's answer was lost waits a minute). */
 function refillDue(
   budget: LiveBudget,
   kind: "control_refill" | "mark_refill",
@@ -228,6 +227,7 @@ function poolLow(budget: LiveBudget, kind: "control" | "mark", day: number, at: 
   );
 }
 
+/** A socket's id, from its attachment. */
 function socketIdOf(ws: WebSocket): string | undefined {
   const attached = ws.deserializeAttachment() as { v?: number; id?: unknown } | null;
   return attached?.v === 1 && typeof attached.id === "string" ? attached.id : undefined;
@@ -1297,7 +1297,6 @@ export class UserDO extends MigratingDO {
       return;
     }
     const now = Date.now();
-    // Past its deadline or its life: closed, whatever it says.
     if (socket.deadline <= now || socket.expires_at <= now)
       return this.#closeSocket(id, CLOSE_EXPIRED, "expired: reconnect with a new ticket");
     const fresh = now - socket.minute_start >= 60_000;
@@ -1348,7 +1347,6 @@ export class UserDO extends MigratingDO {
     const { t, n } = control as { t?: unknown; n?: unknown };
     if (t === "ack" && keys.length === 2 && Number.isSafeInteger(n)) {
       const counter = n as number;
-      // Acknowledging what was not sent, or again: nothing.
       if (counter <= socket.acked || counter > socket.sent) return;
       this.ctx.storage.transactionSync(() =>
         live.update(id, {
@@ -2416,7 +2414,6 @@ export class UserDO extends MigratingDO {
     await this.#arm();
   }
 
-  /** Whether `kind`'s row is due now. */
   #dueNow(kind: Kind): boolean {
     return (
       this.ctx.storage.sql
@@ -2756,7 +2753,6 @@ function causes(
   );
 }
 
-/** Whether two dependency lists name the same dependencies. */
 function sameDeps(a: readonly string[], b: readonly string[]): boolean {
   return [...new Set(a)].sort().join("\n") === [...new Set(b)].sort().join("\n");
 }

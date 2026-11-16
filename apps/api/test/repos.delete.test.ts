@@ -105,7 +105,6 @@ function storageLeft(stub: DurableObjectStub<RepoDO>) {
   });
 }
 
-/** `env` with the repository object of `repoId` failing `method` once. */
 function failingOnce(repoId: string, method: keyof RepoDO): Env {
   let failed = false;
   const real = env.REPO;
@@ -476,7 +475,6 @@ describe("repos.delete", () => {
     expect(await advanceDeletion(env, repo.id)).toBe("deleted");
     expect(await deletionRow(repo.id)).toMatchObject({ step: "done", last_error: null });
     expect(await readModelRow(repo.id)).toMatchObject({ deleted: 1 });
-    // Done is done.
     expect(await advanceDeletion(env, repo.id)).toBe("deleted");
   });
 });

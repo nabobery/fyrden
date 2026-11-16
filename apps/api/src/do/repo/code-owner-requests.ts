@@ -72,7 +72,6 @@ export const CODE_OWNER_REQUEST_POLICY = {
 
 export type CodeOwnerRequestPolicy = typeof CODE_OWNER_REQUEST_POLICY;
 
-/** Test seams. */
 export interface CodeOwnerRequestHooks {
   /** After a slice read its reviewers, right before it resolves the owners' handles. */
   readonly beforeResolve?: () => Promise<void>;

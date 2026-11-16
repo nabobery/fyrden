@@ -33,7 +33,6 @@ export interface RepoEntry {
   readonly nameGen: number;
   /** The repository it was forked from; null when it is not a fork. */
   readonly parentId: string | null;
-  /** Whether new repositories can be generated from it. */
   readonly isTemplate: boolean;
   /** When it is deleted (Unix ms); null to keep it. */
   readonly expiresAt: number | null;
@@ -329,7 +328,6 @@ export async function findOwnedRepos(
   return results.map(entryOf);
 }
 
-/** A repository row a create or a fork inserts. */
 export interface NewRepoRow {
   readonly id: string;
   readonly ownerId: string;

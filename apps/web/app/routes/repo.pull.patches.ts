@@ -3,10 +3,8 @@ import type { PullFilesPage } from "../lib/pulls.js";
 import { pullApiOf } from "../lib/pulls.server.js";
 import type { Route } from "./+types/repo.pull.patches";
 
-/** Files a page of the files view lists (the API's default page). */
 export const FILES_PER_PAGE = 30;
 
-/** One page's patches, as the files view's renderer reads them. */
 export interface PagePatches {
   head_sha: string;
   merge_base_sha: string;

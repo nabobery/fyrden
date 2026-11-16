@@ -9,7 +9,6 @@ import type { ThemeMode } from "./theme.js";
  * nothing here is written while the server renders.
  */
 let shown: { readonly mode: ThemeMode; readonly over: ThemeMode } | null = null;
-/** The last pick the server kept. */
 let kept: ThemeMode | null = null;
 /** Picks post one at a time, so the cookie ends up holding the last one made. */
 let keeping: Promise<unknown> = Promise.resolve();
@@ -76,7 +75,6 @@ export function useServerThemeMode(): ThemeMode {
   return data?.theme ?? "system";
 }
 
-/** The visitor's colour scheme. */
 export function useThemeMode(): ThemeMode {
   const fromServer = useServerThemeMode();
   useEffect(() => noteServerThemeMode(fromServer), [fromServer]);

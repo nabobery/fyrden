@@ -94,7 +94,6 @@ export interface BeginImport {
   readonly url: string;
   readonly ownHosts: readonly string[];
   readonly limits: ImportLimits;
-  /** The request starting the import. */
   readonly requestId?: string | null;
 }
 

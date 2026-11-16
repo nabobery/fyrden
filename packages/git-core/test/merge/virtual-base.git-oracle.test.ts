@@ -26,7 +26,6 @@ afterAll(async () => {
 
 const git = async (args: string[]) => (await sandbox.git(args, { cwd: dir })).stdout.trim();
 
-/** A commit of `files` with `parents`. */
 async function commit(files: Record<string, string>, parents: string[]): Promise<string> {
   await sandbox.git(["rm", "-rq", "--cached", "--ignore-unmatch", "."], { cwd: dir });
   for (const [path, text] of Object.entries(files)) {
@@ -77,7 +76,6 @@ describe("virtual bases against git merge-tree", () => {
           const a = await commit({ f: lines("f", 4), g: lines("g", 4) }, []);
           const b1 = await commit({ f: file(pick.b1), g: lines("g", 4) }, [a]);
           const c1 = await commit({ f: lines("f", 4), g: file(pick.c1) }, [a]);
-          // Each side merges the other: two merge bases from here on.
           const merged = { f: file(pick.b1), g: file(pick.c1) };
           const b2 = await commit({ ...merged, f: pick.f === "base" ? merged.f : file(pick.f) }, [
             b1,

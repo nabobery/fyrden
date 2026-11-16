@@ -8,7 +8,6 @@ import type { Logger } from "@fyrden/adapters-cloudflare/obs";
 import { anyLeased, discardTailMerge, prepareTailMerge } from "./tail-merge.js";
 import type { PackCapPolicy } from "./tail-merge-plan.js";
 
-/** The one background pack-cap compaction job of a repository. */
 export const PACK_CAP_JOB_ID = "compact:pack-cap";
 
 /** Proposed: how long the job waits for the commit lock, and how long it holds it. */

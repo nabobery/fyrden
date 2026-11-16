@@ -32,7 +32,6 @@ export const t5537: CaseFile = {
           "1",
           "--no-single-branch",
         ]);
-        // A new branch from main~2, below the client's shallow boundary.
         await t.ok(["checkout", "-q", "-b", "old", "main~2"], work);
         await t.commit(work, { "old.txt": "old\n" }, "old");
         await pushBoth(t, work, remotes, ["old"]);

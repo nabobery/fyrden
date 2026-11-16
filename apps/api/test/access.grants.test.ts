@@ -90,13 +90,11 @@ describe("collaborators", () => {
     expect((await list.json<{ collaborators: unknown[] }>()).collaborators).toEqual([
       { id: bob.principalId, login: bob.handle, permission: "push" },
     ]);
-    // The user's account object was recorded for it.
     expect(await env.ORG.getByName((await whoOwns(repo.id)) as string).isRecorded()).toBe(true);
 
     expect((await api("DELETE", path, owner.token)).status).toBe(200);
     expect(await roleOf(repo.id, bob)).toBeNull();
     expect((await api("GET", `/repos/${repo.full_name}`, bob.token)).status).toBe(404);
-    // Removing again answers all the same.
     expect((await api("DELETE", path, owner.token)).status).toBe(200);
   });
 
@@ -254,7 +252,6 @@ describe("teams", () => {
         })
       ).status,
     ).toBe(200);
-    // Not on the team yet.
     expect(await roleOf(repo.id, dev)).toBe("read");
     const join = await api(
       "PUT",
@@ -297,7 +294,6 @@ describe("teams", () => {
       (await api("DELETE", `/orgs/${login}/memberships/${dev.handle}`, owner.token)).status,
     ).toBe(200);
     expect(await roleOf(repo.id, dev)).toBeNull();
-    // Rejoining does not bring the team back.
     await api("PUT", `/orgs/${login}/memberships/${dev.handle}`, owner.token, {});
     expect(await roleOf(repo.id, dev)).toBe("read");
   });

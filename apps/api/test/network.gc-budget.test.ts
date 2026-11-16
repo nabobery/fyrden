@@ -108,7 +108,6 @@ async function collect(networkId: string, max = 100) {
   return ran;
 }
 
-/** When the job `jobId` runs next. */
 const dueAt = (n: NetworkDO, jobId: string): number =>
   n.context.storage.sql
     .exec<{ at: number }>("SELECT next_run_at AS at FROM jobs WHERE job_id = ?", jobId)

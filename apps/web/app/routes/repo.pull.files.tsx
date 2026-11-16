@@ -41,7 +41,6 @@ import { filesByPath, loadThreads } from "../lib/review-threads.server.js";
 import type { Route } from "./+types/repo.pull.files";
 import { FILES_PER_PAGE, type PagePatches } from "./repo.pull.patches.js";
 
-// The renderer is loaded in the browser only, once a file is on screen.
 const FileDiffView = lazy(() => import("../components/diff/file-diff.client.js"));
 
 export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescriptors {
@@ -52,7 +51,6 @@ export function meta({ params, loaderData }: Route.MetaArgs): Route.MetaDescript
 /** Bytes of a files-page form at most: a comment of 65,536 characters, URL-encoded, and the rest. */
 const FILES_FORM_MAX_BYTES = 9 * 65_536 + 16 * 1024;
 
-/** A file as the page lists it: the listing without its patch (the browser loads those). */
 export type FileEntry = Omit<PullFile, "patch"> & { hasPatch: boolean };
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
@@ -92,7 +90,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** A positive line number from a form field, or undefined. */
 function lineOf(form: FormData, name: string): number | undefined {
   const value = field(form, name);
   return /^[1-9][0-9]{0,8}$/.test(value) ? Number(value) : undefined;
@@ -175,7 +172,6 @@ export async function action({
   }
 }
 
-/** A page's patches as the browser loads them: by file name, or why they are not shown. */
 type Patches =
   | { state: "loading" }
   | { state: "failed" }
@@ -259,7 +255,6 @@ const STATUS_TEXT: Record<PullFile["status"], string> = {
   changed: "mode changed",
 };
 
-/** What a file without hunks shows instead. */
 function noHunksText(file: FileEntry): string {
   if (file.patch_omitted) return OMITTED_REASON[file.patch_omitted];
   if (file.status === "renamed") return "Renamed without changes.";

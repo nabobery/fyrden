@@ -170,7 +170,6 @@ describe("invocations", () => {
     expect(named(points, "subrequests").map((p) => [p.blobs, [p.value]])).toEqual([
       [["worker", "internal", "/:owner/:repo/git-upload-pack"], [3]],
     ]);
-    // Counted after the end: ignored.
     invocation.run(() => metrics.count("r2.class_b", { bucket: "b", op: "get" }));
     expect(named(points, "subrequests")).toHaveLength(1);
   });
@@ -202,7 +201,6 @@ describe("the per-invocation data point limit", () => {
       for (let i = 0; i < ANALYTICS_ENGINE_POINTS_PER_INVOCATION; i++) write(i);
       expect(() => write(250)).toThrow(WRITE_LIMIT_MESSAGE);
     });
-    // A new invocation starts a new count.
     await measureInvocation(createMetrics(dataset), { where: "do", op: "b" }, () => write(0));
   });
 
@@ -255,7 +253,6 @@ describe("the per-invocation data point limit", () => {
     });
     expect(points.length).toBe(METRIC_POINT_BUDGET);
     expect(METRIC_POINT_BUDGET).toBeLessThan(ANALYTICS_ENGINE_POINTS_PER_INVOCATION);
-    // The invocation's own points come first; the dropped count is the last point.
     expect(named(points, "do.active_ms")).toHaveLength(1);
     const dropped = named(points, "metrics.dropped");
     expect(dropped.map((p) => p.blobs)).toEqual([["do", "alarm"]]);
@@ -274,7 +271,6 @@ describe("the per-invocation data point limit", () => {
     await measureInvocation(metrics, { where: "worker", op: "x" }, () => {
       for (let i = 0; i < 10; i++) metrics.count("git.reaped", { what: `k${i}` });
     });
-    // Three written, one refused; nothing more is tried, not even the dropped count.
     expect(calls).toBe(4);
   });
 
@@ -398,7 +394,6 @@ describe("recordTailMetrics", () => {
       [["fyrden-api", "RepoDO", "alarm", "", "exceededCpu"], 30_001],
     ]);
     expect(named(points, "worker.wall_ms").map((p) => p.value)).toEqual([340, 900, 31_000]);
-    // Nothing from the request (URL, query, headers) reaches a data point.
     expect(JSON.stringify(points)).not.toMatch(/secret|token|x\.example/);
   });
 

@@ -157,7 +157,6 @@ async function restoredWithout(gone: Team): Promise<{ epoch: number; version: nu
   return { epoch, version };
 }
 
-/** The repository's job settling team requests, as its queue keeps it. */
 const reviewTeamsJob = () =>
   inRepo(
     stub(),

@@ -65,7 +65,6 @@ export interface RepoExport {
   }[];
 }
 
-/** Who the repository is, as the Worker that creates it knows it. */
 /** What the directory says of a repository when its object checks its epoch. */
 export interface EpochCheck {
   /** The epoch it allocated (null for none yet). */
@@ -116,7 +115,6 @@ export interface JobActor {
   readonly requestId?: string | null;
 }
 
-/** The commit actor for `actor`, as a job's change records it. */
 function jobRefActor(actor: JobActor | string | null): RefActor | null {
   if (actor === null) return null;
   return typeof actor === "string"
@@ -131,7 +129,6 @@ function jobRefActor(actor: JobActor | string | null): RefActor | null {
 
 /** What a repository being deleted answers every write (and, once erased, every call). */
 export const REPO_DELETED = "the repository is being deleted";
-/** Why a repository takes no change while it moves to another account. */
 export const REPO_TRANSFERRING = "the repository is being transferred; try again in a moment";
 
 /** Whether `error` is a repository object refusing because its deletion started. */
@@ -194,13 +191,10 @@ export class RepoEvents {
   /** An update is moving HEAD: its own snapshot carries the new default branch. */
   #updating = false;
 
-  /** The webhooks an event of `type` goes to (see `routeHooks`). */
   #hooksFor: HookRouter = () => [];
 
-  /** What an event means for activity feeds (see `routeFeed`). */
   #feedFor: FeedRouter = () => undefined;
 
-  /** Where captures' blobs are kept (see `routeCaptures`). */
   #storeCapture: CaptureStore = () => {};
 
   /**
@@ -258,12 +252,10 @@ export class RepoEvents {
     return this.#meta()?.epoch_gen ?? 0;
   }
 
-  /** Says, with each event, what it means for principals' activity feeds. */
   routeFeed(router: FeedRouter): void {
     this.#feedFor = router;
   }
 
-  /** Keeps the blobs of events' webhook captures. */
   routeCaptures(store: CaptureStore): void {
     this.#storeCapture = store;
   }
@@ -531,7 +523,6 @@ export class RepoEvents {
     return frozenReason(this.#meta());
   }
 
-  /** Whether a transfer is moving the repository. */
   isTransferring(): boolean {
     return (this.#meta()?.transfer_id ?? null) !== null;
   }

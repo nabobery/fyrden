@@ -16,7 +16,6 @@ interface Entry {
   dropWhenSettled: boolean;
 }
 
-/** A load waiting for room. */
 interface Waiting {
   readonly entry: Entry;
   readonly bytes: number;

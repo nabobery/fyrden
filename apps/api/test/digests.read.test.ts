@@ -180,7 +180,6 @@ describe("a digest's threads", () => {
     expect(
       (await api("DELETE", `/repos/${repo.fullName}/issues/${deleted}`, owner.token)).status,
     ).toBe(200);
-    // The other history: the two threads alone.
     const alone = await digestRepo(1);
     const aloneKept = [
       await open(alone.owner, alone.repo, "K0"),
@@ -216,7 +215,6 @@ describe("a digest's threads", () => {
     expect(answer.body.threads).toHaveLength(50);
     expect(answer.body.threads[0]?.number).toBe(numbers.at(-1));
     expect(answer.body.complete).toBe(false);
-    // Fifty and a window truncated: not complete either.
     const cut = await sealedWith(repo, told.slice(1), (r) =>
       r.git.context.storage.sql.exec("UPDATE digest_windows SET truncated = 1 WHERE sealed = 0"),
     );

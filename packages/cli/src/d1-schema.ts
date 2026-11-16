@@ -16,7 +16,6 @@ export interface SchemaObject {
   sql: string;
 }
 
-/** Where the repair steps are. */
 export const SCHEMA_RUNBOOK = "docs/operations/d1-schema.md";
 
 // The objects the migrations make, as apps/api/test/d1-schema.test.ts selects
@@ -237,7 +236,6 @@ const NONE_APPLIED = /no such table: d1_migrations/;
 export interface MigrationGap {
   /** The folder's migrations the database has not applied, in order. */
   pending: string[];
-  /** Migrations the database applied that the folder does not have. */
   unknown: string[];
 }
 
@@ -271,11 +269,9 @@ export async function migrationGap(
 export interface SchemaCheck {
   /** The expected file, relative to the repository root. */
   expectedFile: string;
-  /** Empty when the database matches. */
   problems: string[];
 }
 
-/** Compares one deployed database with its committed expected schema. */
 export async function checkD1Schema(
   runner: WranglerRunner,
   apiDir: string,
@@ -288,7 +284,6 @@ export async function checkD1Schema(
   return { expectedFile: `apps/api/${file}`, problems: diffSchema(expected, actual) };
 }
 
-/** The sentence naming what differs between a database and its expected schema. */
 export function driftMessage(db: string, check: SchemaCheck): string {
   return `${db} schema differs from ${check.expectedFile}: ${check.problems.join(", ")}.`;
 }

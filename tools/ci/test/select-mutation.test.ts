@@ -106,7 +106,6 @@ describe("select-mutation (the script CI runs)", () => {
     await write("packages/git-core/src/pack/a.ts", "export const a = 1;\n");
     await write("packages/git-core/src/graph/b.ts", "export const b = 1;\n");
     const base = await commit("base");
-    // The same content at a new path: a rename, unless renames are off.
     await write("packages/git-core/src/refs/a.ts", "export const a = 1;\n");
     await sandbox.git(["rm", "-q", "packages/git-core/src/pack/a.ts"]);
     await sandbox.git(["rm", "-q", "packages/git-core/src/graph/b.ts"]);
@@ -119,7 +118,6 @@ describe("select-mutation (the script CI runs)", () => {
   });
 
   it("prints the matrix of this repository's changed scopes", async () => {
-    // Against this checkout: HEAD against itself changes nothing.
     const { stdout } = await run(process.execPath, [script, "HEAD", "HEAD"], {
       env: { ...process.env, GITHUB_OUTPUT: "" },
     });

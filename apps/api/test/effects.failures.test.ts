@@ -42,7 +42,6 @@ async function pendingEffect(): Promise<string> {
 const effectRow = (id: string) =>
   admitted().prepare("SELECT state, attempts FROM effects WHERE effect_id = ?").bind(id).first();
 
-/** Counts `name`'s points by their first dimension. */
 const counted = (points: { name: string; blobs: string[]; value: number }[], name: string) =>
   points
     .filter((p) => p.name === name)

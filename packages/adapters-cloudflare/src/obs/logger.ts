@@ -2,7 +2,6 @@ import { redact } from "./redact.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
-/** Fields every log line carries when known. */
 export interface LogContext {
   requestId?: string;
   principalId?: string;

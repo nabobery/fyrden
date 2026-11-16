@@ -60,7 +60,6 @@ describe("in-isolate CLOCK block cache", () => {
     for (let i = 0; i < 3; i++) await cache.put("net_a", PACK, i, block(i));
     await cache.get("net_a", PACK, 0);
     await cache.put("net_a", PACK, 3, block(3));
-    // Block 0 was referenced, so the hand passed it and evicted block 1.
     expect(await cache.get("net_a", PACK, 0)).toBeDefined();
     expect(await cache.get("net_a", PACK, 1)).toBeUndefined();
     expect(await cache.get("net_a", PACK, 2)).toBeDefined();
@@ -115,13 +114,11 @@ describe("Cache API block tier", () => {
     await tier.put("net_a", PACK, 0, block(1, 10));
     expect(await tier.get("net_a", PACK, 0)).toEqual(block(1, 10));
     expect(await tier.get("net_a", PACK, 1)).toBeUndefined();
-    // Budget spent: a block that is cached now reads as a miss, and puts are dropped.
     expect(await tier.get("net_a", PACK, 0)).toBeUndefined();
     await tier.put("net_a", PACK, 2, block(2, 10));
     expect(tier.calls).toBe(3);
     expect(tier.skipped).toBe(2);
     expect(await cache.match(blockCacheUrl("net_a", PACK, 2))).toBeUndefined();
-    // The next request gets a fresh budget.
     const next = createCacheApiBlockCache({ cache, maxCalls: 3 });
     expect(await next.get("net_a", PACK, 0)).toEqual(block(1, 10));
     expect(DEFAULT_CACHE_API_CALLS).toBeLessThan(50);
@@ -182,7 +179,6 @@ describe("memory then Cache API", () => {
     await createTieredBlockCache(memoryA, shared).put("net_a", PACK, 4, block(4, 50));
     expect(await memoryA.get("net_a", PACK, 4)).toEqual(block(4, 50));
 
-    // Another isolate (empty memory) finds it in the shared tier and keeps a copy.
     const memoryB = createClockBlockCache();
     const tiered = createTieredBlockCache(memoryB, shared);
     expect(await tiered.get("net_a", PACK, 4)).toEqual(block(4, 50));

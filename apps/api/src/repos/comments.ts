@@ -30,7 +30,6 @@ function commentFailure(entry: RepoEntry, code: string, id: number, number?: num
   return failure(entry, code, number);
 }
 
-/** The `issues.comments.list` operation. */
 export async function listCommentsOperation(
   ctx: OpContext,
   input: Input<typeof listComments>,
@@ -55,7 +54,6 @@ export async function listCommentsOperation(
   };
 }
 
-/** The `issues.comments.get` operation. */
 export async function getCommentOperation(
   ctx: OpContext,
   input: Input<typeof getComment>,
@@ -67,7 +65,6 @@ export async function getCommentOperation(
   return commentOutput(comment);
 }
 
-/** The `issues.comments.create` operation. */
 export async function createCommentOperation(
   ctx: OpContext,
   input: Input<typeof createComment>,
@@ -83,7 +80,6 @@ export async function createCommentOperation(
   return commentOutput(result.comment);
 }
 
-/** The `issues.comments.update` operation. */
 export async function updateCommentOperation(
   ctx: OpContext,
   input: Input<typeof updateComment>,
@@ -110,7 +106,6 @@ export async function updateCommentOperation(
   return commentOutput(result.comment);
 }
 
-/** The `issues.comments.delete` operation. */
 export async function deleteCommentOperation(
   ctx: OpContext,
   input: Input<typeof deleteComment>,

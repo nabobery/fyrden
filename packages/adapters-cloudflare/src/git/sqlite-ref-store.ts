@@ -39,7 +39,6 @@ export interface RefActor {
   readonly onBehalfOf?: string | null;
   /** The agents acting for `principal` (a delegated token's act chain), the current one first. */
   readonly actChain?: readonly string[];
-  /** The request that made the change. */
   readonly requestId?: string | null;
   /**
    * The push this commit belongs to (its upload): a push without `atomic`
@@ -552,7 +551,6 @@ export class SqliteRefStore implements RefStore {
     return { derived, follows };
   }
 
-  /** The current `ref_state` (version and non-fast-forward version). */
   state(): { version: number; nonffVersion: number } {
     const row = first<{ version: number; nonff_version: number }>(
       this.context.storage,

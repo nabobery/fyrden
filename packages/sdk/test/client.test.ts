@@ -14,7 +14,6 @@ function fake(responses: { status?: number; body: unknown; headers?: Record<stri
       ...(init?.body !== undefined && { body: String(init.body) }),
     });
     const next = responses.shift() ?? { body: {} };
-    // A 204 or 205 has no body.
     if (next.status === 204 || next.status === 205)
       return new Response(null, { status: next.status });
     return new Response(JSON.stringify(next.body), {
@@ -385,7 +384,6 @@ describe("FyrdenClient", () => {
 
   it("does not page an answer that says how its list ended: only its items would be left", async () => {
     expect(OPERATIONS["repos.paths.list"]).not.toHaveProperty("items");
-    // Other answers with a `state` page as they did.
     expect(OPERATIONS["pulls.code_owners.get"]).toHaveProperty("items", "rules");
     expect(OPERATIONS["repos.hooks.deliveries.get"]).toHaveProperty("items", "attempts_made");
     const client = new FyrdenClient({

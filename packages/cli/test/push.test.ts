@@ -64,7 +64,6 @@ describe("fyrden push --chunked", () => {
     const { git, srv, d } = setup();
     expect(await push(args(), d)).toBe(0);
 
-    // The pack: the new tip, minus every remote ref the local repository has.
     expect(git.packInputs).toEqual([`${OID.b}\n^${OID.a}\n`]);
     const packCall = git.calls.find((c) => c[0] === "pack-objects") as string[];
     expect(packCall).toEqual(expect.arrayContaining(["--revs", "--thin", "--delta-base-offset"]));
@@ -76,7 +75,6 @@ describe("fyrden push --chunked", () => {
       auth: "Bearer tok",
       body: { size: 100, ref_updates: [{ ref: "refs/heads/main", old: OID.a, new: OID.b }] },
     });
-    // 100 bytes in parts of 40: 40, 40, 20, with git credentials.
     const puts = srv.requests.filter((r) => r.method === "PUT");
     expect(puts.map((r) => [r.path.split("/").at(-1), r.bytes])).toEqual([
       ["1", 40],
@@ -112,7 +110,6 @@ describe("fyrden push --chunked", () => {
   });
 
   it("discovers, packs and uploads against the push URL, as git push would", async () => {
-    // origin fetches from one repository and pushes to another.
     const { git, srv, d } = setup({
       remotes: { origin: "https://fyrden.example/alice/mirror.git" },
       pushUrls: { origin: [REMOTE] },
@@ -178,7 +175,6 @@ describe("fyrden push --chunked", () => {
       .filter((r) => r.method === "PUT")
       .map((r) => r.path.split("/").at(-1));
     expect(puts).toEqual(["1", "2", "2", "3", "3"]);
-    // After a failure the client asks the session what is stored before sending more.
     expect(srv.requests.some((r) => r.method === "GET")).toBe(true);
     expect([...srv.stored.keys()].sort()).toEqual([1, 2, 3]);
   });

@@ -32,7 +32,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** Where a reference's source is: its issue or pull request, or the comment on it naming it. */
 function sourcePage(source: Reference["source"]): string {
   const [owner = "", repo = ""] = source.repository.split("/");
   const page =

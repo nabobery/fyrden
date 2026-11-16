@@ -1,7 +1,6 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
 import type { PullState } from "./pull.js";
 
-/** What can be done to a pull request after it is opened. */
 export const PULL_ACTIONS = [
   "edit",
   "retarget",
@@ -22,13 +21,10 @@ export interface PullActionRule {
   readonly author: boolean;
   /** The role anyone else needs; null when only the author may. */
   readonly minRole: RepoRole | null;
-  /** The states it applies in. */
   readonly from: readonly PullState[];
-  /** The state it leaves the pull request in, when it changes it. */
   readonly to?: PullState;
   /** The event it emits, as `pull_request.<event>`. */
   readonly event: string;
-  /** The audit action it records. */
   readonly audit: string;
 }
 

@@ -16,7 +16,6 @@ function codeOf(run: () => unknown): string {
   }
 }
 
-/** Random valid ops against a base, and the result they describe. */
 const deltaCaseArb = fc.uint8Array({ minLength: 0, maxLength: 600 }).chain((base) =>
   fc
     .array(
@@ -130,7 +129,7 @@ describe("applyDelta (git's patch-delta.c)", () => {
     const base = text("0123456789");
     const zero = new Uint8Array([...encodeDelta(10, 1, []), 0x00]);
     expect(codeOf(() => applyDelta(base, zero, CAP))).toBe("bad-delta");
-    const cutCopy = new Uint8Array([...encodeDelta(10, 1, []), 0x91]); // wants 2 argument bytes
+    const cutCopy = new Uint8Array([...encodeDelta(10, 1, []), 0x91]);
     expect(codeOf(() => applyDelta(base, cutCopy, CAP))).toBe("bad-delta");
     const cutInsert = new Uint8Array([...encodeDelta(10, 5, []), 0x05, 0x41, 0x42]);
     expect(codeOf(() => applyDelta(base, cutInsert, CAP))).toBe("bad-delta");

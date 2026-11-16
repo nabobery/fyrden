@@ -21,7 +21,6 @@ const refused = (detail: string, status = 400) =>
     { status, headers: { "Cache-Control": "no-store" } },
   );
 
-/** The API's answer, as it came: status, JSON body and when to ask again. */
 function passed(res: Response): Response {
   const headers = new Headers({ "Cache-Control": "no-store" });
   for (const name of ["Content-Type", "Retry-After"]) {

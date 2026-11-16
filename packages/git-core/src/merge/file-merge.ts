@@ -23,7 +23,6 @@ export type FileMerge =
       readonly regions: readonly ({ readonly clean: readonly Uint8Array[] } | ConflictRegion)[];
       readonly conflicts: number;
     }
-  /** A side is binary: no lines to merge. */
   | { readonly kind: "binary" }
   /** A side has more lines than the budget. */
   | { readonly kind: "too_large" };

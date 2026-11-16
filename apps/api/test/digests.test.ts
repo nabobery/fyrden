@@ -188,7 +188,6 @@ describe("a repository's digests", () => {
     const window = startWindow();
     const number = await funded(repo, owner);
     await comment(owner, repo, number);
-    // As a transfer freezes it.
     await runInDurableObject(stubOf(repo.id), (_: RepoDO, state) =>
       state.storage.sql.exec(
         "UPDATE repo_meta SET transfer_id = 'held', write_frozen = 1 WHERE id = 1",
@@ -307,7 +306,6 @@ describe("digest accumulation", () => {
     await runInDurableObject(stubOf(repo.id), (instance: RepoDO) => {
       fund(instance, 10, ["issue"]);
       instance.git.context.storage.transactionSync(() => {
-        // Pull requests have no credit: nothing kept, the issues' balance as it was.
         expect(instance.digests.record(entry({ subject: "pull", conversation: "p-1" }))).toBe(
           false,
         );
@@ -327,7 +325,6 @@ describe("digest accumulation", () => {
       const { digests } = instance;
       const tx = <T>(fn: () => T) => instance.git.context.storage.transactionSync(fn);
       const far = Date.now() + 3_600_000;
-      // An event with no credit: nothing kept, the kind's credit wanted.
       expect(tx(() => digests.record(entry()))).toBe(false);
       const now = Date.now();
       const [first] = tx(() => digests.creditAsks());
@@ -433,7 +430,6 @@ describe("digest accumulation", () => {
         expect(instance.digests.record(entry({ subject: "pull", conversation: "past" }))).toBe(
           false,
         );
-        // A thread it has is still kept.
         expect(instance.digests.record(entry({ subject: "pull", conversation: "p-0" }))).toBe(true);
       });
     });

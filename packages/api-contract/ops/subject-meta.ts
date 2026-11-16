@@ -19,7 +19,6 @@ export const ExpectedVersion = z
     "Fyrden: the `version` the change was made from; refused with 409 `stale` when it changed since.",
   );
 
-/** A label as the API answers it (GitHub's shape). */
 export const Label = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -29,7 +28,6 @@ export const Label = z.object({
   version: Version,
 });
 
-/** A milestone as the API answers it (GitHub's shape). */
 export const Milestone = z.object({
   id: z.number().int().describe("Fyrden: the number again (milestones have no separate id space)."),
   number: z.number().int(),
@@ -52,7 +50,6 @@ export const Milestone = z.object({
   version: Version,
 });
 
-/** Who is assigned, and what it is sorted by, as issues and pull requests answer it. */
 export const SortingOutput = {
   labels: z.array(Label),
   assignee: z

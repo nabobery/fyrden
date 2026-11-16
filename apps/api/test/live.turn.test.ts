@@ -91,7 +91,6 @@ describe("a feed's execution turn", () => {
         const now = Date.now();
         return state.storage.transactionSync(() => [
           budget.prepareTurn(first, now + 1_000, now),
-          // One at a time.
           budget.prepareTurn(second, now, now),
           budget.claimTurn(now)?.operationId,
           budget.claimTurn(now),

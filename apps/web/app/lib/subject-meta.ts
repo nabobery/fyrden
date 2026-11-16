@@ -7,7 +7,6 @@
 
 import type { LockReason } from "@fyrden/domain";
 
-/** The intents these forms send. */
 export const META_INTENTS = [
   "label-add",
   "label-remove",
@@ -21,11 +20,9 @@ export const META_INTENTS = [
 ] as const;
 export type MetaIntent = (typeof META_INTENTS)[number];
 
-/** Whether `intent` is one of these forms'. */
 export const isMetaIntent = (intent: string): intent is MetaIntent =>
   (META_INTENTS as readonly string[]).includes(intent);
 
-/** What a done change says. */
 export const META_DONE: Record<MetaIntent, string> = {
   "label-add": "Label added.",
   "label-remove": "Label removed.",
@@ -38,7 +35,6 @@ export const META_DONE: Record<MetaIntent, string> = {
   "delete-issue": "Issue deleted.",
 };
 
-/** GitHub's lock reasons, as the lock form offers them (the API's own list). */
 export const LOCK_REASON_LABEL: Record<LockReason, string> = {
   "off-topic": "Off-topic",
   "too heated": "Too heated",

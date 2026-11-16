@@ -669,7 +669,6 @@ export class PullDiscussion {
       : result;
   }
 
-  /** Resolves a thread, or makes it unresolved again. */
   resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
     const { reviewComments } = this.deps;
     return this.deps.pullChange(

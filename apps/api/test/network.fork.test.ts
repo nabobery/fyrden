@@ -49,7 +49,6 @@ describe("fork creation", () => {
     expect(result.packsCompacted).toBe(0);
     expect(result.commitsCopied).toBe(fixtures.split.commits.length);
     expect(result.publishMs).toBeGreaterThanOrEqual(0);
-    // No object was written under the network's prefix.
     expect(await keysUnder(networkId)).toEqual(before);
 
     const view = await inRepo(repo.stub, ({ git }) => ({

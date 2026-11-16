@@ -60,10 +60,8 @@ describe("header parsing allocations", () => {
     const commit = parseCommit(continuation).value;
     expect(commit.parents).toEqual([]);
     expect(counter.count()).toBeLessThan(64);
-    // Asked for, the header is still built in one pass, not per line.
     const [header] = commit.headers;
     expect(header?.key).toBe("x-big");
-    // "first", then LF and "c" for each continuation line.
     expect(header?.value.length).toBe("first".length + 2 * fit(head, " c\n"));
     expect(counter.count()).toBeLessThan(64);
   });

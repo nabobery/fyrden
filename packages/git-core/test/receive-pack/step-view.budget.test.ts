@@ -78,10 +78,8 @@ describe("StepView call accounting", () => {
     const step = stepOver(idx);
     const packs = await step.locateMany(oids);
     expect(packs.every((pack) => pack?.packId === PACK_ID)).toBe(true);
-    // Many oid-table spans, then offset spans: far more than two reads.
     expect(reads()).toBeGreaterThan(20);
     expect(step.calls).toBe(reads());
-    // The answers are remembered: a reader's lookup costs nothing more.
     const found = await step.view.packs[0]?.idx.lookup(oids[100] as Uint8Array);
     expect(found).toEqual({
       position: positions[100],
@@ -100,7 +98,6 @@ describe("StepView call accounting", () => {
     expect(answered.length).toBeGreaterThan(0);
     expect(answered.length).toBeLessThan(oids.length);
     expect(answered.every((pack) => pack?.packId === PACK_ID)).toBe(true);
-    // A later step finishes the rest.
     const rest = oids.filter((_, i) => packs[i] === null);
     const later = await stepOver(idx).locateMany(rest);
     expect(later.every((pack) => pack?.packId === PACK_ID)).toBe(true);

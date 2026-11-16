@@ -47,7 +47,6 @@ export interface UploadPackRepoState {
   ])[];
 }
 
-/** One line of `requests.jsonl`. */
 export interface UploadPackRequestLog {
   readonly command: string;
   readonly plan?: "as-is" | "stitched" | "regenerated" | undefined;
@@ -90,7 +89,6 @@ export async function appendRequestLog(dir: string, entry: UploadPackRequestLog)
   await appendFile(join(dir, "requests.jsonl"), `${JSON.stringify(entry)}\n`);
 }
 
-/** Pack store calls counted for the request log. */
 export interface CountingPackStore extends PackStore {
   reads: number;
   bytes: number;
@@ -250,7 +248,6 @@ export async function openUploadPackRepo(dir: string): Promise<LoadedUploadPackR
   return { repository, packStore, stats, packIds };
 }
 
-/** Names of the materialised objects in a repository directory. */
 export async function materialisedKeys(dir: string): Promise<string[]> {
   try {
     return (await readdir(join(dir, "fetch")))

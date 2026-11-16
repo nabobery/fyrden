@@ -109,7 +109,6 @@ const copied = (principal: string, repoId: string) =>
     .all<{ conversation: string; number: number; kind: string; state: string; revision: number }>()
     .then((r) => r.results);
 
-/** The conversation identity numbered `number` now. */
 const conversationOf = (repoId: string, number: number) =>
   runInDurableObject(
     env.REPO.getByName(repoId),

@@ -20,9 +20,7 @@ export interface DestroyResult {
   dryRun: boolean;
   /** Resources deleted, e.g. "r2:fyrden-git". Empty on a dry run. */
   deleted: string[];
-  /** What a dry run found and `--yes` would delete. */
   wouldDelete: string[];
-  /** Resources that do not exist. */
   skipped: string[];
   /** Resources destroy cannot delete (a bucket that is not empty, Analytics Engine datasets). */
   left: string[];
@@ -48,7 +46,6 @@ async function call(runner: WranglerRunner, args: string[]): Promise<RunResult |
   throw new WranglerError(args, result);
 }
 
-/** The lifecycle rule destroy adds to a bucket it cannot delete. */
 export const ABORT_UPLOADS_RULE = "fyrden-destroy-abort";
 
 /**
@@ -154,7 +151,6 @@ export async function destroy(deps: DestroyDeps): Promise<DestroyResult> {
     result.skipped.push(key);
     log(`skipped ${key} (not found)`);
   };
-  /** Deletes a resource that exists, or on a dry run lists it. */
   const remove = async (key: string, args: string[], note = "") => {
     if (!confirmed) {
       result.wouldDelete.push(key);
@@ -200,7 +196,6 @@ export async function destroy(deps: DestroyDeps): Promise<DestroyResult> {
     else missing(key);
   }
 
-  // 3. Queues, now without consumers.
   for (const queue of plan.queues) {
     if (await call(runner, ["queues", "info", queue]))
       await remove(`queue:${queue}`, ["queues", "delete", queue]);
@@ -238,7 +233,6 @@ export async function destroy(deps: DestroyDeps): Promise<DestroyResult> {
     }
   }
 
-  // 5. D1 databases.
   const d1 = new Set(
     (JSON.parse(await wrangler(runner, ["d1", "list", "--json"])) as { name: string }[]).map(
       (d) => d.name,
@@ -249,7 +243,6 @@ export async function destroy(deps: DestroyDeps): Promise<DestroyResult> {
     else missing(`d1:${db.name}`);
   }
 
-  // 6. KV namespaces, by the ids found above.
   for (const ns of plan.kv) {
     const id = kv.get(ns.title);
     if (id)

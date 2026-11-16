@@ -89,7 +89,6 @@ describe("what the base branch's rulesets ask of a merge", () => {
       ruleset({ conditions: { ref_name: { include: ["refs/heads/release/*"], exclude: [] } } }),
     ];
     expect(mergeRules(ignored, "main", "main").methods).toEqual(["merge", "squash", "rebase"]);
-    // The default branch only matches as the default branch.
     expect(mergeRules([ruleset()], "main", "trunk").methods).toEqual(["merge", "squash", "rebase"]);
   });
 });
@@ -219,7 +218,6 @@ describe("the conversation's merge box", () => {
     expect(unreadable).toContain("It will be checked again later.");
     expect(unreadable).not.toContain("went past its budget");
     expect(pending).toMatch(/<button type="button"[^>]*>Check again<\/button>/);
-    // A deferred check runs again only when its retry is due: the button just reloads.
     for (const html of [expensive, unreadable]) {
       expect(html).toMatch(/<button type="button"[^>]*>Refresh<\/button>/);
       expect(html).not.toContain("Check again");
@@ -284,7 +282,6 @@ describe("reviewing, merging and updating the branch", () => {
       call: "PUT /api/repos/ada/demo/pulls/7/merge",
       body: { merge_method: "squash", sha: HEAD, commit_title: "T", commit_message: "M" },
     });
-    // A rebase takes no message; a malformed head is not sent.
     expect(
       (
         await act({

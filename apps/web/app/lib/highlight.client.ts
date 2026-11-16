@@ -52,11 +52,9 @@ export async function highlightBlocks(
   try {
     highlighter = await import("@pierre/highlights");
   } catch {
-    // Not loaded (blocked, or no WebAssembly): the code stays plain.
     return;
   }
   for (const { code, lang, text } of todo) {
-    // A page gone meanwhile highlights nothing (and so spends nothing).
     if (isCancelled()) return;
     // Within what the page shows highlighted now, block by block: past it, the rest stay plain.
     const size = encoder.encode(text).length;
@@ -79,7 +77,6 @@ export async function highlightBlocks(
           fragment.append(span);
         }
       });
-      // The same text, as spans: a block whose text changed meanwhile is left as it is.
       if (code.textContent !== text) continue;
       code.replaceChildren(fragment);
       sizes.set(code, size);

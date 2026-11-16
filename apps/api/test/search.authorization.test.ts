@@ -260,7 +260,6 @@ describe("a search's scope", () => {
       try {
         await scope(bob.token, q);
       } catch (error) {
-        // (Each names what the query named.)
         return (error as OperationError).message
           .replace(secret.full_name, "<named>")
           .replace(`${alice.handle}/missing`, "<named>");

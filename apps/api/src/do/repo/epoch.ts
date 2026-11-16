@@ -2,7 +2,6 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { readModelFor } from "../../events/read-model.js";
 import type { EpochCheck } from "./events.js";
 
-/** Hooks into the epoch read. For tests. */
 export const epochHooks: { beforeRead?: () => Promise<void> } = {};
 
 /**

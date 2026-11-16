@@ -57,8 +57,6 @@ describe("hasher.chunking-restart (writer)", () => {
           });
           for (let i = 0; i <= objects.length; i++) {
             if (stopAt.has(i)) {
-              // Persist the checkpoint as bytes, drop the builder, and resume
-              // with a new sink, as after an eviction.
               const saved = new Uint8Array(await builder.checkpoint());
               parts.push(sink.bytes());
               sink = memorySink();

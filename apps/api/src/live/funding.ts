@@ -80,7 +80,6 @@ export type FundedResult<T> =
     }
   | { readonly status: "refused"; readonly reason: "temporary"; readonly gate: LiveRefusalReason };
 
-/** What a recipient is handed with funded work. */
 export interface LiveFunding {
   readonly protocol: 1;
   readonly revision: number;
@@ -377,7 +376,6 @@ export interface LiveTarget {
   readonly marksHeld: boolean;
 }
 
-/** A target with what an opening's pre-check compares. */
 export interface LiveOpeningTarget extends LiveTarget {
   readonly admissionsToday: number;
   readonly view: LiveLedgerView;

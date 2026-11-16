@@ -13,19 +13,16 @@ import type { WriteRefusal } from "./write-context.js";
  * pulled again here and checked with no await before the change.
  */
 
-/** What a repository object knows of the repository's details. */
 export interface RepoDetails {
   readonly headTarget: string | null;
   readonly description: string | null;
 }
 
-/** A ruleset created, replaced or deleted. */
 export type RulesetChange =
   | { readonly op: "create"; readonly input: RulesetInput }
   | { readonly op: "update"; readonly id: number; readonly input: RulesetInput }
   | { readonly op: "delete"; readonly id: number };
 
-/** Whether a hook URL is plain http (as its parser reads it). */
 function isHttp(url: string): boolean {
   try {
     return new URL(url).protocol === "http:";
@@ -40,7 +37,6 @@ export interface AdministrationDeps {
   readonly authority: RepoAuthority;
   readonly events: RepoEvents;
   readonly rulesets: () => RepoRulesets;
-  /** The repository's details now. */
   readonly details: () => RepoDetails;
   /** Takes the directory's epoch (a change needs it first). */
   readonly checkEpoch: () => Promise<void>;
@@ -50,7 +46,6 @@ export interface AdministrationDeps {
   readonly writeRefusal: () => WriteRefusal | undefined;
   /** Arms the alarm for the outbox's next drain. */
   readonly armOutbox: () => void;
-  /** Queues the audit archiver while audit rows wait to be archived. */
   readonly ensureAuditArchive: () => void;
 }
 

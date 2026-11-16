@@ -144,7 +144,6 @@ describe("the digests list", () => {
       params: {},
     } as never);
     expect(shown.expired).toBe(true);
-    // The note stays on that page, not on the ones it links to.
     expect(shown.pages).toEqual({ next: "/notifications/digests?since=c2", first: null });
   });
 

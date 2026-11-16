@@ -14,7 +14,6 @@ let browser: Browser;
 const REPO = "/ada/files";
 const blob = (path: string) => `${stack.origin}${REPO}/blob/main/${path}`;
 
-/** `count` lines of TypeScript, each naming its number, with no final line ending. */
 const code = (count: number) =>
   Array.from({ length: count }, (_, i) => `const line${i + 1} = ${i + 1};`).join("\n");
 
@@ -76,7 +75,6 @@ async function withoutScript<T>(use: (plain: Page) => Promise<T>): Promise<T> {
   }
 }
 
-/** The renderer's rows have taken over from the plain view. */
 async function drawn(on: Page = page): Promise<Locator> {
   await see(on.locator(".file-view")).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
   await see(on.locator(".file-lines")).toHaveCount(0);
@@ -112,13 +110,11 @@ async function committed(act: () => Promise<unknown>): Promise<void> {
   await see(view).not.toHaveAttribute("data-router-commits", before);
 }
 
-/** Sets the fragment, as a person editing the address would. */
 const goToFragment = (hash: string) =>
   page.evaluate((to) => {
     (globalThis as unknown as { location: { hash: string } }).location.hash = to;
   }, hash);
 
-/** `#rrggbb` as `getComputedStyle` reports it. */
 function rgb(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
@@ -128,7 +124,6 @@ function rgb(hex: string): string {
 const keyword = (view: Locator, line: number) =>
   row(view, line).locator("span", { hasText: /^const\s*$/ });
 
-/** `view` is drawn in `scheme`'s colours. */
 async function coloured(view: Locator, scheme: Scheme): Promise<void> {
   await see(keyword(view, 1)).toHaveCSS("color", rgb(scheme.syntax.keyword));
   await see(numberCell(view, 1)).toHaveCSS("color", rgb(scheme.page.muted));
@@ -239,7 +234,6 @@ describe("a file's lines", () => {
             element as unknown as { getBoundingClientRect(): { top: number } }
           ).getBoundingClientRect().top,
       );
-    // A file sent whole, and one whose paging links give way to the renderer.
     for (const path of ["lines.ts", "big.ts"]) {
       const plainTop = await withoutScript(async (plain) => {
         await plain.goto(blob(path));
@@ -274,7 +268,6 @@ describe("line links", () => {
     await see(row(view, 12)).toBeInViewport();
     await see(row(view, 11)).not.toHaveAttribute("data-selected-line");
     expect(search()).toBe("?line=12-20#L12");
-    // Far down the file too, where only the page can bring it into view.
     await visit(page, `${blob("lines.ts")}?line=150-152#L150`);
     const far = await drawn();
     await see(far.locator("[data-line][data-selected-line]")).toHaveCount(3);
@@ -300,7 +293,6 @@ describe("line links", () => {
     await see(row(view, 150)).toBeInViewport();
     await see(row(view, 150)).toHaveAttribute("data-selected-line");
     expect(search()).toBe("?line=150#L150");
-    // It has nothing new to do on the next, and the page must go back all the same.
     await page.evaluate(() =>
       (globalThis as unknown as { scrollTo(x: number, y: number): void }).scrollTo(0, 0),
     );
@@ -313,7 +305,6 @@ describe("line links", () => {
     await visit(page, `${blob("lines.ts")}?line=150#L150`);
     const view = await drawn();
     await see(row(view, 150)).toBeInViewport();
-    // Written with replaceState: the router still thinks the page is at #L150.
     await arrives("?line=152#L152", () => numberCell(view, 152).click());
     await see(row(view, 152)).toHaveAttribute("data-selected-line");
     await committed(() => goToFragment("#L150"));
@@ -343,7 +334,6 @@ describe("line links", () => {
     await numberCell(view, 9).hover();
     await arrives("?line=7-9#L7", () => page.mouse.up());
     await see(view.locator("[data-line][data-selected-line]")).toHaveCount(3);
-    // It reads the same when opened again.
     await visit(page, page.url());
     await see((await drawn()).locator("[data-line][data-selected-line]")).toHaveCount(3);
   });
@@ -473,7 +463,6 @@ describe("going back and forward", () => {
     await arrives("", () => follow(history()));
     await page.goBack();
     await drawn();
-    // A place the plain view's one block is too short to hold: only the takeover can restore it.
     expect(await scrollY()).toBe(saved);
     expect(search()).toBe("?line=4100#L4100");
   });
@@ -499,7 +488,6 @@ describe("a file sent in blocks", () => {
       await see(plain.getByRole("link", { name: "Next" })).toHaveCount(0);
       await plain.getByRole("link", { name: "Previous" }).first().click();
       await see(plain.locator("a#L2001")).toBeAttached();
-      // A line's own link opens the block that holds it, with no `from` left to outvote it.
       await arrives("?line=2500#L2500", () => plain.locator("a#L2500").click(), plain);
       await see(plain.locator("a#L2500")).toBeInViewport();
     });
@@ -554,7 +542,6 @@ describe("a file sent in blocks", () => {
 });
 
 describe("when nothing highlights", () => {
-  // No workers, and Shiki's backend refused on the page itself.
   const refused = /\/assets\/(worker|shiki)-[^/]+\.js$/;
   const plainAgain = async () => {
     await see(page.locator(".file-view")).toHaveAttribute("data-drawn", "text", {
@@ -637,7 +624,6 @@ describe("when nothing highlights", () => {
 describe("when highlighting fails in the renderer", () => {
   it("steps the session down, and the file is drawn by the next", async () => {
     const workers = /\/assets\/worker-[^/]+\.js$/;
-    // Each worker starts, then answers every file it is asked to draw with an error.
     await page.route(workers, async (route) => {
       const response = await route.fetch();
       const erring = `const fyrdenPost = self.postMessage.bind(self);
@@ -670,7 +656,6 @@ describe("a file that reads as the page's own words", () => {
 
 describe("the highlighting limits", () => {
   const tokens = (view: Locator, line: number) => keyword(view, line);
-  /** Goes to `line`, by the form, and returns the view drawn there. */
   const goTo = async (path: string, line: number) => {
     await visit(page, blob(path));
     await drawn();
@@ -722,7 +707,6 @@ describe("a line over 64 KiB", () => {
     await see(view.locator("[data-line]")).toHaveCount(3);
     await see(page.getByText("This line is cut at 64 KiB")).toHaveCount(0);
     await coloured(view, FJORD.light);
-    // The code scrolls inside its frame, and the page itself stays the window's width.
     const scrolled = await view
       .locator("code")
       .first()

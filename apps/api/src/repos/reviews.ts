@@ -86,7 +86,6 @@ async function loginsOf(
   return ids.map((id) => ({ id, login: handles.get(id) ?? id }));
 }
 
-/** The `pulls.reviews.list` operation. */
 export async function listReviewsOperation(
   ctx: OpContext,
   input: Input<typeof listReviews>,
@@ -108,7 +107,6 @@ export async function listReviewsOperation(
   };
 }
 
-/** The `pulls.reviews.get` operation. */
 export async function getReviewOperation(
   ctx: OpContext,
   input: Input<typeof getReview>,
@@ -120,7 +118,6 @@ export async function getReviewOperation(
   return reviewOutput(review);
 }
 
-/** The `pulls.reviews.create` operation. */
 export async function createReviewOperation(
   ctx: OpContext,
   input: Input<typeof createReview>,
@@ -135,7 +132,6 @@ export async function createReviewOperation(
   return reviewOutput(result.review);
 }
 
-/** The `pulls.reviews.dismiss` operation. */
 export async function dismissReviewOperation(
   ctx: OpContext,
   input: Input<typeof dismissReview>,
@@ -151,7 +147,6 @@ export async function dismissReviewOperation(
   return reviewOutput(result.review);
 }
 
-/** The `pulls.requested_reviewers.list` operation. */
 export async function listRequestedReviewersOperation(
   ctx: OpContext,
   input: Input<typeof listRequestedReviewers>,
@@ -165,7 +160,6 @@ export async function listRequestedReviewersOperation(
   return { users: await loginsOf(ctx, requested.users), teams: requested.teams };
 }
 
-/** The `pulls.requested_reviewers.add` operation. */
 export async function requestReviewersOperation(
   ctx: OpContext,
   input: Input<typeof requestReviewers>,
@@ -213,7 +207,6 @@ async function requestReviewersOf(
   return pullOutput(result.pull, readable(ctx, entry));
 }
 
-/** The `pulls.requested_reviewers.remove` operation. */
 export async function removeRequestedReviewersOperation(
   ctx: OpContext,
   input: Input<typeof removeRequestedReviewers>,

@@ -109,7 +109,6 @@ export function shallowInfoSection(shallow: readonly Oid[], unshallow: readonly 
   return writer.delim().bytes();
 }
 
-/** The packfile section's header line. */
 export function packfileHeader(): Uint8Array {
   return new PktLineWriter().text("packfile").bytes();
 }

@@ -84,7 +84,6 @@ describe("diffTrees against git diff-tree", () => {
         const read = readTree(dir);
         const { changes } = await diffTrees(read, oidFromHex(a), oidFromHex(b));
         expect(changes.map(asRaw)).toEqual(expected);
-        // Two at a time, resumed after each page's last path: the same list.
         const paged: TreeChange[] = [];
         let cursor: Uint8Array | undefined;
         for (;;) {

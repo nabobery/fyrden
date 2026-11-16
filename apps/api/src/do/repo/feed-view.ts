@@ -30,7 +30,6 @@ export type FeedViewDenial =
   | { readonly kind: "denied" }
   | { readonly kind: "unknown" };
 
-/** What a feed's reader gets of the repository (see `RepoFeedView.view`). */
 export interface FeedViewAnswer {
   readonly readable: boolean;
   readonly role: RepoRole | null;
@@ -64,7 +63,6 @@ export interface FeedViewAnswer {
   readonly account: { readonly accountId: string; readonly ownerGen: number } | null;
 }
 
-/** What a feed item names of the repository, with the thread the item is on and when. */
 export interface FeedMember {
   /** The repository's restore generation the item was told in. */
   readonly epoch: number;
@@ -87,11 +85,9 @@ export interface FeedViewDeps {
   readonly issues: RepoIssues;
   readonly comments: RepoComments;
   readonly reviewComments: RepoReviewComments;
-  /** Whether the repository is public now. */
   readonly isPublic: () => boolean;
   /** No read: the repository is gone or going. */
   readonly refusesReads: () => boolean;
-  /** Whether a transfer is moving the repository now. */
   readonly isTransferring: () => boolean;
   /** The repository's restore generation now (checked against the directory before any read). */
   readonly epoch: () => number;
@@ -214,7 +210,6 @@ export class RepoFeedView {
         } else if (kind === "checks" && subject.kind === "pull" && n === subject.number) {
           body = this.deps.failingChecks?.(n);
         } else if (m.member === m.thread)
-          // The thread's own description.
           body = kind === "pull" ? this.deps.pulls.get(n)?.body : this.deps.issues.get(n)?.body;
       excerpts[memberKey(m)] = excerpt(body);
     }
@@ -225,7 +220,6 @@ export class RepoFeedView {
         return !this.deps.digestShows(named.subject, named.digest.window, named.digest.epoch);
       return named?.subject === "issue" && this.deps.issues.deleted(named.number);
     });
-    // The conversation each thread names now, and its title, when asked.
     const conversations: Record<string, { conversation: string; title: string } | null> = {};
     if (identify)
       for (const thread of threads.slice(0, 100)) {

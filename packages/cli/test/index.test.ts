@@ -25,7 +25,6 @@ describe("command line", () => {
   ])("answers %j with the usage and changes nothing", async (argv) => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      // Returns before looking for a checkout or running wrangler.
       expect(await main(argv)).toBe(0);
       expect(out.mock.calls[0]?.[0]).toMatch(/^usage:/);
     } finally {
@@ -78,7 +77,6 @@ describe("command line", () => {
       plan: "paid",
       internalCalls: 10_000_000,
     });
-    // Free cannot raise its 1,000.
     expect(parseDeployArgs(["--plan", "free", "--internal-calls", "5000"])).toBeUndefined();
     for (const bad of ["999", "10000001", "5e3", "-5000", "1000.5", "lots", ""])
       expect(parseDeployArgs(["--internal-calls", bad])).toBeUndefined();
@@ -137,7 +135,6 @@ describe("envDeployOptions", () => {
         "s",
       ]),
     ).toMatchObject({ email: { from: "n@notify.example" } });
-    // In part, another provider, or a sending address that is not one: no deploy.
     expect(parseDeployArgs(email)).toBeUndefined();
     expect(parseDeployArgs(["--email-secrets-file", "/s.json"])).toBeUndefined();
     expect(
@@ -197,7 +194,6 @@ describe("envDeployOptions", () => {
     expect(parseDeployArgs([...email, "--email-sending", "off"])).toMatchObject({
       email: { sending: false },
     });
-    // A daily limit of 0 (no email) fits whatever the reserve.
     expect(parseDeployArgs([...email, "--email-daily-limit", "0"])).toMatchObject({
       email: { limits: { daily: 0 } },
     });
@@ -213,7 +209,6 @@ describe("envDeployOptions", () => {
     expect(parseDeployArgs([...email, "--public-origin", "https://git.example"])).toMatchObject({
       email: { publicOrigin: "https://git.example" },
     });
-    // As the API reads it: canonical.
     for (const [given, canonical] of [
       ["https://Git.Example", "https://git.example"],
       ["https://git.example:443", "https://git.example"],
@@ -231,7 +226,6 @@ describe("envDeployOptions", () => {
       "git",
     ])
       expect(parseDeployArgs([...email, "--public-origin", bad]), bad).toBeUndefined();
-    // Without a provider: no deploy.
     expect(parseDeployArgs(["--public-origin", "https://git.example"])).toBeUndefined();
     expect(parseDeployArgs(["--email-sending", "on"])).toBeUndefined();
     expect(parseDeployArgs(["--email-daily-limit", "10"])).toBeUndefined();
@@ -256,7 +250,6 @@ describe("envDeployOptions", () => {
       }) as unknown as typeof fetch;
     await writeFile(file, JSON.stringify({ RESEND_API_KEY: "re_test12345" }));
     await expect(emailDeploy(args, answering(200))).rejects.toThrow(/RESEND_WEBHOOK_SECRET/);
-    // Not sending: the secret may wait.
     expect(await emailDeploy({ ...args, sending: false }, answering(200))).toMatchObject({
       apiKey: "re_test12345",
       sending: false,

@@ -57,7 +57,6 @@ export function serverCommitIdentity(input: {
  */
 export function coAuthorTrailers(message: string, coAuthors: readonly GitPerson[]): string[] {
   const named = message.toLowerCase();
-  // Each person once, whichever way they came to be named twice.
   const seen = new Set<string>();
   return coAuthors
     .filter((p) => {

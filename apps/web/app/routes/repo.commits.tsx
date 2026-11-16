@@ -9,7 +9,6 @@ export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
   return [{ title: `Commits · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
-/** What a page of history has to say: rows, or why it has none. */
 type HistoryState =
   | "commits"
   | "repo-empty"
@@ -46,7 +45,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   if (result.status === 409 && refused === "repo_empty") return none("repo-empty");
   if (result.status === 422 && refused === "history_too_wide") return none("too-wide");
   if (result.status === 422 && refused === "invalid_cursor") return none("stale-cursor");
-  // Any other failure is shown as one.
   const page = bodyOf(result, request);
   const history: HistoryState =
     page.commits.length > 0

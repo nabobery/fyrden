@@ -17,7 +17,6 @@ export interface WalkRun {
   readonly roundTrip?: boolean;
 }
 
-/** What a run gives: ranges whole and paged, the final state's hash, and each slice's stop. */
 export interface WalkResult {
   readonly ranges: string;
   readonly page: string;

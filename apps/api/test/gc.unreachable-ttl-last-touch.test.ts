@@ -73,7 +73,6 @@ describe("garbage collection: unreachable objects and their time to live", () =>
     expectSorted(await objectsIn(stub, "live"), fx.afterForce);
     expectSorted(await objectsIn(stub, "garbage"), minus(fx.all, fx.afterForce));
     expect(states.filter((p) => p.kind === "garbage")).toHaveLength(1);
-    // A source with nothing unreachable stays as it is.
     for (const id of packIds)
       expect(["live", "superseded"]).toContain(states.find((p) => p.pack_id === id)?.state);
   });

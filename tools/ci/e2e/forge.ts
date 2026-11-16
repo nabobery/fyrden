@@ -37,7 +37,6 @@ const wranglerBin = join(
 /** The cron that delivers effects (feed entries among them) the queue consumer left (wrangler.jsonc). */
 export const EFFECTS_CRON = "2-59/5 * * * *";
 
-/** Each request of a test gives up after this long (the server is local). */
 const DEADLINE_MS = 30_000;
 const MCP_PROTOCOL = "2026-07-28";
 
@@ -71,7 +70,6 @@ function run(
   });
 }
 
-/** A user or an agent acting through REST. */
 export interface Account {
   readonly id: string;
   readonly handle: string;
@@ -85,7 +83,6 @@ export interface Forge {
   readonly port: number;
   /** A directory of the test's own, removed by `stop`. */
   readonly scratch: string;
-  /** The instance administrator `bootstrap` made. */
   readonly admin: Account;
   /** A new user, made by the administrator, with a token of its full rights. */
   user(handle: string): Promise<Account>;
@@ -126,7 +123,6 @@ export async function startForge(
   const stop = async () => {
     try {
       await server?.stop();
-      // Neither the Worker nor wrangler's access log may print a token.
       expect(output.split("\n").filter(mentionsToken)).toEqual([]);
     } finally {
       // Its state and the env file (a signing seed, the bootstrap secret) go in any case.
@@ -167,7 +163,6 @@ export async function startForge(
         persist,
         "--env-file",
         envFile,
-        // The crons run when the test asks (`/__scheduled`).
         "--test-scheduled",
       ],
       cwd: apiDir,
@@ -511,7 +506,6 @@ export class Git {
     private readonly account: Account,
   ) {}
 
-  /** The URL of a repository, with this account's token. */
   url(owner: string, repo: string): string {
     return `http://x-access-token:${this.account.token}@127.0.0.1:${this.forge.port}/${owner}/${repo}.git`;
   }
@@ -568,7 +562,6 @@ export class Git {
     return this.ok(["rev-parse", "HEAD"], cwd);
   }
 
-  /** `git ls-remote` of a repository, as `{ ref: oid }`. */
   async remoteRefs(owner: string, repo: string, ...patterns: string[]) {
     const out: Record<string, string> = {};
     for (const line of (await this.ok(["ls-remote", this.url(owner, repo), ...patterns])).split(
@@ -641,7 +634,6 @@ export class FeedFollower {
     this.cursor = read.cursor;
   }
 
-  /** The item of pull request `number` of `kind`, as last read. */
   find(number: number, kind: FeedItem["kind"]): FeedItem | undefined {
     return [...this.items.values()].find(
       (i) => i.thread_key === `pull/${number}` && i.kind === kind,

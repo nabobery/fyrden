@@ -119,7 +119,6 @@ const fenceStatement = (db: D1Database, generation: number) =>
     )
     .bind(generation);
 
-/** Runs `statements` under the fence; their results. */
 async function fenced(
   db: D1Database,
   generation: number,

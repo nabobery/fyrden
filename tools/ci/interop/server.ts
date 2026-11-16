@@ -35,7 +35,6 @@ export interface ServerOptions {
 
 export interface Server {
   readonly origin: string;
-  /** The bootstrapped user's handle. */
   readonly handle: string;
   /** `http://<host>/<handle>/<name>.git`, without credentials. */
   repoUrl(name: string): string;
@@ -44,11 +43,8 @@ export interface Server {
    * case gets its own and cases cannot starve each other.
    */
   mintToken(): Promise<string>;
-  /** Creates a repository through the REST API, as the holder of `token`. */
   createRepo(name: string, token: string): Promise<void>;
-  /** Lines the Worker or wrangler printed that contain a token. */
   tokenLines(): string[];
-  /** Everything wrangler printed so far. */
   output(): string;
   /**
    * Resolves true once `until` holds for the output, or false after
@@ -64,7 +60,6 @@ export interface Server {
   stop(): Promise<void>;
 }
 
-/** Default bound for waitForOutput. */
 const OUTPUT_WAIT_MS = 10_000;
 
 interface Exit {

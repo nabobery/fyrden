@@ -32,7 +32,6 @@ export const RULE_TYPES = [
 ] as const;
 export type RuleType = (typeof RULE_TYPES)[number];
 
-/** How a pull request may be merged. */
 export const MERGE_METHODS = ["merge", "squash", "rebase"] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 

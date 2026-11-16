@@ -12,7 +12,6 @@ export const ACL_POLICY = {
 
 export type AclPurpose = "read" | "write";
 
-/** The account a repository belongs to, from its identity. */
 export interface RepoAccount {
   readonly accountId: string;
   readonly ownerId: string;
@@ -62,7 +61,6 @@ const below = (e1: number, v1: number, e2: number, v2: number) => e1 < e2 || (e1
 export class RepoAcl {
   /** The pull in flight, and the ownership (account, owner generation) it pulls for. */
   #pulling: { account: RepoAccount; row: Promise<Row> } | undefined;
-  /** The parsed roles of the stored snapshot, reused while it is the same one. */
   #parsed: { key: string; roles: Map<string, RepoRole> } | undefined;
 
   constructor(private readonly deps: RepoAclDeps) {}
@@ -312,7 +310,6 @@ export class RepoAcl {
       version: snapshot.version,
       pulled_at: startedAt,
       roles: JSON.stringify(snapshot.roles),
-      // Now the newest seen.
       floor_epoch: snapshot.epochGen,
       floor_version: snapshot.version,
     };

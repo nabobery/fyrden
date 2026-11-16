@@ -75,7 +75,6 @@ export class CommitBuildError extends Error {
   }
 }
 
-/** Changes under one directory: files by name, subdirectories by name. */
 interface Dir {
   readonly files: Map<
     string,

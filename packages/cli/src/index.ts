@@ -301,7 +301,6 @@ function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | nu
   return { sockets: Number(sockets) };
 }
 
-/** The resources a discretionary allowance names (as the API's `FYRDEN_DISCRETIONARY_DAILY`). */
 const DISCRETIONARY_RESOURCES = new Set([
   "do_requests",
   "do_rows_read",
@@ -341,7 +340,6 @@ export function asksForHelp(argv: readonly string[]): boolean {
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   const log = (line: string) => console.log(line);
-  // Help is answered before anything else runs, for every command.
   if (command === undefined || asksForHelp(argv)) {
     console.log(USAGE);
     return command === undefined ? 2 : 0;

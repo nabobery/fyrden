@@ -9,7 +9,6 @@ import { Virtualizer } from "@pierre/diffs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { steadyVirtualizer } from "../app/components/diff/steady-virtualizer.client.js";
 
-/** A file element with no drawn lines: `top` pixels from the top of the window, `height` tall. */
 function fileAt(top: number, height: number) {
   return {
     top,
@@ -77,14 +76,12 @@ describe("a steady virtualizer", () => {
   });
 
   it("holds a file with height in place as the renderer does", () => {
-    // Wholly above the window, then 500 pixels taller: the page follows its bottom edge.
     const above = fileAt(-500, 400);
     expect(
       scrolledAround(steadyVirtualizer(), above, () => {
         above.offsetHeight = 900;
       }),
     ).toEqual({ scrolledTo: [500], marked: true });
-    // In the window, then moved 30 pixels down: the page follows its top edge.
     const inView = fileAt(120, 60_000);
     expect(
       scrolledAround(steadyVirtualizer(), inView, () => {

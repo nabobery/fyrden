@@ -25,7 +25,6 @@ beforeAll(async () => {
 });
 afterAll(() => sandbox.dispose());
 
-/** Random packs of whole objects and correct deltas (OFS or REF) against earlier entries. */
 const packArb = fc
   .array(
     fc.record({
@@ -137,12 +136,9 @@ describe("pack-parse streaming", () => {
       limits: { deltaBaseCacheBytes: 1, largeObjectBytes: 100 },
     });
     expect(rowsOf(tight.pack, true)).toEqual((await gitPackRows(sandbox, bytes))?.rows);
-    // Nothing is a delta of the leaf blob, so the second pass never reads it.
     expect(reads).not.toContain(offsets[5]);
-    // With no cache, d1 is rebuilt (b0 and d1 read again) before e2 is resolved.
     expect(reads.filter((o) => o === offsets[0]).length).toBeGreaterThan(1);
 
-    // The same with small bases: dropped because the cache is full, not because they are large.
     reads.length = 0;
     const smallBases = await parseBytes(bytes, { readRange, limits: { deltaBaseCacheBytes: 1 } });
     expect(rowsOf(smallBases.pack, true)).toEqual(rowsOf(tight.pack, true));
@@ -152,7 +148,6 @@ describe("pack-parse streaming", () => {
     reads.length = 0;
     const roomy = await parseBytes(bytes, { readRange });
     expect(rowsOf(roomy.pack, true)).toEqual(rowsOf(tight.pack, true));
-    // With room, every entry with work to do is read exactly once.
     expect([...reads].sort((a, b) => a - b)).toEqual(offsets.slice(0, 5));
     tight.pack.release();
     roomy.pack.release();

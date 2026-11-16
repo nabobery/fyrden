@@ -15,9 +15,7 @@ const requestHandler = createRequestHandler(
  * take (see `isReservedHandle`).
  */
 export const API_PREFIXES = ["/api/", "/mcp/", "/oauth/", "/auth/", "/.well-known/", "/v0/"];
-/** Single paths fyrden-api answers: unsubscribe links, which mail clients post to. */
 export const API_PATHS = ["/unsubscribe"];
-/** git's smart HTTP and chunked upload paths under a repository. */
 const GIT_PATH = /^\/[^/]+\/[^/]+\/(info\/refs$|git-upload-pack$|git-receive-pack$|uploads\/)/;
 
 /**

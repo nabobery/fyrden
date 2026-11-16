@@ -114,7 +114,6 @@ export const IN_INDEX = (d = "d") =>
 export const IN_REPO_INDEX = (n = "n") =>
   `EXISTS (SELECT 1 FROM search_repos_fts_docsize z WHERE z.id = ${n}.num)`;
 
-/** What `search_docs.kind` and `state` hold. */
 export const DOC_KIND = { issue: 1, pull: 2 } as const;
 export const DOC_STATE = { open: 1, closed: 2, merged: 3 } as const;
 

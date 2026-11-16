@@ -37,7 +37,6 @@ export interface PackIdxSource {
   crc32At(position: number, budget?: IdxReadBudget): number | Promise<number>;
 }
 
-/** One live pack of a repository, as its registry row describes it. */
 export interface ViewPack {
   readonly packId: PackId;
   /** The pack's length in bytes, trailer included. */

@@ -92,7 +92,6 @@ export async function diffTrees(
   const maxChanges = options.maxChanges ?? Number.POSITIVE_INFINITY;
   const after = options.after;
   const changes: TreeChange[] = [];
-  /** The directories walked into, by name. */
   const dirs: Uint8Array[] = [];
   /** Their joined length with a `/` after each. */
   let dirBytes = 0;

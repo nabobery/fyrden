@@ -62,7 +62,6 @@ export interface ArchivePolicy {
    * (headers and content) and tree bytes inflated.
    */
   readonly sliceBytes: number;
-  /** Entries one slice encodes at most. */
   readonly sliceEntries: number;
   /** R2 reads after which a slice stops at the next entry. */
   readonly sliceReads: number;
@@ -86,7 +85,6 @@ export interface ArchivePolicy {
    * directories that nest deeper fail the build.
    */
   readonly maxCursorBytes: number;
-  /** How long a built archive is kept. */
   readonly retentionMs: number;
   /** Expired archives one request clears at most. */
   readonly pruneBatch: number;
@@ -126,7 +124,6 @@ export const ARCHIVE_POLICY: ArchivePolicy = {
 const CALLS_HEADROOM = 100;
 /** Fewest reads a slice starts with; fewer, and it waits for the next invocation. */
 const MIN_SLICE_READS = 20;
-/** Objects of one directory whose lookups a slice batches at most. */
 const PREFETCH_BATCH = 500;
 /** A build that has not moved for this long is stale, and may be pruned once expired. */
 const STALE_BUILD_MS = 60 * 60 * 1000;
@@ -544,7 +541,6 @@ export class RepoArchives {
           }
           frame.offset = e.end;
         }
-        // The tree is done.
         stack.pop();
         names.pop();
         letGo(frame.tree);

@@ -53,7 +53,6 @@ export async function checkImportUrl(raw: string, policy: SsrfPolicy): Promise<I
   return { ok: true, url: withoutTrailingSlashes(check.url.href) };
 }
 
-/** How an import reaches the network; tests replace it. */
 export interface ImportNetwork {
   /** Resolves names for the guard of one import's requests; `signal` stops every lookup. */
   resolver(signal: AbortSignal): Resolver;
@@ -83,7 +82,6 @@ export function guardedTransport(policy: SsrfPolicy, signal: AbortSignal): HttpT
   };
 }
 
-/** A fetch `Response` as the client reads it. */
 export function clientResponse(response: Response): ClientResponse {
   const stream = response.body;
   return {

@@ -37,11 +37,9 @@ export const RELEASE_ASSET_POLICY = {
   completeLockMs: 60_000,
   /** Retained objects purged a slice (one R2 delete). */
   purgeBatch: 50,
-  /** Sessions ended or cleared a slice. */
   sessionBatch: 20,
   /** Open sessions a deletion aborts a call (each an R2 call of the object's own). */
   settleBatch: 100,
-  /** A session's parts at most. */
   maxParts: 2_000,
   /** The stored part list's UTF-8 JSON at most, under SQLite's 2 MB row limit. */
   maxPartsJsonBytes: 1.5 * 1024 * 1024,
@@ -102,7 +100,6 @@ export interface UploadView {
 
 export type UploadAnswer = { ok: true; view: UploadView } | AssetFailure;
 
-/** What a part's request needs: where to send it. */
 export type PartTarget =
   | { ok: true; key: string; multipartId: string; partNumber: number }
   | AssetFailure;
@@ -219,8 +216,6 @@ export class RepoReleaseAssets {
     },
   ) {}
 
-  // Reads.
-
   /** The assets of releases `releaseIds`, by release, each in name order. */
   ofReleases(releaseIds: readonly number[]): Map<number, AssetRecord[]> {
     const out = new Map<number, AssetRecord[]>();
@@ -275,8 +270,6 @@ export class RepoReleaseAssets {
       "SELECT asset_bytes, usage_seq, told_seq, retain_until, early_purge_at FROM release_asset_counters WHERE id = 1",
     )[0] as Counters;
   }
-
-  // Sessions.
 
   /** What a begin checks before it creates the multipart upload (and again after). */
   beginRefusal(input: {
@@ -793,8 +786,6 @@ export class RepoReleaseAssets {
     await this.deps.releaseHold(assetHoldId(row.upload_id)).catch(() => undefined);
   }
 
-  // Assets.
-
   /** Deletes an asset: its object retained for 30 days, still counted. */
   deleteAsset(id: number, actor: RefActor): { ok: true } | AssetFailure {
     const asset = this.get(id);
@@ -866,8 +857,6 @@ export class RepoReleaseAssets {
       return { ok: true as const, objects: covered.n, bytes: covered.bytes };
     });
   }
-
-  // The account.
 
   /**
    * States the total to the account: read, with `usage_seq` bumped, in one
@@ -994,8 +983,6 @@ export class RepoReleaseAssets {
     this.#bump();
     this.#ensureJob();
   }
-
-  // The job.
 
   /**
    * One slice: expired sessions ended, ended ones cleared once nothing can

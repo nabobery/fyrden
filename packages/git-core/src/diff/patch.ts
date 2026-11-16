@@ -85,7 +85,6 @@ export function quotePath(prefix: string, path: Uint8Array): string {
 
 export type FileStatus = "added" | "removed" | "modified" | "renamed" | "copied" | "changed";
 
-/** One file of a diff, as its header needs it. */
 export interface FileHeader {
   readonly status: FileStatus;
   /** Path bytes; null for the side that does not exist. */

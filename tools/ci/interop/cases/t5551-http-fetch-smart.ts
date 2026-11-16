@@ -45,7 +45,6 @@ export const t5551: CaseFile = {
           mark,
           (r) => r.filter((line) => line.startsWith("POST ")).length >= 2,
         );
-        // The first request is answered 401; git asks its credential helper and repeats it.
         expect(seen.slice(0, 2)).toEqual(["GET /info/refs 401", "GET /info/refs 200"]);
         expect(seen.slice(2).length).toBeGreaterThan(0);
         expect(seen.slice(2).every((r) => r === "POST /git-upload-pack 200")).toBe(true);

@@ -287,7 +287,6 @@ export function normalizeUrl(input: string): string | undefined {
   let norm = url.slice(0, spanned).toLowerCase();
   url = url.slice(spanned);
 
-  // user:password@
   const at = url.indexOf("@");
   let slash = cspan(url, 0, "/?#");
   if (at >= 0 && at < slash) {
@@ -338,7 +337,6 @@ export function normalizeUrl(input: string): string | undefined {
   }
   url = url.slice(slash);
 
-  // Path, resolving "." and ".." segments.
   const pathStart = norm.length;
   norm += "/";
   if (url.startsWith("/")) url = url.slice(1);

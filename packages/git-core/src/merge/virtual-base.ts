@@ -20,14 +20,12 @@ import {
 export interface History {
   /** The merge bases of `one` against all of `others`, as merge bases are found for a merge of several. */
   mergeBases(one: Oid, others: readonly Oid[]): Promise<Oid[]>;
-  /** A commit's tree. */
   treeOf(commit: Oid): Promise<Oid>;
 }
 
 export type BaseTree =
   /** The tree to merge from (null when the sides share no history: an empty base). */
   | { readonly kind: "tree"; readonly tree: Oid | null; readonly objects: readonly NewObject[] }
-  /** The merge bases conflict among themselves: the merge needs a person. */
   | { readonly kind: "manual" };
 
 /** Deepest recursion of virtual bases. Proposed. */

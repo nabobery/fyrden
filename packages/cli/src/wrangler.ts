@@ -73,7 +73,6 @@ const SETUP_HINTS: readonly (readonly [RegExp, string])[] = [
 
 export class WranglerError extends Error {
   override name = "WranglerError";
-  /** What the operator has to do, when the failure is a known account setup step. */
   readonly hint: string | undefined;
   constructor(args: string[], result: RunResult) {
     // stderr can echo config but never a secret: secrets go in a file whose

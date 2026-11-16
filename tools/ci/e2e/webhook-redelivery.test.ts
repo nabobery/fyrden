@@ -79,7 +79,6 @@ describe.skipIf(!RECEIVER_URL || !RECEIVER_PORT)("webhook redelivery (wrangler d
 
   const at = () => ({ owner: owner.handle, repo: REPO });
 
-  /** The deliveries the receiver took of `event`. */
   const of = (event: string) => received.filter((r) => r.headers["x-fyrden-event"] === event);
 
   it("delivers a pull request's event signed, logs it, and redelivers it signed afresh", {
@@ -106,7 +105,6 @@ describe.skipIf(!RECEIVER_URL || !RECEIVER_PORT)("webhook redelivery (wrangler d
       of("pull_request").at(0),
     );
     expect(verify(hook.secret, first)).toBe(true);
-    // A body changed in transit would not verify.
     expect(verify(hook.secret, { ...first, body: Buffer.from(`${first.body} `) })).toBe(false);
     const id = String(first.headers["webhook-id"]);
     expect(id).toMatch(/^msg_[0-9a-f]{32}$/);

@@ -29,16 +29,13 @@ export function shownLines(patch: string): ShownLines {
   return shown;
 }
 
-/** Whether `line` on `side` is one the hunks show. */
 export function isShown(shown: ShownLines, side: DiffSide, line: number): boolean {
   return shown[side].some(([first, last]) => line >= first && line <= last);
 }
 
-/** The renderer's side for the API's. */
 export const rendererSide = (side: DiffSide): "deletions" | "additions" =>
   side === "LEFT" ? "deletions" : "additions";
 
-/** The API's side for the renderer's. */
 export const apiSide = (side: "deletions" | "additions" | undefined): DiffSide =>
   side === "deletions" ? "LEFT" : "RIGHT";
 
@@ -47,7 +44,6 @@ export function rendererPatch(hunks: string): string {
   return `--- a/file\n+++ b/file\n${hunks}`;
 }
 
-/** The renderer's kind of change for the API's file status. */
 export function changeType(
   status: string,
   hasChanges: boolean,

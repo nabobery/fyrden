@@ -27,7 +27,6 @@ const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
 const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
 
-/** Hooks into organization creation. For tests. */
 export const orgHooks: { beforePublish?: () => Promise<void> } = {};
 
 /** The `admin.orgs.create` operation: the organization's object first, then its directory rows. */

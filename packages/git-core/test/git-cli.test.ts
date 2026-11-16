@@ -23,12 +23,10 @@ describe("git CLI harness", () => {
     const a = await createGitSandbox();
     const b = await createGitSandbox();
     sandboxes.push(a, b);
-    // Fixed author, committer and dates give the same commit id in two sandboxes.
     const head = await headAfterOneCommit(a);
     expect(head).toMatch(/^[0-9a-f]{40}$/);
     expect(await headAfterOneCommit(b)).toBe(head);
     expect(a.dir).not.toBe(b.dir);
-    // The user's global config never leaks in: the sandbox's own is all there is.
     const config = await a.git(["config", "--global", "--list"]);
     expect(config.stdout.trim().split("\n").sort()).toEqual([
       "gc.auto=0",

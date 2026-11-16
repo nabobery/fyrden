@@ -91,7 +91,6 @@ interface Pass {
   readonly after: number;
 }
 
-/** What each kind's projection is: its table and key column. */
 const TABLES = {
   subjects: { table: "search_docs", key: "number" },
   labels: { table: "search_labels", key: "label_id" },

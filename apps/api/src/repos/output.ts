@@ -14,7 +14,6 @@ export function repoOutput(
     defaultBranch: string;
     description: string | null;
     parentVisible?: boolean;
-    /** How many users starred it (0 for a new repository). */
     stars: number;
   },
 ): Output<typeof getRepo> {

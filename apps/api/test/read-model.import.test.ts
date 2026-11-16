@@ -199,7 +199,6 @@ describe("a recovery's import", () => {
       most = { rows: Math.max(most.rows, used.rows), reads: Math.max(most.reads, used.reads) };
       if (done) break;
     }
-    // (Hundreds removed a step.)
     expect(most.rows).toBeGreaterThan(300);
     expect(most.rows).toBeLessThanOrEqual(CHARGES.importing?.rows ?? 0);
     expect(most.reads).toBeLessThanOrEqual(CHARGES.importing?.reads ?? 0);

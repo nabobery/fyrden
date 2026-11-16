@@ -14,7 +14,6 @@ describe("mergeTrees, budget", () => {
       files(s, "A\n", "b\n"),
       files(s, "a\n", "B\n"),
     ];
-    // Three trees: the base and the two sides.
     const exact = await mergeTrees(s.source, base, ours, theirs, { budget: new MergeBudget(3) });
     expect(exact.kind).toBe("clean");
     expect(
@@ -55,7 +54,6 @@ describe("mergeTrees, budget", () => {
     const theirs = files(s, "1\n2\nY\n", "1\n2\nY\n");
     const merged = await mergeTrees(s.source, base, ours, theirs);
     if (merged.kind !== "clean") return expect.fail(JSON.stringify(kinds(merged)));
-    // One blob of 6 bytes and a tree of two 29-byte entries.
     expect(merged.objects.reduce((n, o) => n + o.bytes.length, 0)).toBe(64);
     const exact = await mergeTrees(s.source, base, ours, theirs, {
       budget: new MergeBudget(2_000, 1_000, 64),
@@ -149,7 +147,6 @@ describe("mergeTrees, budget", () => {
     type Files = Record<string, string>;
     const lines = { base: "a\nb\nc\n", ours: "A\nb\nc\n", theirs: "a\nb\nC\n" };
 
-    /** A file `n`'s base, ours and theirs, each as the files it adds to a side. */
     type Sides = (n: string) => readonly [Files, Files, Files];
     const cases: readonly (readonly [string, Sides])[] = [
       [
@@ -220,7 +217,6 @@ describe("mergeTrees, budget", () => {
           );
           if (merged.kind !== "clean") return expect.fail(JSON.stringify(kinds(merged)));
           expect(trees).toBe(3);
-          // Ours' directories, as they are, and theirs' `r`.
           expect(await listed(s, merged.tree, merged.objects)).toEqual(
             await listed(s, root(s, o, "R\n"), []),
           );

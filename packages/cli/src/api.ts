@@ -40,7 +40,6 @@ export function apiTarget(
   return { url: origin.origin, token };
 }
 
-/** An answer the API refused with, as its problem says. */
 export class ApiError extends Error {
   // Fields, not parameter properties: the CLI runs under Node's type stripping, which has none.
   readonly status: number;

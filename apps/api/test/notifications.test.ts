@@ -54,7 +54,6 @@ async function repoOf(owner: Who, issues: number, readers: readonly Who[] = []) 
   return { id: made.body.id, fullName };
 }
 
-/** The conversation issue `number` of `repoId` is now. */
 const conversationOf = (repoId: string, number: number) =>
   runInDurableObject(env.REPO.getByName(repoId), (_: RepoDO, state) =>
     String(
@@ -113,7 +112,6 @@ describe("listing notifications", () => {
     expect(one?.subject.url).toMatch(new RegExp(`/api/repos/${repo.fullName}/issues/1$`));
     expect(one?.url).toMatch(new RegExp(`/api/notifications/threads/${mentioned}$`));
     expect(one?.subscription_url).toBe(`${one?.url}/subscription`);
-    // Participating: not the watched one.
     expect(
       (await list(reader, "?participating=true")).body.notifications.map((t) => t.id).sort(),
     ).toEqual([mentioned, commented].sort());
@@ -184,7 +182,6 @@ describe("listing notifications", () => {
       status: 403,
       body: { code: "delegated_listing" },
     });
-    // A repository's list and marking too.
     const [owner] = [await user()];
     const repo = await repoOf(owner, 0, [reader]);
     for (const [method, path] of [

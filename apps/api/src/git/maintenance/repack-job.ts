@@ -184,7 +184,6 @@ class RepackSlice {
     return { done: false, cursor: null, runAfterMs: 0 };
   }
 
-  /** Gives up this run's output and plans again. */
   async #abandon(cursor: Cursor, output: PackId | undefined): Promise<SliceResult> {
     this.#count("restarts", 1);
     if (cursor.phase === "write") releaseOutputLease(this.git, cursor.rewrite);

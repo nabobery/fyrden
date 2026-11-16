@@ -193,7 +193,6 @@ describe("a feed migrated to streams", () => {
       );
       state.storage.sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 5)");
     });
-    // A new instance migrates it.
     await runInDurableObject(stub, (_: UserDO, state) => state.abort("migrate")).catch(() => {});
     const migrated = env.USER.getByName(name);
     const epoch = (await migrated.syncStreams(null, 1, {})).epoch;
@@ -275,7 +274,6 @@ describe("a cursor's snapshot", () => {
     await stub.applyFeed([entry({ version: 1 }), entry({ thread: 2, version: 1 })]);
     const { epoch } = await stub.syncStreams(null, 1, {});
     const first = await stub.saveCursor("crd_a", state(1));
-    // The same positions again: the same snapshot, nothing written.
     expect(await stub.saveCursor("crd_a", state(1))).toEqual(first);
     const other = await stub.saveCursor("crd_b", state(1));
     expect(other.id).not.toBe(first.id);

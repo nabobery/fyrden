@@ -36,7 +36,6 @@ import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 const OWNER = "usr_01K742SG00NAWD8WB4RTMJF8H8";
-// Written as production writes it: through the read model's executor.
 const db = admitted();
 
 async function listedRepo(): Promise<string> {
@@ -696,7 +695,6 @@ describe("search's live projection of a large envelope", () => {
         },
       },
     }) as unknown as Env;
-  // A sink that plans nothing, counting what it is asked to plan.
   const sink = {
     name: "test_counting",
     plan: () => {

@@ -20,7 +20,6 @@ export function parseJsonc<T = unknown>(text: string): T {
       const end = text.indexOf("*/", i + 2);
       i = end === -1 ? text.length : end + 2;
     } else if (ch === "}" || ch === "]") {
-      // Drop a trailing comma (and the whitespace after it) before a closer.
       out = out.replace(/,\s*$/, "");
       out += ch;
       i++;

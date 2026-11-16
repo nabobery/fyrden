@@ -14,7 +14,6 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startWranglerDev, type WranglerDev } from "../e2e/wrangler-dev.ts";
 
-/** Schemathesis, pinned: a new version is adopted deliberately. */
 const SCHEMATHESIS = "schemathesis@4.28.0";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -171,7 +170,6 @@ describe("the REST API under Schemathesis", () => {
   // Long enough for stop: SIGTERM, 10 s, SIGKILL, then waiting for it to go.
   afterAll(async () => {
     try {
-      // Its state is removed next: make sure it is gone first.
       await dev?.stop();
       if (scratch) await rm(scratch, { recursive: true, force: true });
     } finally {
@@ -231,7 +229,6 @@ describe("the REST API under Schemathesis", () => {
     );
     const report = result.output.replaceAll(token, "<token>");
     expect(result.code, report).toBe(0);
-    // It ran: every operation in the document.
     const total = Number(/Selected: \d+\/(\d+)/.exec(report)?.[1]);
     expect(total, report).toBeGreaterThan(0);
     expect(report).toContain(`Selected: ${total}/${total}`);

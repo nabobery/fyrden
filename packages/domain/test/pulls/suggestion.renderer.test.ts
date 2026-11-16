@@ -23,7 +23,6 @@ const decodeEntities = (html: string) =>
     .replaceAll("&quot;", '"')
     .replaceAll("&amp;", "&");
 
-/** The suggestion blocks the renderer shows, as their lines. */
 function shown(body: string): string[][] {
   const blocks = [
     ...render(body).matchAll(/<pre><code class="language-suggestion">([\s\S]*?)<\/code><\/pre>/g),
@@ -35,7 +34,6 @@ function shown(body: string): string[][] {
   });
 }
 
-// Lines that make fences, containers and HTML blocks meet.
 const FRAGMENTS = [
   "```suggestion",
   "```",

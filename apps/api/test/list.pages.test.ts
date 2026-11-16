@@ -155,7 +155,6 @@ describe("every list the web reads, cut by its bytes", () => {
           )
         ).body.number,
       );
-    // Touched out of order, so update order differs from creation order.
     for (const n of [numbers[3], numbers[0], numbers[4]])
       await api("PATCH", `${path}/issues/${n}`, owner.token, { title: `touched ${n}` });
     // The order, read one item a page (never cut by its bytes).
@@ -270,7 +269,6 @@ describe("every list the web reads, cut by its bytes", () => {
     expect((await api("GET", `${path}/pulls/1/reviews?after=2&cursor=x`, owner.token)).status).toBe(
       422,
     );
-    // Diff comments of the same pull request, a thread each.
     await seed((sql) => {
       for (let id = 1; id <= 5; id++) {
         sql.exec(
@@ -310,7 +308,6 @@ describe("a page by its bytes", () => {
       last: 100,
       more: true,
     });
-    // Exactly fitting, and one byte over.
     expect(pageOf([10, 10], 30, out, size([10, 10]))).toMatchObject({ last: 10, more: false });
     expect(pageOf([10, 10], 30, out, size([10, 10]) - 1).shown).toHaveLength(1);
     expect(pageOf([1, 1, 1], 2, out, 1_000)).toMatchObject({ last: 1, more: true });

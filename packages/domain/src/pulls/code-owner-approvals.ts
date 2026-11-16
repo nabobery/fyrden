@@ -30,7 +30,6 @@ export type CodeOwnerFact =
 
 /** A rule that decides at least one changed path and names owners. */
 export interface CodeOwnerRequirement {
-  /** Its line in the CODEOWNERS file. */
   readonly line: number;
   /** One path it decides, for the refusal. */
   readonly example: string;
@@ -71,7 +70,6 @@ export interface CodeOwnerClaims {
   readonly pairs: ReadonlySet<string>;
 }
 
-/** Rules a refusal names at most. */
 const RULES_SHOWN = 10;
 
 export function membershipKey(teamId: string, principal: string): string {

@@ -93,7 +93,6 @@ class Inspector {
     this.socket = socket;
     socket.addEventListener("message", (event) => {
       const { id, result } = JSON.parse(String(event.data)) as { id?: unknown; result?: HeapUsage };
-      // Only a reply to a question this asked: events carry no id, and nothing else is called.
       if (typeof id !== "number") return;
       const waiting = this.#waiting.get(id);
       if (typeof waiting !== "function") return;
@@ -133,7 +132,6 @@ async function get<T>(w: Workerd, path: string, name: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-/** Runs a request while sampling resident size, and gives its high-water. */
 async function watched<T>(
   w: Workerd,
   name: string,
@@ -357,7 +355,6 @@ if (only.has("memory")) {
   }
 }
 
-// Every case once with a fixed count: what a run timed from outside relies on.
 if (only.has("fixed")) {
   const names = await Workerd.with(binary, config(dir, false), (w) => get<string[]>(w, "list", ""));
   for (const name of names) {

@@ -97,7 +97,6 @@ async function openPull(): Promise<number> {
   return res.body.number;
 }
 
-/** The outbox's events of `prefix`. */
 const events = async (prefix: string) =>
   (
     await inRepo(stub(), (r: RepoDO) =>
@@ -210,7 +209,6 @@ describe("label names", () => {
     expect((await label(owner, "Émoji")).status).toBe(201);
     // `é` and `É` are two names (only ASCII letters fold), so this is another label...
     expect((await label(owner, "émoji")).status).toBe(201);
-    // ...and renaming one into the other is a collision, not a server error.
     const collision = await json<{ code: string }>(
       api("PATCH", `${path}/labels/${encodeURIComponent("Émoji")}`, owner.token, {
         new_name: "émoji",

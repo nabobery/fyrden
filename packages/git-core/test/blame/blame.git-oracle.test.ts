@@ -116,7 +116,6 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     return parsePorcelain(Buffer.from(out).toString("latin1"));
   }
 
-  /** Each commit's name in a built history, by id: its ref under the prefix. */
   async function namesOf(prefix: string): Promise<Map<string, string>> {
     const out = await sandbox.git([
       "for-each-ref",
@@ -255,7 +254,6 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
     },
     "path-kinds": {
       tip: "d",
-      // At d a directory became the file, removing f/inner.
       refused: { rename_possible: 1 },
       history: {
         a: { files: { f: "target\n" } },
@@ -852,7 +850,6 @@ describe.skipIf(!pinned)(`blame against git ${PIN}`, () => {
           const second = Math.floor(rand() * k);
           if (second !== first) {
             parents.push(`c${second}`);
-            // A merge takes some of the second parent's text.
             const other = files[second] as string[];
             const at = Math.floor(rand() * other.length);
             file.splice(Math.floor(rand() * file.length), 0, ...other.slice(at, at + 8));

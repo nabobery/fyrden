@@ -105,7 +105,6 @@ beforeAll(async () => {
 });
 afterAll(() => sandbox.dispose());
 
-/** Every path below `dir`: its type, whether it is executable, its content or target. */
 function snapshot(dir: string): Record<string, string> {
   const out: Record<string, string> = {};
   const walk = (at: string, rel: string) => {

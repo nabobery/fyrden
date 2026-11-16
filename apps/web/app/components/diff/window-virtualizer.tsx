@@ -7,7 +7,6 @@ import {
   useState,
 } from "react";
 
-/** What the owner drives: the diff renderer's virtualizer, set up on the window's scroll. */
 export interface Attachable {
   setup(root: Document): void;
   cleanUp(): void;
@@ -50,7 +49,6 @@ export class VirtualizerOwner<T extends Attachable = Attachable> {
 
 export const VirtualizerOwnerContext = createContext<VirtualizerOwner | null>(null);
 
-/** Gives the files under it one virtualizer, owned by this page. */
 export function WindowVirtualizer({ children }: { children: ReactNode }) {
   const [owner] = useState(() => new VirtualizerOwner());
   useEffect(() => {

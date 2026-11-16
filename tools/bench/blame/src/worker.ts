@@ -67,7 +67,6 @@ interface Timed {
   readonly runs: number;
 }
 
-/** Set by `&runs=N`, for one request. */
 let fixedRuns: number | undefined;
 
 /** Runs `body` until at least `minMs` passed, after one discarded warm-up. */
@@ -129,13 +128,11 @@ function oidOf(k: number): Uint8Array {
   return oid;
 }
 
-/** A pack and where its entries are, by the made-up ids `oidOf`. */
 function indexed(entries: readonly PackEntrySpec[]) {
   const { offsets } = buildPack(entries);
   return new Map(entries.map((_, k) => [hex(oidOf(k)), offsets[k] as number]));
 }
 
-/** A tree in git's format, with `count` entries named by number. */
 function treeBytes(count: number, oidAt: (k: number) => Uint8Array, mode = "100644"): Uint8Array {
   const parts: Uint8Array[] = [];
   const encoder = new TextEncoder();
@@ -670,7 +667,6 @@ async function prepare(pack: Uint8Array, offsets: readonly number[]) {
   return { objects: offsets.length, packBytes: pack.length };
 }
 
-/** Reads the prepared objects in order `rounds` times, awaiting only what reads await. */
 async function churn(rounds: number, yieldEvery: number) {
   if (!held) throw new Error("nothing prepared");
   let reads = 0;
@@ -738,7 +734,6 @@ const handler = {
         return Response.json({ name, ...(await run()) });
       }
       if (url.pathname === "/prepare") {
-        // How many entries, where each is, then the pack.
         const body = await request.arrayBuffer();
         const count = new DataView(body).getFloat64(0);
         const offsets = [...new Float64Array(body.slice(8, 8 + count * 8))];
@@ -751,7 +746,6 @@ const handler = {
       }
       return new Response("not found", { status: 404 });
     } catch (error) {
-      // The stack stays in workerd's log; the response names the error and its message only.
       console.error(error);
       const said = error instanceof Error ? `${error.name}: ${error.message}` : "Error";
       return new Response(said, { status: 500 });
@@ -761,7 +755,6 @@ const handler = {
 
 export default handler;
 
-/** One instance per name, so a case's timing can be read from outside on its own. */
 export class BlameBench {
   fetch(request: Request): Promise<Response> {
     return handler.fetch(request);

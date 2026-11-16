@@ -2,7 +2,6 @@ import { apiFetch } from "../lib/api.server.js";
 import { refAndPath } from "../lib/target.js";
 import type { Route } from "./+types/repo.blame-ranges";
 
-/** What the blame page may pass on: the commit and path come from the URL. */
 const QUERY = ["continuation", "per_page", "line_start", "line_end"] as const;
 
 /**

@@ -35,7 +35,6 @@ export const EntitySnapshotSchema = z.strictObject({
     .max(64)
     .regex(/^[a-z][a-z_]*$/),
   id: short.min(1),
-  /** Bumped on every change of the entity, within the epoch. */
   version: position,
   deleted: z.boolean(),
   /** The full current row; null for a deletion, or when the event is stored. */

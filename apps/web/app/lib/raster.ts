@@ -8,7 +8,6 @@ import { bytesOfBase64, type Contents, encodePath } from "./types.js";
 
 /** The largest image previewed: more than this is left to Raw. */
 export const IMAGE_MAX_BYTES = 4 * 1024 * 1024;
-/** The most pixels an image previewed may say it has. */
 export const IMAGE_MAX_PIXELS = 16_000_000;
 /** How far into a file its header is looked for. */
 export const SNIFF_MAX_BYTES = 256 * 1024;

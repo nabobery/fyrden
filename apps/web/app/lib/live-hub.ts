@@ -45,7 +45,6 @@ export type LiveStatus =
 const LIVE: LiveStatus = { kind: "live" };
 const TEMPORARY: LiveStatus = { kind: "temporary" };
 
-/** What a client tells the hub. */
 export interface LiveHubEvents {
   changed(streams: readonly LiveStream[] | "all"): void;
   stopped(why: Stop): void;
@@ -57,9 +56,7 @@ export interface LiveHubDeps {
   /** A client whose hints, stops and refusals come to the hub. */
   client(events: LiveHubEvents): { start(): void; stop(): void };
   hidden(): boolean;
-  /** No navigation under way. */
   idle(): boolean;
-  /** Reads the current page again. */
   revalidate(): Promise<unknown>;
   /** When the tab was last told live hints are off (0: never), and to record it. */
   offSince(): number;
@@ -78,7 +75,6 @@ export class LiveHub {
   readonly #client: { start(): void; stop(): void };
   readonly #wants = new Set<{ current: (stream: LiveStream) => boolean }>();
   #running = false;
-  /** Stopped for good (off is kept apart, by its time). */
   #halted = false;
   #failedUntil: number | null = null;
   /** When this tab was told live hints are off (beside the tab's storage, which may fail). */
@@ -138,7 +134,6 @@ export class LiveHub {
     };
   }
 
-  /** The tab was shown or hidden. */
   visibility(): void {
     this.#clear("hidden");
     if (this.#deps.hidden()) {
@@ -161,7 +156,6 @@ export class LiveHub {
     this.#stopClient();
   }
 
-  /** Starts or stops the socket for what the tab is doing now. */
   #update(): void {
     if (this.#disposed) return;
     const now = this.#deps.now();
@@ -225,7 +219,6 @@ export class LiveHub {
     this.#tell();
   }
 
-  /** The status for what holds now, its watchers called when it changed. */
   #tell(): void {
     const pause = this.#pause;
     const status: LiveStatus = pause

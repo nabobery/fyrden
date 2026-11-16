@@ -6,7 +6,6 @@ import { FILE_MODES, isTreeMode, parseTree, type TreeEntry } from "../object/tre
 import type { ObjectReader } from "../reader/object-reader.js";
 import { UploadPackError } from "./errors.js";
 
-/** What the object walk reads. */
 export type TreeReader = Pick<ObjectReader, "readObject">;
 
 export interface ObjectSelection {

@@ -103,7 +103,6 @@ export function makeFixtures(root: string, dir: string, esbuild: typeof Esbuild)
     `${prefixLines(JSON.stringify(listing, null, 2), 100 * KiB)}`,
   );
 
-  // Markdown: AGENTS.md as it is, and the docs concatenated to 100 KiB.
   add(
     { id: "md-real", name: "file.md", lang: "markdown", kind: "markdown", source: "AGENTS.md" },
     readFileSync(join(root, "AGENTS.md"), "utf8"),

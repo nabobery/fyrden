@@ -22,7 +22,6 @@ import type { FeedSubjectKind } from "@fyrden/domain";
 
 /** Proposed values. */
 export const DIGEST_POLICY = {
-  /** A window's length. */
   windowMs: 15 * 60_000,
   /** How long after a window ends it is sealed (events of its last moments in). */
   sealAfterMs: 60_000,
@@ -53,7 +52,6 @@ export const DIGEST_POLICY = {
   deliveryMs: 24 * 60 * 60_000,
   /** How long a window's rows are kept after it (every item it made has expired by then). */
   keepMs: 16 * 24 * 60 * 60_000,
-  /** Windows one seal slice seals at most, and rows one cleanup slice deletes. */
   sealsPerRun: 4,
   sliceRows: 500,
   /** A deleted conversation's digest rows deleted with it; more go with cleanup. */
@@ -66,7 +64,6 @@ export interface WatcherKey {
   readonly principal: string;
 }
 
-/** What an event tells a window of its thread. */
 export interface DigestEntry {
   readonly subject: FeedSubjectKind;
   readonly conversation: string;
@@ -78,14 +75,12 @@ export interface DigestEntry {
   readonly floor: WatcherKey;
 }
 
-/** One digest member: a watcher and the kinds it is told of. */
 export interface DigestMember {
   readonly principal: string;
   readonly root: string;
   readonly kinds: readonly FeedSubjectKind[];
 }
 
-/** A window's threads of one kind. */
 export type DigestBucket = {
   readonly win: number;
   readonly epoch_gen: number;
@@ -121,7 +116,6 @@ export type DigestResolution =
       readonly complete: boolean;
     };
 
-/** A credit request to make of the ledger. */
 export interface CreditAsk {
   readonly subject: FeedSubjectKind;
   readonly request: string;
@@ -154,7 +148,6 @@ export interface DigestDeps {
 /** The type of a sealed window's event, which tells its members. */
 export const DIGEST_EVENT = "repository.digest";
 
-/** The window a time falls in. */
 export const windowOf = (at: number) => Math.floor(at / DIGEST_POLICY.windowMs);
 
 const before = (a: WatcherKey, b: WatcherKey) =>

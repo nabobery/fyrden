@@ -14,7 +14,6 @@ import { dirname, join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { startWranglerDev, type WranglerDev } from "../e2e/wrangler-dev.ts";
 
-/** The suite's version, pinned: a new one is adopted deliberately, with its baseline. */
 const CONFORMANCE = "@modelcontextprotocol/conformance@0.2.0-alpha.12";
 const REVISION = "2026-07-28";
 
@@ -101,7 +100,6 @@ describe("MCP conformance", () => {
     });
     expect(boot.status, await boot.clone().text()).toBe(201);
     const { token } = (await boot.json()) as { token: string };
-    // Every request the suite makes, with the token (and the suite's own Host and Origin).
     proxy = createServer((req, res) => {
       const upstream = request(
         {
@@ -122,7 +120,6 @@ describe("MCP conformance", () => {
       });
       req.pipe(upstream);
     });
-    // A port the system picks, so it cannot collide.
     await new Promise<void>((ready, fail) => {
       proxy?.once("error", fail);
       proxy?.listen(0, "127.0.0.1", ready);
@@ -135,7 +132,6 @@ describe("MCP conformance", () => {
   // Long enough for stop: SIGTERM, 10 s, SIGKILL, then waiting for it to go.
   afterAll(async () => {
     proxy?.close();
-    // Its state is removed next: make sure it is gone first.
     await dev?.stop();
     if (scratch) await rm(scratch, { recursive: true, force: true });
   }, 60_000);
@@ -159,7 +155,6 @@ describe("MCP conformance", () => {
       scratch,
     );
     expect(result.code, result.output).toBe(0);
-    // It ran: every scenario of the revision, judged against the baseline.
     expect(result.output).toContain(`Running requirements ${REVISION}`);
     expect(result.output).toContain("Baseline check passed");
   }, 600_000);

@@ -177,7 +177,6 @@ export function gzipMemberParts(zlib: Zlib, bytes: Uint8Array, mtime: number): U
   return [header, deflateRaw(zlib, bytes), trailer];
 }
 
-/** What the zip's central directory needs about one entry. */
 export interface ZipRecord {
   readonly name: Uint8Array;
   /** General purpose flags: 0x0800 when the name is UTF-8. */

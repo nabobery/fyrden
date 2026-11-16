@@ -268,7 +268,6 @@ async function check(spec: Spec, queries: number[][]): Promise<void> {
     const twos = rest.slice(0, 2);
     const label = `one ${one}, twos ${twos.join(",")}`;
 
-    // merge-base --all
     const ours = hexes(
       await mergeBases(
         graph,
@@ -287,7 +286,6 @@ async function check(spec: Spec, queries: number[][]): Promise<void> {
       );
     }
 
-    // merge-base --is-ancestor
     const target = twos[0] ?? one;
     // Exit 0 means "is an ancestor", 1 "is not"; the harness rejects on 1.
     const code = await git(["merge-base", "--is-ancestor", hex(one), hex(target)]).then(
@@ -347,7 +345,6 @@ describe("commit graph walks match git", () => {
         ],
       },
     );
-    // Every hard shape occurred at least once.
     for (const [shape, count] of Object.entries(seen)) expect(count, shape).toBeGreaterThan(0);
     console.info("git differential coverage:", seen);
   }, 180_000);

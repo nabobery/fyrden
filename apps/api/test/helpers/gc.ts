@@ -50,7 +50,6 @@ export async function objectsOf(git: RepoGitStorage, packId: string): Promise<st
   return (await packObjects(new Uint8Array(await object.arrayBuffer()))).oids;
 }
 
-/** Pack ids by state. */
 export const inState = (git: RepoGitStorage, state: string): PackId[] =>
   git.context.storage.sql
     .exec<{ pack_id: string }>(

@@ -133,7 +133,6 @@ export function jsonBytes(
       for (const [key, raw] of Object.entries(v)) {
         read();
         const item = convert(raw, key);
-        // Left out of an object.
         if (omitted(item)) continue;
         add((first ? 0 : 1) + encoder.encode(JSON.stringify(key)).length + 1);
         first = false;

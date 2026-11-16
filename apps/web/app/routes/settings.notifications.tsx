@@ -46,7 +46,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
 type Answer = { status: number; body: { detail?: string; code?: string } | null };
 
-/** What the page says of an answer that was not a success. */
 const refused = (answer: Answer, fallback: string) => ({
   error: answer.body?.detail ?? fallback,
 });
@@ -124,7 +123,6 @@ const CATEGORIES = [
   },
 ] as const;
 
-/** What an address's state is, in words. */
 function stateOf(address: Address): string {
   if (!address.deliverable)
     return "Not deliverable: the email provider suppresses it (it bounced, or Fyrden's mail was marked as spam)";

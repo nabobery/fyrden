@@ -30,7 +30,6 @@ const CRISS_CROSS: HistorySpec = [
   ["x", []],
   ["oct", ["a1", "b1", "x"]],
 ];
-// "c" is pushed later, in the quarantine tests.
 const names = namer([...CRISS_CROSS, ["c", []]]);
 
 describe("mergeBases", () => {
@@ -68,7 +67,6 @@ describe("mergeBases", () => {
   });
 
   it("is ordered by generation, not fooled by clock skew", async () => {
-    // Dates run backwards: every child is older than its parents.
     const skewed = CRISS_CROSS.map(([n, p], i) => [n, p, 2_000_000_000 - i * 1000] as const);
     const graph = await verifiedGraph(skewed);
     expect(names(await mergeBases(graph, "verified", o("a3"), [o("b3")]))).toEqual(["a1", "b1"]);
@@ -146,7 +144,6 @@ describe("pending rows (quarantine)", () => {
         MissingCommitError,
       );
     }
-    // A commit no view has at all.
     await expect(mergeBases(graph, "verified", o("nowhere"), [])).rejects.toThrow(
       MissingCommitError,
     );
@@ -173,7 +170,6 @@ describe("pending rows (quarantine)", () => {
     ]);
     const error = await addPendingCommits(graph, "push-2", orphan).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(MissingCommitError);
-    // "c" is pending in another upload, so for push-2 it is missing too.
     expect((error as MissingCommitError).oids.map(oidToHex).sort()).toEqual(
       [o("c"), o("missing")].map(oidToHex).sort(),
     );
@@ -181,7 +177,6 @@ describe("pending rows (quarantine)", () => {
       undefined,
       undefined,
     ]);
-    // The same upload may add children of its own pending commits later.
     expect(await addPendingCommits(graph, "push-1", orphan.slice(0, 1))).toBe(1);
     expect(await addPendingCommits(graph, "push-1", orphan.slice(0, 1))).toBe(0);
   });
@@ -230,7 +225,6 @@ describe("markPositions", () => {
   it("sets the bit of each commit's position in a pack index, skipping absent ones", async () => {
     const graph = await verifiedGraph(CRISS_CROSS);
     const reachable = await reachableCommits(graph, "verified", [o("a3")]);
-    // A fake .idx: sorted oids of some commits plus an unrelated one.
     const inPack = [o("a1"), o("a3"), o("b2"), o("x"), o("r")].sort(compareOids);
     const lookup = new OidTable();
     for (const oid of inPack) lookup.add(oid);

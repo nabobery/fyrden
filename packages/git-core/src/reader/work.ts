@@ -1,6 +1,5 @@
 import { ReaderWorkSpent } from "./errors.js";
 
-/** What a decoding primitive is charged as. */
 export type ReaderWorkKind =
   /** Each inflate attempt, including one that stops for more input: span given plus declared size. */
   | "inflate"

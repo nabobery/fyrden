@@ -1,6 +1,5 @@
 import { ANALYTICS_ENGINE_POINTS_PER_INVOCATION, currentInvocation } from "./invocation.js";
 
-/** One data point as a test reads it back. */
 export interface RecordedPoint {
   readonly name: string;
   readonly blobs: string[];

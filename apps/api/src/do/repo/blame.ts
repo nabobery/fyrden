@@ -68,7 +68,6 @@ const MiB = 1024 * 1024;
  * answers 503 blame_busy.
  */
 export const BLAME_SHARE_BYTES = 48 * MiB;
-/** The one cleanup job of a repository's blame runs. */
 export const BLAME_PRUNE_JOB = "blame_prune";
 const SHARE_WAIT_MS = 2_000;
 /** The view and the live state together; each pack in the view counts 1 KiB. */
@@ -206,7 +205,6 @@ const restarted = () =>
 /** A ref resolved and pinned, or the answer refusing it. */
 type Resolved = { ok: true; commit: Oid } | { ok: false; result: BlameResult };
 
-/** A run's checkpoint read: its state, a reason to replace the run, or an answer. */
 type Loaded =
   | { ok: true; state: BlameState }
   | { ok: false; replace: string }
@@ -240,7 +238,6 @@ export class RepoBlame {
    */
   readonly #active = new Set<string>();
 
-  /** Runs with a slice in progress now. */
   activeRuns(): ReadonlySet<string> {
     return this.#active;
   }
@@ -1041,7 +1038,6 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((v, k) => v === b[k]);
 }
 
-/** The state of an empty file's finished run: no lines, nothing stored. */
 function emptyState(row: RunRow): BlameState {
   return {
     commit: row.commit,

@@ -12,7 +12,6 @@ import { blob, chunks, countRowsWritten, first, placeholders, rows, run } from "
 export interface PackSwap {
   /** Live packs the outputs replace (whole pack units): they become `superseded`. */
   readonly remove: readonly PackId[];
-  /** Outputs that go live. */
   readonly live: readonly PackId[];
   /** Outputs holding unreachable objects: they become `garbage`. */
   readonly garbage?: readonly PackId[];

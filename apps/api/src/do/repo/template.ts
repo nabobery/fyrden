@@ -39,7 +39,6 @@ export const TEMPLATE_POLICY = {
   maxBytes: 8 * 1024 * 1024,
 } as const;
 
-/** Objects one prefetch locates together. */
 const PREFETCH_BATCH = 100;
 
 export interface TemplateObject {
@@ -207,7 +206,6 @@ export interface GenerationDeps {
   readonly hasGitStorage: () => boolean;
   /** Takes the directory's epoch (a commit needs it first). */
   readonly checkEpoch: () => Promise<void>;
-  /** The write deps of the current invocation. */
   readonly writeDeps: () => Promise<FileWriteDeps>;
   /** For tests: runs before the first commit is written. */
   readonly hooks: () => { readonly beforeWrite?: () => Promise<void> };

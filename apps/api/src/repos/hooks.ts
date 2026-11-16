@@ -489,7 +489,6 @@ export async function redeliverHookDeliveryOperation(
   return deliveryOut(moved);
 }
 
-/** Repositories one call of the operator's reseal goes through. */
 const RESEAL_REPOS = 25;
 
 export async function resealHookSecretsOperation(

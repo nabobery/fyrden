@@ -128,8 +128,6 @@ describe("reachability mark", () => {
     repo = await createGitSandbox();
     sandboxes.push(repo);
     await buildRepo(repo, { seed: 5, commits: 25, files: 6, binaryBytes: 800 });
-    // A side branch, then objects nothing reaches: a deleted branch's commit,
-    // a lone blob and a lone tree.
     await repo.git(["branch", "side", "main~7"]);
     await repo.git(["checkout", "-q", "-b", "gone", "main~3"]);
     await repo.git(["commit", "-q", "--allow-empty", "-m", "gone"]);
@@ -157,7 +155,6 @@ describe("reachability mark", () => {
     ).sort();
     reachable = await oidsOf(repo, ["rev-list", "--objects", "--all"]);
     tips = (await lines(repo, ["for-each-ref", "--format=%(objectname)"])).map(oidFromHex);
-    // Two packs splitting the objects at random.
     const half = all.filter((_, i) => i % 3 === 0);
     loaded = await load(repo, [half, all.filter((_, i) => i % 3 !== 0)]);
   });

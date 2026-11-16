@@ -41,7 +41,6 @@ import type {
 const BRANCHES = "refs/heads/";
 const PULL_HEAD = /^refs\/pull\/([1-9][0-9]*)\/head$/;
 
-/** What a pull request listing pages through. */
 export type ListingKind = "files" | "commits";
 
 /** How long a listing's later pages keep its comparison. Proposed. */

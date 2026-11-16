@@ -15,7 +15,6 @@ import {
 } from "../app/lib/highlight-languages.js";
 import { DARK, LIGHT, themeOf } from "../app/lib/highlight-palette.js";
 
-/** WCAG 2 contrast ratio of two six-digit hex colours. */
 function contrast(a: string, b: string): number {
   const luminance = (hex: string) => {
     const [r, g, bl] = [1, 3, 5].map((at) => {
@@ -70,7 +69,6 @@ describe("a page's highlighting budget", () => {
     const k = 1024;
     expect(fits({ bytes: 0, blocks: 0 }, 64 * k)).toBe(true);
     expect(fits({ bytes: 10 * k, blocks: 1 }, 60 * k)).toBe(false);
-    // A large one passed over, a later small one still fits.
     expect(fits({ bytes: 10 * k, blocks: 1 }, 4 * k)).toBe(true);
     expect(fits({ bytes: 0, blocks: HIGHLIGHT_BUDGET.blocks - 1 }, 1)).toBe(true);
     expect(fits({ bytes: 0, blocks: HIGHLIGHT_BUDGET.blocks }, 1)).toBe(false);

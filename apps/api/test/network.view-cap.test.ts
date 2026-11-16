@@ -100,7 +100,6 @@ describe("view cap", () => {
     );
     expect(clone.objects).toEqual([...fx.repo.objects].sort());
 
-    // The parents' views are unchanged.
     expect((await viewOf(f1)).every((p) => p.state === "live")).toBe(true);
     expect((await viewOf(p)).every((p) => p.state === "live")).toBe(true);
 
@@ -164,7 +163,6 @@ describe("view cap", () => {
           `pack-${swaps}`,
         )
         .toArray().length;
-      // The output's row goes: so do its records.
       forgetMerged(git, previous);
       const left = sql.exec<{ n: number }>("SELECT count(*) AS n FROM view_merged").one().n;
       return { most, kept, newest, left };

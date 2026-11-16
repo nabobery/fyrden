@@ -43,7 +43,6 @@ export interface AuthzRequest {
    */
   ceilings?: readonly Rights[];
   token: { scopes: readonly string[]; repoIds: readonly string[] | null };
-  /** The repository a repository permission is checked against. */
   repoId?: string;
 }
 

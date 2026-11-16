@@ -64,7 +64,6 @@ describe("search in the web UI", () => {
     expect(new URL(page.url()).searchParams.get("per_page")).toBe("10");
     expect(new URL(page.url()).searchParams.has("page")).toBe(false);
     await see(page.getByRole("status")).toHaveText("No results.");
-    // Indexing is off: the API says results may be missing, and the page says so.
     await see(page.getByText("Results may be missing")).toBeVisible();
     await see(query()).toHaveValue("lantern");
     await accessible("search results that may be incomplete");
@@ -112,7 +111,6 @@ describe("search in the web UI", () => {
     await see(page.getByLabel("Search for")).toHaveValue("repositories");
     await visit(page, `${stack.origin}/search?q=${encodeURIComponent("日本 repo:ada/forge")}`);
     await see(page.getByRole("alert")).toContainText("text search cannot match");
-    // A scope value not of its kind's shape is refused before any search.
     await page.getByLabel("Scope", { exact: true }).selectOption("repo");
     await page.getByLabel("Repository (owner/name) or handle").fill(`${handle} org:other`);
     await page.getByRole("button", { name: "Search", exact: true }).click();

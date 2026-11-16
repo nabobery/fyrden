@@ -9,7 +9,6 @@ import type { CaseFile } from "./types.ts";
 
 const from = "t5546-receive-limits.sh";
 
-/** The push body limit the interop server is started with. */
 export const BODY_LIMIT = 4 * 1024 * 1024;
 
 export const t5546: CaseFile = {
@@ -23,7 +22,6 @@ export const t5546: CaseFile = {
         const work = await t.work("too-large-work");
         await t.ok(["push", "-q", remotes.fyrden, "main"], work);
         const before = await t.lsRemote(remotes.fyrden);
-        // Incompressible, so the pack is larger than the limit.
         await writeFile(join(t.scratch, work, "big.bin"), randomBytes(BODY_LIMIT + 512 * 1024));
         await t.commit(work, {}, "too big");
         const res = await t.git(["push", remotes.fyrden, "main"], { cwd: work });

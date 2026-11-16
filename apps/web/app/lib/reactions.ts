@@ -1,11 +1,9 @@
 import { REACTION_CONTENTS, type ReactionContent } from "@fyrden/domain";
 
-/** What a reaction form asks the API: where, how, and with what. */
 export type ReactionCall = {
   readonly method: "POST" | "DELETE";
   readonly path: string;
   readonly body: { content: ReactionContent } | undefined;
-  /** The comment it is on, if any. */
   readonly target: number | undefined;
 };
 

@@ -46,7 +46,6 @@ function reactionOutput(reaction: ReactionRecord): Reaction {
   };
 }
 
-/** What a target that is not there (or not the caller's kind) answers. */
 function missing(target: ReactionTarget, id: number): OperationError {
   return target === "subject"
     ? subjectNotFound(id)
@@ -163,55 +162,46 @@ async function remove(
   return { id: input.reaction_id, state: "deleted" };
 }
 
-/** The `reactions.issue.list` operation. */
 export const listIssueReactionsOperation = (
   ctx: OpContext,
   input: Input<typeof listIssueReactions>,
 ) => list(ctx, input, "subject", input.issue_number);
 
-/** The `reactions.issue.create` operation. */
 export const createIssueReactionOperation = (
   ctx: OpContext,
   input: Input<typeof createIssueReaction>,
 ) => create(ctx, input, "subject", input.issue_number);
 
-/** The `reactions.issue.delete` operation. */
 export const deleteIssueReactionOperation = (
   ctx: OpContext,
   input: Input<typeof deleteIssueReaction>,
 ) => remove(ctx, input, "subject", input.issue_number);
 
-/** The `reactions.comment.list` operation. */
 export const listCommentReactionsOperation = (
   ctx: OpContext,
   input: Input<typeof listCommentReactions>,
 ) => list(ctx, input, "comment", input.comment_id);
 
-/** The `reactions.comment.create` operation. */
 export const createCommentReactionOperation = (
   ctx: OpContext,
   input: Input<typeof createCommentReaction>,
 ) => create(ctx, input, "comment", input.comment_id);
 
-/** The `reactions.comment.delete` operation. */
 export const deleteCommentReactionOperation = (
   ctx: OpContext,
   input: Input<typeof deleteCommentReaction>,
 ) => remove(ctx, input, "comment", input.comment_id);
 
-/** The `reactions.review_comment.list` operation. */
 export const listReviewCommentReactionsOperation = (
   ctx: OpContext,
   input: Input<typeof listReviewCommentReactions>,
 ) => list(ctx, input, "review_comment", input.comment_id);
 
-/** The `reactions.review_comment.create` operation. */
 export const createReviewCommentReactionOperation = (
   ctx: OpContext,
   input: Input<typeof createReviewCommentReaction>,
 ) => create(ctx, input, "review_comment", input.comment_id);
 
-/** The `reactions.review_comment.delete` operation. */
 export const deleteReviewCommentReactionOperation = (
   ctx: OpContext,
   input: Input<typeof deleteReviewCommentReaction>,

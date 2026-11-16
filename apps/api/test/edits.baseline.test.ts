@@ -101,7 +101,6 @@ describe("updates from a version", () => {
     const made = await json<{ id: number; version: number }>(
       api("POST", `${path}/labels`, owner.token, { name: "bug-x", color: "ff0000" }),
     );
-    // Renamed, and its old name taken by a new label.
     await api("PATCH", `${path}/labels/bug-x`, owner.token, { new_name: "defect-x" });
     await api("POST", `${path}/labels`, owner.token, { name: "bug-x", color: "00ff00" });
     const stale = await json<{ code: string }>(

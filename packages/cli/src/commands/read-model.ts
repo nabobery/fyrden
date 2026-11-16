@@ -98,7 +98,6 @@ export function parseReadModelArgs(
   return { command: "export", ...target, out, keepPaused };
 }
 
-/** What a command that drives the API step by step needs. */
 interface Driving {
   readonly args: ApiTarget;
   readonly fetch: typeof fetch;

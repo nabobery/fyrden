@@ -27,9 +27,7 @@ for (const name of readdirSync(tmpdir())) {
   try {
     if (Date.now() - statSync(path).mtimeMs > STALE_MS)
       rmSync(path, { recursive: true, force: true });
-  } catch {
-    // Another run removed it first.
-  }
+  } catch {}
 }
 
 /** Resident memory of every process in group `pgid`, in MB (`ps` reports KB, on Linux and macOS). */
@@ -53,9 +51,7 @@ const child = spawn("npx", ["vitest", "run", "--root", ".", ...process.argv.slic
 const killGroup = () => {
   try {
     process.kill(-child.pid, "SIGKILL");
-  } catch {
-    // Already gone.
-  }
+  } catch {}
 };
 // Stryker kills a timed-out run's process tree by parent pid (tree-kill),
 // which reaches this group too. A SIGTERM or Ctrl-C takes the group along.
@@ -86,7 +82,7 @@ const status = await new Promise((resolve) => {
   child.on("close", (code) => resolve(code ?? 1));
 });
 clearInterval(watch);
-killGroup(); // Anything the run left behind in its group.
+killGroup();
 rmSync(dir, { recursive: true, force: true });
 if (overLimit > 0) {
   console.error(

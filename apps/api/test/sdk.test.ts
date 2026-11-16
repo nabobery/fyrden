@@ -1,5 +1,3 @@
-// The SDK against this API: a repository's life through typed calls.
-
 import { env, exports } from "cloudflare:workers";
 import {
   authorizationUrl,

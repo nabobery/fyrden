@@ -36,7 +36,6 @@ export const PULL_FILES_POLICY = {
    * then); past it, the listing is truncated and pairs no renames.
    */
   maxRawChanges: 6_000,
-  /** Trees read to list the files. */
   maxTrees: 1_500,
   /**
    * The largest tree read, in bytes (about 37,000 entries): its memory
@@ -66,7 +65,6 @@ export const PULL_FILES_POLICY = {
 };
 export type PullFilesPolicy = typeof PULL_FILES_POLICY;
 
-/** Why a file's patch is not given. */
 export type PatchOmitted = "binary" | "too_large" | "patch_too_large" | "submodule" | "budget";
 
 export interface PullFileView {
@@ -226,7 +224,6 @@ async function changeList(
   }
 }
 
-/** What a page needs of a change. */
 function listedChange(entry: DiffEntry): ListedChange {
   return {
     status: entry.status,

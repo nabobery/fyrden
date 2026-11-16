@@ -24,7 +24,6 @@ import { countingExec, entry, feedIn, inFeed } from "./helpers/feed.js";
 const REPO = "rep_test";
 const conv = (n: number) => `conv-${n}`;
 
-/** The inbox's rows, as the tests read them. */
 const threads = (storage: DurableObjectStorage) =>
   storage.sql
     .exec<{
@@ -102,7 +101,6 @@ describe("the inbox", () => {
         storage.transactionSync(() => feed.inbox.markDone(id));
         apply([second]);
         expect(threads(storage)[0], order).toMatchObject({ unread: 0, done: 1 });
-        // A later event reopens it.
         apply([comment(1, 4)]);
         expect(threads(storage)[0], order).toMatchObject({ unread: 1, done: 0 });
       });
@@ -158,7 +156,6 @@ describe("the preference gate", () => {
         feed.apply([comment(1, 1), comment(2, 1, { kind: "mention" })], gate({ ignored: [REPO] })),
       );
       expect(threads(storage)).toEqual([]);
-      // The feed's items apply as ever.
       expect(storage.sql.exec("SELECT count(*) AS n FROM feed_items").one().n).toBe(2);
     });
   });
@@ -267,7 +264,6 @@ describe("a stream's cap", () => {
       const { feed } = feedIn(storage, () => now);
       const apply = (es: ReturnType<typeof entry>[]) =>
         storage.transactionSync(() => feed.apply(es));
-      // Another repository's stream, and the issues of this one.
       apply([entry({ version: 1, thread: 1, conversation: "other", repoId: "rep_other" })]);
       apply([entry({ version: 1, thread: 9_000, subject: "issue", conversation: "issue" })]);
       for (let n = 1; n <= INBOX_POLICY.streamThreads; n++) {
@@ -605,7 +601,6 @@ describe("a thread read or done where the feed's thread stands", () => {
         const { feed } = feedIn(storage, () => now);
         const apply = (es: ReturnType<typeof entry>[], gate?: Gate) =>
           storage.transactionSync(() => feed.apply(es, gate));
-        // Event A notifies thread 1.
         apply([comment(1, 1, { eventKey: "rep_test:1:a", occurredAt: now })]);
         // Event B's settlement (version 2), its repository ignored: state only, a tombstone.
         const ignored: Gate = { ignored: new Set([REPO]), unsubscribed: new Set() };

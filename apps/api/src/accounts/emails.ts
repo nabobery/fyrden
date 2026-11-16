@@ -43,16 +43,13 @@ import { clock, newId } from "../services.js";
 
 /** Proposed values. */
 export const EMAIL_POLICY = {
-  /** Live addresses a user keeps at most. */
   maxAddresses: 10,
   /** Confirmation emails a user is sent at most an hour, and a mailbox a day. */
   perUserHour: 5,
   perMailboxDay: 3,
-  /** How long a confirmation link works. */
   confirmationMs: 24 * 60 * 60_000,
 } as const;
 
-/** Hooks into a write, between its checks and its batch. For tests. */
 export const emailWriteHooks: { beforeWrite?: () => Promise<void> } = {};
 
 const HOUR = 60 * 60_000;
@@ -149,7 +146,6 @@ function entries(rows: readonly Row[]): Entry[] {
   }));
 }
 
-/** The `users.emails.list` operation. */
 export async function listUserEmailsOperation(
   ctx: OpContext,
   _input: Input<typeof listUserEmails>,
@@ -242,7 +238,6 @@ const withinLimits = (n: number, keys: string, user: string, hour: string, day: 
      WHERE coalesce((SELECT sent FROM email_counters c WHERE c.scope = 'mailbox_day'
        AND c.key = k.value AND c.period = ${day}), 0) + 1 > ${EMAIL_POLICY.perMailboxDay})`;
 
-/** The condition that none of the mailboxes `?<keys>` (JSON) is suppressed. */
 const notSuppressed = (keys: string) =>
   `NOT EXISTS (SELECT 1 FROM email_suppressions WHERE suppressed = 1
      AND address_key IN (SELECT value FROM json_each(${keys})))`;
@@ -288,11 +283,9 @@ async function refusal(ctx: OpContext, keys: readonly string[], adding: number):
     throw rateLimited(Math.ceil(((hour + 1) * HOUR - now) / 1000));
   if ((row.daily ?? 0) + 1 > EMAIL_POLICY.perMailboxDay)
     throw rateLimited(Math.ceil(((day + 1) * DAY - now) / 1000));
-  // Something changed between: the caller tries again.
   throw new OperationError(409, "conflict", "The addresses changed meanwhile: try again.");
 }
 
-/** What became of one confirmation email. */
 type Mailed =
   | { readonly status: "sent" }
   /** The provider may have it: never sent again. */
@@ -415,7 +408,6 @@ async function heldBack(
   return { status: "not_sent", why: "gone" };
 }
 
-/** The `users.emails.add` operation. */
 export async function addUserEmailsOperation(
   ctx: OpContext,
   input: Input<typeof addUserEmails>,
@@ -490,7 +482,6 @@ export async function addUserEmailsOperation(
   return entries(await liveRows(ctx)).filter((e) => keys.has(e.email.toLowerCase()));
 }
 
-/** The `users.emails.delete` operation. */
 export async function deleteUserEmailsOperation(
   ctx: OpContext,
   input: Input<typeof deleteUserEmails>,
@@ -546,7 +537,6 @@ export async function deleteUserEmailsOperation(
 const notFound = () =>
   new OperationError(404, "confirmation_not_found", "No such confirmation link works now.");
 
-/** The `users.emails.confirm` operation. */
 export async function confirmUserEmailOperation(
   ctx: OpContext,
   input: Input<typeof confirmUserEmail>,
@@ -625,7 +615,6 @@ export async function confirmUserEmailOperation(
   return entry;
 }
 
-/** The `users.emails.confirmation` operation. */
 export async function requestUserEmailConfirmationOperation(
   ctx: OpContext,
   input: Input<typeof requestUserEmailConfirmation>,
@@ -696,7 +685,6 @@ export async function requestUserEmailConfirmationOperation(
   return null;
 }
 
-/** The categories' defaults: what asks something of the user on, the rest off. */
 export const EMAIL_DEFAULTS = { direct: true, participating: false, watching: false } as const;
 
 type Settings = Output<typeof getNotificationSettings>;
@@ -718,7 +706,6 @@ async function settingsOf(ctx: OpContext): Promise<Settings> {
   };
 }
 
-/** The `users.notification_settings.get` operation. */
 export async function getNotificationSettingsOperation(
   ctx: OpContext,
   _input: Input<typeof getNotificationSettings>,

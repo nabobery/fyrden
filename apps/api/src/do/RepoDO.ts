@@ -331,7 +331,6 @@ const MAX_APPROVERS = 1_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
-/** The job that prunes feed audience pages past their time, and how many a slice deletes. */
 const FEED_PAGES_JOB = "feed_pages_prune";
 /** The job that takes a restored repository's preferences back from the directory's copies. */
 const PREFERENCE_RECOVERY_JOB = "preference_recovery";
@@ -339,7 +338,6 @@ const PREFERENCE_RECOVERY_JOB = "preference_recovery";
 const PREFERENCE_RECOVERY_RETRY_MS = 60_000;
 /** The job that deletes what deleted conversations' deletions left of their preferences. */
 const PREFERENCE_CLEANUP_JOB = "preference_cleanup";
-/** The jobs that seal and clean up digest windows, and ask the ledger for digest credit. */
 const DIGEST_SEAL_JOB = "digest_seal";
 const DIGEST_CREDIT_JOB = "digest_credit";
 
@@ -378,8 +376,6 @@ const DELETION_SLICE = {
   claim: 0,
 } as const;
 
-/** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
-/** A label's change as `updateLabel` takes it. */
 type LabelPatch = {
   readonly name?: string;
   readonly color?: string;
@@ -401,6 +397,7 @@ function assetRefusal(code: string): AssetFailure {
   }
 }
 
+/** One repository: refs, packs, its events and audit log. Keyed by the immutable repo id. */
 export class RepoDO extends MigratingDO {
   static readonly schema = repoSchema;
 
@@ -412,16 +409,13 @@ export class RepoDO extends MigratingDO {
    */
   readonly git: RepoGitStorage;
 
-  /** Where this object's metrics are written. Tests may replace it. */
   metricsDataset: AnalyticsEngineDataset;
 
-  /** Sends one outbox batch to the events queue. Tests may replace it. */
   sendEvents: (envelope: Envelope) => Promise<void>;
 
   /** Access decisions, from the account's ACL snapshot. */
   readonly acl: RepoAcl;
 
-  /** Effective roles and the rulesets' judgement of writes. */
   readonly #authority: RepoAuthority;
 
   /** The repository's generation from a template, while it is pending. */
@@ -430,27 +424,20 @@ export class RepoDO extends MigratingDO {
   /** Changes only an administrator may make: settings, rulesets, webhooks. */
   readonly #admin: RepoAdministration;
 
-  /** The repository as activity feeds read it. */
   readonly #feedView: RepoFeedView;
 
-  /** The account's storage quota, as pushes charge it. */
   readonly #storageCharges: StorageCharges;
 
-  /** Review requests, diff threads and the standing a merge is judged by. */
   readonly #discussion: PullDiscussion;
   readonly #codeOwnerFacts: CodeOwnerFacts;
   readonly #codeOwnerRequests: CodeOwnerRequests;
 
-  /** Merges of pull requests into their base branches. */
   readonly #merging: PullMerging;
 
-  /** Writes of pull requests' head branches made through this repository. */
   readonly #headWrites: HeadBranchWrites;
 
-  /** Pull requests between this repository and others of its fork network. */
   readonly #forkPulls: ForkPulls;
 
-  /** Pull requests opened, from this repository's branches or another's of its network. */
   readonly #opening: PullOpening;
 
   /** Pulls the account's ACL snapshot for this repository. Tests may replace it. */
@@ -476,7 +463,6 @@ export class RepoDO extends MigratingDO {
   /** The CODEOWNERS errors endpoint's budgets. Tests may replace them. */
   codeOwnersErrorsPolicy: CodeOwnersErrorsPolicy = CODEOWNERS_ERRORS_POLICY;
 
-  /** A tree's path lists: caps and slices. Tests may replace them. */
   pathsPolicy: PathsPolicy = PATHS_POLICY;
 
   /** Asking code owners to review: a slice's budgets. Tests may replace them. */
@@ -485,7 +471,6 @@ export class RepoDO extends MigratingDO {
   /** Hooks into asking code owners to review. For tests. */
   codeOwnerRequestHooks: CodeOwnerRequestHooks = {};
 
-  /** Where audit records are archived. Tests may replace it. */
   auditBucket: Pick<R2Bucket, "put">;
 
   /** Events waiting to be sent; drained by the alarm. */
@@ -494,13 +479,11 @@ export class RepoDO extends MigratingDO {
   /** The repository's events and audit rows, written with each change. */
   readonly events: RepoEvents;
 
-  /** Pull requests between the repository's branches. */
   readonly pulls: RepoPulls;
 
   /** The files pull requests' listings found changed, kept for their later pages and listings. */
   readonly changeLists: ChangeLists;
 
-  /** Reviews of pull requests, and reviews requested. */
   readonly reviews: RepoReviews;
   readonly teamRequests: RepoTeamRequests;
 
@@ -534,13 +517,10 @@ export class RepoDO extends MigratingDO {
   /** Reactions to issues, pull requests and their comments. */
   readonly reactions: RepoReactions;
 
-  /** References between issues and pull requests, here and across repositories. */
   readonly references: RepoReferences;
 
-  /** Conversation comments on issues and pull requests. */
   readonly comments: RepoComments;
 
-  /** Comments on pull requests' diffs, and their threads. */
   readonly reviewComments: RepoReviewComments;
 
   /** Whether open pull requests merge cleanly, worked out in the background. */
@@ -556,7 +536,6 @@ export class RepoDO extends MigratingDO {
   /** Rebase merges of pull requests, made over several steps. */
   readonly rebases: RebaseSagas;
 
-  /** The repository's webhooks. */
   readonly hooks: RepoHooks;
   readonly feed: RepoFeed;
   readonly watching: RepoWatching;
@@ -1196,7 +1175,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** Queues the audit archiver while audit rows wait to be archived. */
   #ensureAuditArchive(): void {
     if (!hasUnarchivedAuditRows(this.ctx.storage)) return;
     this.git.jobs.ensure("audit_archive", AUDIT_ARCHIVE_JOB, {
@@ -1376,7 +1354,6 @@ export class RepoDO extends MigratingDO {
     return this.#measured("updateSettings", () => this.#admin.updateSettings(input));
   }
 
-  /** The repository's rulesets, created on first use. */
   #rulesetStore: RepoRulesets | undefined;
 
   get rulesetStore(): RepoRulesets {
@@ -1611,7 +1588,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** Opens a pull request between two of the repository's branches (see `PullOpening.open`). */
   createPull(input: Omit<OpenPull, "baseSha" | "headSha">, actor: RefActor): Promise<PullOpened> {
     return this.#measured("createPull", () => this.#opening.open(input, actor));
   }
@@ -1700,7 +1676,6 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** Merges a pull request into its base branch (see `PullMerging.merge`). */
   mergePull(input: MergePullInput, actor: RefActor): Promise<Browsed<MergeMade>> {
     return this.#measured("mergePull", async () => {
       // What the description closes in other repositories is resolved now, for the merge to read.
@@ -1709,7 +1684,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** A page of the files a pull request changes (see `pullFilesListing`). */
   listPullFiles(number: number, from: ListingCursor | null, limit: number) {
     return this.#browse("listPullFiles", async (browse) =>
       this.#refusesReads()
@@ -1789,7 +1763,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** Queues the settling of team review requests no longer standing (see `RepoTeamRequests`). */
   /**
    * The repository's organization's teams `slugs`, as a review request
    * asks them; `unavailable` when they could not be read.
@@ -1991,7 +1964,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** The issue or pull request numbered `number`, of kind `kind`, with what it is sorted by. */
   #subject(number: number, kind: SubjectKind): Subject | undefined {
     const meta = this.subjectMeta.of(number);
     if (kind === "issue") {
@@ -2377,14 +2349,12 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** Creates a label (write). */
   createLabel(spec: LabelSpec, actor: RefActor) {
     return this.#pullChange("createLabel", actor, (caller) =>
       this.#withIdentity(() => this.subjectMeta.createLabel(spec, caller)),
     );
   }
 
-  /** Changes a label (write). */
   updateLabel(name: string, patch: LabelPatch, actor: RefActor) {
     return this.#updateLabel(undefined, name, patch, actor);
   }
@@ -2410,7 +2380,6 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** Deletes a label (write). */
   deleteLabel(name: string, actor: RefActor) {
     return this.#deleteLabel(undefined, name, actor);
   }
@@ -2872,7 +2841,6 @@ export class RepoDO extends MigratingDO {
     });
   }
 
-  /** Ends an upload session. */
   abortReleaseAsset(uploadId: string, principal: string): Promise<UploadAnswer> {
     return this.#measured("abortReleaseAsset", async () => {
       await this.checkEpoch();
@@ -2976,14 +2944,12 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** Creates a milestone (write). */
   createMilestone(input: Parameters<RepoSubjectMeta["createMilestone"]>[0], actor: RefActor) {
     return this.#pullChange("createMilestone", actor, (caller) =>
       this.#withIdentity(() => this.subjectMeta.createMilestone(input, caller)),
     );
   }
 
-  /** Changes a milestone (write). */
   updateMilestone(
     number: number,
     patch: Parameters<RepoSubjectMeta["updateMilestone"]>[1],
@@ -3018,7 +2984,6 @@ export class RepoDO extends MigratingDO {
     );
   }
 
-  /** Deletes a milestone (write). */
   deleteMilestone(number: number, actor: RefActor) {
     return this.#pullChange("deleteMilestone", actor, (caller) =>
       this.#withIdentity(() => this.subjectMeta.deleteMilestone(number, caller)),
@@ -3065,7 +3030,6 @@ export class RepoDO extends MigratingDO {
     };
   }
 
-  /** Locks or unlocks an issue's or pull request's conversation, of `kinds`. */
   setConversationLock(
     number: number,
     lock: { readonly locked: boolean; readonly reason: LockReason | null },
@@ -3181,7 +3145,6 @@ export class RepoDO extends MigratingDO {
     return this.#discussion.editReviewComment(id, body, actor);
   }
 
-  /** Resolves a thread, or makes it unresolved again. */
   resolveReviewThread(number: number, threadId: number, resolved: boolean, actor: RefActor) {
     return this.#discussion.resolveReviewThread(number, threadId, resolved, actor);
   }
@@ -3589,7 +3552,6 @@ export class RepoDO extends MigratingDO {
     return this.#browse("browseTree", (b) => treeListing(b, ref, recursive));
   }
 
-  /** One page of a tree's file paths (see `path-lists.ts`). */
   browsePaths(input: PathsInput): Promise<Browsed<PathsPage>> {
     const { walkReads, maxReads, maxBuiltBytes } = this.pathsPolicy;
     return this.#browse(
@@ -3627,7 +3589,6 @@ export class RepoDO extends MigratingDO {
     this.git.leases.release(leaseId);
   }
 
-  /** The push path's operations (receive-pack), created on first use. */
   #pushes: RepoPush | undefined;
 
   /**
@@ -3645,7 +3606,6 @@ export class RepoDO extends MigratingDO {
    * replace them.
    */
   retireOptions: PackRetireOptions;
-  /** Hooks into garbage-collection slices. For tests. */
   gcHooks: GcHooks = {};
 
   /** What garbage collection keeps besides what the refs and the reflog reach. */
@@ -3752,7 +3712,6 @@ export class RepoDO extends MigratingDO {
     return this.#push().abort(uploadId);
   }
 
-  /** Chunked uploads (`uploads.*` operations), created on first use. */
   #chunkedUploads: ChunkedUploads | undefined;
 
   #chunked(): ChunkedUploads {
@@ -4155,27 +4114,19 @@ export class RepoDO extends MigratingDO {
     } satisfies Partial<Record<JobKind, JobHandler>>;
   }
 
-  // Fork networks: see src/network/.
-
-  /** Hooks into detach slices. For tests. */
   detachHooks: DetachHooks = {};
 
   /** Hooks into a generation from a template. For tests. */
   generationHooks: { beforeWrite?: () => Promise<void> } = {};
 
-  /** Hooks into opening a pull request from another repository. For tests. */
   forkPullHooks: { beforePublish?: () => Promise<void> } = {};
 
-  /** Hooks into a merge of a pull request. For tests. */
   mergeHooks: { beforeFinish?: () => Promise<void> } = {};
 
-  /** Hooks into a merge of the base branch into a pull request's head. For tests. */
   headMergeHooks: { beforeFinish?: () => Promise<void> } = {};
 
-  /** Hooks into a write of a pull request's head branch here, handed over by its base. For tests. */
   headWriteHooks: { beforeFinish?: () => Promise<void> } = {};
 
-  /** Hooks into applying suggestions. For tests. */
   suggestionHooks: { beforeWrite?: () => Promise<void> } = {};
 
   /**
@@ -4190,7 +4141,6 @@ export class RepoDO extends MigratingDO {
   /** A rebase merge's budgets. Tests may replace them. */
   rebasePolicy: RebasePolicy = REBASE_POLICY;
 
-  /** Hooks into a rebase merge's commit. For tests. */
   rebaseHooks: {
     beforeFinish?: (queries: number) => void;
     beforeFinalize?: () => Promise<void>;
@@ -4203,7 +4153,6 @@ export class RepoDO extends MigratingDO {
   /** A mergeability slice's budgets. Tests may replace them. */
   mergeabilityPolicy: MergePolicy = MERGEABILITY_POLICY;
 
-  /** Hooks into working out mergeability. For tests. */
   mergeabilityHooks: { beforeWrite?: () => Promise<void> } = {};
 
   #networkOps: RepoNetwork | undefined;
@@ -4236,7 +4185,6 @@ export class RepoDO extends MigratingDO {
     return this.#network().commitPage(frontier, limit);
   }
 
-  /** What an import of a pull request's head works with. */
   #importDeps(): ImportDeps {
     return {
       git: this.git,
@@ -5041,7 +4989,6 @@ export class RepoDO extends MigratingDO {
     return this.#network().compactSlice(input);
   }
 
-  /** Swaps a finished view compaction in. */
   async swapCompactedView(output: string, sources: readonly string[]): Promise<ViewPack> {
     await this.#epochFirst();
     return this.#network().swapCompacted(output, sources);
@@ -5106,7 +5053,6 @@ export class RepoDO extends MigratingDO {
   }
 }
 
-/** Whether a change asks anything of labels, assignees or the milestone. */
 function hasMeta(meta: MetaInput): boolean {
   return meta.labels !== undefined || meta.assignees !== undefined || meta.milestone !== undefined;
 }

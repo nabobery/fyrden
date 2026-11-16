@@ -38,7 +38,6 @@ describe("what a file's bytes are", () => {
 
   it("is undecodable when valid bytes are not UTF-8", () => {
     expect(classifyBytes(Uint8Array.of(0xc3, 0x28))).toEqual({ kind: "undecodable" });
-    // Cut in the middle of a character.
     expect(classifyBytes(utf8("é").subarray(0, 1))).toEqual({ kind: "undecodable" });
   });
 
@@ -46,7 +45,6 @@ describe("what a file's bytes are", () => {
     expect(decodeText(btoa("hi"))).toBe("hi");
     expect(decodeText(btoa("a\0b"))).toBeUndefined();
     expect(decodeText(btoa("\xc3\x28"))).toBeUndefined();
-    // A byte order mark is taken off, as it always was.
     expect(decodeText(btoa("\xef\xbb\xbfhi"))).toBe("hi");
   });
 });
@@ -335,7 +333,6 @@ describe("where a URL opens the file", () => {
       position: 30,
       canonical: "?line=30#L30",
     });
-    // A range is no canonical fragment, even one that starts where the query's does.
     expect(at("?line=12-20", "#L12-L15")).toEqual({
       selection: { start: 12, end: 15 },
       position: 12,

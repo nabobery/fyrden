@@ -76,7 +76,6 @@ describe("encodeCommit and parseCommit", () => {
       }),
     );
     expect(value.parents.map((p) => Buffer.from(p).toString("hex"))).toEqual([PARENT, TREE]);
-    // Trailing whitespace is not part of the name; extra blanks before the date are allowed.
     expect(value.author).toEqual({
       name: utf8("Name"),
       email: utf8("e@x"),

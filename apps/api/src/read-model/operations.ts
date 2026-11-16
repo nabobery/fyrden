@@ -46,7 +46,6 @@ export async function pauseReadModelOperation(
   }
 }
 
-/** The `admin.read_model.resume` operation. */
 export async function resumeReadModelOperation(
   ctx: OpContext,
   input: Input<typeof resumeReadModel>,

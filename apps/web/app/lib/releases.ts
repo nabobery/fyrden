@@ -1,8 +1,3 @@
-/**
- * Releases as the pages read and show them: the API's own shapes (types
- * only), where a release lives, and how the state of its tag reads.
- */
-
 import type { getRelease, getRetainedAssets, listReleases, Output } from "@fyrden/api-contract";
 import { encodePath } from "./types.js";
 
@@ -20,11 +15,9 @@ export const RELEASE_FORM_MAX_BYTES = 9 * 65_536 + 32 * 1024;
 export const releasePage = (owner: string, repo: string, tag: string) =>
   `/${owner}/${repo}/releases/tag/${encodePath(tag)}`;
 
-/** A release's editor. */
 export const releaseEditor = (owner: string, repo: string, tag: string) =>
   `/${owner}/${repo}/releases/edit/${encodePath(tag)}`;
 
-/** The API's release of a tag. */
 export const releaseByTagApi = (base: string, tag: string) =>
   `${base}/releases/tags/${encodePath(tag)}`;
 

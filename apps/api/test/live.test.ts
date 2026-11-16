@@ -322,7 +322,6 @@ describe("revocations", () => {
       .first<{ id: string }>()) as { id: string };
     expect(token).toBeTruthy();
     await env.DIRECTORY.prepare("UPDATE tokens SET revoked_at = ? WHERE id = ?").bind(1, id).run();
-    // Again: nothing more.
     await env.DIRECTORY.prepare("UPDATE tokens SET revoked_at = ? WHERE id = ?").bind(2, id).run();
     expect(await revocationsOf(`credential:${id}`)).toBe(1);
     const { gen } = (await env.DIRECTORY.prepare(
@@ -481,7 +480,6 @@ describe("a live socket", () => {
           ws.addEventListener("close", (event) => resolve(event.code)),
         );
         ws.accept();
-        // No socket of it was made.
         expect(
           await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_sockets WHERE feed = ?")
             .bind(owner.principalId)
@@ -1952,7 +1950,6 @@ describe("a feed's turn", () => {
     const ws = opened.response.webSocket as WebSocket;
     ws.accept();
     onTestFinished(() => ws.close(1000, "done"));
-    // Nothing sent, nor its cursor moved, with no socket to send to.
     expect(beforeAttached).toEqual({ attached: 0, behind: true, sent: 0 });
     // Once attached, its turn tells it.
     const frames: unknown[] = [];
@@ -1990,7 +1987,6 @@ describe("a feed's turn", () => {
     for (let turn = 0; turn < 3 && connected.frames.length === 0; turn++)
       await runDurableObjectAlarm(feedOf(owner));
     expect(connected.frames[0]).toMatchObject({ t: "changed" });
-    // The one left with nothing attached is gone, on its end's provision.
     expect(await rows()).toEqual([{ attached: 1, sent: 1 }]);
   });
 
@@ -2701,7 +2697,6 @@ describe("a feed's turn", () => {
       const noted = await lateRefusal(owner, (state) => {
         state.storage.sql.exec("UPDATE live_turn SET operation_id = 'another turn'");
       });
-      // Another turn's sockets: nothing of this turn counted either.
       expect(noted).toEqual([]);
       expect(pausedFrames(socket)).toEqual([]);
       socket.ws?.close(1000, "done");
@@ -2770,7 +2765,6 @@ describe("a feed's turn", () => {
       const noted = await outlast(owner, ends, (state) => {
         state.storage.sql.exec("UPDATE live_turn SET operation_id = 'another turn'");
       });
-      // Another turn's sockets: nothing of this turn counted either.
       expect(noted).toEqual([]);
       expect(pausedFrames(socket)).toEqual([]);
       socket.ws?.close(1000, "done");
@@ -3589,7 +3583,6 @@ describe("a feed's turn", () => {
     );
     ws.accept();
     expect(await closed).toBe(4413);
-    // Nothing granted: no admission, end or turn charged and left standing.
     expect(await charged()).toEqual(before);
     first.ws?.close(1000, "done");
   });
@@ -3724,7 +3717,6 @@ describe("a feed's turn", () => {
     await runDurableObjectAlarm(feedOf(owner));
     expect(socket.frames).toEqual([]);
     expect(await kindOf()).toBe("pump");
-    // The pump delivers it.
     await due();
     await runDurableObjectAlarm(feedOf(owner));
     expect(await socket.next()).toMatchObject({ t: "changed" });
@@ -4056,14 +4048,12 @@ describe("live work's rows in a feed's object", () => {
       };
     };
     try {
-      // A turn with nothing to do: its own end.
       const idle = await userWithEpoch();
       const idleSocket = await open(idle.token, ROOMY);
       await doneTurnReceipts(idle, at);
       measuring = true;
       await turnLater(idle);
       noteEnd();
-      // A renewal.
       vi.useFakeTimers({ toFake: ["Date"] });
       await advance(idle, RENEW_LATE);
       await say(idle, idleSocket, { t: "renew" });
@@ -4554,18 +4544,14 @@ describe("live work's rows in a feed's object", () => {
       socket = await open(owner.token);
     });
     note("admission", { ...opened, d1Read: 0, d1Written: 0 });
-    // A control.
     note("control", await rows(owner, () => say(owner, socket, { t: "ack", n: 0 })));
     // A mark: a change applied with and without live sockets, its difference the mark's.
     const marked = await rows(owner, () => feedOf(owner).applyFeed([change(owner, repo, 1)]));
-    // A turn running the pump.
     note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
-    // A renewal's turn.
     vi.useFakeTimers({ toFake: ["Date"] });
     await advance(owner, RENEW_LATE);
     await say(owner, socket, { t: "renew" });
     note("pump", await rows(owner, () => runDurableObjectAlarm(feedOf(owner))));
-    // The socket's end.
     note(
       "terminal",
       await rows(owner, async () => {
@@ -4955,7 +4941,6 @@ describe("a live socket's protocol", () => {
     expect(await socket.closed).toEqual({ code: 1008 });
     const late = await open(owner.token);
     vi.useFakeTimers({ toFake: ["Date"] });
-    // Past its deadline (a renewal period and a minute on).
     vi.setSystemTime(Date.now() + LIVE_POLICY.renewMs + 60_000);
     late.ws?.send(JSON.stringify({ t: "renew" }));
     expect(await late.closed).toEqual({ code: 4401 });

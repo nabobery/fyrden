@@ -116,7 +116,6 @@ export const t5543: CaseFile = {
       async run(t) {
         const { work, remotes } = await seeded(t, "atomic-exit");
         await t.commit(work, { "ok.txt": "ok\n" }, "fast-forward");
-        // A ref the server refuses (hidden), next to one it would accept.
         const res = await t.git(
           ["push", "--atomic", remotes.fyrden, "main", "HEAD:refs/pull/1/head"],
           { cwd: work },

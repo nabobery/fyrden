@@ -87,7 +87,6 @@ export interface ForkOptions {
   readonly pageSize?: number;
   /** Pages one step of the graph copy may fetch. Default `COPY_CALLS` (Proposed 400). */
   readonly copyCalls?: number;
-  /** Pause points. For tests. */
   readonly hooks?: {
     readonly afterCopyStep?: (
       step: { readonly step: number; readonly pages: number; readonly copied: number },

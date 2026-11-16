@@ -70,7 +70,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 
 export async function action({ request, context, params }: Route.ActionArgs) {
   assertSameOrigin(request);
-  // Signed in before a large form is read.
   if (!(await signedInUser(context, request))) throw redirect(signInUrl(request));
   const form = await readForm(request, EDIT_FORM_MAX_BYTES);
   const { ref, path: dir } = refAndPath(request);

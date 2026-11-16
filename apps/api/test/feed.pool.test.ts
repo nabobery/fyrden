@@ -59,7 +59,6 @@ describe("a pool of calls", () => {
       },
       ...Array.from({ length: 9 }, () => async () => {
         ended++;
-        // The last of the others lets the slow one end.
         if (ended === 9) release();
         return "quick";
       }),

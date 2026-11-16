@@ -58,7 +58,6 @@ describe("packs written by git parse as git indexes them", () => {
           const expected = await gitPackRows(sandbox, bytes);
           const { pack, objects } = await parseBytes(bytes, { chunkSize });
           expect(rowsOf(pack, true)).toEqual(expected?.rows);
-          // Every object was handed out once, with the bytes its id names.
           expect(objects.size).toBe(pack.entries.count);
           for (const [oid, { type, data }] of objects) {
             expect(oidToHex(await hashObject(createSha1Hasher, type as ObjectType, data))).toBe(

@@ -31,7 +31,6 @@ export type EditResult<S extends Scope> =
     }
   | { error: string; scope?: S; draft?: Draft | undefined; ok?: undefined };
 
-/** Whether two scopes name the same viewer and page. */
 export function sameScope(a: Scope, b: Scope): boolean {
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);

@@ -19,7 +19,6 @@ import {
 import { action as ticketAction } from "../app/routes/notifications.live-ticket.js";
 import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
 
-/** A clock whose timers run only when the test advances it. */
 function fakeClock() {
   let now = 1_000_000;
   let next = 0;
@@ -34,7 +33,6 @@ function fakeClock() {
     clearTimer: (handle: unknown) => {
       timers.delete(handle as number);
     },
-    /** Moves the clock on, running each timer due on the way, in order. */
     advance(ms: number) {
       const end = now + ms;
       for (;;) {
@@ -136,7 +134,6 @@ describe("the live hints client", () => {
     h.last().events.open();
     h.frame(1, [A]);
     h.last().events.message(JSON.stringify({ t: "changed", n: 2, refresh: true }));
-    // Repeated or older frames, and what is not a frame, change nothing.
     h.frame(2, [A]);
     h.frame(1, [A]);
     h.last().events.message("not json");
@@ -173,8 +170,6 @@ describe("the live hints client", () => {
     // The server's clock an hour ahead: its deadline is not this clock's.
     const until = h.clock.now() + 60 * 60_000;
     h.last().events.message(JSON.stringify({ t: "renewed", until }));
-    // A renewal reads everything again, as a connect does (the server passed over what it
-    // could not decide).
     expect(h.changes).toEqual(["all", "all"]);
     h.clock.advance(renewAt - 1);
     expect(h.last().sent).toHaveLength(2);
@@ -400,14 +395,12 @@ describe("the live hints client", () => {
     h.last().events.close(4413);
     expect(h.pauses).toEqual([{ kind: "budget", retryAt: nextUtcDay(at) }]);
     expect(h.stops).toEqual([]);
-    // Nothing acknowledged, renewed or reconnected: no timer is left.
     expect(h.clock.pending()).toEqual([]);
     h.clock.advance(LIVE_CLIENT.renewMs * 10);
     await h.flush();
     expect(h.sockets).toHaveLength(1);
     expect(h.last().sent).toEqual([]);
     expect(h.asked()).toBe(1);
-    // Started again (the hub's, at the deadline), it connects at once: no back-off was counted.
     h.client.start();
     await h.flush();
     expect(h.sockets).toHaveLength(2);
@@ -427,7 +420,6 @@ describe("the live hints client", () => {
     const h = harness();
     h.client.start();
     await h.flush();
-    // Upgraded, then closed at once.
     h.last().events.open();
     h.last().events.close(4412);
     expect(h.temporaries).toEqual([true]);
@@ -465,7 +457,6 @@ describe("the live hints client", () => {
     expect(h.temporaries).toEqual([true]);
     h.clock.advance(750);
     await h.flush();
-    // A socket refused as it opened is not steady.
     h.last().events.open();
     h.last().events.close(4412);
     h.clock.advance(LIVE_CLIENT.refusedBackoffMs);
@@ -476,7 +467,6 @@ describe("the live hints client", () => {
     expect(h.temporaries).toEqual([true]);
     h.clock.advance(1);
     expect(h.temporaries).toEqual([true, false]);
-    // An ordinary refused ticket is not one to tell.
     const plain = harness([{ kind: "retry" }]);
     plain.client.start();
     await plain.flush();
@@ -501,7 +491,6 @@ describe("the live hints client", () => {
 });
 
 describe("a page's ticket", () => {
-  /** The API answering the ticket with `status` and `body`, the session as ada's. */
   const issuing = (status: number, body: unknown) =>
     fakeApi((req) =>
       new URL(req.url).pathname === "/auth/session"

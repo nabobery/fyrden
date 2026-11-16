@@ -42,7 +42,6 @@ export const DEFAULT_PKT_LINE_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
 });
 
-/** Anything packets can be read from: a buffer reader, a stream reader, or a test double. */
 export interface PktLineSource {
   read(): PktLine | undefined | Promise<PktLine | undefined>;
 }
@@ -80,7 +79,6 @@ export const flushPkt = (): Uint8Array<ArrayBuffer> => header(0);
 export const delimPkt = (): Uint8Array<ArrayBuffer> => header(1);
 export const responseEndPkt = (): Uint8Array<ArrayBuffer> => header(2);
 
-/** Collects packets into one buffer. */
 export class PktLineWriter {
   readonly #parts: Uint8Array[] = [];
 

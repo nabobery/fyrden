@@ -20,7 +20,6 @@ const MAIN = "refs/heads/main";
 /** Past the upload's index lock (5 min). */
 const PAST_INDEX_LOCK_MS = 10 * 60 * 1000;
 
-/** `target` with every property passed through, except those in `overrides`. */
 function overriding<T extends object>(target: T, overrides: Partial<T>): T {
   return new Proxy(target, {
     get(t, prop) {

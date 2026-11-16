@@ -26,7 +26,6 @@ import {
   type TeamToAsk,
 } from "./team-requests.js";
 
-/** The entity type review snapshots travel as in events. */
 export const REVIEW_ENTITY = "pull_request_review";
 
 /**

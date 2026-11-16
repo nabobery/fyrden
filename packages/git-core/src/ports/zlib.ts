@@ -1,4 +1,3 @@
-/** Why an inflate failed. */
 export type ZlibErrorKind =
   /** The input ended before the zlib stream did: more bytes may complete it. */
   | "truncated"

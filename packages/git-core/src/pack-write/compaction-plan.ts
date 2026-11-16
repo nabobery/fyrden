@@ -41,7 +41,6 @@ export interface CompactionSource {
   readonly packId: PackId;
   /** Bytes in the pack, trailer included. */
   readonly packLength: number;
-  /** The pack's `.idx`. */
   readonly idx: PackIdx;
   /**
    * The entries to write, by `.idx` position (size: the `.idx` count).

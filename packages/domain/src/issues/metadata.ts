@@ -33,7 +33,6 @@ export function labelNameKey(name: string): string {
   return name.replace(/[A-Z]/g, (c) => c.toLowerCase());
 }
 
-/** Labels a repository holds at most. */
 export const MAX_REPO_LABELS = 1_000;
 /** Labels an organization's default set holds at most. */
 export const MAX_DEFAULT_LABELS = 100;
@@ -49,11 +48,9 @@ export const MAX_MILESTONE_DESCRIPTION_LENGTH = 65_536;
 export const MILESTONE_STATES = ["open", "closed"] as const;
 export type MilestoneState = (typeof MILESTONE_STATES)[number];
 
-/** The entity types label and milestone snapshots travel as in events. */
 export const LABEL_ENTITY = "label";
 export const MILESTONE_ENTITY = "milestone";
 
-/** A label's name, color and description, as given. */
 export interface LabelSpec {
   readonly name: string;
   readonly color: string;
@@ -80,7 +77,6 @@ export const GITHUB_DEFAULT_LABELS: readonly LabelSpec[] = [
   { name: "wontfix", color: "ffffff", description: "This will not be worked on" },
 ];
 
-/** A label as events carry it. */
 export const LabelRowSchema = z.strictObject({
   id: z.number().int().positive(),
   name: z.string().min(1).max(MAX_LABEL_NAME_LENGTH),
@@ -93,7 +89,6 @@ export const LabelRowSchema = z.strictObject({
 });
 export type LabelRow = z.infer<typeof LabelRowSchema>;
 
-/** A milestone as events carry it. */
 export const MilestoneRowSchema = z.strictObject({
   number: z.number().int().positive(),
   title: z.string().min(1).max(MAX_MILESTONE_TITLE_LENGTH),
@@ -130,7 +125,6 @@ export const SubjectMetaRowShape = {
  */
 export type SubjectMetaField = "labels" | "assignees";
 
-/** What can be done to sort issues and pull requests. */
 export const METADATA_ACTIONS = [
   "label",
   "assign",

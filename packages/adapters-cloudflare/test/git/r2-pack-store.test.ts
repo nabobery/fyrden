@@ -17,7 +17,6 @@ describe("R2PackStore", () => {
     const bytes = pattern(total, 7);
     const result = await inProbe(stub, async (probe) => {
       const writer = probe.git.packStore.beginPack();
-      // Uneven chunks across part boundaries.
       for (let at = 0; at < total; at += 1_000_003)
         await writer.write(bytes.subarray(at, at + 1_000_003));
       const info = await writer.finish();

@@ -6,7 +6,6 @@ import { parseTree, type TreeEntry } from "../../src/object/tree.js";
 export const enc = new TextEncoder();
 export const dec = new TextDecoder();
 
-/** Trees and blobs by hex id, built here. */
 export function store() {
   const objects = new Map<string, TreeEntry[] | Uint8Array>();
   let n = 0;
@@ -32,7 +31,6 @@ export function store() {
         .sort(([a], [b]) => (a < b ? -1 : 1))
         .map(([name, e]) => ({ name: enc.encode(name), mode: e.mode ?? 0o100644, oid: e.oid })),
     );
-  // A tree of entries as given (names as bytes).
   const rawTree = (entries: TreeEntry[]) => put(entries);
   const source = {
     readTree: async (oid: Oid) => objects.get(oidToHex(oid)) as TreeEntry[],
@@ -51,11 +49,9 @@ export async function listed(s: ReturnType<typeof store>, tree: Oid, made: reado
   return list.map((e) => [dec.decode(e.name), e.mode.toString(8), oidToHex(e.oid)]);
 }
 
-/** A merge's conflicts as [path, kind], or its kind when clean. */
 export const kinds = (merged: TreeMerge) =>
   merged.kind === "conflicts" ? merged.conflicts.map((c) => [c.path, c.kind]) : merged.kind;
 
-/** The error a merge stopped with. */
 export const stopped = (merge: Promise<unknown>) =>
   merge.then(
     () => expect.fail("the merge finished"),

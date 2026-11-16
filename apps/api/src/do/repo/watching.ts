@@ -22,14 +22,12 @@ export const WATCH_POLICY = {
   maxWatchers: 5_000,
   /** Watchers told of each event (the pushed tier): the first, in `(revision, principal)` order. */
   pushed: 100,
-  /** Rows one step of a recovery clears or imports. */
   recoveryPage: 200,
 } as const;
 
 export const WATCH_LEVELS = ["participating", "watching", "ignoring"] as const;
 export type WatchLevel = (typeof WATCH_LEVELS)[number];
 
-/** A principal's level, and the command that set it. */
 export interface WatchRow {
   readonly principal: string;
   readonly root: string;

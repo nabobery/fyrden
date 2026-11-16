@@ -27,7 +27,6 @@ export const THREAD_POLICY = {
   maxPerKind: 1_000,
   /** Subscribed, and unsubscribed, principals a conversation keeps at most. */
   maxPerState: 1_000,
-  /** Rows one step of a recovery clears or imports. */
   recoveryPage: 200,
   /** Rows of a deleted conversation one step of its cleanup deletes (past those its deletion did). */
   forgetPage: 500,
@@ -35,7 +34,6 @@ export const THREAD_POLICY = {
 
 export type ThreadState = "subscribed" | "unsubscribed";
 
-/** A conversation as preferences name it. */
 export interface ThreadSubject {
   readonly number: number;
   readonly kind: SubjectKind;

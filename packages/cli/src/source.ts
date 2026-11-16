@@ -12,7 +12,6 @@ export interface SourceState {
 /** Appended to the commit a deploy records when the working tree had changes. */
 export const DIRTY_SUFFIX = "-dirty";
 
-/** The commit a deploy records outside a git checkout. */
 export const UNKNOWN_COMMIT = "unknown";
 
 /** FYRDEN_COMMIT's value: the commit, marked when the tree was dirty, or "unknown". */

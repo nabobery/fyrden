@@ -62,7 +62,6 @@ export function reserveDuration(
   return holds;
 }
 
-/** The grant's hold for `day`, if any. */
 const holdOn = (grant: LiveEnvelope, day: number) =>
   grant.plan.charges.find((c) => c.day === day)?.duration ?? null;
 

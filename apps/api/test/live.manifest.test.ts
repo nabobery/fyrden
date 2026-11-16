@@ -88,7 +88,6 @@ describe("a manifest", () => {
         ticket({ resources: { ...complete().ticket?.resources, queue_ops: 1 } as typeof ZERO }),
       ),
     ).toBe("ticket: resources is not a live vector");
-    // Below its observed price.
     expect(
       broken(
         ticket({
@@ -117,7 +116,6 @@ describe("a manifest", () => {
     expect(broken(ticket({ components: ["toString" as "settle"] }))).toBe(
       "ticket: unknown component toString",
     );
-    // An owned unit's accounting, whole.
     const pump = (m: Record<string, LiveManifestEntry>) => m.pump as LiveManifestEntry;
     expect(
       broken((m) => {

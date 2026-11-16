@@ -6,7 +6,6 @@ export type DiffEntry =
   | TreeChange
   | (Omit<TreeChange, "status"> & {
       readonly status: "renamed";
-      /** Where the file was. */
       readonly previousPath: string;
       readonly previousPathBytes: Uint8Array;
       /** The share of the content kept, 0-100 (100 for an exact rename). */

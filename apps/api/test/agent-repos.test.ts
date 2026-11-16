@@ -56,7 +56,6 @@ describe("repositories agents create", () => {
     expect(made.body.owner).toBe(owner.handle);
     expect(made.body.expires_at).toBeGreaterThanOrEqual(before + AGENT_REPO_DEFAULTS.ttlMs);
     expect(made.body.expires_at).toBeLessThanOrEqual(Date.now() + AGENT_REPO_DEFAULTS.ttlMs);
-    // The audit names the agent, acting for the user.
     const audit = await env.DIRECTORY.prepare(
       "SELECT actor_id FROM audit_log WHERE action = 'repo.create' AND target_id = ?",
     )
@@ -127,7 +126,6 @@ describe("repositories agents create", () => {
     const parent = await json<Repo>(
       api("POST", "/user/repos", owner.token, { name: uniqueId("p") }),
     );
-    // A branch for the fork to take, so its first commit is recorded.
     expect(
       (
         await api("PUT", `/repos/${owner.handle}/${parent.body.name}/contents/a.txt`, owner.token, {
@@ -145,7 +143,6 @@ describe("repositories agents create", () => {
     expect(fork.status).toBe(201);
     expect(fork.body.owner).toBe(owner.handle);
     expect(fork.body.expires_at).toBeGreaterThan(Date.now());
-    // Its first commit names the agent, acting for the user under the grant.
     const audit = await runInDurableObject(env.REPO.getByName(fork.body.id), (_, state) =>
       state.storage.sql
         .exec("SELECT actor_id, act_chain, grant_id FROM audit_log WHERE action = 'refs.update'")

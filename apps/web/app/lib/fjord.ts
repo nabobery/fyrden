@@ -101,7 +101,6 @@ export const FJORD: { readonly light: Scheme; readonly dark: Scheme } = {
   },
 };
 
-/** The names the file and diff renderers know the themes by. */
 export const FJORD_THEME_NAMES = { light: "fjord-light", dark: "fjord-dark" } as const;
 
 export type Appearance = "light" | "dark";
@@ -135,7 +134,6 @@ export function highlightScopes(scheme: Scheme): Readonly<Record<string, string>
   };
 }
 
-/** A highlighter's colours, on `background`. */
 type Palette = { readonly background: string; readonly foreground: string } & {
   readonly syntax: Readonly<Record<string, string>>;
 };
@@ -150,7 +148,6 @@ const markdownPalette = (scheme: Scheme): Palette => ({
 export const LIGHT = markdownPalette(FJORD.light);
 export const DARK = markdownPalette(FJORD.dark);
 
-/** `palette` as Highlights' theme. */
 export function themeOf(name: string, appearance: Appearance, palette: Palette): Theme {
   return {
     name,

@@ -18,7 +18,6 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** A deployment's API as the export calls it: its pause, manifest, pages and resume. */
 function fakeApi(
   options: {
     leasesLive?: number;
@@ -26,7 +25,6 @@ function fakeApi(
     limitedOnce?: boolean;
     /** The pause's step after the first fails. */
     failPause?: boolean;
-    /** Another step's pause stands when this run resumes. */
     newerPause?: boolean;
   } = {},
 ) {
@@ -154,7 +152,6 @@ describe("fyrden read-model export", () => {
     const api = fakeApi({ leasesLive: 1 });
     const { done, slept } = run(api.fetcher);
     const result = await done;
-    // Waited for the older lease's deadline before the next step.
     expect(slept).toEqual([1_000]);
     expect(api.calls).toEqual([
       "POST /api/admin/read-model/pause",
@@ -168,7 +165,6 @@ describe("fyrden read-model export", () => {
     const out = join(dir, "export");
     const epochs = await readFile(join(out, "consumer_epochs.jsonl"), "utf8");
     expect(epochs).toBe('{"source_id":"a","epoch_gen":1}\n{"source_id":"b","epoch_gen":2}\n');
-    // A table with no rows is a file too, empty.
     expect(await readFile(join(out, "webhook_payloads.jsonl"), "utf8")).toBe("");
     const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
     expect(manifest).toMatchObject({

@@ -214,7 +214,6 @@ async function commit(stub: Stub, uploadId: string) {
   return reportLines(response).report;
 }
 
-/** Stages and commits a push. */
 async function push(stub: Stub, bytes: Uint8Array) {
   return commit(stub, await stage(stub, bytes));
 }
@@ -255,7 +254,6 @@ async function compactInBackground(stub: Stub) {
   expect(await jobState()).toBe("done");
 }
 
-/** The repository's one live pack. */
 async function onlyLivePack(stub: Stub): Promise<string> {
   const live = await inRepo(stub, ({ git }) => git.registry.liveOwn().map((p) => p.packId));
   expect(live).toHaveLength(1);

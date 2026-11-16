@@ -181,7 +181,6 @@ export class UploadRegistry {
     countRowsWritten(this.context, "uploads.multipart", written);
   }
 
-  /** The recorded multipart upload of an upload, if any. */
   multipartOf(uploadId: string): { key: string; multipartId: string } | undefined {
     const row = first<{ r2_key: string | null; multipart_id: string | null }>(
       this.context.storage,

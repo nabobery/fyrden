@@ -282,7 +282,6 @@ const fileEnds: AlignCase[] = [
   }),
 ];
 
-/** Every named experiment that's about one parent and one child. */
 export const NAMED_CASES: readonly AlignCase[] = [
   ...lineRules,
   ...search,

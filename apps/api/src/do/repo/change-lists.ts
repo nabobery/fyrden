@@ -11,7 +11,6 @@ import { type Oid, oidFromHex, oidToHex } from "@fyrden/git-core";
  * and drops the oldest first.
  */
 
-/** One change of a listing, as its page needs it. */
 export interface ListedChange {
   readonly status: "added" | "removed" | "modified" | "type_changed" | "renamed";
   readonly path: string;
@@ -31,7 +30,6 @@ export interface ChangeList {
 
 /** Bounds of the kept lists. Proposed. */
 export const CHANGE_LISTS_POLICY = {
-  /** Lists the object keeps at most. */
   maxLists: 256,
   /** Bytes of the kept lists in all. */
   maxBytes: 8 * 1024 * 1024,

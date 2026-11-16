@@ -71,7 +71,6 @@ export function useBaseline(
   };
 }
 
-/** The named fields of the form an input event came from. */
 export function fieldsOf(
   event: FormEvent<HTMLFormElement>,
   names: readonly string[],
@@ -80,7 +79,6 @@ export function fieldsOf(
   return Object.fromEntries(names.map((name) => [name, String(data.get(name) ?? "")]));
 }
 
-/** Which editor an answer is of, as a page names its editors. */
 export interface DraftEditors {
   /** The editor a refused draft came from. */
   ofDraft(draft: Draft): string;
@@ -106,7 +104,6 @@ export type Drafts = ReturnType<typeof useDrafts>;
  * replaced on a failed reload comes back with them, and go with the tab.
  */
 const tabDrafts = new Map<string, ScopeDrafts>();
-/** Scopes whose drafts a tab keeps at most. */
 const MAX_SCOPES = 32;
 
 /**
@@ -130,12 +127,10 @@ export function useDrafts(scope: string, own: Answer, editors: DraftEditors) {
   let drafts = all.get(scope);
   if (!drafts) {
     drafts = { held: new Map(), sending: new Set(), since: new Set() };
-    // The oldest scope's go first past the bound.
     if (all.size >= MAX_SCOPES) all.delete(all.keys().next().value as string);
     all.set(scope, drafts);
   }
   const { held, sending, since } = drafts;
-  // Each answer taken once: drawn again, it changes nothing.
   if (own && taken.current !== own) {
     taken.current = own;
     const done = own.ok !== undefined ? editors.ofAnswer(own.ok, own.target) : undefined;

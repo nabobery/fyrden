@@ -21,7 +21,6 @@ const MAX_HEADER_BYTES = 30;
  */
 const FIRST_READ_LARGE = 1024 * 1024;
 
-/** An entry's header and its inflated body: the object, or a delta program. */
 export interface RawEntry {
   readonly header: EntryHeader;
   readonly data: Uint8Array;

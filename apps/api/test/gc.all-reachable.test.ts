@@ -141,7 +141,6 @@ describe("all-reachable flags", () => {
       },
     });
     expect(moved).toBe(true);
-    // The run restarted from the new refs; both packs are reachable again.
     expect((await packStates(stub)).map((p) => p.all_reachable)).toEqual([1, 1]);
   });
 });

@@ -35,7 +35,6 @@ import type { WriteContext } from "./write-context.js";
  * the base tip are as the request read them.
  */
 
-/** A merge of a pull request, as the Worker asks for it. */
 export interface MergePullInput {
   readonly number: number;
   readonly method: "merge" | "squash" | "rebase";

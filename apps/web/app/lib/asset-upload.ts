@@ -12,7 +12,6 @@ import type { Release } from "./releases.js";
 
 export type ReleaseAsset = Release["assets"][number];
 
-/** Where an upload goes. */
 export interface UploadTarget {
   readonly owner: string;
   readonly repo: string;
@@ -70,7 +69,6 @@ export type UploadResult =
       readonly message: string;
     };
 
-/** Parts sent at once. */
 export const PARTS_AT_ONCE = 2;
 /** Tries of a part after its first, for anything but a rate limit. */
 export const PART_RETRIES = 3;
@@ -85,7 +83,6 @@ const DEFAULT_WAIT_MS = 1_000;
 export const releaseUploads = (target: Pick<UploadTarget, "owner" | "repo">) =>
   `/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/releases/uploads`;
 
-/** Part `n` of upload `id`, at the API on this origin. */
 export const partUrl = (target: Pick<UploadTarget, "owner" | "repo">, id: string, n: number) =>
   `/api/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/releases/assets/uploads/${encodeURIComponent(id)}/parts/${n}`;
 
@@ -112,7 +109,6 @@ class Stopped extends Error {
   }
 }
 
-/** An answer's problem details, as far as they parse. */
 async function problemOf(res: Response): Promise<{ code?: string; detail?: string }> {
   const body: unknown = await res.json().catch(() => null);
   return typeof body === "object" && body !== null
@@ -202,7 +198,6 @@ export async function runUpload(
       const res = await ask(startOf(upload, name.name, upload.beginKey), false);
       if (!res.ok) {
         const problem = res.status === 401 ? {} : await problemOf(res);
-        // The lost start this key was kept for is still running: the same key gets its answer.
         const running = problem.code === "idempotency_key_in_use";
         // Else answered: the API keeps this answer for the key, so the next start needs a new one.
         if (!running) upload.beginKey = null;
@@ -258,7 +253,6 @@ function startOf(upload: Upload, name: string, key: string): Record<string, unkn
  */
 export const holdsSession = (upload: Upload) => upload.session !== null || upload.beginKey !== null;
 
-/** What a refusal to begin says, for the person uploading. */
 function refusal(status: number, problem: { code?: string; detail?: string }): string {
   if (status === 401) return "Sign in again, then start the upload again.";
   if (problem.code === "wrong_token")
@@ -313,7 +307,6 @@ async function endingOf(
   return "unknown";
 }
 
-/** What a Cancel that came to `ending` says. */
 function cancelled(ending: Ending): UploadResult {
   switch (ending) {
     case "completed":
@@ -402,7 +395,6 @@ const NOT_KEPT = new Set([401, 403, 408, 429]);
 /** Answers that say the key's request is still to be decided, or was undone to run again. */
 const STILL_TO_LEARN = new Set(["idempotency_key_in_use", "busy", "network_busy"]);
 
-/** Sends every part the API lacks, `PARTS_AT_ONCE` at a time. */
 async function sendParts(
   upload: Upload,
   deps: UploadDeps,

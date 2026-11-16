@@ -60,7 +60,6 @@ export interface BlameState {
    */
   ranges: Int32Array;
   rangeCount: number;
-  /** What's known of each commit that settled lines, by hex id. */
   facts: Record<string, BlameCommitInfo>;
   factOrder: Oid[];
   /** The state stopped fitting: every line not settled is `state_limit`, with no list of them. */
@@ -110,7 +109,6 @@ export const factTextOf = (fact: BlameCommitInfo) =>
 /** The longest field of a commit's facts a checkpoint holds: its length takes two bytes. */
 export const MAX_FACT_FIELD_BYTES = 0xffff;
 
-/** Whether every field of a commit's facts fits a checkpoint. */
 export const factFitsCheckpoint = (fact: BlameCommitInfo) =>
   [fact.summary, fact.name, fact.email, fact.date].every(
     (text) => encoder.encode(text).length <= MAX_FACT_FIELD_BYTES,

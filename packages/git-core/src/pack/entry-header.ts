@@ -11,7 +11,6 @@ export const PACK_HEADER_BYTES = 12;
 export const PACK_TRAILER_BYTES = OID_BYTES;
 const SIGNATURE = 0x5041434b; // "PACK"
 
-/** What an entry holds: a whole object, or a delta against a base. */
 export type EntryKind = ObjectType | "ofs-delta" | "ref-delta";
 
 /** Entry type codes as stored in packs (git object.h). 0 and 5 are reserved. */

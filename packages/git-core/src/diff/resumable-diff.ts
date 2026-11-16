@@ -62,7 +62,6 @@ export interface ResumedDiff {
   readonly stop: "done" | "changes" | "scanned" | "read" | "accept";
   /** Entries read (every entry of every tree read). */
   readonly scanned: number;
-  /** Trees read. */
   readonly trees: number;
 }
 
@@ -71,7 +70,6 @@ export class ReadDeferred extends Error {
   override name = "ReadDeferred";
 }
 
-/** The cursor of a diff not started yet. */
 export const DIFF_START: DiffCursor = { path: [], enter: true };
 
 const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
@@ -79,7 +77,6 @@ const SLASH = 0x2f;
 const FILE_MODE = 0o100644;
 const TREE_MODE = 0o40000;
 
-/** Stops the walk, with where to resume. */
 class Stop {
   constructor(
     readonly stop: "changes" | "scanned" | "read" | "accept",
@@ -102,7 +99,6 @@ export async function diffTreesFrom(
   const maxPathBytes = limits.maxPathBytes ?? DEFAULT_MAX_PATH_BYTES;
   const start = from ?? DIFF_START;
   const changes: ResumedChange[] = [];
-  /** The directories walked into. */
   const dirs: CursorName[] = [];
   let dirBytes = 0;
   let scanned = 0;
@@ -235,7 +231,6 @@ export async function diffTreesFrom(
     }
   };
 
-  /** One side's whole entry, as removals or additions. */
   const whole = async (side: "added" | "removed", entry: TreeEntry): Promise<void> => {
     if (isTreeMode(entry.mode)) {
       await inside(entry.name, () =>

@@ -125,7 +125,6 @@ describe("the issue list", () => {
     expect(html).toContain('href="/ada/demo/issues/7"');
     expect(html).toContain('href="/ada/demo/pull/8"');
     expect(html).toContain("Merged");
-    // The state links keep both kinds and the filters.
     expect(html).toContain('href="/ada/demo/issues?kind=all&amp;milestone=3"');
   });
 
@@ -184,7 +183,6 @@ describe("an issue's page", () => {
     expect(calls.map(pathOf)).toContain(
       "GET /api/repos/ada/demo/issues/7/comments?per_page=25&after=4",
     );
-    // The next page starts after the last comment shown.
     expect(data.pages).toEqual({ next: "/ada/demo/issues/7?after=6", first: "/ada/demo/issues/7" });
     expect(data.permissions).toEqual(READ_ONLY);
   });
@@ -228,7 +226,6 @@ describe("an issue's page", () => {
   it("edits from the version the form showed, and keeps the text when someone changed it since", async () => {
     const saved = await act({ intent: "edit", title: "New", body: "b", version: "3" });
     expect(saved.sent?.body).toEqual({ title: "New", body: "b", expected_version: 3 });
-    // The answer names its scope and the version the change made (the API's answer).
     expect(saved.outcome).toEqual({
       ok: "edit",
       target: undefined,
@@ -238,7 +235,6 @@ describe("an issue's page", () => {
     const stale = await act({ intent: "edit", title: "New", body: "b", version: "3" }, () =>
       json({ code: "stale", detail: "d", current_version: 4 }, 409),
     );
-    // The draft keeps the version it was written from.
     expect(stale.outcome).toMatchObject({
       draft: { fields: { title: "New", body: "b" }, version: 3 },
     });
@@ -282,7 +278,6 @@ describe("an issue's page", () => {
     });
     const deleted = await act({ intent: "delete-comment", comment_id: "5" });
     expect(deleted.sent?.path).toBe("DELETE /api/repos/ada/demo/issues/comments/5");
-    // The answer names the comment, so the page drops what was kept for it.
     expect(deleted.outcome).toMatchObject({ ok: "delete-comment", target: 5 });
   });
 
@@ -339,7 +334,6 @@ describe("an issue's page", () => {
     );
     expect(locked).not.toContain("Add a comment");
     expect(locked).toContain("This conversation is locked.");
-    // Write access still talks in a locked conversation.
     const writer = renderPage(
       IssuePage,
       "/ada/demo/issues/7",
@@ -495,7 +489,6 @@ describe("an action's answer, in its scope only", () => {
       );
       expect(html, text).toContain("Your unsent text");
       expect(html.match(new RegExp(text, "g")), text).toHaveLength(1);
-      // Nothing to send it with: no comment, edit or delete form.
       expect(html).not.toMatch(/value="(comment|edit-comment|delete-comment)"/);
     }
   });
@@ -539,7 +532,6 @@ describe("the conversation's source budget", () => {
       params,
     } as never);
     expect(data.comments.map((c) => c.id)).toEqual([1]);
-    // The API had no more, but the page was cut: it goes on after the one shown.
     expect(data.pages.next).toBe("/ada/demo/issues/7?after=1");
   });
 });
@@ -630,22 +622,18 @@ describe("reactions", () => {
         comments: [comment(1, { reactions: rollup({ total_count: 1, eyes: 1, viewer: [] }) })],
       }),
     );
-    // The heart is the viewer's: taken back by its id.
     expect(html).toMatch(
       /value="unreact"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="heart"\/><input type="hidden" name="reaction_id" value="9"\/>/,
     );
     expect(html).toMatch(
       /aria-pressed="true"[^>]*><span aria-hidden="true">❤️<\/span><span class="visually-hidden">Heart<\/span> <!-- -->2/,
     );
-    // Another's +1: one more is added.
     expect(html).toMatch(
       /value="react"\/><input type="hidden" name="target" value="issue"\/><input type="hidden" name="content" value="\+1"/,
     );
-    // A comment's: by its id, with the viewer's form field.
     expect(html).toMatch(
       /value="react"\/><input type="hidden" name="target" value="1"\/><input type="hidden" name="content" value="eyes"\/><input type="hidden" name="viewer" value="usr_viewer"/,
     );
-    // The rest, to add.
     expect(html.match(/Add a reaction/g)).toHaveLength(2);
   });
 
@@ -734,7 +722,6 @@ describe("a comment's permalink", () => {
       linked: { id: 9, missing: false },
       pages: { first: "/ada/demo/issues/7" },
     });
-    // The first comment: from the start, no `after`.
     expect((await load("?comment=1", [1])).listed).toBe(
       "GET /api/repos/ada/demo/issues/7/comments?per_page=25",
     );

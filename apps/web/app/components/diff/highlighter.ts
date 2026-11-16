@@ -32,7 +32,6 @@ import { useEffect } from "react";
 import { FJORD_THEME_NAMES } from "../../lib/fjord.js";
 import { registerFjordThemes } from "./fjord-themes.client.js";
 
-/** The renderer's highlighters this uses. */
 export type Engine = "highlights" | "shiki-js";
 
 export interface Highlighter {
@@ -138,7 +137,6 @@ export const MAX_TOKENIZED_LINE = 1000;
  */
 const POOL_START_MS = 20_000;
 
-/** What the renderers have in common: where a highlighting failure ends up. */
 interface HighlightingRenderer {
   prototype: { cleanUp(): void; onHighlightError(error: unknown): void };
 }
@@ -214,7 +212,6 @@ export function settingsOf(
       pool: {
         workerFactory,
         poolSize: Math.max(1, Math.min(4, (globalThis.navigator?.hardwareConcurrency ?? 2) - 1)),
-        // A worker failing (blocked, crashed) steps the session down.
         onWorkerError: () => void choice.fail(step),
       },
       highlighter: {

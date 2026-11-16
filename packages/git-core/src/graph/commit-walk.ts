@@ -67,7 +67,7 @@ export class CommitWalk {
     for (let k = 0; k < indices.length; k++) {
       const i = indices[k] as number;
       if (this.#loaded[i] === 0) {
-        this.#loaded[i] = 2; // requested; marked 1 once the row is in
+        this.#loaded[i] = 2;
         wanted.push(i);
       }
     }

@@ -86,12 +86,10 @@ describe("applying entries", () => {
         notified: 1,
       });
       expect(head()).toBe(1);
-      // Older, then the same again: nothing written, nothing sequenced.
       expect(apply([entry({ kind, version: 1, state: "resolved" })]).changed).toBe(0);
       expect(apply([entry({ kind, version: 2, priority: "P0" })]).changed).toBe(0);
       expect(head()).toBe(1);
       expect(items()).toMatchObject([{ version: 2, state: "open", priority: "P0" }]);
-      // Newer: replaces the item and takes the next sequence number.
       expect(apply([entry({ kind, version: 3, state: "resolved" })]).changed).toBe(1);
       expect(head()).toBe(2);
       expect(items()).toMatchObject([{ version: 3, state: "resolved" }]);
@@ -156,7 +154,6 @@ describe("applying entries", () => {
       expect(apply([restored])).toEqual({ changed: 1, notified: 1 });
       expect(apply([delayed])).toEqual({ changed: 0, notified: 0 });
       expect(items()).toMatchObject([{ thread_epoch: 2, version: 1, state: "resolved" }]);
-      // In one call, in any order, the same.
       reset();
       apply([delayed, restored, before]);
       expect(items()).toMatchObject([{ thread_epoch: 2, version: 1, state: "resolved" }]);
@@ -377,7 +374,6 @@ describe("reading the feed", () => {
     });
     const acked = await stub.ackFeed(id, { epoch: 1, version: 2 });
     expect(acked).toMatchObject({ status: "acked", item: { ackedVersion: 2, seq: 2 } });
-    // An older or the same version again: unchanged, not sequenced again.
     expect(await stub.ackFeed(id, { epoch: 1, version: 1 })).toMatchObject({
       item: { ackedVersion: 2, seq: 2 },
     });

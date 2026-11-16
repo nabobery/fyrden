@@ -31,7 +31,6 @@ export function describeMemoryBudgetContract(
         return r;
       });
       await Promise.resolve();
-      // The small request waits behind the big one, so the big one cannot starve.
       expect(order).toEqual([]);
       expect(budget.tryReserve(10)).toBeUndefined();
       held.release();
@@ -49,9 +48,7 @@ export function describeMemoryBudgetContract(
       const reason = new Error("the request ended");
       controller.abort(reason);
       await expect(big).rejects.toBe(reason);
-      // The small one waited behind the big one only; it fits now.
       expect((await small).bytes).toBe(10);
-      // Nothing of the aborted wait was kept.
       expect(budget.tryReserve(10)?.bytes).toBe(10);
       expect(budget.tryReserve(1)).toBeUndefined();
       held.release();

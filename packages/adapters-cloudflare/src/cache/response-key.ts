@@ -16,7 +16,6 @@ const OID = /^[0-9a-f]{40}$/;
 /** A rendering of the object: `raw`, `json`, `html-v1`, `tar.gz`. */
 const VARIANT = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
-/** What a response is about: one object, or a diff between two commits. */
 export type ResponseObject =
   | { readonly kind: "commit" | "tree" | "blob"; readonly oid: string }
   | { readonly kind: "diff"; readonly base: string; readonly head: string };

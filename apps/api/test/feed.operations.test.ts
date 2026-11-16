@@ -42,7 +42,6 @@ const viewCalls = new Map<string, string[][]>();
 const directoryOnly = new Set<string>();
 /** Their owners, whose account the double answers it judged under. */
 const directoryOwner = new Map<string, string>();
-/** Of those, the ones whose check says the caller may not read them. */
 const unreadable = new Set<string>();
 /** Repositories whose checks of issue threads alone (no members) cannot say. */
 const unsureThreads = new Set<string>();
@@ -162,7 +161,6 @@ function withFeedView(base: Env): Env {
 }
 
 /** A request to the API, its repositories' objects with the `feedView` double. */
-/** Items the feed operations read a page at a time. */
 const SCAN_PAGE = 200;
 
 /** `on` whose feed objects run `before(n)` ahead of their `n`th `method` call (from 0). */
@@ -240,7 +238,6 @@ function forgettingAfter(base: Env, meanwhile: () => Promise<void>): Env {
   return { ...base, USER: users } as Env;
 }
 
-/** `api`, through `feedFetch`. */
 function feedApi(method: string, path: string, token: string, body?: unknown) {
   return feedFetch(
     path,
@@ -514,7 +511,6 @@ describe("the feed operations", () => {
       waits.push(res.body.poll_after_ms);
       cursor = res.body.next_cursor;
     }
-    // Doubling from 30 seconds, then 30 minutes.
     expect(waits).toEqual([
       60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000, 1_800_000, 1_800_000,
     ]);
@@ -566,7 +562,6 @@ describe("the feed operations", () => {
         status: 422,
         body: { code: "invalid_cursor" },
       });
-    // Following the cursor: nothing new.
     const next = await json<FeedOut>(
       feedApi("GET", `/feed?since=${head.body.next_cursor}`, owner.token),
     );
@@ -857,11 +852,9 @@ describe("the feed operations", () => {
     const first = await read();
     expect(first.body).toMatchObject({ items: [], poll_after_ms: 2 * FEED_POLL.baseMs });
     expect(await stored(someone.principalId)).toHaveLength(53);
-    // The next answer gets past the rest of them.
     const second = await read(first.body.next_cursor);
     expect(second.body.items.map((i) => i.item_key)).toEqual(keys);
     expect(await stored(someone.principalId)).toEqual(keys);
-    // The same request again: the same items, none skipped.
     expect((await read(first.body.next_cursor)).body).toEqual(second.body);
   });
 
@@ -1079,7 +1072,6 @@ describe("the feed operations", () => {
       ["review_requested", null],
     ]);
     expect(viewCalls.get(made.id)).toEqual([["1 pull/1 comment/2", "1 pull/1 review_comment/7"]]);
-    // An edit shows at once.
     said.set(`${made.id}:1 pull/1 comment/2`, "second, edited");
     expect(await excerpts("/feed/sync")).toContainEqual(["activity", "second, edited"]);
   });

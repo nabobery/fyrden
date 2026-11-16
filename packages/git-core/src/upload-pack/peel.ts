@@ -5,10 +5,8 @@ import { parseTag } from "../object/tag.js";
 import type { CommitGraph } from "../ports/commit-graph.js";
 import type { ObjectReader } from "../reader/object-reader.js";
 
-/** What peeling reads: object types and tag bodies. */
 export type PeelReader = Pick<ObjectReader, "readHeader" | "readObject">;
 
-/** A ref tip, and what it peels to. */
 export interface PeeledTip {
   readonly oid: Oid;
   readonly type: ObjectType;

@@ -17,7 +17,6 @@ async function firstLine(child: ChildProcess): Promise<string> {
   return String(chunk).split("\n")[0] as string;
 }
 
-/** Whether process `pid` still exists. */
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -90,7 +89,6 @@ describe("stopping wrangler dev", () => {
       settled = true;
     });
     if (child.exitCode === null) await once(child, "exit");
-    // The launcher is gone but its child still holds the pipes.
     expect(child.stdout?.readableEnded).toBe(false);
     expect(settled).toBe(false);
     await stop();
@@ -182,7 +180,6 @@ describe("stopping wrangler dev", () => {
       });
       controller.kill(sig);
       await once(controller, "exit");
-      // Ended by the signal, as it would have been without the cleanup.
       expect(controller.signalCode).toBe(sig);
       await closed;
     },
@@ -200,7 +197,6 @@ describe("stopping wrangler dev", () => {
       await Promise.all(owned.map((o) => o.stop()));
     };
     onTestFinished(stopAll);
-    // One set for all that is owned, not one a process.
     expect(listeners()).toEqual(before.map((n) => n + 1));
     await stopAll();
     expect(listeners()).toEqual(before);

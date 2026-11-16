@@ -7,7 +7,6 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { compilePattern, MatchBudget, matchesPath, preparePath } from "../../src/index.js";
 
-/** A segment's glob as a regular expression. */
 const glob = (segment: string) =>
   segment === "*"
     ? "[^/]+"

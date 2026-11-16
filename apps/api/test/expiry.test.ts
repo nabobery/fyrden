@@ -76,7 +76,6 @@ describe("repository expiry", () => {
     expect(
       (await json<Repo>(api("PATCH", path, owner.token, { expires_at: null }))).body.expires_at,
     ).toBeNull();
-    // With a rename in the same update, the answer has the new name.
     const moved = await json<Repo>(
       api("PATCH", path, owner.token, { name: renamed, expires_at: at }),
     );
@@ -108,7 +107,6 @@ describe("repository expiry", () => {
       .bind(soon.id)
       .first<{ state: string; actor_id: string | null }>();
     expect(row).toEqual({ state: "deleted", actor_id: null });
-    // Run again: nothing more happens to it.
     await runCron();
     const audits = await env.DIRECTORY.prepare(
       "SELECT count(*) AS n FROM audit_log WHERE target_id = ? AND action = 'repo.expire'",

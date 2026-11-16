@@ -231,7 +231,6 @@ describe("a tab's live hints", () => {
     const h = harness();
     const leave = h.hub.listen(want("rep_a"));
     leave();
-    // Lingering: connected, but no page listens.
     h.hint("all");
     h.hint([A]);
     h.advance(LIVE_HUB.readGapMs * 2);
@@ -248,7 +247,6 @@ describe("a tab's live hints", () => {
     h.hub.settled();
     h.advance(LIVE_HUB.readGapMs * 2);
     expect(h.reads).toHaveLength(0);
-    // One for the arriving page's, held through the navigation, is read.
     h.page.idle = false;
     h.hint([B]);
     h.page.idle = true;
@@ -346,7 +344,6 @@ describe("a tab's live hints", () => {
     h.hub.listen(want("rep_a"));
     h.temporary(true);
     expect(h.hub.status()).toEqual({ kind: "temporary" });
-    // Failing, it is tried again: still told.
     h.stop("failing");
     expect(h.hub.status()).toEqual({ kind: "temporary" });
     h.temporary(false);
@@ -354,7 +351,6 @@ describe("a tab's live hints", () => {
     h.temporary(true);
     h.stop("revoked");
     expect(h.hub.status()).toEqual({ kind: "live" });
-    // A pause overrides it, and is told once.
     h.temporary(true);
     h.pause(h.now() + 60_000);
     h.pause(h.now() + 60_000);

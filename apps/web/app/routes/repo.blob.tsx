@@ -54,7 +54,6 @@ async function codeOwnersOf(
     // Not reached, or an answer that could not be read: the file is shown all the same.
     return { kind: "unavailable" };
   }
-  // No file in effect at that ref: nothing to say.
   if (answer.status === 404) return null;
   if (answer.status !== 200) return { kind: "unavailable" };
   if (!answer.body.file) return null;
@@ -79,7 +78,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       { status: 404 },
     );
   const contents = bodyOf(answer, request);
-  // A directory (a README's link without a trailing slash): its listing.
   if (contents.type === "dir")
     throw redirect(
       `/${params.owner}/${params.repo}/tree/${encodeURIComponent(ref)}/${encodePath(path)}`,
@@ -121,7 +119,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** What the page says of a file it has no lines to show for. */
 const MESSAGES: Partial<Record<FileState["state"], string>> = {
   empty: "This file is empty.",
   binary: "This is a binary file.",
@@ -226,7 +223,6 @@ export default function Blob({ loaderData }: Route.ComponentProps) {
   );
 }
 
-/** What this CODEOWNERS file's errors are, or why they are not shown here. */
 function CodeOwnersNotes({
   notes,
   owner,

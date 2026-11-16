@@ -99,7 +99,6 @@ describe("receive-pack with real git push", () => {
     async () => {
       const s = await setup({ commits: 12, files: 4, binaryBytes: 3000 });
       sameResults(await s.both("main~4:refs/heads/main"));
-      // A thin pack: deltas against objects the server already has.
       const second = await s.both("main", "--tags");
       sameResults(second);
       expect(second.ours.lines.map((l) => l.ref).sort()).toEqual([
@@ -107,7 +106,6 @@ describe("receive-pack with real git push", () => {
         "refs/tags/v1",
       ]);
       const repo = await FileRepo.open(s.server);
-      // Two received packs and the second push's completion pack.
       expect(repo.livePacks).toHaveLength(3);
       // The first pack and the completion pack are self-contained: their .idx is git's.
       expect(await compareIdxWithGit(s.sandbox, s.server)).toBe(2);
@@ -137,19 +135,16 @@ describe("receive-pack with real git push", () => {
       sameResults(await s.both("main"));
       await s.sandbox.git(["reset", "-q", "--hard", "HEAD~1"]);
       await commitFile(s.sandbox, "b", "rewritten");
-      sameResults(await s.both("main")); // non-fast-forward, refused by the client
+      sameResults(await s.both("main"));
       const forced = await s.both("--force", "main");
       sameResults(forced);
       expect(forced.ours.lines[0]?.flag).toBe("+");
-      // A lease on the value the server has: accepted.
       await commitFile(s.sandbox, "c", "again");
       await s.sandbox.git(["reset", "-q", "--hard", "HEAD~1"]);
       await commitFile(s.sandbox, "c", "other");
-      // The lease names what the server has (the forced commit, now HEAD~1).
       const { stdout: leased } = await s.sandbox.git(["rev-parse", "HEAD~1"]);
       const leaseOk = await s.ours(`--force-with-lease=main:${leased.trim()}`, "main");
       expect(leaseOk.ok).toBe(true);
-      // A stale lease: the client refuses before sending.
       await commitFile(s.sandbox, "d", "x");
       const stale = await s.ours(`--force-with-lease=main:${"1".repeat(40)}`, "main");
       expect(stale.ok).toBe(false);

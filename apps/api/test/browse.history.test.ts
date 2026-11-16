@@ -33,7 +33,6 @@ async function get<T = Record<string, unknown>>(
 
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString().replace(".000Z", "Z");
 
-/** The commit as the API should show it. */
 function expected(c: OracleCommit) {
   return {
     sha: c.sha,
@@ -42,7 +41,6 @@ function expected(c: OracleCommit) {
       author: { name: c.authorName, email: c.authorEmail, date: iso(c.authorTime) },
       committer: { name: c.committerName, email: c.committerEmail, date: iso(c.committerTime) },
       tree: { sha: c.tree },
-      // The fixture's commits are unsigned.
       verification: {
         verified: false,
         reason: "unsigned",
@@ -57,7 +55,6 @@ function expected(c: OracleCommit) {
 
 const commitOf = (sha: string) => expected(fx.commits[sha] as OracleCommit);
 
-/** Every item of a paged listing, `perPage` at a time. */
 async function allPages(kind: "branches" | "tags", perPage: number): Promise<unknown[]> {
   const items: unknown[] = [];
   let cursor: string | null = null;
@@ -238,7 +235,6 @@ describe("commits", () => {
     expect(first).toMatchObject({ ok: true, value: { commits: [] } });
     const next = first.ok ? [...first.value.next] : [];
     expect(next).toHaveLength(1);
-    // Going on from there, with reads to spare, finds the rest.
     const rest = await browse({}, next);
     expect(rest.ok && rest.value.commits.map((c) => c.sha)).toEqual(fx.logs["main -- README.md"]);
   });
@@ -361,7 +357,6 @@ describe("compare", () => {
       `${base}/compare/${encodeURIComponent("feature/ü-slash")}...main`,
     );
     expect(feature.body.status).toBe("ahead");
-    // Oldest first.
     expect(feature.body.commits.map((c) => c.sha)).toEqual(
       (fx.logs.main as string[])
         .filter((sha) => !(fx.logs["feature/ü-slash"] as string[]).includes(sha))

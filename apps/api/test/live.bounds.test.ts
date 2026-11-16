@@ -125,7 +125,6 @@ describe("a feed's live state", () => {
       expect(second.streams).toHaveLength(LIVE_POLICY.dirtyPage);
       const third = live.dirtyAfter(second.reach, upTo);
       expect(third.streams).toHaveLength(5);
-      // The last page: nothing past it up to the capture.
       expect(third.reach).toBe(upTo);
     });
   });

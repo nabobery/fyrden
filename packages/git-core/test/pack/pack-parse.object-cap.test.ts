@@ -38,7 +38,6 @@ describe("pack-parse: 32 MiB per-object cap and the three sizes", () => {
     const { bytes } = buildPack([{ kind: "blob", data: text("small"), declaredSize: CAP + 1 }]);
     expect(await parseCode(bytes)).toBe("object-too-large");
     const atCap = buildPack([{ kind: "blob", data: text("small"), declaredSize: CAP }]);
-    // Exactly 32 MiB is allowed by the cap, and then fails the exact-size check.
     expect(await parseCode(atCap.bytes)).toBe("size-mismatch");
   });
 
@@ -47,13 +46,11 @@ describe("pack-parse: 32 MiB per-object cap and the three sizes", () => {
     const { bytes } = buildPack([{ kind: "blob", data: text("small"), declaredSize: CAP }]);
     expect(bytes.length).toBeLessThan(64);
     for (const chunkSize of [7, 4096]) {
-      // The production pool (72 MiB) is not tied up by a declaration.
       const memory = trackingBudget(72 * MiB);
       expect(await parseCode(bytes, { memory, chunkSize })).toBe("size-mismatch");
       expect(memory.peak()).toBeLessThan(MiB);
       expect(memory.held()).toBe(0);
     }
-    // And a pool far smaller than the declared size is enough to refuse it.
     expect(await parseCode(bytes, { memory: trackingBudget(MiB) })).toBe("size-mismatch");
   });
 
@@ -88,12 +85,10 @@ describe("pack-parse: 32 MiB per-object cap and the three sizes", () => {
     const zlib = spyZlib();
     expect(await parseCode(bytes, { zlib })).toBe("inflate-bomb");
     expect(zlib.maxOutputs.every((m) => m === 11)).toBe(true);
-    // One byte too many is a bomb too.
     const plusOne = buildPack([
       { kind: "blob", data: text("0123456789"), compressed: deflateSync(text("0123456789A")) },
     ]);
     expect(await parseCode(plusOne.bytes)).toBe("inflate-bomb");
-    // The same for a delta program.
     const deltaBomb = buildPack([
       { kind: "blob", data: base },
       {
@@ -144,7 +139,6 @@ describe("pack-parse: 32 MiB per-object cap and the three sizes", () => {
       { copy: [0, 100] },
       { insert: text("new tail, longer than the base") },
     ]);
-    // entry_size (the program) < base_size < result_size, all distinct.
     expect(new Set([delta.length, base.length, result.length]).size).toBe(3);
     const { bytes } = buildPack([
       { kind: "blob", data: base },

@@ -484,7 +484,6 @@ describe("asking code owners to review", () => {
     await ok(api("PATCH", `${path}/pulls/1`, owner.token, { draft: false }));
     await runJobs();
     expect((await requested()).users).toEqual(ids(alice));
-    // Back to a draft: nothing is taken back.
     await ok(api("PATCH", `${path}/pulls/1`, owner.token, { draft: true }));
     await runJobs();
     expect((await requested()).users).toEqual(ids(alice));
@@ -504,7 +503,6 @@ describe("asking code owners to review", () => {
   it("takes back an automatic request whose owner no longer owns a changed path, not a person's", async () => {
     await pullChanging({ "src/a.ts": "b\n", "lib/a.c": "b\n" });
     expect((await requested()).users).toEqual(ids(alice, bob));
-    // A person asks bob too: his request carries both reasons.
     await ask({ reviewers: [bob.handle] });
     expect(await reasons()).toEqual(
       [`${alice.principalId}:${OWNERS}`, `${bob.principalId}:${OWNERS | MANUAL}`].sort(),
@@ -1215,7 +1213,6 @@ describe("a request job's bounds", () => {
         (await ok<{ state: string }>(api("GET", `${path}/pulls/1/code-owners`, owner.token))).state,
       ).toBe("complete");
       expect(await requested()).toEqual({ users: [], teams: [] });
-      // The next round in a repository of its own.
       repo = await ok<{ id: string; name: string }>(
         api("POST", `/orgs/${org.login}/repos`, owner.token, { name: uniqueId("r") }),
       );
@@ -1483,7 +1480,6 @@ describe("a request job's bounds", () => {
           dueNow(r);
           await measureInvocation(r.git.context.metrics, { where: "do", op: "test" }, async () => {
             const invocation = currentInvocation();
-            // No room on Free.
             if (invocation) invocation.tally.d1 = FREE_INTERNAL_CALLS;
             await r.alarm();
           });
@@ -1544,7 +1540,6 @@ describe("a request job's bounds", () => {
       rules.push(`/big/f${i}.txt ${owners.join(" ")}`);
       files[`big/f${i}.txt`] = "b\n";
     }
-    // Changed in commits of at most a hundred files.
     const entries = Object.entries(files);
     await pullChanging(Object.fromEntries(entries.slice(0, 64)), {
       file: rules.join("\n"),
@@ -1557,7 +1552,6 @@ describe("a request job's bounds", () => {
       api("POST", `${path}/pulls`, owner.token, { title: "Two", head: "second", base: "main" }),
     );
     const { most } = await drained(200);
-    // One slice an invocation, within its own queries.
     expect(most).toBeLessThanOrEqual(sliceQueries(CODE_OWNER_REQUEST_POLICY));
     expect(await requested()).toEqual({ users: [], teams: [] });
   });
@@ -1595,7 +1589,6 @@ describe("a request job's bounds", () => {
     );
     expect(allowsCalls).toBeLessThan(1_000);
     expect((await requested()).users).toEqual(ids(alice));
-    // A merge of it asks the directory within an invocation's queries too.
     await ok(
       api("POST", `${path}/rulesets`, owner.token, {
         name: uniqueId("owners"),

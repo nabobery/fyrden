@@ -7,7 +7,6 @@ import type { RepoIssues, SubjectKind } from "./issues.js";
 import type { PullCaller } from "./pulls.js";
 import type { ReactionCounts } from "./reactions.js";
 
-/** The entity type comment snapshots travel as in events. */
 export const COMMENT_ENTITY = "issue_comment";
 
 export interface CommentRecord {

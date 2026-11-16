@@ -165,9 +165,7 @@ function decodeCursor(bytes: Uint8Array | null): Cursor {
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes)) as { v?: number } & Cursor;
     if (value.v === 1 && ["uploads", "packs", "sweep"].includes(value.phase)) return value;
-  } catch {
-    // Fall through to a new pass.
-  }
+  } catch {}
   return FIRST;
 }
 

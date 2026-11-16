@@ -82,7 +82,6 @@ const BROWSER: UploadDeps = {
   newKey: () => crypto.randomUUID(),
 };
 
-/** How names compare: as the API compares them, else as given. */
 const foldOf = (name: string) => {
   const checked = assetName(name);
   return checked.ok ? checked.fold : name.normalize("NFC").toLowerCase();
@@ -105,7 +104,6 @@ export function AssetUploader({
 }) {
   const inputId = useId();
   const [ready, setReady] = useState(false);
-  // Each upload changes as it goes; the page draws them again on each change.
   const items = useRef(new Map<number, Item>());
   const [, setDrawn] = useState(0);
   const [said, setSaid] = useState("");
@@ -149,7 +147,6 @@ export function AssetUploader({
 
   const changed = () => setDrawn((n) => n + 1);
 
-  /** Shows how `item` ended, and draws the release's assets again if any may have changed. */
   const settle = (item: Item, result: UploadResult) => {
     if (result.ok) {
       item.status = "done";
@@ -171,7 +168,6 @@ export function AssetUploader({
   };
 
   const run = async (item: Item) => {
-    // Once at a time, and never while a Cancel is ending its session.
     if (item.stop !== null || item.status === "cancelling") return;
     const stop = new AbortController();
     item.stop = stop;

@@ -207,7 +207,6 @@ describe("repack", () => {
       scratch: (await env.GIT.list({ prefix: `net/${git.networkId()}/scratch/` })).objects.length,
     }));
     expect(result.bytes).toBe(expected);
-    // The run's scratch objects are gone.
     expect(result.scratch).toBe(0);
   }, 60_000);
 

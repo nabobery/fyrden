@@ -290,7 +290,6 @@ export async function codeGrant(c: OAuthContext, params: Map<string, string>): P
   return tokenResponse(c, issued);
 }
 
-/** Hooks into the code grant. For tests. */
 export const issueHooks: { beforeClaim?: () => Promise<void> } = {};
 
 /** `grant_type=refresh_token`. */

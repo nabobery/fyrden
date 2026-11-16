@@ -21,7 +21,6 @@ import {
   type WebStack,
 } from "./web-stack.js";
 
-/** `#rrggbb` as `getComputedStyle` reports it. */
 function rgbOf(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
@@ -33,7 +32,6 @@ let page: Page;
 let origin = "";
 let token = "";
 
-/** Picks a colour scheme in the header, and waits until the server has kept it. */
 async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
   // Its own post's answer, not one of an earlier pick still on its way.
   const kept = page.waitForResponse(
@@ -45,7 +43,6 @@ async function pickScheme(name: "System" | "Light" | "Dark"): Promise<void> {
   await kept;
 }
 
-/** The page has no WCAG 2.x A or AA violation axe can find. */
 const accessible = (name: string) => axe(page, name);
 
 beforeAll(async () => {
@@ -64,8 +61,6 @@ afterAll(async () => {
   expect(stack?.workerLines().filter(mentionsToken) ?? []).toEqual([]);
 });
 
-// The service binding and the logs, apart from the browser: plain requests,
-// signed out, that leave the page and the repositories alone.
 describe("fyrden-web and fyrden-api running together", () => {
   it("serves the page and health check through the API service binding", async () => {
     const results = await runSmoke(webChecks(`${origin}/`));
@@ -120,7 +115,6 @@ describe("the web UI", () => {
     await see(page.locator(".markdown table")).toBeVisible();
     await see(page.locator("figure.mermaid img")).toBeVisible({ timeout: 20_000 });
     await accessible("repository with README");
-    // The clone URL, copied as shown.
     await page.getByRole("button", { name: "Copy" }).click();
     expect(
       await page.evaluate(() =>
@@ -139,7 +133,6 @@ describe("the web UI", () => {
   });
 
   it("edits a file into hostile Markdown that stays inert, and follows its relative link", async () => {
-    // A file in a directory for the README to link to.
     await page.goto(`${origin}/ada/demo/edit/main/?new=1`);
     await page.getByLabel("File name").fill("docs/guide.md");
     await page.getByLabel("Content").fill("# Guide\n");
@@ -149,7 +142,6 @@ describe("the web UI", () => {
     await page.goto(`${origin}/ada/demo/tree/main/docs`);
     await see(page.getByRole("link", { name: "guide.md" })).toBeVisible();
     await accessible("directory");
-    // The README, edited where it is.
     await page.goto(`${origin}/ada/demo/blob/main/README.md`);
     await page.getByRole("link", { name: "Edit" }).click();
     await accessible("editor, an existing file");
@@ -188,9 +180,7 @@ describe("the web UI", () => {
     await see(page).toHaveURL(/\/ada\/demo\/blob\/main\/README\.md$/);
     await page.goto(`${origin}/ada/demo`);
     await see(page.locator("figure.mermaid img")).toHaveCount(3, { timeout: 20_000 });
-    // Drawings are images: none of their markup is in the page to act on.
     expect(await page.locator(".markdown svg").count()).toBe(0);
-    // Nothing the README holds ran, or made an element of its own.
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
     expect(
       await page
@@ -231,11 +221,9 @@ describe("the web UI", () => {
       }),
     });
     expect(put.status).toBe(200);
-    // React Router would take the path for its own data request: opened with a slash.
     await page.goto(`${origin}/ada/demo/blob/main/notes.data`);
     await see(page).toHaveURL(`${origin}/ada/demo/blob/main/notes.data/`);
     await see(page.getByText("plain notes")).toBeVisible();
-    // The data a page navigates with, as the signed-in browser fetches it.
     const data = await page.request.get(`${origin}/ada/demo.data`);
     expect(data.status()).toBe(200);
     expect(data.headers()["cache-control"]).toBe("private, no-store");
@@ -255,7 +243,6 @@ describe("the web UI", () => {
     await pressed("System");
     expect(await theme()).toBeNull();
 
-    // Picked: the same page again, in the choice, whatever the operating system says.
     await pickScheme("Dark");
     expect(page.url()).toBe(`${origin}${path}?from=header`);
     await pressed("Dark");
@@ -277,7 +264,6 @@ describe("the web UI", () => {
     await page.emulateMedia({ colorScheme: "light" });
     await accessible("forced light");
 
-    // System: the choice is gone, and the page follows the operating system again.
     await pickScheme("System");
     await pressed("System");
     expect(await theme()).toBeNull();
@@ -306,11 +292,9 @@ describe("the web UI", () => {
     expect(await page.evaluate(() => (globalThis as { sameDocument?: boolean }).sameDocument)).toBe(
       true,
     );
-    // Kept for the next page, by the server.
     await page.reload();
     await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
-    // A choice that could not be kept is not shown as if it were.
     await page.route("**/appearance", (route) => route.abort());
     await page.getByRole("button", { name: "Light", exact: true }).click();
     await see(page.getByRole("button", { name: "Dark", exact: true })).toHaveAttribute(
@@ -326,7 +310,6 @@ describe("the web UI", () => {
   it("checks a page in all six colour scheme states through the header's control, and puts it back", async () => {
     await page.goto(`${origin}/ada/demo/commits`);
     await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
-    // A start other than the default, to see it come back.
     await pickScheme("Light");
     await page.emulateMedia({ colorScheme: "dark" });
     try {
@@ -378,7 +361,6 @@ describe("the web UI", () => {
       expect(failure).toContain("color-contrast");
       await restored;
       page.off("request", noted);
-      // Each pick went through the server, as a visitor's does, then the starting one again.
       expect(posted).toEqual(["system", "light", "dark", "light"]);
       await see(page.getByRole("button", { name: "Light", exact: true })).toHaveAttribute(
         "aria-pressed",
@@ -388,11 +370,9 @@ describe("the web UI", () => {
       const kept = (await page.context().cookies()).find((c) => c.name === "fyrden_theme");
       expect(kept?.value).toBe("light");
 
-      // Without the fault, every state passes.
       await page.reload();
       await accessibleInEveryTheme(page, "commits");
     } finally {
-      // The next tests start from System under a light system, whatever happened here.
       await page.emulateMedia({ colorScheme: "light" });
       await pickScheme("System");
     }
@@ -437,7 +417,6 @@ describe("the web UI", () => {
   it("doesn't take a pick the server refused for one it kept", async () => {
     await page.goto(`${origin}/ada/demo/commits`);
     await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
-    // Starts in System, which keeps no cookie: a refused System pick leaves none either.
     await see(page.getByRole("button", { name: "System", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -558,10 +537,8 @@ describe("the web UI", () => {
     });
     expect(inline.length).toBeGreaterThan(0);
     expect(inline.every((n) => n === nonce)).toBe(true);
-    // HEAD answers the same headers.
     const head = await fetch(`${origin}/`, { method: "HEAD" });
     expect(head.headers.get("content-security-policy")).toMatch(/script-src 'self' 'nonce-/);
-    // A new one on the next response.
     const again = await page.goto(`${origin}/ada/demo`);
     expect(again?.headers()["content-security-policy"]).not.toContain(nonce);
   });
@@ -584,11 +561,9 @@ describe("the web UI", () => {
     await page.getByLabel("Threads you take part in").check();
     await page.getByRole("button", { name: "Save" }).click();
     await see(page.getByRole("status")).toContainText("saved");
-    // Kept: read back from the API.
     await page.goto(`${origin}/settings/notifications`);
     await see(page.getByLabel("Threads you take part in")).toBeChecked();
     await see(page.getByLabel("Repositories you watch")).not.toBeChecked();
-    // This stack sends no email: adding an address is refused, and the page says why.
     await page.getByLabel("Add an address").fill("ada@example.com");
     await page.getByRole("button", { name: "Add address" }).click();
     await see(page.getByRole("alert")).toContainText("sends no email");

@@ -39,7 +39,6 @@ export interface RunRow extends RunKey {
   readonly expiresAt: number;
 }
 
-/** What a published slice moves the row to. */
 export interface Published {
   readonly blobOid: Oid | null;
   readonly generation: number;
@@ -241,7 +240,6 @@ export class BlameRuns {
     return cursor.rowsWritten > 0;
   }
 
-  /** Every checkpoint a run names. */
   checkpointKeys(): string[] {
     return this.storage.sql
       .exec<{ checkpoint_key: string }>(

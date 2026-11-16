@@ -25,7 +25,6 @@ let baseTree: string;
 let baseCommit: string;
 const trees = new Map<string, TreeEntry[]>();
 
-/** Base files: a regular file, nested ones, an executable and a symlink. */
 const BASE: Record<string, { content: string; mode?: string }> = {
   "a.txt": { content: "a\n" },
   "d/x.txt": { content: "x\n" },
@@ -33,7 +32,6 @@ const BASE: Record<string, { content: string; mode?: string }> = {
   "run.sh": { content: "#!/bin/sh\n", mode: "100755" },
   link: { content: "a.txt", mode: "120000" },
 };
-/** Paths a change may name: existing ones, new ones, and ones through files. */
 const PATHS = [
   "a.txt",
   "d/x.txt",

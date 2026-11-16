@@ -538,7 +538,6 @@ describe("an issue search's listing", () => {
     const { repo, q } = await listedSource(t);
     for (const query of [`user:someone is:open`, q(""), q("is:open is:closed")])
       expect((await docs(query, [scoped(repo)])).refused, query).toBe("sort_needs_scope");
-    // Text sorted too.
     expect(
       (
         await docs(`user:someone ${t}`, [scoped(repo)], {

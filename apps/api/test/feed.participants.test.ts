@@ -180,7 +180,6 @@ describe("thread participants", () => {
     try {
       expect((await comment(owner, "Thanks, all")).status).toBe(201);
     } finally {
-      // The file's later tests count nothing: the repository's own exec again.
       restore();
     }
     // Every statement of the comment's change, its 1,000-participant audience included.

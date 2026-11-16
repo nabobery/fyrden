@@ -87,7 +87,6 @@ export class RepoClosure {
     this.#source = source;
   }
 
-  /** Trees and tags read so far. */
   get reads(): number {
     return this.#reads;
   }
@@ -162,7 +161,6 @@ export class RepoClosure {
     }
   }
 
-  /** A tag chain from a ref: each tag, and what it ends at. */
   async #peel(tag: Oid): Promise<void> {
     let current = tag;
     for (let depth = 0; depth < MAX_TAG_CHAIN; depth++) {

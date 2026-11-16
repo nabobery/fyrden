@@ -83,7 +83,6 @@ export class Compaction {
     this.#builder = builder;
     this.#reader = reader;
     this.#options = options;
-    // Skip what a resumed writer already wrote.
     for (let written = 0; written < builder.count; this.#cursor++) {
       if (plan.outIndex[plan.order[this.#cursor] as number] !== DROPPED) written++;
     }
@@ -143,7 +142,6 @@ export class Compaction {
     }
   }
 
-  /** Objects in the output. */
   get objectCount(): number {
     return this.#plan.objectCount;
   }
@@ -290,7 +288,6 @@ export class Compaction {
   }
 }
 
-/** Compacts `sources` in one go. */
 export async function compactPacks(
   sources: readonly CompactionSource[],
   options: CompactionOptions,

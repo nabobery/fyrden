@@ -20,7 +20,6 @@ import {
 import { FINDER_SHOWN } from "../lib/path-search.js";
 import { encodePath } from "../lib/types.js";
 
-/** Where the choice to use the `t` shortcut is kept: this browser only. */
 const SHORTCUT_KEY = "fyrden.finder.shortcut";
 
 function shortcutStored(): boolean {

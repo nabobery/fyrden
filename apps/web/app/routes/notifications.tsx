@@ -45,7 +45,6 @@ interface Page {
 
 type Tab = Exclude<InboxTab, "digests">;
 
-/** Each tab's listing query (the digests are a page of their own). */
 const QUERIES = {
   unread: "",
   all: "all=true",
@@ -141,7 +140,6 @@ export default function Inbox({ loaderData }: Route.ComponentProps) {
   const result = useKeptActionData<typeof action>();
   const busy = useNavigation().state !== "idle";
   const { tab, threads, degraded, pages, viewer } = loaderData;
-  // Any stream: every thread of the inbox is in one.
   const live = useLiveHints(() => true);
   // Marking again after a partial pass keeps that pass's time, so nothing newer is marked.
   const newest =

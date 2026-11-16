@@ -9,7 +9,6 @@ export interface McpToolDefinition {
   /** Absent for a tool that answers nothing (its result is a short text). */
   outputSchema?: Record<string, unknown>;
   annotations: McpAnnotations;
-  /** The registry operation that serves this tool. */
   operationId: string;
 }
 

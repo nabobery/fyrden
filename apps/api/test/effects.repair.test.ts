@@ -10,7 +10,6 @@ import { clock } from "../src/services.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 
 const DAY = 24 * 60 * 60 * 1000;
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 let admin: Who;
@@ -109,10 +108,8 @@ describe("effects repair", () => {
       lease_token: null,
       last_error: "reopened: feed unavailable",
     });
-    // Due at once, and overdue for the cron.
     expect(spent?.next_attempt_at).toBe(spent?.recover_at);
     expect(spent?.next_attempt_at).toBeGreaterThanOrEqual(now);
-    // Reopened, they are no longer failed: a second run finds none.
     expect(await repair({ sink: "feed", since, dry_run: false })).toMatchObject({
       body: { eligible: 0, oldest: null, reopened: 0 },
     });

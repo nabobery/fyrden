@@ -55,7 +55,6 @@ export class FetchClientError extends Error {
 export interface FetchClientLimits {
   /** Bytes of the capability advertisement. */
   readonly maxAdvertisementBytes: number;
-  /** Refs in one `ls-refs` answer. */
   readonly maxRefs: number;
   /** Bytes of one `ls-refs` answer. */
   readonly maxRefListBytes: number;
@@ -208,7 +207,6 @@ export class SmartHttpClient {
 
   private constructor(
     options: FetchClientOptions,
-    /** What the server advertised. */
     readonly capabilities: readonly Capability[],
   ) {
     this.#base = withoutTrailingSlashes(options.url);

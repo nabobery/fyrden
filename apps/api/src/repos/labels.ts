@@ -75,7 +75,6 @@ function subjectFailure(entry: RepoEntry, code: string, number: number): Operati
   return sortingFailure(code) ?? failure(entry, code, number);
 }
 
-/** The `labels.list` operation. */
 export async function listLabelsOperation(
   ctx: OpContext,
   input: Input<typeof listLabels>,
@@ -102,7 +101,6 @@ export async function listLabelsOperation(
   };
 }
 
-/** The `labels.get` operation. */
 export async function getLabelOperation(
   ctx: OpContext,
   input: Input<typeof getLabel>,
@@ -114,7 +112,6 @@ export async function getLabelOperation(
   return labelOutput(label);
 }
 
-/** The `labels.create` operation. */
 export async function createLabelOperation(
   ctx: OpContext,
   input: Input<typeof createLabel>,
@@ -137,7 +134,6 @@ const expectedLabel = (input: {
   ...(input.expected_version !== undefined && { version: input.expected_version }),
 });
 
-/** The `labels.update` operation. */
 export async function updateLabelOperation(
   ctx: OpContext,
   input: Input<typeof updateLabel>,
@@ -168,7 +164,6 @@ export async function updateLabelOperation(
   return labelOutput(result.label);
 }
 
-/** The `labels.delete` operation. */
 export async function deleteLabelOperation(
   ctx: OpContext,
   input: Input<typeof deleteLabel>,
@@ -200,7 +195,6 @@ export async function copyDefaultLabelsOperation(
   return { labels: result.labels.map(labelOutput) };
 }
 
-/** The `issues.labels.list` operation. */
 export async function listIssueLabelsOperation(
   ctx: OpContext,
   input: Input<typeof listIssueLabels>,
@@ -245,7 +239,6 @@ async function changeSubject(
   return { subject: result.subject, entry };
 }
 
-/** The `issues.labels.add` operation. */
 export async function addIssueLabelsOperation(
   ctx: OpContext,
   input: Input<typeof addIssueLabels>,
@@ -260,7 +253,6 @@ export async function addIssueLabelsOperation(
   return { labels: subject.meta.labels.map(labelOutput) };
 }
 
-/** The `issues.labels.set` operation. */
 export async function setIssueLabelsOperation(
   ctx: OpContext,
   input: Input<typeof setIssueLabels>,
@@ -269,7 +261,6 @@ export async function setIssueLabelsOperation(
   return { labels: subject.meta.labels.map(labelOutput) };
 }
 
-/** The `issues.labels.remove` operation. */
 export async function removeIssueLabelOperation(
   ctx: OpContext,
   input: Input<typeof removeIssueLabel>,
@@ -284,7 +275,6 @@ export async function removeIssueLabelOperation(
   return { labels: subject.meta.labels.map(labelOutput) };
 }
 
-/** The `issues.labels.clear` operation. */
 export async function clearIssueLabelsOperation(
   ctx: OpContext,
   input: Input<typeof clearIssueLabels>,
@@ -293,7 +283,6 @@ export async function clearIssueLabelsOperation(
   return { labels: subject.meta.labels.map(labelOutput) };
 }
 
-/** The `issues.assignees.add` operation. */
 export async function addAssigneesOperation(
   ctx: OpContext,
   input: Input<typeof addAssignees>,
@@ -304,7 +293,6 @@ export async function addAssigneesOperation(
   return subjectOutput(subject, tokenKinds(ctx, entry, "read"));
 }
 
-/** The `issues.assignees.remove` operation. */
 export async function removeAssigneesOperation(
   ctx: OpContext,
   input: Input<typeof removeAssignees>,

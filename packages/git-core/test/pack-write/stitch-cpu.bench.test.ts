@@ -79,7 +79,7 @@ describe.runIf(process.env.FYRDEN_BENCH)("stitch and framing CPU", () => {
       ["node-crypto", nodeHasher],
     ] as const) {
       for (const chunk of [4096, 65536]) {
-        await drain(streamVerbatimPack(plan, chunkedSource(packs, chunk))); // warm up
+        await drain(streamVerbatimPack(plan, chunkedSource(packs, chunk)));
         const { ms, bytes } = await cpuMs(() =>
           drain(
             streamVerbatimPack(plan, chunkedSource(packs, chunk), {

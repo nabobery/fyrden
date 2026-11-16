@@ -298,17 +298,14 @@ describe("push fsck: special names in trees (git fsck as oracle)", () => {
     const evil = latin1('[submodule "../../x"]\n\tpath = a\n');
     const blob = oidFromHex("1".repeat(40));
     const tree = treeOf([["100644", latin1(".gitmodules"), "1".repeat(40)]]);
-    // Tree first: the blob is checked when it arrives.
     const first = new PushFsck();
     first.check(oidFromHex("2".repeat(40)), "tree", tree);
     expect(() => first.check(blob, "blob", evil)).toThrow(/gitmodulesName/);
-    // Blob first: it is pending until finish.
     const second = new PushFsck();
     second.check(blob, "blob", evil);
     second.check(oidFromHex("2".repeat(40)), "tree", tree);
     expect(second.pending()).toHaveLength(1);
     expect(() => second.finishBlob(blob, { type: "blob", data: evil })).toThrow(/gitmodulesName/);
-    // Missing or not a blob.
     const third = new PushFsck();
     third.check(oidFromHex("2".repeat(40)), "tree", tree);
     expect(() => third.finishBlob(blob, undefined)).toThrow(/gitmodulesMissing/);

@@ -61,7 +61,6 @@ async function target(ctx: OpContext, username: string): Promise<Target> {
   return row;
 }
 
-/** The `admin.users.suspend` operation. */
 export async function suspendUserOperation(
   ctx: OpContext,
   input: Input<typeof suspendUser>,
@@ -133,7 +132,6 @@ export async function suspendUserOperation(
   return refused(ctx, user, "suspend");
 }
 
-/** The `admin.users.unsuspend` operation. */
 export async function unsuspendUserOperation(
   ctx: OpContext,
   input: Input<typeof unsuspendUser>,

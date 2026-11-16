@@ -539,7 +539,6 @@ describe("a slow or stalled source", () => {
     return manual.advance;
   }
 
-  /** As recorded, all at once. */
   const asRecorded = (body: Uint8Array) => trickle(body, body.length, 0, () => {});
 
   /** The import failed in its first slice, holding and leaving nothing; its error. */
@@ -621,7 +620,6 @@ describe("a slow or stalled source", () => {
     let transferMs = 0;
     await start(target, cx.largeSource.exchanges, (n, body) => {
       if (n !== FETCH) return asRecorded(body);
-      // Twice the floor, a chunk a second.
       const chunk = 2 * minImportBytesPerSecond;
       transferMs = Math.ceil(body.length / chunk) * 1000;
       return trickle(body, chunk, 1000, advance);

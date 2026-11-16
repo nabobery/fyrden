@@ -26,7 +26,6 @@ function get(answer: () => Response, path = URL_PATH) {
   return { response, calls };
 }
 
-/** Bytes that start with `head` and fill `length`. */
 function filled(head: Uint8Array, length: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(length);
   bytes.set(head);
@@ -227,7 +226,6 @@ describe("an image's bytes", () => {
             claimed === null ? {} : { "Content-Length": claimed };
           const answer = await get(() => new Response(upstream, { headers })).response;
           if (answer.status === 415) {
-            // A chunk so large that the read for the header passed the limit: no byte left.
             expect(answer.body).toBeNull();
             expect(reason).toBeDefined();
             return;

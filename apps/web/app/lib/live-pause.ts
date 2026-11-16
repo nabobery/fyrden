@@ -8,7 +8,6 @@ import { LIVE_PAUSE_MAX_MS, type LiveBudgetPause } from "./live.js";
  * read is checked: a malformed, past or too distant pause is let go.
  */
 
-/** Where pauses are kept: the browser's, or a test's. */
 export interface PauseEnv {
   readonly origin: string;
   /** The tab's storage (it may throw: blocked, or full). */
@@ -20,7 +19,6 @@ const browser = (): PauseEnv => ({
   storage: () => sessionStorage,
 });
 
-/** What is kept, versioned. */
 interface Kept {
   readonly v: 1;
   readonly kind: "budget";
@@ -52,9 +50,7 @@ export function readPause(
   let raw: string | null = null;
   try {
     raw = env.storage().getItem(key);
-  } catch {
-    // Unreadable: the memory's.
-  }
+  } catch {}
   let stored: LiveBudgetPause | null = null;
   if (raw !== null) {
     try {

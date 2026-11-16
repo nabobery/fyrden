@@ -30,7 +30,6 @@ export const SEARCH_SCOPE = {
   named: 4,
 } as const;
 
-/** `values` once each, by `key`. */
 const distinct = <T>(values: readonly T[], key: (value: T) => string): T[] => [
   ...new Map(values.map((v) => [key(v), v])).values(),
 ];

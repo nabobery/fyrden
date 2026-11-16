@@ -48,7 +48,6 @@ async function repoStub(ctx: OpContext, owner: string, repo: string) {
 /** Any name a ref listing could have returned. */
 const anyName = (name: string) => name.length > 0 && name.length <= 1024;
 
-/** The `repos.branches.list` operation. */
 export async function listBranchesOperation(
   ctx: OpContext,
   input: Input<typeof listBranches>,
@@ -67,7 +66,6 @@ export async function listBranchesOperation(
   };
 }
 
-/** The `repos.branches.get` operation. */
 export async function getBranchOperation(
   ctx: OpContext,
   input: Input<typeof getBranch>,
@@ -86,7 +84,6 @@ export async function getBranchOperation(
   };
 }
 
-/** The `repos.tags.list` operation. */
 export async function listTagsOperation(
   ctx: OpContext,
   input: Input<typeof listTags>,
@@ -125,7 +122,6 @@ function decodeLogCursor(cursor: string): string[] {
   return hex.match(/.{40}/g) ?? [];
 }
 
-/** The `repos.commits.list` operation. */
 export async function listCommitsOperation(
   ctx: OpContext,
   input: Input<typeof listCommits>,
@@ -147,7 +143,6 @@ export async function listCommitsOperation(
   };
 }
 
-/** The `repos.commits.get` operation. */
 export async function getCommitOperation(
   ctx: OpContext,
   input: Input<typeof getCommit>,
@@ -184,7 +179,6 @@ export async function getBlameOperation(
   return result.value;
 }
 
-/** The `repos.compare` operation. */
 export async function compareCommitsOperation(
   ctx: OpContext,
   input: Input<typeof compareCommits>,
@@ -234,7 +228,6 @@ function rawUrl(ctx: OpContext, owner: string, repo: string, path: string, commi
   return url.href;
 }
 
-/** The API shape of what a path names. */
 function contentsOutput(
   ctx: OpContext,
   input: { readonly owner: string; readonly repo: string },
@@ -284,7 +277,6 @@ async function contentsOf(
   return contentsOutput(ctx, input, found);
 }
 
-/** The `repos.contents.get` operation. */
 export function getContentsOperation(
   ctx: OpContext,
   input: Input<typeof getContents>,
@@ -292,7 +284,6 @@ export function getContentsOperation(
   return contentsOf(ctx, input);
 }
 
-/** The `repos.contents.root` operation. */
 export function getRootContentsOperation(
   ctx: OpContext,
   input: Input<typeof getRootContents>,
@@ -300,7 +291,6 @@ export function getRootContentsOperation(
   return contentsOf(ctx, input);
 }
 
-/** The `repos.readme.get` operation. */
 export async function getReadmeOperation(
   ctx: OpContext,
   input: Input<typeof getReadme>,
@@ -329,7 +319,6 @@ export async function getCodeOwnersErrorsOperation(
   };
 }
 
-/** The `repos.trees.get` operation. */
 export async function getTreeOperation(
   ctx: OpContext,
   input: Input<typeof getTree>,
@@ -393,7 +382,6 @@ function validPosition(w: unknown): boolean {
   return text.split("/").every((name) => name.length > 0);
 }
 
-/** The `repos.paths.list` operation. */
 export async function listPathsOperation(
   ctx: OpContext,
   input: Input<typeof listPaths>,

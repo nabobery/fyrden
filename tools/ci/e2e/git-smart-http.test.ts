@@ -58,7 +58,6 @@ function run(
   });
 }
 
-/** git with no user or system config, never prompting. */
 function git(args: string[], cwd = scratch): Promise<Run> {
   return run("git", args, {
     cwd,
@@ -148,7 +147,6 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await server?.stop();
-    // Neither the Workers nor wrangler's access log may print a token.
     expect(output.split("\n").filter(mentionsToken)).toEqual([]);
   } finally {
     if (scratch) await rm(scratch, { recursive: true, force: true });
@@ -187,7 +185,6 @@ describe("stock git against fyrden-api (wrangler dev)", () => {
     expect(dry.code, dry.stderr).toBe(0);
     expect(dry.stderr).toMatch(/\* \[new branch\]\s+main -> main/);
 
-    // Pushing for real (the push cases are in git-push.test.ts).
     const push = await git(["push", repoUrl("push-target"), "main"], work);
     expect(push.code, push.stderr).toBe(0);
   });

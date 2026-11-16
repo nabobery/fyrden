@@ -142,7 +142,6 @@ function withinRepos(repoIds: readonly string[] | null, limit: readonly string[]
   return repoIds?.every((id) => limit.includes(id)) ?? false;
 }
 
-/** Hooks into grant creation. For tests. */
 export const grantHooks: { beforeInsert?: () => Promise<void> } = {};
 
 /** An SQL condition: the agent bound at `agent` and its owner are enabled. */
@@ -150,7 +149,6 @@ const agentEnabled = (agent: string) =>
   `EXISTS (SELECT 1 FROM principals a LEFT JOIN principals ao ON ao.id = a.owner_id
     WHERE a.id = ${agent} AND a.disabled_at IS NULL AND ao.disabled_at IS NULL)`;
 
-/** The `grants.create` operation. */
 export async function createGrantOperation(
   ctx: OpContext,
   input: Input<typeof createGrant>,

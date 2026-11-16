@@ -86,7 +86,6 @@ describe("an event's email for each recipient", () => {
     await api("PATCH", `${path}/issues/1`, writer.token, { state: "closed" });
     const [closed] = await blocks(from);
     expect(marks(closed)).toEqual([`${owner.principalId}:direct:author`]);
-    // The actor's own entries (silent) carry none.
     expect(closed?.audience.filter((a) => a.principal === writer.principalId && a.email)).toEqual(
       [],
     );

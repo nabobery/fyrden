@@ -82,8 +82,6 @@ describe("a file for the renderer", () => {
           theme: { dark: "pierre-dark", light: "pierre-light" },
         },
       });
-      // The renderer's own markup has its styles and icons; nothing from the patch adds a tag
-      // or an attribute: every `<` of it is escaped.
       expect(html, path).toContain("&#x3C;script>alert(1)&#x3C;/script>&#x3C;img src=x");
       expect(html, path).toContain("&#x3C;svg onload=alert(6)>");
       expect(html, path).not.toMatch(/<(script|img|iframe|object|embed)\b/i);

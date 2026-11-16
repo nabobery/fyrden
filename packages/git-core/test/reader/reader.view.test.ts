@@ -361,7 +361,6 @@ describe("reader errors", () => {
   });
 });
 
-/** A view pack whose `.idx` counts single and batched lookups. */
 function counted(pack: ViewPack, batched = true) {
   const counts = { lookup: 0, lookupMany: 0 };
   const idx = pack.idx;
@@ -409,7 +408,6 @@ describe("lookups", () => {
       const data = blobs(8, 2, 300)[1] as Uint8Array;
       const oid = toOid(gitOid("blob", data));
       expect(await reader.readHeader(oid)).toEqual({ type: "blob", size: 300 });
-      // Not in the newer pack, then found in the older one.
       expect(lookups()).toBe(2);
       expect(hex((await reader.readObject(oid))?.bytes as Uint8Array)).toBe(hex(data));
       expect(await reader.has(oid)).toBe(true);

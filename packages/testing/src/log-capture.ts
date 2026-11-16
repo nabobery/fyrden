@@ -11,9 +11,7 @@ const render = (a: unknown): string =>
     : inspect(a, { depth: Number.POSITIVE_INFINITY, breakLength: Number.POSITIVE_INFINITY });
 
 export interface CapturedLogs {
-  /** Every line written through console.* during the current test. */
   readonly lines: string[];
-  /** Parsed JSON log entries written during the current test. */
   entries(): Record<string, unknown>[];
 }
 

@@ -22,7 +22,6 @@ import {
 } from "../../src/protocol/v2-command.js";
 import { chunked } from "./helpers.js";
 
-/** The parsers a corpus case or fuzz input can be fed to. */
 export const TARGETS = [
   "pkt-line",
   "sideband",

@@ -90,7 +90,6 @@ export async function listTokensOf(
   };
 }
 
-/** The `users.tokens.create` operation. */
 export async function createUserTokenOperation(
   ctx: OpContext,
   input: Input<typeof createUserToken>,
@@ -153,7 +152,6 @@ export async function mintAs(
   }
 }
 
-/** The `users.git_tokens.create` operation. */
 export async function createGitTokenOperation(
   ctx: OpContext,
   input: Input<typeof createGitToken>,

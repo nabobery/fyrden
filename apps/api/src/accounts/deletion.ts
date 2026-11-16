@@ -29,7 +29,6 @@ export interface DeletionTarget {
   readonly gen: number;
 }
 
-/** Who deletes, for the records. */
 export interface DeletionActor {
   readonly principalId: string;
   readonly act: readonly string[];
@@ -204,7 +203,6 @@ async function deletionTarget(
   return row ?? undefined;
 }
 
-/** The `admin.users.delete` operation (see the module's description). */
 export async function deleteUserOperation(
   ctx: OpContext,
   input: Input<typeof deleteUser>,

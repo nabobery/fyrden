@@ -25,7 +25,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A mailbox of its own. */
 const mailbox = () => `Box.${crypto.randomUUID().slice(0, 8)}@Example.com`;
 const sid = () => crypto.randomUUID();
 
@@ -127,7 +126,6 @@ describe("the provider's callbacks", () => {
     const a = { id: sid(), email, created_at: at(Date.now() - 60_000) };
     expect(await deliver("suppression.added", a)).toBe(200);
     expect(await rowOf(email)).toMatchObject({ id: a.id, suppressed: 1, origin: "bounce" });
-    // Redelivered: nothing changes, not even its revision.
     const { rev } = (await rowOf(email)) as { rev: number };
     expect(await deliver("suppression.added", a)).toBe(200);
     expect((await rowOf(email))?.rev).toBe(rev);
@@ -268,7 +266,6 @@ async function suppressedDue(n: number): Promise<string[]> {
     ),
     makingDue(env.DIRECTORY, JSON.stringify(emails.map((e) => e.toLowerCase())), -1_000_000 + now),
   ]);
-  // The oldest due first, in the order given.
   await env.DIRECTORY.batch(
     emails.map((email, i) =>
       env.DIRECTORY.prepare(

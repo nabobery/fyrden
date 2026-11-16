@@ -6,7 +6,6 @@ import {
   MemoryWaitTimeoutError,
 } from "../../src/git/memory-budget.js";
 
-/** Who started an operation, for tests that don't look at admissions. */
 const OP = { consumer: "fetch_plan" } as const;
 
 describe("Durable Object memory pool", () => {
@@ -54,7 +53,6 @@ describe("Durable Object memory pool", () => {
     const big = budget.reserveWithin(60, 20);
     const small = budget.reserveWithin(10, 1_000);
     expect(budget.stats().waiting).toBe(2);
-    // The big request leaves the queue at its deadline; the small one fits.
     expect(await big).toBeUndefined();
     const granted = await small;
     expect(granted?.bytes).toBe(10);
@@ -131,7 +129,6 @@ describe("operations started with their share of the pool", () => {
     other.release();
     expect((await plain).bytes).toBe(5);
     expect((await more).bytes).toBe(20);
-    // The 15 left do not fit the operation waiting to start.
     expect(budget.stats()).toMatchObject({ reservedBytes: 85, waiting: 1 });
     for (const reservation of [own, past, await more]) reservation.release();
     operation.release();
@@ -168,7 +165,6 @@ describe("operations started with their share of the pool", () => {
     const first = operation.reserve(20);
     const second = operation.reserve(5);
     others[0]?.release();
-    // The first comes from the pool, which is then full; the second fits the share.
     expect((await first).bytes).toBe(20);
     expect((await second).bytes).toBe(5);
     expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 0 });
@@ -185,7 +181,6 @@ describe("operations started with their share of the pool", () => {
     const second = operation.reserve(20);
     first.release();
     expect((await second).bytes).toBe(20);
-    // Nothing more came from the pool, which stayed full.
     expect(budget.stats()).toMatchObject({ reservedBytes: 100, waiting: 0 });
     (await second).release();
     other.release();

@@ -97,7 +97,6 @@ async function fsckVerdicts(): Promise<Map<string, GitVerdict>> {
 const typedOid = (kind: string): fc.Arbitrary<Oid> =>
   fc.nat().map((n) => oidFromBytes(createHash("sha1").update(`${kind}:${n}`).digest()));
 
-/** Byte edits that tend to break header syntax: separators, digits, signs, NUL. */
 const INTERESTING = [
   0x00, 0x09, 0x0a, 0x20, 0x2b, 0x2d, 0x2e, 0x30, 0x31, 0x3c, 0x3e, 0x5c, 0x61, 0x67, 0x7e,
 ];
@@ -344,7 +343,6 @@ describe("git fsck as the oracle", () => {
       }
     }
     expect(disagreements).toEqual([]);
-    // The corpus exercises both sides: plenty rejected, plenty accepted.
     expect(rejected).toBeGreaterThan(written.length / 10);
     expect(rejected).toBeLessThan(written.length);
   }, 60_000);

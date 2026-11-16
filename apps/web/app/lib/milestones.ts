@@ -1,9 +1,3 @@
-/**
- * Milestones as the pages read and show them: the API's own shapes (types
- * only), a due date as a form's date field writes it and as the API takes
- * it, and where a milestone's issues and pull requests are listed.
- */
-
 import type { getMilestone, listMilestones, Output } from "@fyrden/api-contract";
 
 export type Milestone = Output<typeof getMilestone>;
@@ -16,7 +10,6 @@ export type MilestonesPage = Output<typeof listMilestones>;
  */
 export const MILESTONE_FORM_MAX_BYTES = 9 * 65_536 + 16 * 1024;
 
-/** Characters of a description the list shows (as text: the rest is in its editor). */
 export const DESCRIPTION_EXCERPT = 500;
 
 /** The latest due date the API takes (JavaScript's latest time, in year 275760). */
@@ -65,12 +58,10 @@ export function excerpt(description: string): string {
   return description;
 }
 
-/** A milestone's issues and pull requests, in any state. */
 export function milestoneItems(owner: string, repo: string, number: number): string {
   const query = new URLSearchParams({ state: "all", kind: "all", milestone: String(number) });
   return `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${query}`;
 }
 
-/** `/repos/{owner}/{repo}/milestones/{number}` for the API. */
 export const milestoneApiPath = (repoApi: string, number: number): string =>
   `${repoApi}/milestones/${number}`;

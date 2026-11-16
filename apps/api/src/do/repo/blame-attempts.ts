@@ -28,7 +28,6 @@ export interface AttemptLedger {
    * the request reported, not a death. Earlier deaths still count.
    */
   release(run: string, generation: number): void;
-  /** Forgets the run's attempts. */
   clear(run: string): void;
 }
 

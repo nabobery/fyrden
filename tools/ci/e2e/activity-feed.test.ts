@@ -27,9 +27,7 @@ import {
 const REPO = "activity";
 
 let forge: Forge;
-/** Owns the repository; asks for reviews and reviews. */
 let owner: Account;
-/** A collaborator: the user the agent acts for, whose feed it follows. */
 let dev: Account;
 let ownerGit: Git;
 let devGit: Git;
@@ -72,7 +70,6 @@ const setCollaborator = () =>
     permission: "push",
   });
 
-/** Pushes `branch` from main with one change to README.md, as `git`. */
 async function pushBranch(git: Git, work: string, branch: string, readme: string) {
   await git.ok(["fetch", "-q", "origin", "main"], work);
   await git.ok(["checkout", "-q", "-B", branch, "FETCH_HEAD"], work);
@@ -81,7 +78,6 @@ async function pushBranch(git: Git, work: string, branch: string, readme: string
   return head;
 }
 
-/** The owner opens a pull request and asks the agent's user to review it. */
 async function askForReview(branch: string): Promise<number> {
   await pushBranch(ownerGit, ownerWork, branch, `one\ntwo\n${branch}\n`);
   const pull = await owner.api.call("pulls.create", {
@@ -98,7 +94,6 @@ async function askForReview(branch: string): Promise<number> {
   return pull.number;
 }
 
-/** This repository's items of a list of them. */
 const ours = (items: readonly FeedItem[]) => items.filter((i) => i.repo.id === repoId);
 
 describe("an agent following its user's activity feed (wrangler dev)", () => {
@@ -106,9 +101,7 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
     timeout: 240_000,
   }, async () => {
     const feed = new FeedFollower(agent.api, start);
-    // A review asked of the agent's user.
     const asked = await askForReview("asked");
-    // Its user's own pull request: changes requested, then approved, then a conflict with main.
     const head = await pushBranch(devGit, devWork, "own", "one\ntwo (dev)\n");
     const own = (
       await dev.api.call("pulls.create", { ...at(), title: "Own", head: "own", base: "main" })
@@ -131,14 +124,12 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
     expect(request.repo.full_name).toBe(`${owner.handle}/${REPO}`);
     const approved = await feed.until(forge, own, "approved", "open");
     expect(approved.priority).toBe("P0");
-    // The request for changes was answered by the approval: the same item, resolved.
     const settled = await feed.until(forge, own, "changes_requested", "resolved");
     expect(settled.item_key).toBe(changes.item_key);
     expect(settled.version).toBeGreaterThan(changes.version);
     const conflict = await feed.until(forge, own, "merge_conflict", "open");
     expect(conflict.reasons).toContain("author");
 
-    // Read again from where it started: each item once, as last changed.
     const again = ours((await readFeed(agent.api, start)).items);
     const keys = again.map((i) => i.item_key);
     expect(new Set(keys).size).toBe(keys.length);
@@ -147,7 +138,6 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
         state: item.state,
         version: item.version,
       });
-    // MCP reads the same feed the same way.
     const viaMcp = await agent.mcp.tool<{ items: FeedItem[] }>("get_feed", {
       since: startMcp,
       limit: 100,
@@ -158,7 +148,6 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
         .sort(),
     ).toEqual(again.map((i) => `${i.item_key}@${i.version}`).sort());
 
-    // A sync lists what is open, with a cursor from which nothing has changed since.
     const synced = await agent.api.call("feed.sync", {});
     expect(synced.complete).toBe(true);
     const open = ours(synced.items).map((i) => `${i.thread_key} ${i.kind}`);
@@ -199,24 +188,20 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
         resync: "/api/feed/sync",
       });
     await expect(agent.mcp.tool("get_feed", { since: forged })).rejects.toThrow(/cursor_expired/);
-    // The REST token's cursor is not the MCP token's.
     await expect(agent.mcp.tool("get_feed", { since: start })).rejects.toThrow(/cursor_expired/);
   });
 
   it("drops a removed collaborator's items, and brings only new ones once access is back", {
     timeout: 240_000,
   }, async () => {
-    // An item of the repository in the feed first.
     const removed = await askForReview("before-removal");
     await new FeedFollower(agent.api, start).until(forge, removed, "review_requested", "open");
     const before = ours((await agent.api.call("feed.sync", {})).items);
     expect(before.map((i) => i.thread_key)).toContain(`pull/${removed}`);
     await owner.api.call("repos.collaborators.remove", { ...at(), username: dev.handle });
-    // Out of sight at once (the feed checks access when read)...
     expect(ours((await agent.api.call("feed.sync", {})).items)).toEqual([]);
     expect(ours((await readFeed(agent.api, start)).items)).toEqual([]);
 
-    // ...and deleted: with access given back, the old items do not return.
     await setCollaborator();
     await eventually("the feed to forget the repository's old items", async () => {
       const items = ours((await readFeed(agent.api, start)).items);
@@ -224,7 +209,6 @@ describe("an agent following its user's activity feed (wrangler dev)", () => {
       await forge.cron(EFFECTS_CRON);
       return undefined;
     });
-    // New ones do.
     const feed = new FeedFollower(agent.api, start);
     const later = await askForReview("after");
     await feed.until(forge, later, "review_requested", "open");

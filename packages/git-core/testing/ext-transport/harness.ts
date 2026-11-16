@@ -25,7 +25,6 @@ export function extPushArgs(repoDir: string, ...rest: string[]): string[] {
   return ["-c", "protocol.ext.allow=always", "push", extRemote(repoDir), ...rest];
 }
 
-/** A test server repository directory; `dispose` removes it. */
 export interface ServerRepo {
   readonly dir: string;
   dispose(): Promise<void>;

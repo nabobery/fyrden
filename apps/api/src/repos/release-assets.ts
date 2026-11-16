@@ -104,7 +104,6 @@ async function tagOf(ctx: OpContext, entry: RepoEntry, view: UploadView) {
   return release?.tagName;
 }
 
-/** The `releases.assets.uploads.create` operation. */
 export async function createAssetUploadOperation(
   ctx: OpContext,
   input: Input<typeof createAssetUpload>,
@@ -182,7 +181,6 @@ export async function completeAssetUploadOperation(
   return uploadOutput(entry, view, await tagOf(ctx, entry, view));
 }
 
-/** The `releases.assets.uploads.abort` operation. */
 export async function abortAssetUploadOperation(
   ctx: OpContext,
   input: Input<typeof abortAssetUpload>,
@@ -217,7 +215,6 @@ export async function getReleaseAssetOperation(
   return assetOutput(release, asset, entry);
 }
 
-/** The `releases.assets.delete` operation. */
 export async function deleteReleaseAssetOperation(
   ctx: OpContext,
   input: Input<typeof deleteReleaseAsset>,
@@ -231,7 +228,6 @@ export async function deleteReleaseAssetOperation(
   return { id: input.asset_id, state: "deleted" };
 }
 
-/** The `releases.retained.get` operation. */
 export async function getRetainedAssetsOperation(
   ctx: OpContext,
   input: Input<typeof getRetainedAssets>,

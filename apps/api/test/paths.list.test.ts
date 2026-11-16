@@ -816,7 +816,6 @@ describe("caps and limits", () => {
     const trees = new Trees();
     const root = trees.of(names);
     const bench = await Bench.open({ maxPageJsonBytes: 64 * 1024, keepMinTrees: 0 });
-    // Twice: once walked, then from the stored list.
     for (const round of ["walked", "stored"]) {
       const got = await bench.all(browseOf(trees, root), 10_000);
       expect(got.paths).toEqual(names);
@@ -978,7 +977,6 @@ describe("memory and unreadable objects", () => {
     const before = trees.headers;
     const start = await bench.page(browseOf(trees, root, { tip: false }));
     expect(start).toMatchObject({ state: "unavailable", reason: "busy", paths: [], next: null });
-    // It got as far as the tree: no stored list answered.
     expect(trees.headers).toBe(before + 1);
     expect((await bench.rows()).lists).toEqual([]);
   });
@@ -1470,7 +1468,6 @@ describe("repos.paths.list", () => {
   });
 });
 
-/** A cursor's text, of any shape. */
 function cursorText(value: unknown): string {
   return btoa(JSON.stringify(value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }

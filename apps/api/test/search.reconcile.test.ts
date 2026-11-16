@@ -42,7 +42,6 @@ const docStatement = (...args: Parameters<typeof docStatements>) => ({
 });
 
 const fx = inject("pushFixtures");
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 let owner: Who;
@@ -441,7 +440,6 @@ describe("search reconciliation", () => {
         },
         { by: "reconcile", gen, kind: "subjects", after: 0, day },
       ).run();
-    // (While a pass is under way.)
     await db
       .prepare("UPDATE search_reconciles SET kind = 'subjects' WHERE repo_id = ?")
       .bind(repo.id)

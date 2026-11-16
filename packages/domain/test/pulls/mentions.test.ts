@@ -54,7 +54,6 @@ describe("mentions as the page shows them", () => {
       "b",
       "c",
     ]);
-    // Raw HTML is shown as text, so what it holds is read.
     expect(mentionsIn("<div>\n```\n@d\n</div>")).toContain("d");
     expect(mentionsIn("[see @e](https://example.com/@f)")).toEqual(["e"]);
     // An unclosed run of four backticks is text, the span after it code; a handle right after
@@ -117,7 +116,6 @@ describe("mentions as the page joins its text", () => {
       "first",
     ]);
     expect(mentionsIn(`@crlf\r\n \r\n${"y ".repeat(MENTION_SOURCE_LENGTH)}`)).toEqual(["crlf"]);
-    // One with no blank line before the limit is not read.
     expect(mentionsIn(`@kept ${head} @${handle}`)).toEqual([]);
   });
 
@@ -143,15 +141,12 @@ describe("mentions in what the page shows of references, autolinks and footnotes
   });
 
   it("read autolinks' text, and never footnote labels or unshown notes", () => {
-    // The page shows an autolink's text: `<mailto:@m>` reads `mailto:@m`.
     expect(mentionsIn("<mailto:@m> and <https://x.test/@not> @y")).toEqual(["m", "y"]);
     expect(mentionsIn("[^@alice]: hidden @bob")).toEqual([]);
-    // A footnote's text is not read: a mention there tells no one.
     expect(mentionsIn("See note[^n].\n\n[^n]: Please ask @alice.")).toEqual([]);
   });
 
   it("mention no one in a text too costly to parse", () => {
-    // Emphasis inside a word keeps it whole.
     expect(mentionsIn("@a*l*ice")).toEqual(["alice"]);
     expect(mentionsIn(`@x ${"*".repeat(257)}`)).toEqual([]);
     expect(mentionsIn(`@x ${"[".repeat(257)}`)).toEqual([]);
@@ -167,7 +162,6 @@ describe("mentions in what the page shows of references, autolinks and footnotes
     expect(mentionsIn(`${"- ".repeat(8191)}@z`)).toEqual([]);
     expect(mentionsIn(`>> ${"- ".repeat(2048)}@alice`)).toEqual([]);
     expect(mentionsIn(`x\r${"- ".repeat(4096)}@alice`)).toEqual([]);
-    // No longer turned into other text: what the page shows stays the rule.
     expect(mentionsIn(`*     @hidden\n\n${"*".repeat(200)}`)).toEqual([]);
     expect(mentionsIn("@alice_bob")).toEqual([]);
   });

@@ -51,27 +51,22 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const listed = bodyOf(page, request);
   return {
     repo,
-    // The repository as this page's URL names it: its answers are scoped by the same.
     at: { owner: params.owner, repo: params.repo },
     origin: url.origin,
     labels: listed.labels,
     pages: pageLinks(url, "cursor", listed.next_cursor),
     viewer: session.state === "signed-in" ? session.user.id : null,
-    // A session check that failed says nothing of who is viewing: the page keeps the last known.
     viewerKnown: session.state !== "unknown",
   };
 }
 
-/** A labels page's answer is about its viewer and repository. */
 type LabelsScope = Scope & { owner: string; repo: string; page: "labels" };
 
-/** The id of the label a form is of, else none. */
 const labelId = (form: FormData): number | null => {
   const value = field(form, "label_id");
   return /^[1-9][0-9]{0,14}$/.test(value) ? Number(value) : null;
 };
 
-/** What a label form wrote, as its refused draft keeps it. */
 function draftOf(form: FormData): Written | undefined {
   const fields = {
     name: field(form, field(form, "intent") === "edit" ? "new_name" : "name"),
@@ -179,7 +174,6 @@ const DONE: Record<string, string> = {
 
 type ActionData = Awaited<ReturnType<typeof action>> | undefined;
 
-/** The labels page's editors: the new label's, and each label's. */
 const EDITORS: DraftEditors = {
   ofDraft: (draft) => (draft.target === undefined ? "new-label" : `label-${draft.target}`),
   ofAnswer: (ok, target) => {
@@ -190,7 +184,6 @@ const EDITORS: DraftEditors = {
   },
 };
 
-/** What a kept draft's field is, as its recovery shows it. */
 function unsentLabel(editor: string, field: string): string {
   const what = editor === "new-label" ? "New label" : "Your edit of a label";
   if (field === "color") return `${what}: colour`;
@@ -198,7 +191,6 @@ function unsentLabel(editor: string, field: string): string {
   return what;
 }
 
-/** A label's name, colour and description fields, filled from `shown`. */
 function LabelFields({
   id,
   shown,

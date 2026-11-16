@@ -22,7 +22,6 @@ const SLICE_STEPS = 256;
 const DEEP_COMMITS = 2_600;
 /** Blame's cap on one object read (4 MiB): an earlier version over it can't be compared. */
 const OVER_OBJECT_CAP = 4 * 1024 * 1024 + 300 * 1024;
-/** Over blame's 1 MiB file limit: refused outright. */
 const OVER_FILE_LIMIT = 1024 * 1024 + 4096;
 /** Lines alternating between two commits: one display group each. */
 const UNDER_CUTOFF_LINES = 3_000;
@@ -75,7 +74,6 @@ function noise(bytes: number): string {
   return out.slice(0, bytes - 1).concat("\n");
 }
 
-/** A fast-import stream of every fixture, each branch its own history. */
 function fixtures(): string {
   const parts: string[] = [];
   let mark = 0;
@@ -136,7 +134,6 @@ function fixtures(): string {
   return parts.join("");
 }
 
-/** The API's blame answer, asked as the user with a token. */
 async function apiBlame(ref: string, path: string, query = "") {
   const res = await fetch(
     `${stack.origin}/api/repos/ada/blamed/blame?path=${path}&ref=${ref}${query}`,
@@ -145,7 +142,6 @@ async function apiBlame(ref: string, path: string, query = "") {
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
 }
 
-/** Requests the page sends to the ranges route, kept as they go. */
 function rangesRequests(on: Page): Request[] {
   const seen: Request[] = [];
   on.on("request", (request) => {
@@ -222,7 +218,6 @@ async function firstVisibleLine(on: Page): Promise<number> {
   return Number(await line.jsonValue());
 }
 
-/** Scrolls `on` by `by` pixels, or to `fraction` of its height. */
 const scroll = (on: Page, to: { by: number } | { fraction: number }) =>
   on.locator("html").evaluate((html, where) => {
     const view = html.ownerDocument.defaultView;
@@ -230,7 +225,6 @@ const scroll = (on: Page, to: { by: number } | { fraction: number }) =>
     else view?.scrollTo({ top: html.scrollHeight * where.fraction });
   }, to);
 
-/** How far `on` is scrolled. */
 const scrollY = (on: Page) =>
   on.locator("html").evaluate((html) => html.ownerDocument.defaultView?.scrollY ?? null);
 
@@ -296,7 +290,6 @@ describe("the fixtures, through both Workers", () => {
   });
 
   it("walks a deep branch in more slices than one visit makes on its own", async () => {
-    // No request is made of it here: only the number of commits, and the slice's step limit.
     expect(Math.ceil(DEEP_COMMITS / SLICE_STEPS)).toBeGreaterThan(9);
   });
 });
@@ -320,7 +313,6 @@ describe("with JavaScript", () => {
   it("brings in the ranges past the server's window", async () => {
     const asked = rangesRequests(page);
     await visit(page, blame("main", "long.txt"));
-    // The server sent the first 2,000 lines; the second commit's lines start at 2,501.
     await see(page.locator("#L2001")).toHaveCount(0);
     await see(file(page)).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
     await see(notes(page)).toHaveCount(2);
@@ -426,7 +418,6 @@ describe("with JavaScript", () => {
     await visit(page, blame("main", "lone-cr.txt"));
     await see(file(page)).toHaveAttribute("data-blame-status", "done", { timeout: 30_000 });
     await see(file(page)).toHaveAttribute("data-drawn", "text");
-    // a\rb, c, d: three lines, as the API counts them.
     await see(page.locator('table.blame a[id^="L"]')).toHaveCount(3);
     await see(page.locator("#L1").locator("xpath=../..")).toContainText("a␍b");
     await see(page.locator("diffs-container")).toHaveCount(0);
@@ -479,7 +470,6 @@ describe("with JavaScript", () => {
       });
       await visit(fresh, blame("main", "over.txt"));
       await see(file(fresh)).toHaveAttribute("data-drawn", "file", { timeout: 30_000 });
-      // The reader at the top of the page: its header and the file's first lines in view.
       await scroll(fresh, { fraction: 0 });
       await see.poll(() => scrollY(fresh)).toBe(0);
       expect(await firstVisibleLine(fresh)).toBe(1);
@@ -555,7 +545,6 @@ describe("with JavaScript", () => {
 
   it("waits a busy answer's time and goes on, counting it", async () => {
     await freshPage(async (fresh) => {
-      // The page's own clock, stopped from its first load: only the test moves it on.
       await fresh.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       await fresh.clock.pauseAt(new Date("2026-01-01T00:00:01Z"));
       let refused = false;
@@ -577,7 +566,6 @@ describe("with JavaScript", () => {
       await visit(fresh, blame("main", "notes.txt"));
       await see(file(fresh)).toHaveAttribute("data-blame-status", "waiting", { timeout: 30_000 });
       expect(asked).toHaveLength(1);
-      // Short of the 30 seconds asked: still waiting, nothing asked again.
       await fresh.clock.fastForward(29_000);
       await see(file(fresh)).toHaveAttribute("data-blame-status", "waiting");
       expect(asked).toHaveLength(1);
@@ -609,7 +597,6 @@ describe("with JavaScript", () => {
       const tokens = asked.map((r) => new URL(r.url()).searchParams.has("continuation"));
       const at = tokens.indexOf(true);
       expect(at).toBeGreaterThan(0);
-      // The request after the refused one asks from the start again.
       expect(tokens[at + 1]).toBe(false);
     });
   });

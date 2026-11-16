@@ -473,7 +473,6 @@ class GcSlice {
     await deleteRun(this.git, cursor.runId);
   }
 
-  /** Starts the collection again from a new snapshot. */
   async #restart(cursor: GcCursor): Promise<SliceResult> {
     this.git.context.metrics.count("git.maintenance", { job: "gc", what: "restarts" }, 1);
     await this.#cleanup(cursor);

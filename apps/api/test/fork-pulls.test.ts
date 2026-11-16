@@ -1067,7 +1067,6 @@ describe("the base's view", () => {
     const waiting = await open(other, otherHead);
     expect(waiting).toMatchObject({ status: 409, body: { code: "busy" } });
     await compactView(stub);
-    // The output holds each object once: room for the new pack.
     expect((await borrowedCounts(stub)).map((p) => p.object_count)).toEqual([whole?.object_count]);
     expect(await open(other, otherHead)).toMatchObject({ status: 201 });
     expect(await borrowedLive(stub)).toBe(2);
@@ -1101,7 +1100,6 @@ describe("the base's view", () => {
   });
 
   describe("after its compaction merged the fork's packs", () => {
-    /** The fork's newest pack with its objects. */
     const newestForkPack = () =>
       inRepo(env.REPO.getByName(fork.id), (r: RepoDO) =>
         r.git.context.storage.sql
@@ -1249,7 +1247,6 @@ describe("the base's view", () => {
       const topic = await forkBranch("topic", "d.txt");
       const added = await newestForkPack();
       expect((await open(contributor, `${contributor.handle}:${topic}`)).status).toBe(201);
-      // The output and the new pack are merged again; the first output's row goes.
       await compactView(stub);
       const [later, ...others] = await borrowedCounts(stub);
       expect(others).toEqual([]);
@@ -1328,7 +1325,6 @@ describe("the base's view", () => {
     });
     const acked = (await network.status()).deletions.find((d) => d.packId === borrowed.pack_id);
     expect(acked?.acksPending).toEqual([]);
-    // From the fork's packs as they are now.
     expect(await open(contributor, `${contributor.handle}:${topic}`)).toMatchObject({
       status: 201,
     });
@@ -2001,7 +1997,6 @@ describe("a head branch in a fork, written from the base", () => {
     const allowed = await setConsent(contributor, true);
     expect(allowed.status).toBe(200);
     expect(allowed.body.maintainer_can_modify).toBe(true);
-    // The fork has the consent once told.
     await runJobs(base.id);
     const updated = await updateBranch();
     expect(updated.status).toBe(202);

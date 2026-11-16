@@ -1,15 +1,12 @@
 import { z } from "zod";
 import { isId } from "../ids.js";
 
-/** Entity rows that travel in events, one schema per entity type. */
-
 export const REPO_ENTITY = "repo";
 
 /** The longest repository description (GitHub's limit). */
 export const MAX_DESCRIPTION_LENGTH = 350;
 
 export const RepoRowSchema = z.strictObject({
-  /** Repositories belong to users and organizations. */
   ownerId: z.string().refine((s) => isId(s, "usr") || isId(s, "org"), "not an owner id"),
   name: z.string().min(1),
   visibility: z.enum(["public", "internal", "private"]),

@@ -4,7 +4,6 @@ import { when, who } from "../lib/pulls.js";
 import { Markdown } from "./markdown.js";
 import { Reactions, type Rollup } from "./reactions.js";
 
-/** One event of a pull request's conversation, with its Markdown source. */
 export type TimelineItem =
   | {
       kind: "comment";
@@ -58,7 +57,6 @@ function Byline({
   );
 }
 
-/** A pull request's conversation: its comments, reviews, and when it was closed or merged. */
 export function Timeline({
   items,
   viewer,
@@ -70,7 +68,6 @@ export function Timeline({
   viewer: string | null;
   /** Fields every form sends (the viewer it was made for). */
   hidden?: ReactNode;
-  /** Whether the viewer may react to its comments, and whether a form is being sent. */
   react: { canReact: boolean; busy: boolean };
   /** The comment a permalink names, marked. */
   linked?: number | null;

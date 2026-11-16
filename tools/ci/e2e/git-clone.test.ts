@@ -53,7 +53,6 @@ function run(
 }
 
 describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)", (plan) => {
-  // Taken when the server starts (`beforeAll`).
   let port = 0;
   let origin = "";
   const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
@@ -234,7 +233,6 @@ describe.each(["free", "paid"] as const)("stock git clones and fetches (plan %s)
   afterAll(async () => {
     try {
       await server?.stop();
-      // Neither the Workers nor wrangler's access log may print a token.
       expect(output.split("\n").filter(mentionsToken)).toEqual([]);
     } finally {
       if (scratch) await rm(scratch, { recursive: true, force: true });

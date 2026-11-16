@@ -112,7 +112,6 @@ describe("receive-pack.connectivity", () => {
     const ok = await pushBoth("refs/tags/blob-tag", good, [b, good]);
     expect(ok.ours.lines).toEqual(ok.git);
     expect(ok.ours.lines).toEqual(["unpack ok", "ok refs/tags/blob-tag"]);
-    // A tag that says "commit" about a blob.
     const lying = await writeObject(sandbox, "tag", tagBody(b, "commit", "liar"));
     const bad = await pushBoth("refs/tags/liar", lying, [lying]);
     expect(bad.ours.lines).toEqual(bad.git);
@@ -136,7 +135,6 @@ describe("receive-pack.connectivity", () => {
   });
 
   it("stops at objects the repository already has (verified closures are boundaries)", async () => {
-    // A new commit whose tree keeps the existing subtree and adds one blob.
     const b = await writeObject(sandbox, "blob", "new\n");
     const { stdout: sub } = await sandbox.git(["rev-parse", `${tree}:sub`]);
     const t = await writeObject(
@@ -158,7 +156,6 @@ describe("receive-pack.connectivity", () => {
     const ours = await server.push(body, { index: { view } });
     expect(ours.lines).toEqual(await gitReceivePack(sandbox, oracle, body));
     expect(ours.lines).toEqual(["unpack ok", "ok refs/heads/boundary"]);
-    // The existing subtree, blob and parent are looked up; nothing inside the subtree is.
     expect(new Set(looked)).toEqual(new Set([blob, sub.trim(), base]));
   });
 
@@ -178,7 +175,6 @@ describe("receive-pack.connectivity", () => {
       request([{ new: tree, ref: "refs/heads/tree" }], await packOf(sandbox, [])),
     );
     expect(ours.lines).toEqual(["unpack ok", "ng refs/heads/tree branch must point to a commit"]);
-    // Under refs/tags/ any object is fine.
     const tagged = await server.push(
       request([{ new: tree, ref: "refs/tags/tree" }], await packOf(sandbox, [])),
     );

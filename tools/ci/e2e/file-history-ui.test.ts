@@ -136,7 +136,6 @@ describe("a file's history", () => {
     expect(empty, "stretches with no change for this file").toBeGreaterThanOrEqual(1);
     await see(page).toHaveURL(new RegExp(`^${history}\\?cursor=`));
 
-    // The rows lead to the file at each commit, and to the tree at each commit.
     await page.getByRole("link", { name: "View file" }).first().click();
     await see(page).toHaveURL(/\/blob\/[0-9a-f]{40}\/notes\.txt$/);
     await see(page.getByText("one")).toBeVisible();

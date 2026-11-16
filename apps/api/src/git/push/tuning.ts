@@ -59,7 +59,6 @@ const VARIABLES: Record<keyof PushTuning, string> = {
   maxWaitMs: "GIT_PUSH_MAX_WAIT_MS",
 };
 
-/** The tuning for this Worker: defaults, overridden by any variables set. */
 export function pushTuning(env: object): PushTuning {
   const vars = env as Partial<Record<string, unknown>>;
   const out: Record<string, number> = { ...PUSH_TUNING_DEFAULTS };

@@ -25,7 +25,6 @@ export interface CallCounter {
   calls: number;
 }
 
-/** A pack as maintenance reads it: registry facts and its parsed `.idx`. */
 export interface LoadedPack {
   readonly packId: PackId;
   readonly networkId: string;

@@ -425,7 +425,6 @@ function blockOf(unit: LiveManifestEntry): LiveManifestEntry {
   });
 }
 
-/** Queued renewals one turn runs at most. */
 export const LIVE_TURN_RENEWALS = 2;
 
 /**

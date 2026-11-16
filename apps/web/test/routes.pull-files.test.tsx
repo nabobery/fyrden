@@ -130,7 +130,6 @@ describe("the files page", () => {
         .slice(before)
         .map(pathOf)
         .filter((p) => p.includes("/comments"));
-      // One page of the API's listing a navigation, never more.
       expect(asked).toHaveLength(1);
       read.push(...asked);
       const sent = data.threads.flatMap((t) => t.comments);
@@ -142,7 +141,6 @@ describe("the files page", () => {
       at = new URL(`${ORIGIN}${next}`).searchParams.get("comments");
       if (at === ":p2") break;
     }
-    // Every comment of the API's page, once each, in order; then its next page.
     expect(shown).toEqual(all.map((c) => c.id));
     expect(at).toBe(":p2");
     expect(read[0]).toBe("GET /api/repos/ada/demo/pulls/7/comments?per_page=30");
@@ -179,7 +177,6 @@ describe("the files page", () => {
     };
     const first = await navigate(null);
     expect(first.ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
-    // A shown comment and an unshown one are deleted before the next navigation.
     live = live.filter((c) => c.id !== 2 && c.id !== 12);
     const second = await navigate(first.at);
     expect(second.ids).toEqual([9, 10, 11, 13, 14, 15, 16, 17]);
@@ -220,7 +217,6 @@ describe("the files page", () => {
       ["old.ts", "new.ts"],
       ["new.ts", "new.ts"],
     ]);
-    // A file listed under its own name keeps its threads, even if another was renamed from it.
     expect(
       filesByPath([{ filename: "a.ts" }, { filename: "b.ts", previous_filename: "a.ts" }]).get(
         "a.ts",
@@ -255,7 +251,6 @@ describe("the files page", () => {
     const listed = { headSha: HEAD, mergeBaseSha: BASE };
     expect(sameComparison({ head_sha: HEAD, merge_base_sha: BASE }, listed)).toBe(true);
     expect(sameComparison({ head_sha: "d".repeat(40), merge_base_sha: BASE }, listed)).toBe(false);
-    // The base moved to a commit the head already has: same head, another comparison.
     expect(sameComparison({ head_sha: HEAD, merge_base_sha: "d".repeat(40) }, listed)).toBe(false);
   });
 
@@ -319,7 +314,6 @@ describe("the files page", () => {
     });
     expect(html).not.toMatch(ACTIVE_TAG);
     expect(html).toContain(escaped(HOSTILE));
-    // Before the browser loads the hunks: the threads are listed, never an empty diff.
     expect(html).toContain("Loading changes");
     expect(html).toContain("Comments on this file");
     expect(html).toContain("This file is too large to compare here.");
@@ -343,7 +337,6 @@ describe("a review thread", () => {
     expect(onHead({ commit_id: "d".repeat(40) })).toBe(false);
     expect(onHead({ outdated: true, line: null })).toBe(false);
     expect(onHead({}, { state: "closed", head: pull.head })).toBe(false);
-    // The body is the browser's to read: on the head's side, with or without a suggestion.
     expect(onHead({ body: "no suggestion" })).toBe(true);
   });
 
@@ -399,7 +392,6 @@ describe("diff comments", () => {
       start_line: 2,
       start_side: "LEFT",
     });
-    // A range of one line is that line.
     expect(
       (await act({ ...line, side: "RIGHT", start_line: "4", line: "4" })).body,
     ).not.toHaveProperty("start_line");

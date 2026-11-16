@@ -46,7 +46,6 @@ export function headers(): HeadersInit {
  */
 export const SEARCH_MAX_BYTES = 1024 * 1024 + 16 * 1024;
 
-/** What the page says of each refusal the API names. */
 const REFUSALS: Readonly<Record<string, string>> = {
   search_scope_too_broad:
     "That owner has more repositories than a search can look through. Name a repository (repo:owner/name).",
@@ -64,7 +63,6 @@ const REFUSALS: Readonly<Record<string, string>> = {
   read_model_maintenance: "Search is under maintenance. Try again later.",
 };
 
-/** Refusals whose own detail says what to change, after the page's words. */
 const DETAILED: Readonly<Record<string, string>> = {
   invalid_search_query: "The query could not be read:",
   unsupported_search_text: "The query holds text search cannot match:",
@@ -107,7 +105,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     searchApiPath(asked),
     SEARCH_MAX_BYTES,
   );
-  // Signed out: sign in, then come back.
   if (answer.status === 401) throw redirect(signInUrl(request), { headers: NO_STORE });
   if (answer.status !== 200) {
     const code = problemCode(answer.body);

@@ -37,7 +37,6 @@ async function indexedUpload(git: RepoGitStorage, n: number) {
   return upload;
 }
 
-/** A live pack, committed on its own. */
 async function livePack(git: RepoGitStorage): Promise<PackId> {
   const writer = git.packStore.beginPack();
   await writer.write(new Uint8Array([1, 2, 3]));

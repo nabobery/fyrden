@@ -202,7 +202,6 @@ describe("saved state with collision detection", () => {
     // Version 1 had no flags: resuming it could skip detection for earlier blocks.
     expect(() => Sha1.fromState(withByte(0, 1))).toThrow(RangeError);
     expect(() => Sha1.fromState(withByte(1, 0b100))).toThrow(RangeError);
-    // A collision recorded while detection was off cannot happen.
     expect(() => Sha1.fromState(withByte(1, 0b10))).toThrow(RangeError);
     expect(() => Sha1.fromState(state.subarray(0, 2))).toThrow(RangeError);
   });

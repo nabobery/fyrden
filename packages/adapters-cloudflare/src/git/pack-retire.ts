@@ -50,7 +50,6 @@ export interface DeletionFence {
   acknowledged(packId: PackId): boolean | Promise<boolean>;
 }
 
-/** A pack as the network knows it: its id and the network it is stored under. */
 export interface NetworkPackRef {
   readonly packId: PackId;
   readonly networkId: string;

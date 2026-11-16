@@ -36,7 +36,6 @@ type SuiteRow = {
   evaluations: string;
 };
 
-/** A ruleset as it is given: everything but its id. */
 export type RulesetInput = Omit<Ruleset, "id">;
 
 export interface RulesetRecord {

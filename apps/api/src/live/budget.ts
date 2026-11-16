@@ -191,7 +191,6 @@ export interface LiveGrantRequest {
   readonly plan: LiveGrantPlan;
 }
 
-/** A granted operation, as its recipient receives it. */
 export interface LiveEnvelope {
   readonly protocol: 1;
   readonly operationId: string;
@@ -251,7 +250,6 @@ export type LiveGrantResult =
       readonly retryAt?: number;
     };
 
-/** What a funded operation actually used of its reserved duration, per day. */
 export interface LiveDurationCompletion {
   readonly protocol: 1;
   readonly operationId: string;
@@ -443,7 +441,6 @@ function statement(
   return db.prepare(sql).bind(...values);
 }
 
-/** `json_extract` of a vector column or parameter, as an integer. */
 const v = (x: string, r: DiscretionaryResource) => `CAST(json_extract(${x}, '$.${r}') AS INTEGER)`;
 
 /** Whether `plan` is a feed's turn (its state one turn at a time). */
@@ -672,7 +669,6 @@ function liveGates(
   ];
 }
 
-/** A day's use, as `liveOpeningFits` compares it. */
 export type LiveDayView = Readonly<Record<DiscretionaryResource, number>> & {
   readonly protectedUse: Readonly<Record<DiscretionaryResource, number>>;
   readonly escrow: number;

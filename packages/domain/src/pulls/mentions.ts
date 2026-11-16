@@ -44,7 +44,6 @@ const HIDDEN = new Set([
 const PARSE_BUDGET = {
   /** Emphasis and strikethrough delimiters. */
   delimiters: 256,
-  /** Opening brackets (links, references, footnotes). */
   brackets: 256,
   /** Block quote and list markers opening lines, in all (indentation nests them too). */
   containers: 128,
@@ -127,7 +126,6 @@ export function visibleText(markdown: string): string {
   for (const [kind, token, context] of events) {
     const enter = kind === "enter";
     const type = token.type as string;
-    // Past the last line read: nothing more is (the code and links before it already closed).
     if (token.start.line > lastLine) break;
     if (HIDDEN.has(type)) {
       hidden += enter ? 1 : -1;

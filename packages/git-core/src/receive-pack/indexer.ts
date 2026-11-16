@@ -252,7 +252,6 @@ export class PushIndexer {
           await completionPhase(state, env);
           break;
         case "connect":
-          // A slice that stopped at its call budget continues next step.
           if (!(await connectPhase(state, env, limits))) return;
           break;
         case "graph":
@@ -539,7 +538,6 @@ async function completionPhase(state: IndexState, env: PushIndexEnv): Promise<vo
   }
 }
 
-/** Rows read from the commit graph per call. */
 const GRAPH_BATCH = 1000;
 
 async function readRows(

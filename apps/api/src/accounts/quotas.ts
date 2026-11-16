@@ -42,7 +42,6 @@ async function quotaOutput(
   };
 }
 
-/** The `quotas.user.get` operation. */
 export function getUserQuotaOperation(
   ctx: OpContext,
   _input: Input<typeof getUserQuota>,

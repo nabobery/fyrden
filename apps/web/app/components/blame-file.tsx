@@ -50,7 +50,6 @@ import { BlameTable, count } from "./blame-table.js";
 import type { Note } from "./diff/blame-view.client.js";
 import type { FileViewStatus } from "./diff/file-view.client.js";
 
-// The renderer is loaded in the browser only, once the page is hydrated.
 const BlameDrawing = lazy(() => import("./diff/blame-view.client.js"));
 
 /** Leaves the table up when the renderer's module won't load or its drawing throws. */
@@ -281,7 +280,6 @@ export function BlameFile({ view }: { view: BlameView }) {
       : ({ kind: "window", start: region.firstLine, end: region.lastLine } as const);
   const { delivery, state } = useDelivery(view, budget, mode);
 
-  // The ranges and counts the page shows: the server's window until the first answer.
   const ranges = state?.ranges ?? view.blame.ranges;
   const commits = state && state.ranges !== null ? state.commits : view.blame.commits;
   const live: BlameView = useMemo(
@@ -299,7 +297,6 @@ export function BlameFile({ view }: { view: BlameView }) {
     }),
     [view, region, state, ranges, commits],
   );
-  // Every group of the file, for the renderer: past the cutoff, the table takes over.
   const groups = useMemo(
     () => displayGroups(ranges, 1, view.blame.lines),
     [ranges, view.blame.lines],

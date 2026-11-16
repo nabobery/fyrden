@@ -20,7 +20,6 @@ const OID = /^[0-9a-f]{40}$/;
 const PART_ATTEMPTS = 5;
 /** First retry delay; doubles per attempt. */
 const RETRY_MS = 1_000;
-/** Part refusals another try can fix. */
 const RETRY_CODES = new Set(["part_not_stored", "part_in_progress", "part_superseded"]);
 /** Longest the command keeps calling complete while the server indexes. */
 const COMPLETE_TIMEOUT_MS = 60 * 60 * 1000;

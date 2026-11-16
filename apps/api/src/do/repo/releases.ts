@@ -22,7 +22,6 @@ export interface TagTarget {
 
 export type TagRefusal = "tag_not_found" | "tag_not_a_commit";
 
-/** What a peel found: the target, or why there is none. */
 export type PreparedTag = TagTarget | { readonly refused: TagRefusal };
 
 export interface ReleaseRecord {

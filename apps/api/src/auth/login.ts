@@ -113,7 +113,6 @@ async function takeChallenge(
 
 const str = (value: unknown): string => (typeof value === "string" ? value : "");
 
-/** Hooks into adding a passkey. For tests. */
 export const passkeyHooks: { beforeInsert?: () => Promise<void> } = {};
 
 export const authRouter = new Hono<{ Bindings: Env; Variables: AuthVariables }>();

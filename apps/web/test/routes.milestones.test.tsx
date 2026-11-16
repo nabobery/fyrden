@@ -67,7 +67,6 @@ describe("a milestone's due date and description", () => {
     expect(excerpt("short")).toBe("short");
     expect([...excerpt("€".repeat(600))]).toHaveLength(501);
     expect(excerpt("x".repeat(500))).toBe("x".repeat(500));
-    // Characters, never halves of one.
     expect(excerpt("😀".repeat(501))).toBe(`${"😀".repeat(500)}…`);
     expect(milestoneItems("ada", "demo", 3)).toBe(
       "/ada/demo/issues?state=all&kind=all&milestone=3",

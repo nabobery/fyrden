@@ -11,7 +11,6 @@ import { READ_MODEL_ADMISSION, releaseStatements } from "../read-model/executor.
 
 /** Proposed values. */
 export const ADMISSION = {
-  /** Projection rows search may write a day. */
   dailyRows: 40_000,
   /** Rows its maintenance (reconciliations) may read a day. */
   dailyReads: 1_000_000,

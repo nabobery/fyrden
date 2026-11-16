@@ -124,7 +124,6 @@ const forwardStub = (target: object, prop: string | symbol) => {
     : value;
 };
 
-/** `base` with its binding `name` replaced by `replace(the binding)`. */
 const withBinding = <K extends keyof Env>(base: Env, name: K, replace: (b: Env[K]) => unknown) =>
   new Proxy(base, {
     get: (target, prop) =>

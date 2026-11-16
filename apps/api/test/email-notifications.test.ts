@@ -153,7 +153,6 @@ describe("a notification email", () => {
         body: `@${owner.handle} please look at this`,
       }),
     );
-    // Renamed since: the email says what the thread is called now.
     await api("PATCH", `/repos/${repo.fullName}/issues/1`, owner.token, { title: "A worse bug" });
     const told = marked(owner, { member: `comment/${comment.body.id}` });
     await deliver(owner, told);
@@ -205,10 +204,8 @@ describe("a notification email", () => {
       delete feedHooks.alarmLimits;
     }
     expect(sent).toHaveLength(0);
-    // No attempt, no spending, no try, no new due time: as it was.
     expect(await standing(owner)).toEqual(before);
     expect(await delivery(owner, told.eventKey)).toBeNull();
-    // Its run is due at once.
     const alarm = await runInDurableObject(feedOf(owner), (_: UserDO, state) =>
       state.storage.getAlarm(),
     );
@@ -570,7 +567,6 @@ describe("a notification's text", () => {
     expect(of("merge_conflict", "author")).toBe(
       "Your pull request o/r#3 now has a merge conflict.",
     );
-    // Every action the repository emits, in words.
     expect(of("review", "author")).toBe("w reviewed pull request o/r#3.");
     expect(of("review_comment", "comment")).toBe("w commented on a change in pull request o/r#3.");
     expect(of("review_dismissed", "author")).toBe("w dismissed a review on pull request o/r#3.");

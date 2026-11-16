@@ -5,7 +5,6 @@ export type OperationId = keyof Operations;
 export type InputOf<K extends OperationId> = Operations[K]["input"];
 export type OutputOf<K extends OperationId> = Operations[K]["output"];
 
-/** Operations whose answers come a page at a time. */
 type Paged = {
   [K in OperationId]: (typeof OPERATIONS)[K] extends { readonly items: string } ? K : never;
 }[OperationId];
@@ -31,7 +30,6 @@ type AllOf<U> = (U extends unknown ? (u: U) => void : never) extends (all: infer
 export class FyrdenError extends Error {
   override name = "FyrdenError";
   constructor(
-    /** HTTP status. */
     readonly status: number,
     /** The problem's stable code (`repo_not_found`, `name_taken`, ...). */
     readonly code: string,
@@ -170,7 +168,6 @@ export class FyrdenClient {
           : undefined,
       );
     }
-    // An operation that answers nothing (204, 205) gives null, as its output type says.
     if (response.status === 204 || response.status === 205) return null as unknown as OutputOf<K>;
     return (text ? JSON.parse(text) : {}) as OutputOf<K>;
   }
