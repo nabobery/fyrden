@@ -250,6 +250,7 @@ const CASES: Record<
   "actions.runs.cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.force_cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.rerun": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.approve": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "releases.create": {
     input: { tag_name: "checked", draft: true },
     expected: { status: 409, code: "repo_not_ready" },

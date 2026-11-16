@@ -268,6 +268,12 @@ import {
 } from "./repo/reviewer-confirmation.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
+import {
+  type ApproveRunAnswer,
+  CI_APPROVALS_JOB,
+  CiApprovals,
+  type SettleAnswer,
+} from "./repo/run-approvals.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -314,6 +320,8 @@ import { repoSchema } from "./schema/repo.js";
 const ALARM_BUDGET_MS = 5_000;
 /** When an alarm that could not take the restore generation tries again. Proposed. */
 const EPOCH_RETRY_MS = 60_000;
+/** Approvers one approval item tells at most: the feed's audience pages. Proposed. */
+const MAX_APPROVERS = 1_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -501,6 +509,8 @@ export class RepoDO extends MigratingDO {
   readonly checks: RepoChecks;
   /** CI runs started from this repository's pushes and pull request events. */
   readonly ciTriggers: CiTriggers;
+  /** Approvals of held fork runs. */
+  readonly ciApprovals: CiApprovals;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -669,6 +679,13 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
+    this.ciApprovals = new CiApprovals({
+      git: this.git,
+      events: this.events,
+      acl: () => this.acl,
+      runs: () => this.env.RUN,
+      log: () => this.#log(),
+    });
     this.ciTriggers = new CiTriggers({
       git: this.git,
       memoryBlocks: () => this.#memoryBlocks(),
@@ -682,6 +699,9 @@ export class RepoDO extends MigratingDO {
           ceilingIds: await this.#authority.rolesPulled(principalId, grantId),
         }),
       registrar: this,
+      requestApproval: (request) => this.ciApprovals.request(request),
+      supersedeOlder: (run) => this.ciApprovals.supersedeOlder(run),
+      refreshAccess: () => this.acl.pullForWrite(),
       origin: () => publicOrigin(this.env),
       log: () => this.#log(),
     });
@@ -802,6 +822,8 @@ export class RepoDO extends MigratingDO {
           });
       },
       subscribers: (number) => this.threads.subscribers(number),
+      approvalAudience: (number) =>
+        this.ciApprovals.audience(number, this.acl.usersAtLeast("write", MAX_APPROVERS)),
       metrics: this.git.context.metrics,
     });
     this.webhookBlobStore = new RepoWebhookBlobs({
@@ -2505,6 +2527,35 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /**
+   * A maintainer's approval of a held fork run (see `CiApprovals.approve`):
+   * the binding to tell the run object, or why not.
+   */
+  approveRun(input: {
+    readonly runId: string;
+    readonly approver: string;
+  }): Promise<ApproveRunAnswer> {
+    return this.#measured("approveRun", async () => {
+      const refused = this.#writeRefusal();
+      if (refused) return { ok: false, code: "run_not_found" };
+      return this.ciApprovals.approve(input.runId, input.approver);
+    });
+  }
+
+  /** A held run ended unapproved (cancelled, expired): told by its run object (see `CiApprovals.settle`). */
+  settleApproval(input: {
+    readonly runId: string;
+    readonly outcome: "cancelled" | "expired";
+  }): Promise<SettleAnswer> {
+    return this.#measured("settleApproval", async () => {
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      // The approvers the item is resolved for are read from a fresh ACL (else told later).
+      await this.acl.pullForWrite();
+      return this.ciApprovals.settle(input.runId, input.outcome);
+    });
+  }
+
   acquireConcurrency(requests: readonly ConcurrencyRequest[]) {
     return this.#ciChange("acquireConcurrency", "acquire", (coordinator) =>
       coordinator.acquire(requests),
@@ -3878,6 +3929,7 @@ export class RepoDO extends MigratingDO {
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
       [CI_TRIGGERS_JOB]: this.ciTriggers.handler(),
+      [CI_APPROVALS_JOB]: this.ciApprovals.handler(),
       review_teams: {
         runSlice: async () => {
           await this.checkEpoch();

@@ -56,6 +56,7 @@ import {
   ZlibError,
 } from "@fyrden/git-core";
 import { SHOWN_HANDLE } from "../../accounts/handles.js";
+import { approvalBinding } from "../../ci/approval.js";
 import { type RunRegistrar, type StartRunAnswer, startRunFrom } from "../../ci/runs.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
 import type { RunDO } from "../RunDO.js";
@@ -68,6 +69,7 @@ import {
   UnreadableObjectError,
   withHeldReads,
 } from "./held-reads.js";
+import type { ApprovalRequest } from "./run-approvals.js";
 
 /*
  * CI triggers: which changes start runs, and starting them exactly once.
@@ -317,6 +319,12 @@ export interface CiTriggersDeps {
   readonly roleOf: (principalId: string) => Promise<RepoRole | null>;
   /** The root identity of a principal acting under `grantId` (null: its own token). */
   readonly rootOf: (principalId: string, grantId: string | null) => Promise<string>;
+  /** In the transaction recording a held run's creation: its approval request. */
+  readonly requestApproval: (request: ApprovalRequest) => void;
+  /** In the transaction recording a pull request run's creation that needs no approval. */
+  readonly supersedeOlder: (run: Omit<ApprovalRequest, "binding">) => void;
+  /** Pulls the ACL (unless one within the write window is stored) before approvers are named. */
+  readonly refreshAccess: () => Promise<void>;
   /** The repository itself, which records its runs before they are created. */
   readonly registrar: RunRegistrar;
   /** The deployment's public origin, if it has one. */
@@ -1012,16 +1020,12 @@ class Evaluation {
         skipped ??= hasSkipDirective(await this.#message(reader, pass.sha));
         if (skipped) return undefined;
       }
-      // Approval decisions come later: until then a run that would wait for one is not
-      // created at all, so no fork's code from a first-time contributor is ever started.
+      // A fork's run from a first-time contributor is created held, and waits for a
+      // maintainer's approval before anything of it runs.
       const waits = await this.#unlessUnreachable(() => this.#wouldWaitForApproval(pass.kind));
       if (typeof waits === "object") return waits;
-      if (waits) {
-        this.#outcome = "approval_unsupported";
-        continue;
-      }
       if (this.#budget.starts >= MAX_STARTS_PER_SLICE) return { kind: "starts" };
-      const started = await this.#start(reader, pass, file);
+      const started = await this.#start(reader, pass, file, waits);
       if (started) return started;
     }
     return undefined;
@@ -1256,6 +1260,7 @@ class Evaluation {
     reader: ObjectReader,
     pass: Pass,
     file: WorkflowFile,
+    held: boolean,
   ): Promise<Stopped | "gone" | undefined> {
     const bytes = await this.#blob(reader, file.oid);
     if (!bytes) {
@@ -1265,7 +1270,14 @@ class Evaluation {
     }
     const names = await this.#unlessUnreachable(() => this.#names());
     if ("kind" in names) return names;
-    const build = await this.#specBuilder(reader, pass, file.path, bytes, names);
+    const build = await this.#specBuilder(
+      reader,
+      pass,
+      file.path,
+      bytes,
+      names,
+      held ? { workflowBlob: file.oid, action: this.#facts<PullFacts>().action } : undefined,
+    );
     let spec: RunSpec;
     try {
       spec = this.#allocate(pass.kind, file.path, file.oid, build);
@@ -1289,6 +1301,7 @@ class Evaluation {
     spec: RunSpec,
   ): Promise<Stopped | "gone" | undefined> {
     this.#budget.starts++;
+    const binding = await approvalBinding(spec);
     let answer: StartRunAnswer;
     try {
       await this.#t.hooks.beforeStart?.(spec.runId);
@@ -1302,6 +1315,12 @@ class Evaluation {
     } catch (error) {
       throw new SliceAborted("aborted after a start", { cause: error });
     }
+    // Only a held run that planned asks for approval: one whose workflow failed to plan
+    // completed as that failure at creation, and nothing in it can run.
+    const held = binding !== null && answer.ok && answer.run.approval !== null;
+    // A pull request run's creation may tell its approvers (a request, or a supersede): the ACL
+    // is pulled first; if it cannot be, the approvals' job tells them later.
+    if (answer.ok && kind !== "push") await this.#t.repo.refreshAccess().catch(() => {});
     if (answer.ok) {
       this.#t.repo.git.context.storage.transactionSync(() => {
         this.#t.sql().exec(
@@ -1314,6 +1333,20 @@ class Evaluation {
         );
         // The run object holds the spec now.
         this.#t.sql().exec("DELETE FROM ci_run_specs WHERE run_id = ?", spec.runId);
+        // Only now that the run exists may anyone approve or supersede it.
+        if (kind !== "push") {
+          const run = {
+            runId: spec.runId,
+            eventId: this.#row.id,
+            pull: this.#facts<PullFacts>().number,
+            kind,
+            path,
+            actor: spec.actor,
+          };
+          // A newer run supersedes the older waiting ones whether or not it waits itself.
+          if (held && binding !== null) this.#t.repo.requestApproval({ ...run, binding });
+          else this.#t.repo.supersedeOlder(run);
+        }
       });
       return undefined;
     }
@@ -1389,13 +1422,14 @@ class Evaluation {
       }
       this.#t.sql().exec(
         `INSERT INTO ci_event_runs (event_id, trigger_kind, workflow_path, run_id, run_number,
-             workflow_blob, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+             workflow_blob, approval, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         this.#row.id,
         kind,
         path,
         runId,
         number,
         blob,
+        spec.approval ? 1 : 0,
         now,
       );
       this.#t
@@ -1421,6 +1455,7 @@ class Evaluation {
     path: string,
     bytes: Uint8Array,
     names: Names,
+    approval: RunSpec["approval"],
   ): Promise<(runId: string, runNumber: number) => RunSpec> {
     const resolved = this.#resolved as Resolved;
     const repoId = this.#t.repo.repoId();
@@ -1461,6 +1496,7 @@ class Evaluation {
         workflow: { path, source },
         trust: runTrust(pass.kind, fork),
         fork,
+        ...(approval && { approval }),
         github: githubContext(input),
       };
     };

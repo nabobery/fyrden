@@ -59,6 +59,16 @@ CREATE TABLE jobs (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT;
+CREATE TABLE run_approval (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        binding TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('waiting', 'approved', 'cancelled', 'superseded', 'expired')),
+        decided_by TEXT,
+        decided_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        notified INTEGER NOT NULL DEFAULT 1 CHECK (notified IN (0, 1))
+      ) STRICT;
 CREATE TABLE run_attempts (
         attempt INTEGER PRIMARY KEY CHECK (attempt BETWEEN 1 AND 51),
         status TEXT NOT NULL CHECK (status IN ('queued', 'pending', 'in_progress', 'completed')),

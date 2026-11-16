@@ -338,18 +338,20 @@ describe("pull requests from forks", () => {
     });
   });
 
-  it("create no run yet for a fork's first-time contributor, recording why", async () => {
+  it("create a fork's first-time contributor's runs held for approval", async () => {
     await forkedBy("pull");
     const from = await lastEventId(base);
     await openPull(base, `${contributor.handle}:main`, contributor);
     await runTriggers(base.stub);
-    expect(await runsSince(base, from)).toEqual([]);
+    const runs = await runsSince(base, from);
+    expect(runs.map((r) => r.trigger_kind)).toEqual(["pull_request", "pull_request_target"]);
+    for (const run of runs)
+      expect(await viewOf(run.run_id)).toMatchObject({
+        status: "queued",
+        approval: { state: "waiting" },
+      });
     const [event] = (await eventsOf(base.stub)).filter((e) => e.id > from);
-    expect(event).toMatchObject({
-      kind: "pull_request",
-      state: "done",
-      outcome: "approval_unsupported",
-    });
+    expect(event).toMatchObject({ kind: "pull_request", state: "done", outcome: null });
   });
 });
 

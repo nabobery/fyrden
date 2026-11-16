@@ -1,4 +1,5 @@
 import type {
+  approveWorkflowRun,
   cancelWorkflowRun,
   forceCancelWorkflowRun,
   getWorkflowRun,
@@ -7,6 +8,7 @@ import type {
   Output,
   rerunWorkflowRun,
 } from "@fyrden/api-contract";
+import type { RepoDO } from "../do/RepoDO.js";
 import type { JobView, RunDO, RunView } from "../do/RunDO.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
@@ -50,8 +52,15 @@ function runOutput(view: RunView): Output<typeof getWorkflowRun> {
     head_branch: view.ref.startsWith(BRANCH) ? view.ref.slice(BRANCH.length) : null,
     event: view.event,
     path: view.workflowPath,
-    status: view.status,
-    conclusion: view.conclusion,
+    // A held run shows as GitHub shows one: completed, its action required.
+    ...(view.approval?.state === "waiting" && view.status !== "completed"
+      ? { status: "completed" as const, conclusion: "action_required" as const }
+      : { status: view.status, conclusion: view.conclusion }),
+    approval: view.approval && {
+      state: view.approval.state,
+      decided_by: view.approval.decidedBy === null ? null : { id: view.approval.decidedBy },
+      decided_at: view.approval.decidedAt,
+    },
     actor: { id: view.actor },
     triggering_actor: { id: view.triggeringActor },
     created_at: view.createdAt,
@@ -170,6 +179,12 @@ export async function rerunWorkflowRunOperation(
       throw runNotFound();
     case "rerun_limit":
       throw new OperationError(409, "rerun_limit", "The run has been re-run 50 times, its limit.");
+    case "approval_required":
+      throw new OperationError(
+        409,
+        "approval_required",
+        "The run ended without the approval it waited for; it cannot be re-run.",
+      );
     default:
       throw new OperationError(
         409,
@@ -177,4 +192,63 @@ export async function rerunWorkflowRunOperation(
         "The run has not completed, or its workflow could not run, which a re-run cannot change.",
       );
   }
+}
+
+const notPending = () =>
+  new OperationError(
+    409,
+    "approval_not_pending",
+    "The run does not wait for approval: it needed none, or it was superseded, cancelled or expired.",
+  );
+
+/**
+ * The `actions.runs.approve` operation: the repository records the
+ * approval (checking the approver again), then the run is told at once,
+ * with the approver the repository recorded (the first, if two approve
+ * before it is told); a failure there is left to the repository's delivery
+ * job. A run whose approval ended unapproved (cancelled, expired,
+ * superseded) is refused before anything is recorded; one the run refuses
+ * on the fast path settles the repository's record as the run ended.
+ */
+export async function approveWorkflowRunOperation(
+  ctx: OpContext,
+  input: Input<typeof approveWorkflowRun>,
+): Promise<Output<typeof approveWorkflowRun>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
+  const view = await runOf(ctx, entry, input.run_id);
+  if (view.approval && view.approval.state !== "waiting" && view.approval.state !== "approved")
+    throw notPending();
+  const repo = ctx.env.REPO.getByName(entry.id);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "approveRun" });
+  const recorded = (await repo.approveRun({
+    runId: input.run_id,
+    approver: actingPrincipal(ctx),
+  })) as unknown as Awaited<ReturnType<RepoDO["approveRun"]>>;
+  if (!recorded.ok) {
+    if (recorded.code === "approval_not_pending") throw notPending();
+    if (recorded.code === "run_not_found") throw runNotFound();
+    throw new OperationError(
+      404,
+      "repo_not_found",
+      `No repository ${input.owner}/${input.repo} was found.`,
+    );
+  }
+  let answer: Awaited<ReturnType<RunDO["approve"]>>;
+  try {
+    answer = (await runStub(ctx, input.run_id, "approve").approve(
+      recorded.binding,
+      recorded.approver,
+    )) as unknown as Awaited<ReturnType<RunDO["approve"]>>;
+  } catch {
+    // The repository's job delivers it.
+    return {};
+  }
+  if (answer.ok) return {};
+  // The run ended unapproved in between: the repository records how, and nothing was approved.
+  const ended = ((await runStub(ctx, input.run_id, "get").get()) as RunView | undefined)?.approval;
+  if (ended && (ended.state === "cancelled" || ended.state === "expired")) {
+    ctx.metrics.count("do.request", { class: "RepoDO", method: "settleApproval" });
+    await repo.settleApproval({ runId: input.run_id, outcome: ended.state });
+  }
+  throw notPending();
 }

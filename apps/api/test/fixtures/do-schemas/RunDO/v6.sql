@@ -198,3 +198,14 @@ CREATE INDEX run_checks_dirty ON run_checks (attempt) WHERE parked IS NULL AND s
 CREATE INDEX run_instances_live ON run_instances (attempt, status);
 ALTER TABLE runs ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted' CHECK (trust IN ('trusted', 'untrusted'));
 ALTER TABLE runs ADD COLUMN fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1));
+
+      CREATE TABLE run_approval (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        binding TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('waiting', 'approved', 'cancelled', 'superseded', 'expired')),
+        decided_by TEXT,
+        decided_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        notified INTEGER NOT NULL DEFAULT 1 CHECK (notified IN (0, 1))
+      ) STRICT;

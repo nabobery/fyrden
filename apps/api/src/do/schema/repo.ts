@@ -1808,8 +1808,13 @@ export const repoSchema: readonly DoMigration[] = [
     // count per workflow path. `ci_trigger_cache` keeps each workflow
     // blob's `on:` as read. `ci_schedules` holds the cron entries of the
     // default branch's workflows and `ci_approvals` the approval of runs
-    // that wait for one. The partial index finds an author's merged pull
-    // requests.
+    // that wait for one: its source event (newer events supersede older
+    // ones), its binding (null for a row the run settled before the
+    // trigger recorded its creation), its state and whether the run object
+    // still has to be told of it (`delivered` 0); `ci_approval_holders`
+    // who holds a pull request's approval item open, and `ci_approval_feed`
+    // the items to tell once the ACL can be read again. The partial index finds
+    // an author's merged pull requests.
     name: "ci_triggers",
     sql: `
       CREATE TABLE ci_events (
@@ -1876,10 +1881,11 @@ export const repoSchema: readonly DoMigration[] = [
       CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
       CREATE TABLE ci_approvals (
         run_id TEXT PRIMARY KEY,
+        event_id INTEGER NOT NULL,
         pull_number INTEGER NOT NULL,
         trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('pull_request', 'pull_request_target')),
         workflow_path TEXT NOT NULL,
-        binding TEXT NOT NULL,
+        binding TEXT,
         state TEXT NOT NULL
           CHECK (state IN ('waiting', 'approved', 'superseded', 'cancelled', 'expired')),
         decided_by TEXT,
@@ -1888,8 +1894,19 @@ export const repoSchema: readonly DoMigration[] = [
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT, WITHOUT ROWID;
-      CREATE INDEX ci_approvals_waiting ON ci_approvals (pull_number, trigger_kind, workflow_path)
-        WHERE state = 'waiting';
+      CREATE INDEX ci_approvals_waiting
+        ON ci_approvals (pull_number, trigger_kind, workflow_path, event_id) WHERE state = 'waiting';
+      CREATE INDEX ci_approvals_undelivered ON ci_approvals (run_id) WHERE delivered = 0;
+      CREATE TABLE ci_approval_feed (
+        pull_number INTEGER PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        actor TEXT
+      ) STRICT;
+      CREATE TABLE ci_approval_holders (
+        pull_number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        PRIMARY KEY (pull_number, principal)
+      ) STRICT, WITHOUT ROWID;
       CREATE INDEX pull_requests_merged_author ON pull_requests (author_root)
         WHERE state = 'merged';
     `,

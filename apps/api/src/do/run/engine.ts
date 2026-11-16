@@ -63,6 +63,7 @@ export const RUN_JOB = {
   logViewers: "log-viewers",
   concurrency: "concurrency",
   reconcile: "reconcile",
+  approval: "approval",
 } as const;
 
 export interface RunPolicy {

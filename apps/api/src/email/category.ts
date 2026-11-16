@@ -32,7 +32,8 @@ function categoryOf(
   if (
     ASKS.has(recipient.kind) ||
     recipient.kind === "merge_conflict" ||
-    recipient.kind === "ci_failed"
+    recipient.kind === "ci_failed" ||
+    recipient.kind === "approval_requested"
   )
     return "direct";
   if (

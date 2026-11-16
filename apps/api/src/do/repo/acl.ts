@@ -1,5 +1,5 @@
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { atLeast, ownsUserAccount, type RepoRole } from "@fyrden/domain";
+import { atLeast, ownsUserAccount, principalTypeOf, type RepoRole } from "@fyrden/domain";
 import type { AclSnapshot } from "../OrgDO.js";
 
 /** Proposed values. */
@@ -173,6 +173,22 @@ export class RepoAcl {
           : (roles.get(principalId) ?? null),
       key: row ? `${row.account_id}:${row.epoch_gen}:${row.version}` : null,
     };
+  }
+
+  /**
+   * The users with `min` or more, as the snapshot was last pulled (however
+   * long ago, never one below the floor), the account's own user included;
+   * agents left out. Sorted, at most `limit`.
+   */
+  usersAtLeast(min: RepoRole, limit: number): string[] {
+    const account = this.deps.account();
+    if (!account) return [];
+    const row = this.#usable(account.accountId, Number.POSITIVE_INFINITY);
+    const ids = new Set<string>();
+    if (principalTypeOf(account.ownerId) === "user") ids.add(account.ownerId);
+    for (const [id, role] of row ? this.#roles(row) : [])
+      if (principalTypeOf(id) === "user" && atLeast(role, min)) ids.add(id);
+    return [...ids].sort().slice(0, limit);
   }
 
   /**

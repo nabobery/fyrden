@@ -20,7 +20,10 @@ const RunId = z
 const RunStatus = z
   .enum(["queued", "pending", "in_progress", "completed"])
   .describe("`pending`: waiting for its concurrency group.");
-const RunConclusion = z.enum(["success", "failure", "cancelled"]).nullable();
+const RunConclusion = z
+  .enum(["success", "failure", "cancelled", "action_required"])
+  .nullable()
+  .describe("`action_required`: the run waits for a maintainer's approval.");
 
 export const WorkflowRun = z.object({
   id: z.string(),
@@ -39,6 +42,16 @@ export const WorkflowRun = z.object({
   updated_at: z.number().int(),
   run_started_at: z.number().int().nullable(),
   completed_at: z.number().int().nullable(),
+  approval: z
+    .object({
+      state: z.enum(["waiting", "approved", "cancelled", "superseded", "expired"]),
+      decided_by: z.object({ id: z.string() }).nullable(),
+      decided_at: z.number().int().nullable(),
+    })
+    .nullable()
+    .describe(
+      "Fyrden: the maintainer's approval the run waits for, or got: a run from a fork's first-time contributor. Null when none is needed.",
+    ),
   errors: z
     .array(
       z.object({
@@ -244,4 +257,25 @@ export const issueJobLogTicket = defineOperation({
   idempotency: "key",
   secretResponse: true,
   mcp: false,
+});
+
+export const approveWorkflowRun = defineOperation({
+  id: "actions.runs.approve",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/approve",
+  summary: "Approve a workflow run from a fork",
+  description: `Lets a run from a fork's first-time contributor start: it waits (\`status: completed\`, \`conclusion: action_required\`, \`approval.state: waiting\`) until a user with write access approves it. Approving again answers the same; a run that is not waiting (it needed no approval, or was superseded by a newer push, cancelled or expired) is 409 \`approval_not_pending\`. Only users may approve. ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
+  input: z.object({ ...RepoInput, run_id: RunId }),
+  output: z.object({}),
+  permission: "actions:write",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  successStatus: 201,
+  mcp: {
+    tool: "approve_workflow_run",
+    title: "Approve a workflow run",
+    description: "Let a CI run from a fork's first-time contributor start.",
+    readOnly: false,
+  },
 });

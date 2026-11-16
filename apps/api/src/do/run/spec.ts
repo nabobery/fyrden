@@ -27,6 +27,12 @@ export interface RunSpec {
    * fork is trusted code, and still a fork job).
    */
   readonly fork: boolean;
+  /**
+   * Present when the run waits for a maintainer's approval before any of
+   * its attempts is admitted: what the approval binds beyond the spec's
+   * own fields (the workflow file's blob and the event's action).
+   */
+  readonly approval?: { readonly workflowBlob: string; readonly action: string };
   /** The `github` context, as plain JSON data. */
   readonly github?: unknown;
   readonly inputs?: unknown;
@@ -68,6 +74,13 @@ export function validateRunSpec(spec: RunSpec): string {
   if (!isPrincipalId(spec.actor)) fail("actor must be a principal id");
   if (spec.trust !== "trusted" && spec.trust !== "untrusted") fail("trust");
   if (typeof spec.fork !== "boolean") fail("fork");
+  if (spec.approval !== undefined) {
+    const { workflowBlob, action } = spec.approval ?? {};
+    if (typeof workflowBlob !== "string" || !/^[0-9a-f]{40}$/.test(workflowBlob))
+      fail("approval.workflowBlob");
+    if (typeof action !== "string" || action.length === 0 || action.length > MAX_EVENT_LENGTH)
+      fail("approval.action");
+  }
   const { path, source } = spec.workflow ?? {};
   if (typeof path !== "string" || path.length === 0 || path.length > MAX_PATH_LENGTH) fail("path");
   if (typeof source !== "string" || utf8.encode(source).length > MAX_WORKFLOW_BYTES)
@@ -96,6 +109,7 @@ export async function specDigest(spec: RunSpec, contexts: string): Promise<strin
     contexts,
     spec.trust,
     spec.fork,
+    spec.approval ?? null,
   ]);
   const hash = await crypto.subtle.digest("SHA-256", utf8.encode(canonical));
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");

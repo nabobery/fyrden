@@ -10,8 +10,9 @@ CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
 CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
 CREATE INDEX check_summaries_settled ON check_summaries (sha, settled);
-CREATE INDEX ci_approvals_waiting ON ci_approvals (pull_number, trigger_kind, workflow_path)
-        WHERE state = 'waiting';
+CREATE INDEX ci_approvals_undelivered ON ci_approvals (run_id) WHERE delivered = 0;
+CREATE INDEX ci_approvals_waiting
+        ON ci_approvals (pull_number, trigger_kind, workflow_path, event_id) WHERE state = 'waiting';
 CREATE INDEX ci_events_done ON ci_events (done_at) WHERE state = 'done';
 CREATE INDEX ci_events_pending ON ci_events (id) WHERE state = 'pending';
 CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
@@ -233,12 +234,23 @@ CREATE TABLE check_summaries (
         CHECK ((kind = 'check') = (attempt IS NOT NULL)),
         CHECK ((kind = 'status') = (status_id IS NOT NULL))
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE ci_approval_feed (
+        pull_number INTEGER PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        actor TEXT
+      ) STRICT;
+CREATE TABLE ci_approval_holders (
+        pull_number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        PRIMARY KEY (pull_number, principal)
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE ci_approvals (
         run_id TEXT PRIMARY KEY,
+        event_id INTEGER NOT NULL,
         pull_number INTEGER NOT NULL,
         trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('pull_request', 'pull_request_target')),
         workflow_path TEXT NOT NULL,
-        binding TEXT NOT NULL,
+        binding TEXT,
         state TEXT NOT NULL
           CHECK (state IN ('waiting', 'approved', 'superseded', 'cancelled', 'expired')),
         decided_by TEXT,

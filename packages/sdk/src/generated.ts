@@ -6866,7 +6866,7 @@ export type FeedListInput = {
   /** Only items of this priority. */
   priority?: "P0" | "P1" | "P2";
   /** Only items of this kind. */
-  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
+  kind?: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "approval_requested" | "assigned" | "mention" | "activity" | "digest";
 };
 
 /** Output of `feed.list`. */
@@ -6881,7 +6881,7 @@ export type FeedListOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "approval_requested" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
       /** The conversation's number; none for a digest. */
@@ -6956,7 +6956,7 @@ export type FeedSyncOutput = {
     };
     /** The thread within the repository, e.g. `pull/12` or `issue/7`; a digest's: `issue-digest/<window>.<epoch>`. */
     thread_key: string;
-    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "assigned" | "mention" | "activity" | "digest";
+    kind: "review_requested" | "changes_requested" | "approved" | "merge_conflict" | "ci_failed" | "approval_requested" | "assigned" | "mention" | "activity" | "digest";
     subject: {
       kind: "issue" | "pull";
       /** The conversation's number; none for a digest. */
@@ -7705,7 +7705,8 @@ export type ActionsRunsGetOutput = {
   path: string;
   /** `pending`: waiting for its concurrency group. */
   status: "queued" | "pending" | "in_progress" | "completed";
-  conclusion: "success" | "failure" | "cancelled" | null;
+  /** `action_required`: the run waits for a maintainer's approval. */
+  conclusion: "success" | "failure" | "cancelled" | "action_required" | null;
   /** Who triggered the run: its jobs act with this principal's rights on every attempt. */
   actor: {
     id: string;
@@ -7718,6 +7719,14 @@ export type ActionsRunsGetOutput = {
   updated_at: number;
   run_started_at: number | null;
   completed_at: number | null;
+  /** Fyrden: the maintainer's approval the run waits for, or got: a run from a fork's first-time contributor. Null when none is needed. */
+  approval: {
+    state: "waiting" | "approved" | "cancelled" | "superseded" | "expired";
+    decided_by: {
+      id: string;
+    } | null;
+    decided_at: number | null;
+  } | null;
   /** Why the workflow could not run, when it could not. */
   errors: {
     /** The error's code, such as `unsupported_key`. */

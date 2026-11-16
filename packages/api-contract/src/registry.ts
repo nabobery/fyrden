@@ -10,6 +10,7 @@ import {
   setTeamRepo,
 } from "../ops/access.js";
 import {
+  approveWorkflowRun,
   cancelWorkflowRun,
   forceCancelWorkflowRun,
   getWorkflowRun,
@@ -480,6 +481,7 @@ export const registry = defineRegistry([
   forceCancelWorkflowRun,
   rerunWorkflowRun,
   issueJobLogTicket,
+  approveWorkflowRun,
   getBlame,
   getRootContents,
   getContents,

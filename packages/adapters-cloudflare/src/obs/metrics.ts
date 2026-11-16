@@ -35,7 +35,7 @@ export const METRICS = {
   "blame.refused": ["reason"],
   // A CI trigger event decided without a run for some of its workflows, by
   // outcome = too_many_refs | not_a_directory | directory_too_large |
-  // too_many_workflows | unreadable | too_large | approval_unsupported | ...
+  // too_many_workflows | unreadable | too_large | evaluation_failed | ...
   "ci.trigger_outcome": ["outcome"],
   // A repository object's operations started on its memory pool, one point
   // each: the wait in ms (0 when granted at once) and the bytes asked for, by

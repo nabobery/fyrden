@@ -36,6 +36,19 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   one is never `complete`.
  * - `ci_log_chunks`: the stored ranges and their authoritative R2 objects (an
  *   omission is a range of one position whose object holds its record).
+ *
+ * v6 (the run's origin):
+ * - `runs.trust` and `runs.fork`, from the trigger: whether the run's code
+ *   is trusted, and whether its pull request's head is in another
+ *   repository. Both default to the closed answer (untrusted, a fork) for a
+ *   row written without them. `run_attempts.errors` holds the plan's errors
+ *   as JSON objects (code, feature, path, line, column, message); rows
+ *   written before hold strings.
+ * - `run_approval`: present when the run waits for a maintainer's approval:
+ *   the binding an approval must name, its state, who decided and when, its
+ *   expiry, and whether the repository still has to be told of a state this
+ *   object decided (cancelled, expired: `notified` 0). No attempt is
+ *   admitted while it is present and not approved.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -301,6 +314,16 @@ export const runSchema: readonly DoMigration[] = [
       ALTER TABLE runs ADD COLUMN trust TEXT NOT NULL DEFAULT 'untrusted'
         CHECK (trust IN ('trusted', 'untrusted'));
       ALTER TABLE runs ADD COLUMN fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1));
+      CREATE TABLE run_approval (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        binding TEXT NOT NULL,
+        state TEXT NOT NULL
+          CHECK (state IN ('waiting', 'approved', 'cancelled', 'superseded', 'expired')),
+        decided_by TEXT,
+        decided_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        notified INTEGER NOT NULL DEFAULT 1 CHECK (notified IN (0, 1))
+      ) STRICT;
     `,
   },
 ];
