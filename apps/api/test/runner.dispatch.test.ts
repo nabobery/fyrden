@@ -1188,6 +1188,24 @@ describe("a job token", () => {
     expect((await uploadPack(f, token)).status).toBe(401);
   });
 
+  it("whose task is force-cancelled after the final ownership lookup, is never handed out", async () => {
+    const f = await orgRepo();
+    const runId = await started(f, one);
+    const runner = await registerRunner(f.org.login, f.owner);
+    const held = gate();
+    await inRun(runId, (r) => {
+      r.hooks = { beforeTaskAnswer: () => held.hold() };
+    });
+    const fetching = fetchTask(runner, 0);
+    await held.started;
+    await runStub(runId).cancel(f.owner.principalId, "force");
+    held.release();
+    expect((await fetching).task).toBeUndefined();
+    const [row] = await tasksOfRun(runId);
+    const [minted] = await jobTokensOf(row?.id ?? 0);
+    expect(minted?.revoked_at).not.toBeNull();
+  });
+
   it("of an agent is no OAuth exchange subject", async () => {
     const f = await orgRepo();
     const agent = await agentFor(f.owner, ["contents:read"]);

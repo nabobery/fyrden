@@ -74,6 +74,8 @@ export interface DispatchHooks {
   beforeTokenMask?: () => Promise<void> | void;
   /** When a report arrives, before anything is decoded or written. */
   beforeReport?: () => Promise<void> | void;
+  /** After ownership is checked, before the final liveness check and answer. */
+  beforeTaskAnswer?: () => Promise<void> | void;
   /** On every liveness question about a task. */
   onTaskLive?: () => void;
 }
@@ -298,6 +300,13 @@ export class RunDispatch {
           });
           return { refused };
         }
+      }
+      await host.hooks.beforeTaskAnswer?.();
+      // Asked again after the last await, right before the answer: a task that ended meanwhile is
+      // never handed out.
+      if (!host.taskLive(ref)) {
+        await revokeOwn();
+        return { refused: "task_finished" };
       }
     } catch (error) {
       if (!ownRevoked) {
