@@ -160,8 +160,11 @@ function reachesBytes(rows: readonly { readonly content: string }[], limit: numb
  * is caught too.
  */
 export function endsLikeUnregisteredRunner(message: string): boolean {
-  return message
-    .replace(/[\s\p{P}]+$/u, "")
-    .toLowerCase()
-    .endsWith("unregistered runner");
+  let end = 0;
+  let position = 0;
+  for (const character of message) {
+    position += character.length;
+    if (!/[\s\p{P}]/u.test(character)) end = position;
+  }
+  return message.slice(0, end).toLowerCase().endsWith("unregistered runner");
 }
