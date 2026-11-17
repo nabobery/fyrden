@@ -213,7 +213,7 @@ export class SqliteRefStore implements RefStore {
    * transaction when there is one (the owner's snapshot of the default
    * branch). A throw undoes the move inside a transaction.
    */
-  onHeadChanged: ((target: string) => void) | undefined;
+  onHeadChanged: ((target: string, actor?: RefActor) => void) | undefined;
 
   constructor(
     private readonly context: GitStorageContext,
@@ -282,8 +282,12 @@ export class SqliteRefStore implements RefStore {
     );
   }
 
-  /** Sets where HEAD points (the default branch). Does not move any ref. */
-  setHead(target: string): void {
+  /**
+   * Sets where HEAD points (the default branch). Does not move any ref.
+   * `actor`: who moved it, when a principal did (an import, not the
+   * storage's own initialization).
+   */
+  setHead(target: string, actor?: RefActor): void {
     checkRefName(target);
     const now = this.context.now();
     const { storage } = this.context;
@@ -297,7 +301,7 @@ export class SqliteRefStore implements RefStore {
       now,
     );
     countRowsWritten(this.context, "refs.set_head", written);
-    if (before !== target) this.onHeadChanged?.(target);
+    if (before !== target) this.onHeadChanged?.(target, actor);
   }
 
   async commit(request: RefCommitRequest): Promise<RefCommitResult> {

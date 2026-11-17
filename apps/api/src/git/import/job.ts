@@ -371,7 +371,13 @@ export class RepoImports {
           // push in between sees the old one; not once the repository was transferred
           // after the import began (its new owner decides).
           inCommit: () => {
-            if (this.ownerGen() === ownerGen) this.git.refStore.setHead(head);
+            if (this.ownerGen() === ownerGen)
+              this.git.refStore.setHead(head, {
+                principal: record.principal,
+                grantId: record.grantId ?? null,
+                tokenId: record.tokenId,
+                via: "import",
+              });
           },
         }),
       }),

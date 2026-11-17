@@ -55,6 +55,7 @@ export const JOB_KINDS = [
   "ci_triggers",
   "ci_approvals",
   "run_approval",
+  "ci_schedule",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

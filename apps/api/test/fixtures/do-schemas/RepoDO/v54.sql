@@ -1261,11 +1261,20 @@ CREATE TABLE ci_meta (
         actor_id TEXT NOT NULL,
         next_at INTEGER NOT NULL,
         last_fired_at INTEGER,
-        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost')),
+        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost', 'unreachable')),
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (workflow_path, cron)
       ) STRICT, WITHOUT ROWID;
       CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
+      CREATE TABLE ci_schedule_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        refreshed_event INTEGER NOT NULL DEFAULT 0,
+        off_seen INTEGER NOT NULL DEFAULT 0 CHECK (off_seen IN (0, 1))
+      ) STRICT;
+      CREATE TABLE ci_schedule_fires (
+        workflow_path TEXT PRIMARY KEY,
+        last_fired_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
       CREATE TABLE ci_approvals (
         run_id TEXT PRIMARY KEY,
         event_id INTEGER NOT NULL,

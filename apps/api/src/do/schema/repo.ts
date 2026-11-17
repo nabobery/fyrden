@@ -1807,7 +1807,11 @@ export const repoSchema: readonly DoMigration[] = [
     // beside it) until the run's start is confirmed. Run numbers
     // count per workflow path. `ci_trigger_cache` keeps each workflow
     // blob's `on:` as read. `ci_schedules` holds the cron entries of the
-    // default branch's workflows and `ci_approvals` the approval of runs
+    // default branch's workflows (`ci_schedule_state`: the inbox event whose
+    // refresh they last took, so an older one never overwrites a newer
+    // one, and whether CI was seen off since they were armed;
+    // `ci_schedule_fires`: each workflow's last fire, which outlives its
+    // entries), and `ci_approvals` the approval of runs
     // that wait for one: its source event (newer events supersede older
     // ones), its binding (null for a row the run settled before the
     // trigger recorded its creation), its state and whether the run object
@@ -1874,11 +1878,20 @@ export const repoSchema: readonly DoMigration[] = [
         actor_id TEXT NOT NULL,
         next_at INTEGER NOT NULL,
         last_fired_at INTEGER,
-        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost')),
+        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost', 'unreachable')),
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (workflow_path, cron)
       ) STRICT, WITHOUT ROWID;
       CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
+      CREATE TABLE ci_schedule_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        refreshed_event INTEGER NOT NULL DEFAULT 0,
+        off_seen INTEGER NOT NULL DEFAULT 0 CHECK (off_seen IN (0, 1))
+      ) STRICT;
+      CREATE TABLE ci_schedule_fires (
+        workflow_path TEXT PRIMARY KEY,
+        last_fired_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
       CREATE TABLE ci_approvals (
         run_id TEXT PRIMARY KEY,
         event_id INTEGER NOT NULL,

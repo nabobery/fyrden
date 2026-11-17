@@ -165,6 +165,11 @@ export default {
       return sealedCall(request, env, url.pathname);
     if (url.pathname === UPDATE_LOG && request.method === "POST")
       return recordUpdateLog(request, env);
+    // A schedule tick for the evidence run: body `{ repoId, at }` (`at` no later than now).
+    if (url.pathname === "/__runs/schedule-tick" && request.method === "POST") {
+      const { repoId, at } = await request.json();
+      return json(await env.REPO.getByName(repoId).ciScheduleTick(at ?? Date.now()));
+    }
     const match = /^\/__runs(?:\/([0-9A-Z]{26}))?\/([a-z]+)$/.exec(url.pathname);
     if (!match) return env.API.fetch(request);
     const [, runId, action] = match;

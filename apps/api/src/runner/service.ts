@@ -76,6 +76,39 @@ export function runnersOn(env: object): boolean {
   return (env as { FYRDEN_CI_RUNNERS?: unknown }).FYRDEN_CI_RUNNERS === "on";
 }
 
+/**
+ * How far ahead of an object's clock the cutoff still applies (clocks
+ * differ a little; the work waits for it). Further ahead it is a mistake,
+ * and is ignored. Proposed.
+ */
+export const MAX_CUTOFF_LEAD_MS = 5 * 60_000;
+
+/** The latest time a `Date` holds (ECMA-262 time values: 8.64e15 ms either side of the epoch). */
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
+/**
+ * The deployment's CI cutoff: the Worker variable `FYRDEN_CI_SINCE`, an
+ * ISO 8601 time with a zone (`2026-11-16T09:00:00Z`) or milliseconds since
+ * the epoch, set by whoever turns CI on to when they did. Scheduled ticks
+ * before it never fire, though an object asleep through CI off and on again
+ * never saw it off. Null when unset; "unreadable" when set to anything else,
+ * a time no `Date` holds included (no cutoff applies then, as when unset).
+ */
+export function ciSince(env: object): number | null | "unreadable" {
+  const value = (env as { FYRDEN_CI_SINCE?: unknown }).FYRDEN_CI_SINCE;
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") return "unreadable";
+  const text = value.trim();
+  if (/^\d+$/.test(text)) {
+    const ms = Number(text);
+    return ms <= MAX_DATE_MS ? ms : "unreadable";
+  }
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(text))
+    return "unreadable";
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? ms : "unreadable";
+}
+
 /** A refusal a method answers as a Connect error. */
 class Refusal extends Error {
   constructor(

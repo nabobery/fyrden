@@ -24,6 +24,7 @@ import {
   githubOf,
   pushRefs,
   runTriggers,
+  setVar,
   switchCi,
   switchRepoCi,
   viewOf,
@@ -76,12 +77,13 @@ async function settle(runIds: readonly string[]) {
 describe("push triggers", () => {
   it("cost one tree read for a push to a repository without workflows: no run object, no directory query", async () => {
     const f = await ciRepo({ "a.txt": "one\n" });
-    // The push wrote one inbox row and the job, in its own transaction.
+    // The push wrote its inbox row, the default branch's schedule refresh after it, and the job,
+    // in its own transaction.
     const recorded = await inRepo(f.stub, (r: RepoDO) => ({
       events: r.git.context.storage.sql.exec("SELECT 1 FROM ci_events").toArray().length,
       job: r.git.jobs.get(CI_TRIGGERS_JOB)?.state,
     }));
-    expect(recorded).toEqual({ events: 1, job: "queued" });
+    expect(recorded).toEqual({ events: 2, job: "queued" });
     const spent = await inRepo(f.stub, async (r: RepoDO) => {
       const count = { runs: 0, d1: 0 };
       r.ciTriggers.bindings = { RUN: countingRuns(count), DIRECTORY: countingDirectory(count) };
@@ -99,8 +101,12 @@ describe("push triggers", () => {
         blobs: r.ciTriggers.work.blobs - before.blobs,
       };
     });
+    // The refresh reads the listing the push read.
     expect(spent).toEqual({ state: "done", runs: 0, d1: 0, trees: 1, blobs: 0 });
-    expect(await eventsOf(f.stub)).toMatchObject([{ kind: "push", state: "done", outcome: null }]);
+    expect(await eventsOf(f.stub, { refreshes: true })).toMatchObject([
+      { kind: "push", state: "done", outcome: null },
+      { kind: "schedule_refresh", state: "done", outcome: null },
+    ]);
     expect(await eventRunsOf(f.stub)).toEqual([]);
   });
 
@@ -588,6 +594,54 @@ describe("review regressions", () => {
     expect((await viewOf(runs[0]?.run_id ?? "")).sha).toBe(sha);
   });
 
+  it("close an event recorded before the CI cutoff unread, though no object saw CI off", async () => {
+    const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+    const [queued] = await eventsOf(f.stub, { refreshes: true });
+    // CI was switched off and on again after the push, with nothing running in between; whoever
+    // switched it on set the cutoff to then.
+    await setVar(f.stub, "FYRDEN_CI_SINCE", String((queued?.created_at ?? 0) + 1));
+    try {
+      await runTriggers(f.stub);
+      expect(await eventsOf(f.stub, { refreshes: true })).toMatchObject([
+        { kind: "push", state: "done", outcome: "ci_off" },
+        { kind: "schedule_refresh", state: "done", outcome: "ci_off" },
+      ]);
+      expect(await eventRunsOf(f.stub)).toEqual([]);
+      // An event recorded after the cutoff runs.
+      const sha = await commit(f, "main", { "a.txt": "two\n" });
+      await runTriggers(f.stub);
+      const runs = await eventRunsOf(f.stub);
+      expect(runs).toHaveLength(1);
+      expect((await viewOf(runs[0]?.run_id ?? "")).sha).toBe(sha);
+    } finally {
+      await setVar(f.stub, "FYRDEN_CI_SINCE", undefined);
+    }
+  });
+
+  it.each([
+    ["4 minutes", 4 * 60_000, "ci_off"],
+    ["6 minutes", 6 * 60_000, null],
+  ])(
+    "take a cutoff %s ahead of the clock for the inbox as the schedules do",
+    async (_, lead, outcome) => {
+      const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+      const [queued] = await eventsOf(f.stub);
+      const now = (queued?.created_at ?? 0) + 10_000;
+      await inRepo(f.stub, (r: RepoDO) => {
+        (r.git.context as { now: () => number }).now = () => now;
+      });
+      // Within 5 minutes ahead it applies (the event waits closed); further ahead it is ignored.
+      await setVar(f.stub, "FYRDEN_CI_SINCE", String(now + lead));
+      try {
+        await runTriggers(f.stub);
+        expect(await eventsOf(f.stub)).toMatchObject([{ kind: "push", state: "done", outcome }]);
+        expect(await eventRunsOf(f.stub)).toHaveLength(outcome ? 0 : 1);
+      } finally {
+        await setVar(f.stub, "FYRDEN_CI_SINCE", undefined);
+      }
+    },
+  );
+
   it("finish a push whose commit time no date can hold, and the push after it", async () => {
     const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
     await runTriggers(f.stub);
@@ -691,6 +745,10 @@ describe("failures while deciding an event", () => {
   it("decide an event normally after more read failures than any limit of attempts", async () => {
     const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
     const later = await frozen(f);
+    // The push's event alone takes the failures below.
+    await inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec("DELETE FROM ci_events WHERE kind = 'schedule_refresh'"),
+    );
     await inRepo(f.stub, (r: RepoDO) => {
       let failures = 8;
       r.ciTriggers.hooks = {
@@ -885,8 +943,9 @@ describe("runs allocated before their start is confirmed", () => {
       inRepo(
         f.stub,
         (r: RepoDO) =>
-          r.git.context.storage.sql.exec<{ faults: number }>("SELECT faults FROM ci_events").one()
-            .faults,
+          r.git.context.storage.sql
+            .exec<{ faults: number }>("SELECT faults FROM ci_events WHERE kind = 'push'")
+            .one().faults,
       );
     await runTriggers(f.stub);
     expect(await faults()).toBe(1);

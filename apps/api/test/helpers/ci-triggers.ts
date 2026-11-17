@@ -124,12 +124,20 @@ export interface EventRow {
   actor_id: string | null;
   facts: string;
   resolved: string | null;
+  created_at: number;
 }
 
-export const eventsOf = (stub: DurableObjectStub<RepoDO>) =>
+/**
+ * The trigger inbox, oldest first; without the `schedule_refresh` events a
+ * default-branch push or a change of the default branch also records,
+ * unless `refreshes` asks for them.
+ */
+export const eventsOf = (stub: DurableObjectStub<RepoDO>, { refreshes = false } = {}) =>
   inRepo(stub, (r: RepoDO) =>
     r.git.context.storage.sql
-      .exec<EventRow & Record<string, SqlStorageValue>>("SELECT * FROM ci_events ORDER BY id")
+      .exec<EventRow & Record<string, SqlStorageValue>>(
+        `SELECT * FROM ci_events ${refreshes ? "" : "WHERE kind != 'schedule_refresh'"} ORDER BY id`,
+      )
       .toArray()
       .map((row) => ({ ...row }) as EventRow),
   );
@@ -215,3 +223,11 @@ export function countingDirectory(count: { d1: number }) {
     },
   });
 }
+
+/** Sets (or removes) a Worker variable on a repository object, which copied `env` at its start. */
+export const setVar = (stub: DurableObjectStub<RepoDO>, name: string, value: string | undefined) =>
+  inRepo(stub, (r: RepoDO) => {
+    const vars = (r as unknown as { env: Record<string, unknown> }).env;
+    if (value === undefined) delete vars[name];
+    else vars[name] = value;
+  });

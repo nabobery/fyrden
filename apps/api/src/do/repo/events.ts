@@ -215,6 +215,13 @@ export class RepoEvents {
   ) => void = () => {};
 
   /**
+   * Told, in its transaction, that a principal moved HEAD (the default
+   * branch): a settings change or an import. The storage's own
+   * initialization tells nothing.
+   */
+  onHeadMoved: (head: string, actor: RefActor) => void = () => {};
+
+  /**
    * Text values already encoded and hashed in the change being made (equal
    * text in its events, such as an issue's body in each of its label
    * events, is hashed once). A change emits its events synchronously in
@@ -730,6 +737,7 @@ export class RepoEvents {
           this.#updating = false;
         }
         changes.default_branch = { from: head, to: update.head };
+        if (meta && update.actor) this.onHeadMoved(update.head, update.actor);
       }
       if (!meta) return;
       if (update.name && update.name.gen > meta.name_gen) {
@@ -856,7 +864,7 @@ export class RepoEvents {
    * branch): the snapshot with the new default branch, in the caller's
    * transaction.
    */
-  onHeadChanged(): void {
+  onHeadChanged(head?: string, actor?: RefActor): void {
     if (this.#updating) return;
     const meta = this.#meta();
     this.#assertWritable(meta);
@@ -864,6 +872,7 @@ export class RepoEvents {
     if (!this.#epochChecked)
       throw new Error("the repository's epoch must be checked before it changes");
     this.#emit("repo.updated", { actor: null, actChain: [], data: null }, true);
+    if (head !== undefined && actor) this.onHeadMoved(head, actor);
   }
 
   /**

@@ -177,7 +177,7 @@ const BRANCH = "refs/heads/";
 const TAG = "refs/tags/";
 const lossy = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 
-type PassKind = "push" | "pull_request" | "pull_request_target";
+type PassKind = "push" | "pull_request" | "pull_request_target" | "schedule";
 /** A trigger kind a run is allocated under (`ci_event_runs.trigger_kind`). */
 type RunKind = PassKind | "workflow_dispatch";
 
@@ -224,6 +224,22 @@ interface Names {
   readonly logins: Record<string, string>;
 }
 
+/**
+ * One slice's work: what it may still read and start, and the workflow
+ * listings it read, by commit (a commit's listing never changes), so a push
+ * and the refresh after it read the tree once.
+ */
+interface SliceBudget {
+  trees: number;
+  blobs: number;
+  starts: number;
+  readonly listings: Map<string, Discovery>;
+}
+
+function newBudget(): SliceBudget {
+  return { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0, listings: new Map() };
+}
+
 /** What the trigger resolves once and writes back to the event row. */
 interface Resolved {
   readonly passes: readonly Pass[];
@@ -231,6 +247,34 @@ interface Resolved {
   /** A pull request's base branch tip at the first evaluation (its paths diff starts from the merge base). */
   readonly baseTip: string | null;
   readonly names?: Names;
+  /**
+   * A `schedule_refresh` event's: the schedules to refresh from the
+   * workflows at `sha` (as a default-branch push or a change of the default
+   * branch left it, recorded with the change), as `actor`.
+   */
+  readonly refresh?: {
+    readonly sha: string;
+    readonly actor: string;
+    /** A change of the default branch (every row becomes the actor's), not a push. */
+    readonly headChange?: boolean;
+  };
+}
+
+/**
+ * What a schedule refresh recorded, in the transaction of the change it
+ * follows: the default branch's tip then, and whether a push moved it or
+ * the default branch itself changed.
+ */
+interface RefreshFacts {
+  readonly source: "push" | "head";
+  readonly sha: string | null;
+}
+
+/** What a scheduled tick recorded. */
+interface ScheduleFacts {
+  readonly path: string;
+  readonly cron: string;
+  readonly tick: number;
 }
 
 type EventRow = {
@@ -339,6 +383,12 @@ export interface CiTriggersDeps {
   readonly memoryBlocks: () => BlockCache;
   /** Whether events are recorded at all (`FYRDEN_CI_RUNNERS`). */
   readonly enabled: () => boolean;
+  /**
+   * The deployment's CI cutoff (`FYRDEN_CI_SINCE`, when CI was last switched
+   * on), or null: an event recorded before it closes as `ci_off` unread,
+   * though this object never saw CI off.
+   */
+  readonly since: () => number | null;
   readonly repoId: () => string;
   /** A principal's role here, for the approval rules. */
   readonly roleOf: (principalId: string) => Promise<RepoRole | null>;
@@ -348,6 +398,19 @@ export interface CiTriggersDeps {
   readonly requestApproval: (request: ApprovalRequest) => void;
   /** In the transaction recording a pull request run's creation that needs no approval. */
   readonly supersedeOlder: (run: Omit<ApprovalRequest, "binding">) => void;
+  /** In one transaction: the schedules read for inbox event `eventId` (see `CiSchedules.apply`). */
+  readonly applySchedules: (
+    eventId: number,
+    files: readonly { path: string; blob: string; crons: readonly string[] }[],
+    actor: string,
+    headChange: boolean,
+  ) => string | null;
+  /** A refresh that could not be read (see `CiSchedules.skip`). */
+  readonly skipSchedules: (eventId: number) => void;
+  /** In a change's transaction while CI is off (see `CiSchedules.noteOff`). */
+  readonly noteSchedulesOff: () => void;
+  /** CI is on: schedules seen off since start again from now (see `CiSchedules.resume`). */
+  readonly resumeSchedules: () => void;
   /** Pulls the ACL (unless one within the write window is stored) before approvers are named. */
   readonly refreshAccess: () => Promise<void>;
   /** The repository itself, which records its runs before they are created. */
@@ -378,14 +441,20 @@ export class CiTriggers {
    * any other commit is a push of its own), more than
    * {@link MAX_PUSH_TAGS} tags record no tag event, and more than
    * {@link MAX_PUSH_REFS} branches record one refused row instead of any.
-   * Rows of the push already recorded are taken back while undecided.
+   * Rows of the push already recorded are taken back while undecided. A
+   * move of the default branch also records a `schedule_refresh` event after
+   * the push's, refused or not.
    */
   recordPush(
     refs: readonly { name: string; oldOid: Oid | null; newOid: Oid | null }[],
     actor: RefActor | undefined,
     sourceSeq: number,
   ): void {
-    if (!this.deps.enabled() || !actor) return;
+    if (!this.deps.enabled()) {
+      this.deps.noteSchedulesOff();
+      return;
+    }
+    if (!actor) return;
     if (actor.via !== "push" && actor.via !== "merge" && actor.via !== "api") return;
     const moved = refs.filter(
       (r) =>
@@ -405,7 +474,19 @@ export class CiTriggers {
         `${group.slice(0, -1)};`,
       )
       .toArray();
-    if (earlier.some((e) => e.key === refused)) return;
+    const now = this.#now();
+    // The default branch's schedules follow this push, whatever becomes of its runs, its branches
+    // refused included: their own event after the push's, outside its keys (which a later commit
+    // of the push takes back).
+    const head = this.deps.git.refStore.head();
+    const defaultMove = moved.find((r) => r.name === head && r.name.startsWith(BRANCH));
+    const refresh = () => {
+      if (defaultMove) this.#recordRefresh("push", oidToHex(defaultMove.newOid as Oid), actor, now);
+    };
+    if (earlier.some((e) => e.key === refused)) {
+      refresh();
+      return;
+    }
     const refOf = (key: string) => key.slice(group.length);
     const recorded = earlier.filter((e) => e.key !== noTags).map((e) => refOf(e.key));
     const branches = new Set([
@@ -416,7 +497,6 @@ export class CiTriggers {
       ...recorded.filter((r) => r.startsWith(TAG)),
       ...moved.filter((r) => r.name.startsWith(TAG)).map((r) => r.name),
     ]);
-    const now = this.#now();
     const takeBack = (which: (ref: string) => boolean) => {
       for (const e of earlier)
         if (e.key !== noTags && which(refOf(e.key)) && this.#undecided(e.id))
@@ -428,6 +508,7 @@ export class CiTriggers {
         outcome: "too_many_refs",
       });
       this.deps.git.context.metrics.count("ci.trigger_outcome", { outcome: "too_many_refs" });
+      refresh();
       return;
     }
     const tooManyTags = tags.size > MAX_PUSH_TAGS || earlier.some((e) => e.key === noTags);
@@ -447,6 +528,7 @@ export class CiTriggers {
       };
       this.#insert(`${group}${r.name}`, "push", actor.principal, facts, now);
     }
+    refresh();
   }
 
   /** Whether an event is pending with no run allocated for it yet. */
@@ -460,6 +542,38 @@ export class CiTriggers {
         )
         .toArray().length > 0
     );
+  }
+
+  /**
+   * In the transaction of a change of the default branch by `actor` (a
+   * settings change, an import): its schedules are refreshed from the new
+   * branch's tip. Nothing while CI is off.
+   */
+  recordHeadChange(head: string, actor: RefActor): void {
+    if (!this.deps.enabled()) return;
+    this.#recordRefresh(
+      "head",
+      (head.startsWith(BRANCH) && this.#tip(head)) || null,
+      actor,
+      this.#now(),
+    );
+  }
+
+  /** A schedule refresh from `sha`, the default tip as the change left it (none: no schedules read). */
+  #recordRefresh(source: RefreshFacts["source"], sha: string | null, actor: RefActor, now: number) {
+    const facts: RefreshFacts = { source, sha };
+    this.#insert(
+      `schedule_refresh:${newUlid(now)}`,
+      "schedule_refresh",
+      actor.principal,
+      facts,
+      now,
+    );
+  }
+
+  /** In the transaction of a due schedule entry's fire: its tick, for the slice to run. */
+  recordSchedule(key: string, actor: string, facts: object): void {
+    this.#insert(key, "schedule", actor, facts, this.#now());
   }
 
   /** In a pull request change's transaction: records an event that may start pull request runs. */
@@ -478,7 +592,11 @@ export class CiTriggers {
     sourceSeq: number,
     capture: () => Record<string, unknown>,
   ): void {
-    if (!this.deps.enabled() || !PULL_TRIGGER_ACTIONS.has(action)) return;
+    if (!this.deps.enabled()) {
+      this.deps.noteSchedulesOff();
+      return;
+    }
+    if (!PULL_TRIGGER_ACTIONS.has(action)) return;
     const facts: PullFacts = {
       number: pull.number,
       action,
@@ -532,18 +650,44 @@ export class CiTriggers {
   }
 
   /**
+   * Pending events recorded before the CI cutoff close as `ci_off`, as if
+   * this object had seen CI off: nothing read or started, a run allocated
+   * and not yet confirmed (a dispatch answered with its id) included, the
+   * same accepted exception as the off branch of the slice.
+   */
+  #closeBeforeCutoff(): void {
+    const since = this.deps.since();
+    if (since === null) return;
+    const closed = this.#sql().exec(
+      `UPDATE ci_events SET state = 'done', outcome = 'ci_off', done_at = ?
+       WHERE state = 'pending' AND created_at < ?`,
+      this.#now(),
+      since,
+    );
+    this.#countOff(closed.rowsWritten);
+  }
+
+  #countOff(rows: number): void {
+    if (rows > 0)
+      this.deps.git.context.metrics.count("ci.trigger_outcome", { outcome: "ci_off" }, rows);
+  }
+
+  /**
    * Decides pending events that are due, oldest first, within one
    * invocation's work budget, and ends the invocation once it is spent. An
    * event whose start was refused, or failed, waits for its own retry
    * deadline (`next_at`) while later events go on; the job then sleeps until
    * the earliest deadline. With the switch off, pending events are decided
-   * as `ci_off` without being read: turning it on replays nothing. The loop
+   * as `ci_off` without being read: turning it on replays nothing; so are
+   * those recorded before the CI cutoff, which an object asleep through CI
+   * off and on again never saw. The loop
    * reads the inbox again before it ends, with no await in between, so an
    * event recorded while it ran is decided too.
    */
   async #slice(): Promise<SliceResult> {
     this.#prune();
     if (!this.deps.enabled()) {
+      this.deps.noteSchedulesOff();
       // Off means off, also for a dispatch already answered with its run's id whose run was not
       // created yet: it closes here and the run never exists (an accepted exception: switching
       // CI off is a rare operator action).
@@ -552,15 +696,13 @@ export class CiTriggers {
         "UPDATE ci_events SET state = 'done', outcome = 'ci_off', done_at = ? WHERE state = 'pending'",
         now,
       );
-      if (off.rowsWritten > 0)
-        this.deps.git.context.metrics.count(
-          "ci.trigger_outcome",
-          { outcome: "ci_off" },
-          off.rowsWritten,
-        );
+      this.#countOff(off.rowsWritten);
       return { done: true };
     }
-    const budget = { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0 };
+    this.#closeBeforeCutoff();
+    // On again after it was seen off: schedules start from now, replaying none.
+    this.deps.resumeSchedules();
+    const budget = newBudget();
     const opened = this.#reader();
     try {
       for (;;) {
@@ -895,6 +1037,7 @@ export class CiTriggers {
    * job's to retry (the event was recorded, and the job ensured, first).
    */
   async decideNow(eventId: number): Promise<void> {
+    this.#closeBeforeCutoff();
     const row = this.#sql()
       .exec<EventRow>(
         `SELECT id, key, kind, actor_id, facts, resolved, pass, file, attempts, faults, outcome
@@ -903,7 +1046,7 @@ export class CiTriggers {
       )
       .toArray()[0];
     if (!row || !this.deps.enabled()) return;
-    const budget = { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0 };
+    const budget = newBudget();
     const opened = this.#reader();
     try {
       await this.#evaluateRow(row, budget, opened.open);
@@ -919,7 +1062,7 @@ export class CiTriggers {
    */
   async #evaluateRow(
     row: EventRow,
-    budget: { trees: number; blobs: number; starts: number },
+    budget: SliceBudget,
     open: () => Promise<ObjectReader | undefined>,
   ): Promise<Stopped | undefined> {
     let stopped: Stopped | undefined;
@@ -1139,7 +1282,7 @@ export class CiTriggers {
 class Evaluation {
   readonly #t: CiTriggers;
   readonly #row: EventRow;
-  readonly #budget: { trees: number; blobs: number; starts: number };
+  readonly #budget: SliceBudget;
   readonly #open: () => Promise<ObjectReader | undefined>;
   #pass: number;
   #file: number;
@@ -1152,7 +1295,7 @@ class Evaluation {
   constructor(
     triggers: CiTriggers,
     row: EventRow,
-    budget: { trees: number; blobs: number; starts: number },
+    budget: SliceBudget,
     open: () => Promise<ObjectReader | undefined>,
   ) {
     this.#t = triggers;
@@ -1189,6 +1332,14 @@ class Evaluation {
           this.#saveProgress();
           return stopped;
         }
+      }
+      if (resolved.refresh) {
+        const refreshed = await this.#refreshSchedules(reader, resolved.refresh);
+        if (typeof refreshed === "object") {
+          this.#saveProgress();
+          return refreshed;
+        }
+        if (refreshed) this.#outcome = refreshed;
       }
       return this.#done(this.#outcome);
     } catch (error) {
@@ -1308,11 +1459,27 @@ class Evaluation {
     };
     let passes: Pass[];
     let baseTip: string | null = null;
+    let refresh: Resolved["refresh"];
+    const defaultRef = `${BRANCH}${defaultBranch}`;
     if (this.#row.kind === "push") {
       const facts = this.#facts<PushFacts>();
       const commit = await peel(reader, facts.after);
       if (!commit) return "not_a_commit";
       passes = [{ kind: "push", sha: commit, ref: facts.ref }];
+    } else if (this.#row.kind === "schedule_refresh") {
+      // The schedules at the tip the change left, as whoever made it.
+      const facts = this.#facts<RefreshFacts>();
+      passes = [];
+      if (facts.sha)
+        refresh = {
+          sha: facts.sha,
+          actor: this.#row.actor_id ?? "",
+          headChange: facts.source === "head",
+        };
+    } else if (this.#row.kind === "schedule") {
+      // The default tip at this first evaluation, recorded, so a retry runs the same commit.
+      const tip = tipOf(defaultBranch);
+      passes = tip ? [{ kind: "schedule", sha: tip, ref: defaultRef }] : [];
     } else if (this.#row.kind === "pull_request") {
       const facts = this.#facts<PullFacts>();
       passes = [
@@ -1323,7 +1490,7 @@ class Evaluation {
         passes.push({ kind: "pull_request_target", sha: tip, ref: `${BRANCH}${defaultBranch}` });
       baseTip = tipOf(facts.base_ref);
     } else return "unsupported_event";
-    const resolved: Resolved = { passes, defaultBranch, baseTip };
+    const resolved: Resolved = { passes, defaultBranch, baseTip, ...(refresh && { refresh }) };
     this.#t
       .sql()
       .exec(
@@ -1365,7 +1532,8 @@ class Evaluation {
   async #runPass(reader: ObjectReader, pass: Pass): Promise<Stopped | "gone" | undefined> {
     let discovery: Discovery;
     try {
-      discovery = await this.#discover(reader, pass.sha);
+      discovery = this.#budget.listings.get(pass.sha) ?? (await this.#discover(reader, pass.sha));
+      this.#budget.listings.set(pass.sha, discovery);
     } catch (error) {
       const refused = refusal(error);
       if (!refused) throw error;
@@ -1380,6 +1548,8 @@ class Evaluation {
     let skipped: boolean | undefined;
     for (; this.#file < discovery.files.length; this.#file++) {
       const file = discovery.files[this.#file] as WorkflowFile;
+      // A tick runs its own workflow only (another with the same cron has its own tick).
+      if (pass.kind === "schedule" && file.path !== this.#facts<ScheduleFacts>().path) continue;
       // Started, refused, or unconfirmed and left to the next evaluation's reconciliation.
       if (this.#allocation(pass.kind, file.path)) continue;
       const triggers = await this.#triggersOf(reader, file);
@@ -1418,11 +1588,71 @@ class Evaluation {
     }
   }
 
+  /**
+   * Refreshes the repository's schedules from the workflows at `sha`, all
+   * read before anything is written: a listing that cannot be read, or a
+   * budget spent part-way, changes no row. Why some were not kept, if so.
+   */
+  async #refreshSchedules(
+    reader: ObjectReader,
+    refresh: NonNullable<Resolved["refresh"]>,
+  ): Promise<string | Stopped | undefined> {
+    // Refreshes apply in the order of their events: a schedule's actor is whoever pushed the
+    // change of its file, which an older refresh still pending may hold. This one waits until
+    // that one is decided (it runs no sooner than that one's retry). Refreshes start no run, so
+    // a push's runs never hold one.
+    const older = this.#t
+      .sql()
+      .exec<{ next_at: number }>(
+        `SELECT next_at FROM ci_events WHERE state = 'pending' AND id < ?
+           AND kind = 'schedule_refresh' ORDER BY next_at DESC LIMIT 1`,
+        this.#row.id,
+      )
+      .toArray()[0];
+    if (older)
+      return {
+        kind: "retry",
+        afterMs: Math.max(1_000, older.next_at - this.#t.now() + 1),
+        counted: false,
+      };
+    let discovery = this.#budget.listings.get(refresh.sha);
+    if (!discovery) {
+      try {
+        discovery = await this.#discover(reader, refresh.sha);
+        this.#budget.listings.set(refresh.sha, discovery);
+      } catch (error) {
+        if (!refusal(error)) throw error;
+        this.#t.repo.skipSchedules(this.#row.id);
+        return undefined;
+      }
+    }
+    if (!discovery.ok) {
+      this.#t.repo.skipSchedules(this.#row.id);
+      return undefined;
+    }
+    const files: { path: string; blob: string; crons: string[] }[] = [];
+    for (const file of discovery.files) {
+      const schedule = (await this.#triggersOf(reader, file)).find((t) => t.event === "schedule");
+      if (schedule?.event === "schedule")
+        files.push({ path: file.path, blob: file.oid, crons: schedule.crons.map((c) => c.value) });
+    }
+    return (
+      this.#t.repo.applySchedules(
+        this.#row.id,
+        files,
+        refresh.actor,
+        refresh.headChange === true,
+      ) ?? undefined
+    );
+  }
+
   #triggerEvent(pass: Pass): TriggerEvent {
     if (pass.kind === "push") {
       const facts = this.#facts<PushFacts>();
       return { kind: "push", ref: facts.ref, created: facts.before === null };
     }
+    if (pass.kind === "schedule")
+      return { kind: "schedule", cron: this.#facts<ScheduleFacts>().cron };
     const facts = this.#facts<PullFacts>();
     return { kind: pass.kind, action: facts.action, baseRef: `${BRANCH}${facts.base_ref}` };
   }
@@ -1805,6 +2035,8 @@ class Evaluation {
   }
 
   async #contextEvent(reader: ObjectReader, pass: Pass, names: Names): Promise<ContextEvent> {
+    if (pass.kind === "schedule")
+      return { kind: "schedule", cron: this.#facts<ScheduleFacts>().cron, sha: pass.sha };
     if (pass.kind === "push") {
       const facts = this.#facts<PushFacts>();
       const commit = await this.#commit(reader, pass.sha);
