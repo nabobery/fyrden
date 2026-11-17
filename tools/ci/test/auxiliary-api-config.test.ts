@@ -30,7 +30,9 @@ it("loads generated auxiliary secrets despite a conflicting developer file and p
     await writeFile(join(sourceDirectory, ".dev.vars"), "BOOTSTRAP_SECRET=developer-value\n");
     const envFile = join(scratch, "test.env");
     await writeFile(envFile, "BOOTSTRAP_SECRET=generated-test-value\n");
-    const path = await auxiliaryApiConfig(source, join(scratch, "isolated"), envFile, { FYRDEN_CI_RUNNERS: "on" });
+    const path = await auxiliaryApiConfig(source, join(scratch, "isolated"), envFile, {
+      FYRDEN_CI_RUNNERS: "on",
+    });
     const config = unstable_readConfig({ config: path }, { hideWarnings: true });
     const bindings = unstable_getVarsForDev(
       config.userConfigPath,

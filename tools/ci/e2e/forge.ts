@@ -146,9 +146,10 @@ export async function startForge(
       );
       expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
     }
-    const devConfig = options.primary || options.vars
-      ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile, options.vars)
-      : apiConfig;
+    const devConfig =
+      options.primary || options.vars
+        ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile, options.vars)
+        : apiConfig;
     server = await startWranglerDev({
       args: [
         ...(options.primary ? ["-c", options.primary] : []),

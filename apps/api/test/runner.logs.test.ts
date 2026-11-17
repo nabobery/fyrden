@@ -590,17 +590,21 @@ describe("UpdateLog fencing", () => {
   });
 
   it("erasing the run removes its log state and manifest", async () => {
-    const { runId, runner, task, number } = await withTask();
+    const { f, runId, runner, task, number } = await withTask();
     expect(await ackOf(runner, { taskId: task.id, index: 0, rows: rowsAt(0, 50) })).toBe(50);
     expect((await chunksOf(runId, number)).length).toBe(1);
-    await runStub(runId).erase();
+    await runStub(runId).erase(f.repo.id);
     expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_logs"))).toEqual([]);
     expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_log_chunks"))).toEqual([]);
   });
 
   it("a flush whose run is erased while its object is written records nothing, deletes the object and answers not_found", async () => {
-    const { runId, runner, task, number } = await withTask();
-    await hook(runId, (r) => ({ afterLogPut: () => r.erase() }));
+    const { f, runId, runner, task, number } = await withTask();
+    await hook(runId, (r) => ({
+      afterLogPut: async () => {
+        await r.erase(f.repo.id);
+      },
+    }));
     await connectError(
       await sendLog(runner, { taskId: task.id, index: 0, rows: rowsAt(0, 50) }),
       "not_found",

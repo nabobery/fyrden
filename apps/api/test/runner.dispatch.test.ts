@@ -408,7 +408,7 @@ describe("FetchTask", () => {
   it("a job of an erased run: its row is deleted and the next poll finds nothing", async () => {
     const f = await orgRepo();
     const runId = await started(f, one);
-    await runStub(runId).erase();
+    await runStub(runId).erase(f.repo.id);
     const runner = await registerRunner(f.org.login, f.owner);
     expect((await fetchTask(runner, 0)).task).toBeUndefined();
     expect(await pendingOf(runId)).toEqual([]);
@@ -811,7 +811,7 @@ describe("UpdateTask fencing", () => {
     const runner = await registerRunner(f.org.login, f.owner);
     const task = (await fetchTask(runner, 0)).task;
     if (!task) throw new Error("no task");
-    await runStub(runId).erase();
+    await runStub(runId).erase(f.repo.id);
     expect((await updateTask(runner, task.id)).state?.result).toBe(Result.CANCELLED);
     expect((await uploadPack(f, jobTokenOf(task))).status).toBe(401);
   });
