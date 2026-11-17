@@ -243,6 +243,12 @@ const CASES: Record<
   },
   "statuses.list": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "statuses.combined": { input: {}, expected: { status: 404, code: "ref_not_found" } },
+  // No such run: past authorization, every run operation answers it as missing.
+  "actions.runs.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.jobs.list": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.force_cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.rerun": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "releases.create": {
     input: { tag_name: "checked", draft: true },
     expected: { status: 409, code: "repo_not_ready" },
@@ -379,6 +385,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{template_owner}", handle)
     .replace("{template_repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
+    .replace("{run_id}", UPLOAD_ID)
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")

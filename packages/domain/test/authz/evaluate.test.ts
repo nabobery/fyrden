@@ -32,8 +32,16 @@ describe("evaluate: roles", () => {
       PERMISSION_NAMES.filter((p) => request(p, role(r)).allow);
     expect(allowed(null)).toEqual([]);
     const pulls = ["issues:read", "issues:write", "pull_requests:read", "pull_requests:write"];
-    const reads = ["contents:read", "metadata:read", "statuses:read", ...pulls].sort();
+    const reads = [
+      "actions:read",
+      "contents:read",
+      "metadata:read",
+      "statuses:read",
+      ...pulls,
+    ].sort();
     const writes = [
+      "actions:read",
+      "actions:write",
       "contents:read",
       "contents:write",
       "metadata:read",

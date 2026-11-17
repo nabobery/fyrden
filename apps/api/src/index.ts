@@ -12,6 +12,7 @@ import { putBack, readModelMaintenance } from "./read-model/maintenance.js";
 import { consumeWebhooks, WEBHOOKS_QUEUE } from "./webhooks/deliver.js";
 import type { DeliveryMessage } from "./webhooks/sink.js";
 
+export { ConcurrencyDO } from "./do/ConcurrencyDO.js";
 export { DeletionDO } from "./do/DeletionDO.js";
 export { MaintenanceDO } from "./do/MaintenanceDO.js";
 export { NetworkDO } from "./do/NetworkDO.js";

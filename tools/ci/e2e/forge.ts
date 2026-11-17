@@ -20,6 +20,7 @@ import {
   type OutputOf,
 } from "@fyrden/sdk";
 import { expect } from "vitest";
+import { auxiliaryApiConfig } from "./auxiliary-api-config.js";
 import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -97,8 +98,13 @@ export interface Forge {
 /**
  * Starts fyrden-api under `wrangler dev` with fresh local state, its
  * secrets made for this run, and its cron run only when the test asks.
+ * `primary`, a test Worker's config, serves the port in front of the API
+ * (which it must forward to) when a test needs calls no public route makes.
  */
-export async function startForge(name: string): Promise<Forge> {
+export async function startForge(
+  name: string,
+  options: { readonly primary?: string } = {},
+): Promise<Forge> {
   const scratch = await mkdtemp(join(tmpdir(), `fyrden-e2e-${name}-`));
   await mkdir(join(scratch, "home"), { recursive: true });
   const persist = join(scratch, "state");
@@ -135,10 +141,14 @@ export async function startForge(name: string): Promise<Forge> {
     }
   };
   try {
+    const devConfig = options.primary
+      ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile)
+      : apiConfig;
     server = await startWranglerDev({
       args: [
+        ...(options.primary ? ["-c", options.primary] : []),
         "-c",
-        apiConfig,
+        devConfig,
         "--persist-to",
         persist,
         "--env-file",

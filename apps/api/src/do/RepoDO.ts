@@ -2,6 +2,7 @@ import { createClockBlockCache } from "@fyrden/adapters-cloudflare";
 import {
   DERIVED_REF_PREFIX,
   isNetworkId,
+  isUlid,
   type JobHandler,
   type JobKind,
   orphanReaperHandler,
@@ -28,6 +29,7 @@ import {
   type Envelope,
   FEED_HORIZON_MS,
   type FeedSubjectKind,
+  isFullSha,
   type LabelSpec,
   type LockReason,
   protectsBranch,
@@ -115,6 +117,7 @@ import {
 } from "./base/audit-archiver.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
+import type { ConcurrencyDO } from "./ConcurrencyDO.js";
 import type { AclSnapshot, RoleConfirmation, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
@@ -156,6 +159,7 @@ import {
   codeOwnersErrors,
 } from "./repo/code-owners-errors.js";
 import { type CommentRecord, RepoComments } from "./repo/comments.js";
+import type { ConcurrencyRequest, RenewScope } from "./repo/concurrency.js";
 import type { ConflictsView, MergedIntoHead } from "./repo/conflicts.js";
 import {
   type ContentsView,
@@ -2433,6 +2437,102 @@ export class RepoDO extends MigratingDO {
         return { ok: true, value: read(oidToHex(at.value.commit)) };
       }),
     );
+  }
+
+  /**
+   * Records a CI run of this repository before its run object is created, so
+   * erasing the repository erases the run. Repeating it changes nothing. Runs
+   * also call it to learn whether the repository is deleted: `repo_not_found`
+   * means deleted, never a repository still being generated.
+   */
+  registerRun(input: {
+    readonly runId: string;
+    readonly sha: string;
+    readonly path: string;
+  }): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+  > {
+    return this.#measured("registerRun", async () => {
+      if (!isUlid(input.runId) || !isFullSha(input.sha) || !input.path || input.path.length > 1024)
+        throw new TypeError("invalid run registration");
+      const refused = this.#writeRefusal();
+      // A repository still being generated from its template refuses writes as not found, yet
+      // is not deleted, and a restore can bring that state back under runs that exist: runs
+      // ask here whether the repository is deleted, so it answers not ready.
+      if (refused?.code === "repo_not_found" && !this.#refusesReads())
+        return { ok: false, code: "repo_not_ready" };
+      if (refused)
+        return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
+      if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };
+      this.git.context.storage.sql.exec(
+        `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
+        input.runId,
+        input.sha,
+        input.path,
+        this.git.context.now(),
+      );
+      return { ok: true };
+    });
+  }
+
+  acquireConcurrency(requests: readonly ConcurrencyRequest[]) {
+    return this.#ciChange("acquireConcurrency", "acquire", (coordinator) =>
+      coordinator.acquire(requests),
+    );
+  }
+
+  concurrencyStatus(scopes: readonly { group: string; runId: string; ownerKey: string }[]) {
+    return this.#ciChange("concurrencyStatus", "status", (coordinator) =>
+      coordinator.status(scopes),
+    );
+  }
+
+  renewConcurrency(runId: string, scopes: readonly RenewScope[]) {
+    return this.#ciChange("renewConcurrency", "renew", (coordinator) =>
+      coordinator.renew(runId, scopes),
+    );
+  }
+
+  releaseConcurrency(
+    items: readonly { group: string; runId: string; ownerKey: string; generation?: number }[],
+  ) {
+    return this.#ciChange("releaseConcurrency", "release", (coordinator) =>
+      coordinator.release(items),
+    );
+  }
+
+  #ciChange<R>(
+    method: string,
+    coordinatorMethod: string,
+    change: (coordinator: DurableObjectStub<ConcurrencyDO>) => Promise<R>,
+  ): Promise<R> {
+    return this.#measured(method, async () => {
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      const legacy = this.git.context.storage.sql
+        .exec<{ present: number }>(
+          `SELECT EXISTS (
+           SELECT 1 FROM concurrency_groups
+           UNION ALL SELECT 1 FROM concurrency_receipts
+           UNION ALL SELECT 1 FROM concurrency_signals
+           UNION ALL SELECT 1 FROM concurrency_leases
+         ) AS present`,
+        )
+        .one().present;
+      if (legacy)
+        throw new Error(
+          "ci_concurrency_upgrade_required: legacy grant state must be retired before using the coordinator",
+        );
+      this.git.context.metrics.count("do.request", {
+        class: "ConcurrencyDO",
+        method: coordinatorMethod,
+      });
+      return change(this.env.CONCURRENCY.getByName(this.#repoId()));
+    });
   }
 
   /** Starts check attempts of Fyrden's runs on `sha` (see `RepoChecks.startCheckAttempts`). */

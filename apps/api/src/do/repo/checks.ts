@@ -96,6 +96,12 @@ export interface CheckStart {
   readonly startKey: string;
   /** Who triggered the run, told when the attempt fails. */
   readonly actor?: string | null;
+  /**
+   * Start only if the check's current attempt was started with this key
+   * (a re-run settling a check its run no longer produces): another run's
+   * newer start of the name is left alone, answered `stale_attempt`.
+   */
+  readonly supersedes?: string;
 }
 
 export type CheckStartAnswer =
@@ -107,7 +113,8 @@ export type CheckStartAnswer =
         | "invalid_check"
         | "duplicate_check"
         | "check_limit"
-        | "attempt_limit";
+        | "attempt_limit"
+        | "stale_attempt";
     };
 
 export interface CheckUpdate {
@@ -629,6 +636,19 @@ export class RepoChecks {
       item.startKey,
     );
     if (known) return { ok: true, attempt: known.attempt, current: row?.attempt === known.attempt };
+    if (item.supersedes !== undefined) {
+      const [replaced] = this.#exec<{ attempt: number }>(
+        "checks.read",
+        `SELECT attempt FROM check_attempts
+         WHERE sha = ? AND name_key = ? AND source = ? AND start_key = ?`,
+        sha,
+        key,
+        source,
+        item.supersedes,
+      );
+      if (!replaced || replaced.attempt !== row?.attempt)
+        return { ok: false, code: "stale_attempt" };
+    }
     const attempt = (row?.attempt ?? 0) + 1;
     if (attempt > MAX_CHECK_ATTEMPTS) return { ok: false, code: "attempt_limit" };
     if (!row && !room()) return { ok: false, code: "check_limit" };
@@ -725,6 +745,9 @@ function validStart(item: CheckStart): boolean {
     checkText(item.name, MAX_CHECK_NAME_LENGTH).ok &&
     typeof item.startKey === "string" &&
     checkText(item.startKey, MAX_CHECK_NAME_LENGTH).ok &&
+    (item.supersedes === undefined ||
+      (typeof item.supersedes === "string" &&
+        checkText(item.supersedes, MAX_CHECK_NAME_LENGTH).ok)) &&
     (item.actor === undefined || item.actor === null || typeof item.actor === "string")
   );
 }
