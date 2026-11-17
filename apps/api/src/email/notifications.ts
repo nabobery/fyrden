@@ -748,9 +748,11 @@ export function messageFor(
   const lines =
     candidate.action === "merge_conflict"
       ? [`Your ${what} ${view.owner}/${view.name}#${number} now has a merge conflict.`]
-      : [
-          `${actorHandle ?? "Someone"} ${phrase(candidate)} ${what} ${view.owner}/${view.name}#${number}.`,
-        ];
+      : candidate.action === "checks_failed"
+        ? [`Checks are failing on ${what} ${view.owner}/${view.name}#${number}.`]
+        : [
+            `${actorHandle ?? "Someone"} ${phrase(candidate)} ${what} ${view.owner}/${view.name}#${number}.`,
+          ];
   if (view.excerpt) lines.push("", view.excerpt);
   lines.push(
     "",

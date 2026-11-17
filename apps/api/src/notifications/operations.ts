@@ -63,6 +63,7 @@ const PARTICIPATING = new Set([
   "mention",
   "team_mention",
   "assign",
+  "ci_activity",
   "author",
   "comment",
   "state_change",

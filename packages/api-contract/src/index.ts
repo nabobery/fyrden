@@ -30,6 +30,7 @@ export * from "../ops/rulesets.js";
 export * from "../ops/search.js";
 export * from "../ops/signing-keys.js";
 export * from "../ops/stars.js";
+export * from "../ops/statuses.js";
 export * from "../ops/subject-meta.js";
 export * from "../ops/tokens.js";
 export * from "../ops/uploads.js";

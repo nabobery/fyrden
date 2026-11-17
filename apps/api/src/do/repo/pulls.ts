@@ -143,6 +143,15 @@ export interface PullCaller {
   readonly role: RepoRole | null;
 }
 
+/** Changes that may move what fails on a pull request's head, or whether it can fail at all. */
+const CHECK_EVENTS: ReadonlySet<string> = new Set([
+  "opened",
+  "synchronize",
+  "edited",
+  "closed",
+  "reopened",
+]);
+
 /** An open pull request's head moved: its new head, who pushed it, under which grant, and when (twice). */
 export const HEAD_MOVED = `UPDATE pull_requests SET head_sha = ?, last_pusher = ?, last_pusher_grant = ?,
     last_push_at = ?, version = version + 1, updated_at = ?
@@ -188,6 +197,12 @@ export class RepoPulls {
       readonly view?: (pull: PullRecord) => PullView;
       /** A milestone as it stands (its counts after a change), for webhook captures. */
       readonly milestone?: (number: number) => MilestoneRecord | undefined;
+      /**
+       * In the transaction of a change that may move what fails on a pull
+       * request's head (opened, its head moved, retargeted, closed or
+       * reopened): its checks worked out again, after its own event.
+       */
+      readonly checks?: (pull: PullRecord, actor: RefActor | null) => void;
     },
   ) {}
 
@@ -969,6 +984,7 @@ export class RepoPulls {
       (event === "edited" && data?.changes && "body" in (data.changes as object))
     )
       this.deps.described?.(pull.number, pull.body, actor);
+    if (CHECK_EVENTS.has(event)) this.deps.checks?.(pull, actor);
   }
 
   /**

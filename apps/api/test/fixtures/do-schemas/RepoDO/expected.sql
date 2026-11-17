@@ -9,6 +9,7 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 CREATE INDEX blame_runs_expiry ON blame_runs (expires_at);
 CREATE INDEX blame_runs_touched ON blame_runs (touched_at);
+CREATE INDEX check_summaries_settled ON check_summaries (sha, settled);
 CREATE UNIQUE INDEX code_owner_evaluations_key
         ON code_owner_evaluations (merge_base, head, file_blob, version);
 CREATE INDEX code_owner_jobs_due ON code_owner_jobs (requested_at, pr_number);
@@ -16,6 +17,7 @@ CREATE INDEX code_owner_pointers_eval ON code_owner_pointers (eval_id);
 CREATE INDEX code_owner_request_jobs_due
         ON code_owner_request_jobs (requested_at, pr_number);
 CREATE INDEX comments_number ON comments (number, comment_id);
+CREATE INDEX commit_statuses_context ON commit_statuses (sha, context_key, id);
 CREATE INDEX digest_threads_conversation ON digest_threads (conversation);
 CREATE INDEX digest_threads_floor
         ON digest_threads (win, epoch_gen, subject, floor_revision, floor_principal);
@@ -45,6 +47,7 @@ CREATE INDEX pull_listings_created ON pull_listings (created_at);
 CREATE INDEX pull_requests_base ON pull_requests (base_ref, state);
 CREATE INDEX pull_requests_head ON pull_requests (head_ref, state);
 CREATE INDEX pull_requests_head_repo ON pull_requests (head_repo_id, state, number);
+CREATE INDEX pull_requests_open_head ON pull_requests (head_sha) WHERE state = 'open';
 CREATE INDEX pull_requests_state ON pull_requests (state, number);
 CREATE INDEX pull_requests_updated ON pull_requests (state, updated_at, number);
 CREATE INDEX reactions_content ON reactions (target, target_id, content, id);
@@ -184,6 +187,38 @@ CREATE TABLE change_lists (
         body TEXT NOT NULL,
         UNIQUE (base_sha, head_sha, limits)
       ) STRICT;
+CREATE TABLE check_attempts (
+        sha TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        start_key TEXT NOT NULL,
+        PRIMARY KEY (sha, name_key, source, attempt),
+        UNIQUE (sha, name_key, source, start_key)
+      ) STRICT, WITHOUT ROWID;
+CREATE TABLE check_summaries (
+        sha TEXT NOT NULL,
+        name_key TEXT NOT NULL,
+        source TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('status', 'check')),
+        attempt INTEGER CHECK (attempt >= 1),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'in_progress', 'completed')),
+        conclusion TEXT CHECK (conclusion IN ('success', 'failure', 'neutral', 'cancelled',
+          'skipped', 'timed_out', 'action_required', 'error')),
+        settled TEXT CHECK (settled IN ('success', 'failure', 'neutral', 'cancelled', 'skipped',
+          'timed_out', 'action_required', 'error')),
+        settled_attempt INTEGER,
+        settled_actor_id TEXT,
+        status_id INTEGER,
+        actor_id TEXT,
+        details_url TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (sha, name_key, source),
+        CHECK ((status = 'completed') = (conclusion IS NOT NULL)),
+        CHECK ((kind = 'check') = (attempt IS NOT NULL)),
+        CHECK ((kind = 'status') = (status_id IS NOT NULL))
+      ) STRICT, WITHOUT ROWID;
 CREATE TABLE claim_releases (
         pack_id TEXT PRIMARY KEY,
         network_id TEXT NOT NULL,
@@ -269,6 +304,18 @@ CREATE TABLE comments (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         version INTEGER NOT NULL DEFAULT 1
+      ) STRICT;
+CREATE TABLE commit_statuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sha TEXT NOT NULL,
+        context TEXT NOT NULL,
+        context_key TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'success', 'failure', 'error')),
+        description TEXT,
+        target_url TEXT,
+        creator_id TEXT NOT NULL,
+        creator_root TEXT NOT NULL,
+        created_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE commits (
     oid BLOB PRIMARY KEY CHECK (length(oid) = 20),
@@ -631,6 +678,12 @@ CREATE TABLE preference_versions (
         pulls_version INTEGER NOT NULL DEFAULT 0,
         ignore_version INTEGER NOT NULL DEFAULT 0
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE pull_checks (
+        pr_number INTEGER PRIMARY KEY,
+        head_sha TEXT NOT NULL,
+        failing TEXT NOT NULL,
+        holders TEXT NOT NULL
+      ) STRICT;
 CREATE TABLE pull_heads (
         pr_number INTEGER NOT NULL,
         sha TEXT NOT NULL,
