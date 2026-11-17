@@ -44,6 +44,36 @@ describe("depth (GitHub's rule)", () => {
     expect(code(chain(MAX_EXPRESSION_DEPTH))).toBe("limit_exceeded");
   });
 
+  it.each([
+    ["accesses", (links: number) => chain(links), MAX_EXPRESSION_DEPTH - 2],
+    ["a run of &&", (links: number) => `true && ${chain(links)}`, MAX_EXPRESSION_DEPTH - 2],
+    [
+      "|| beneath implicit &&",
+      (links: number) => `false || ${chain(links)}`,
+      MAX_EXPRESSION_DEPTH - 3,
+    ],
+    [
+      "an explicit status check",
+      (links: number) => `success() && ${chain(links)}`,
+      MAX_EXPRESSION_DEPTH - 2,
+    ],
+  ])("bounds the completed condition with %s", (_, build, links) => {
+    const forms = (source: string) => [source, `\${{ ${source} }}`, `\${{ '${source}' }}`];
+    for (const source of forms(build(links))) {
+      const parsed = parseCondition(source);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.problem.message);
+      expect(evaluateCondition(parsed.condition, {}, { cancelled: false, ancestors: [] })).toEqual({
+        ok: true,
+        value: false,
+      });
+    }
+    for (const source of forms(build(links + 1))) {
+      const refused = parseCondition(source);
+      expect(refused.ok ? "ok" : refused.problem.code).toBe("limit_exceeded");
+    }
+  });
+
   it(
     "does not count a run of the same && or ||",
     () => {

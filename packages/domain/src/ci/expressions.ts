@@ -284,6 +284,17 @@ function tokenize(source: string, base: number): Token[] {
 
 // --- Parser --------------------------------------------------------------------------------
 
+function boundedNode<T extends ExprNode>(node: T): T {
+  if (node.d > MAX_EXPRESSION_DEPTH) {
+    stop(
+      "limit_exceeded",
+      `The expression is deeper than ${MAX_EXPRESSION_DEPTH} (GitHub's limit)`,
+      node.at,
+    );
+  }
+  return node;
+}
+
 /** Parses one expression; refuses unknown names and arities, and every limit, before recursing. */
 class Parser {
   #i = 0;
@@ -335,17 +346,6 @@ class Parser {
     }
   }
 
-  #node<T extends ExprNode>(node: T): T {
-    if (node.d > MAX_EXPRESSION_DEPTH) {
-      stop(
-        "limit_exceeded",
-        `The expression is deeper than ${MAX_EXPRESSION_DEPTH} (GitHub's limit)`,
-        node.at,
-      );
-    }
-    return node;
-  }
-
   #logical(kind: "and" | "or", operand: () => ExprNode): ExprNode {
     const first = operand();
     const operator = kind === "and" ? "&&" : "||";
@@ -364,7 +364,7 @@ class Parser {
     let d = 0;
     for (const operand of operands) d = Math.max(d, operand.d);
     d += 1;
-    return this.#node({ k: kind, operands, at: first.at, d });
+    return boundedNode({ k: kind, operands, at: first.at, d });
   }
 
   #or(): ExprNode {
@@ -380,7 +380,7 @@ class Parser {
     for (let token = this.#peek(); token.k === "==" || token.k === "!="; token = this.#peek()) {
       this.#next();
       const right = this.#relational();
-      left = this.#node({
+      left = boundedNode({
         k: "compare",
         op: token.k,
         left,
@@ -401,7 +401,7 @@ class Parser {
     ) {
       this.#next();
       const right = this.#unary();
-      left = this.#node({
+      left = boundedNode({
         k: "compare",
         op: token.k,
         left,
@@ -422,7 +422,7 @@ class Parser {
     }
     let node = this.#postfix();
     for (const token of nots.reverse()) {
-      node = this.#node({ k: "not", operand: node, at: token.at, d: 1 + node.d });
+      node = boundedNode({ k: "not", operand: node, at: token.at, d: 1 + node.d });
     }
     this.#nesting -= nots.length;
     return node;
@@ -436,9 +436,9 @@ class Parser {
         this.#next();
         const name = this.#next();
         if (name.k === "*")
-          node = this.#node({ k: "star", target: node, at: token.at, d: 1 + node.d });
+          node = boundedNode({ k: "star", target: node, at: token.at, d: 1 + node.d });
         else if (name.k === "ident") {
-          node = this.#node({
+          node = boundedNode({
             k: "property",
             target: node,
             name: name.value,
@@ -451,14 +451,14 @@ class Parser {
         if (this.#peek().k === "*") {
           this.#next();
           this.#expect("]");
-          node = this.#node({ k: "star", target: node, at: token.at, d: 1 + node.d });
+          node = boundedNode({ k: "star", target: node, at: token.at, d: 1 + node.d });
           continue;
         }
         this.#nest(token.at);
         const index = this.#or();
         this.#nesting--;
         this.#expect("]");
-        node = this.#node({
+        node = boundedNode({
           k: "index",
           target: node,
           index,
@@ -526,7 +526,7 @@ class Parser {
         );
       }
       const d = Math.max(1, ...args.map((a) => 1 + a.d));
-      return this.#node({ k: "call", fn, args, at: token.at, d });
+      return boundedNode({ k: "call", fn, args, at: token.at, d });
     }
     switch (token.value) {
       case "null":
@@ -646,12 +646,13 @@ export function parseCondition(text: string): Read<"condition", ParsedCondition>
     if (expression === undefined) return { ok: true as const, condition: { root: success } };
     if (callsStatusFunction(expression.root))
       return { ok: true as const, condition: { root: expression.root } };
-    const root: ExprNode = {
+    const operands = expression.root.k === "and" ? expression.root.operands : [expression.root];
+    const root: ExprNode = boundedNode({
       k: "and",
-      operands: [success, expression.root],
+      operands: [success, ...operands],
       at: expression.root.at,
-      d: 1 + expression.root.d,
-    };
+      d: expression.root.k === "and" ? expression.root.d : 1 + expression.root.d,
+    });
     return { ok: true as const, condition: { root } };
   });
 }
