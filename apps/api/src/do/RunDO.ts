@@ -478,11 +478,14 @@ export class RunDO extends MigratingDO {
    * A maintainer's approval, delivered by the repository with the binding it
    * recorded: a waiting run whose binding is the same is approved and its
    * current attempt admitted in the same transaction. Approved already: the
-   * same answer. Ended (cancelled, superseded, expired): `not_waiting`.
+   * same answer. Ended (cancelled, superseded, expired): `not_waiting`. A
+   * waiting approval past its expiry, which the deadline has not processed
+   * yet, expires here as the deadline would expire it.
    */
   approve(binding: string, approver: string): ApproveAnswer {
     return this.#tx((): ApproveAnswer => {
       if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      this.#expireApproval();
       const approval = this.#approvalRow();
       if (!approval) return { ok: false, code: "not_waiting" };
       if (approval.binding !== binding) return { ok: false, code: "approval_stale" };

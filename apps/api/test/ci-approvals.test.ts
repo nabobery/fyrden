@@ -342,6 +342,36 @@ describe("runs held for approval", () => {
     expect((await approvalItems(expired)).at(-1)).toEqual(expectedItems(expired, "resolved"));
   });
 
+  it("refuse an approval past the expiry its deadline has not processed, and expire the run", async () => {
+    const h = await forkPull();
+    const runId = await newestRun(h);
+    const [row] = await inRepo(h.base.stub, (r: RepoDO) =>
+      r.git.context.storage.sql
+        .exec<{ binding: string }>("SELECT binding FROM ci_approvals WHERE run_id = ?", runId)
+        .toArray()
+        .map((b) => ({ ...b })),
+    );
+    const { createdAt } = await viewOf(runId);
+    // Past the expiry, with no deadline run: the approval itself finds it expired.
+    const answer = await inRun(runId, (run) => {
+      (run.context as { now: () => number }).now = () => createdAt + 30 * DAY + 1;
+      return run.approve(row?.binding ?? "", h.writer.principalId);
+    });
+    expect(answer).toEqual({ ok: false, code: "not_waiting" });
+    const view = await viewOf(runId);
+    expect(view).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      startedAt: null,
+      approval: { state: "expired", decidedBy: null },
+    });
+    expect(view.errors[0]).toMatchObject({ code: "approval_expired" });
+    expect(await jobsOf(runId)).toEqual([]);
+    await runAt(runId, 30 * DAY + 1);
+    expect(await approvalRow(h, runId)).toEqual([{ state: "expired", decided_by: null }]);
+    expect((await approvalItems(h)).at(-1)).toEqual(expectedItems(h, "resolved"));
+  });
+
   it("never re-run a held run that ended unapproved, nor approve it then", async () => {
     const h = await forkPull();
     const runId = await newestRun(h);
