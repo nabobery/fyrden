@@ -31,7 +31,7 @@ export const CI_APPROVALS_JOB = "ci_approvals";
 export const APPROVAL_EVENT = "pull_request.approval";
 
 /** Deliveries one slice makes at most. Proposed. */
-const DELIVERIES_PER_SLICE = 20;
+export const DELIVERIES_PER_SLICE = 20;
 /** Before a failed delivery is tried again. Proposed. */
 const DELIVERY_RETRY_MS = 30_000;
 
@@ -261,7 +261,7 @@ export class CiApprovals {
    * Delivers decisions to run objects: approved ones with their binding,
    * superseded ones as a cancel. A definite answer (done, or refused as
    * not waiting, stale or gone) is final; a failed call is tried again
-   * later, however long that takes.
+   * later, however long that takes, after the decisions waiting behind it.
    */
   handler(): JobHandler {
     return {
@@ -290,6 +290,13 @@ export class CiApprovals {
               error,
               runId: row.run_id,
             });
+            // Behind the other undelivered decisions, so failing ones cannot hold every slice.
+            this.#sql().exec(
+              "UPDATE ci_approvals SET updated_at = ? WHERE run_id = ? AND state = ? AND delivered = 0",
+              this.#now(),
+              row.run_id,
+              row.state,
+            );
             failed = true;
             continue;
           }

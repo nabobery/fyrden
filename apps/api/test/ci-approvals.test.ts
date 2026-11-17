@@ -11,7 +11,13 @@ import { uniqueId } from "@fyrden/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { recordedAccount } from "../src/accounts/grants.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { CI_APPROVALS_JOB } from "../src/do/repo/run-approvals.js";
+import type { RunDO } from "../src/do/RunDO.js";
+import {
+  CI_APPROVALS_JOB,
+  CiApprovals,
+  type CiApprovalsDeps,
+  DELIVERIES_PER_SLICE,
+} from "../src/do/repo/run-approvals.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
 import {
@@ -774,5 +780,71 @@ describe("approval items when the account cannot be reached, and supersede by an
     expect((await approvalItems(h)).at(-1)).toEqual(
       [...expectedItems(h, "resolved"), `${h.contributor.principalId}:resolved`].sort(),
     );
+  });
+});
+
+describe("approval deliveries", () => {
+  it("rotate a failing delivery behind later decisions, and retry it until it is delivered", async () => {
+    const h = await forkPull();
+    const runId = await newestRun(h);
+    expect(await h.base.stub.approveRun({ runId, approver: h.writer.principalId })).toMatchObject({
+      ok: true,
+    });
+    const delivered = await inRepo(h.base.stub, async (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      const [healthy] = sql
+        .exec<{ updated_at: number }>("SELECT updated_at FROM ci_approvals WHERE run_id = ?", runId)
+        .toArray();
+      let clock = healthy?.updated_at ?? 0;
+      (r.git.context as { now: () => number }).now = () => clock;
+      // More failing decisions than one slice delivers, all taken before the healthy one.
+      const failing = new Set<string>();
+      for (let i = 0; i <= DELIVERIES_PER_SLICE; i++) {
+        const id = uniqueId("run");
+        failing.add(id);
+        sql.exec(
+          `INSERT INTO ci_approvals (run_id, event_id, pull_number, trigger_kind, workflow_path,
+             binding, state, decided_by, decided_at, delivered, created_at, updated_at)
+           VALUES (?, 0, 0, 'pull_request', ?, 'b', 'approved', ?, ?, 0, ?, ?)`,
+          id,
+          CI,
+          h.writer.principalId,
+          clock - 1000 + i,
+          clock - 1000 + i,
+          clock - 1000 + i,
+        );
+      }
+      const unreachable = { approve: () => Promise.reject(new Error("run unreachable")) };
+      const runs = {
+        getByName: (id: string) => (failing.has(id) ? unreachable : env.RUN.getByName(id)),
+      } as unknown as DurableObjectNamespace<RunDO>;
+      const deps = (r.ciApprovals as unknown as { deps: CiApprovalsDeps }).deps;
+      const approvals = new CiApprovals({ ...deps, runs: () => runs });
+      const undelivered = () =>
+        sql
+          .exec<{ run_id: string }>("SELECT run_id FROM ci_approvals WHERE delivered = 0")
+          .toArray()
+          .map((row) => row.run_id);
+      const slice = async () => {
+        clock += 60_000;
+        return approvals.handler().runSlice(undefined as never);
+      };
+      // Two slices cover every row once: the healthy decision is delivered in the second.
+      await slice();
+      await slice();
+      const healthyLeft = undelivered().includes(runId);
+      const failingLeft = undelivered().length;
+      failing.clear();
+      const results = [await slice(), await slice()];
+      return { healthyLeft, failingLeft, results, left: undelivered() };
+    });
+    expect(delivered.healthyLeft).toBe(false);
+    expect(delivered.failingLeft).toBe(DELIVERIES_PER_SLICE + 1);
+    expect(delivered.left).toEqual([]);
+    expect(delivered.results.at(-1)).toEqual({ done: true });
+    expect((await viewOf(runId)).approval).toMatchObject({
+      state: "approved",
+      decidedBy: h.writer.principalId,
+    });
   });
 });
