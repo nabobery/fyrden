@@ -17,6 +17,7 @@
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@fyrden/api-contract": "workspace:*",
+    "@fyrden/cli": "workspace:*",
     "@fyrden/domain": "workspace:*",
     "@fyrden/sdk": "workspace:*",
     "@fyrden/testing": "workspace:*",

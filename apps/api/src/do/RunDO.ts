@@ -94,6 +94,10 @@ export type CreateAnswer =
   | { readonly ok: true; readonly created: boolean; readonly run: RunView }
   | { readonly ok: false; readonly code: "run_exists" | "run_erased" };
 
+export type ReserveAnswer =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly code: "run_exists" | "run_erased" };
+
 export type AssignAnswer =
   | {
       readonly ok: true;
@@ -205,12 +209,36 @@ export class RunDO extends MigratingDO {
 
   // ------------------------------------------------------------------ creation
 
+  #reserve(spec: RunSpec, digest: string): ReserveAnswer {
+    if (this.#erased()) return { ok: false, code: "run_erased" };
+    const existing = this.engine.rows<{ repo_id: string; spec_digest: string | null }>(
+      "SELECT repo_id, spec_digest FROM run_identity WHERE id = 1",
+    )[0];
+    if (existing)
+      return existing.repo_id === spec.repoId && existing.spec_digest === digest
+        ? { ok: true }
+        : { ok: false, code: "run_exists" };
+    this.engine.exec(
+      "INSERT INTO run_identity (id, repo_id, spec_digest) VALUES (1, ?, ?)",
+      spec.repoId,
+      digest,
+    );
+    return { ok: true };
+  }
+
+  /** Binds the run id before a repository records it; retries must use the same spec. */
+  async reserve(spec: RunSpec): Promise<ReserveAnswer> {
+    const digest = await specDigest(spec, validateRunSpec(spec));
+    return this.#tx(() => this.#reserve(spec, digest));
+  }
+
   /** Creates the run from `spec`; the same spec again returns it, another is refused. */
   async create(spec: RunSpec): Promise<CreateAnswer> {
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
     return this.#tx((): CreateAnswer => {
-      if (this.#erased()) return { ok: false, code: "run_erased" };
+      const reserved = this.#reserve(spec, digest);
+      if (!reserved.ok) return reserved;
       const existing = this.engine.run();
       if (existing)
         return existing.spec_digest === digest
@@ -756,7 +784,16 @@ export class RunDO extends MigratingDO {
     sentAt: number,
   ): void {
     const owner = this.engine.owner(key);
-    if (!owner || owner.state === "ended" || !receipt) return;
+    if (!owner || owner.state === "ended") return;
+    if (!receipt) {
+      if (owner.state === "pending")
+        this.engine.exec(
+          `UPDATE run_owners SET state = 'admitting', outcome = NULL, generation = NULL,
+             lease_valid_until = NULL, renew_at = NULL WHERE owner_key = ?`,
+          key,
+        );
+      return;
+    }
     const now = this.context.now();
     const wanted = owner.state !== "releasing";
     const workflow = !key.includes("/");
@@ -846,12 +883,18 @@ export class RunDO extends MigratingDO {
   // ------------------------------------------------------------------ erasure
 
   /**
-   * Erases the run: a tombstone and the removal of every row in one
-   * transaction, so nothing can recreate its data. Repeating it succeeds.
+   * Erases the reserved repository's run, retaining its identity and a tombstone.
+   * Returns false for another repository; repeating an authorized erasure succeeds.
    */
-  async erase(): Promise<void> {
-    this.#tx(() => {
-      if (this.#erased()) return;
+  async erase(repoId: string): Promise<boolean> {
+    const erased = this.#tx(() => {
+      const identity = this.engine.rows<{ repo_id: string }>(
+        "SELECT repo_id FROM run_identity WHERE id = 1",
+      )[0];
+      if (identity && identity.repo_id !== repoId) return false;
+      if (this.#erased()) return true;
+      if (!identity)
+        this.engine.exec("INSERT INTO run_identity (id, repo_id) VALUES (1, ?)", repoId);
       for (const table of [
         "runs",
         "run_attempts",
@@ -864,9 +907,12 @@ export class RunDO extends MigratingDO {
       ])
         this.engine.exec(`DELETE FROM ${table}`);
       this.engine.exec("INSERT INTO run_erasure (id, erased_at) VALUES (1, ?)", this.context.now());
+      return true;
     });
+    if (!erased) return false;
     this.#model = undefined;
     await this.ctx.storage.deleteAlarm();
+    return true;
   }
 
   // ------------------------------------------------------------------ background work
@@ -888,7 +934,8 @@ export class RunDO extends MigratingDO {
    * `run_not_found`), needing nothing else to succeed first.
    */
   async #repositoryGone(): Promise<void> {
-    await this.erase();
+    const run = this.engine.run();
+    if (run) await this.erase(run.repo_id);
   }
 
   /** Records a fault on the attempt that exhausts a job, and clears its faults when it succeeds. */

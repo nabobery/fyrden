@@ -60,6 +60,11 @@ CREATE TABLE run_faults (
         resolved_at INTEGER,
         PRIMARY KEY (kind, job_id)
       ) STRICT, WITHOUT ROWID;
+CREATE TABLE run_identity (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        repo_id TEXT NOT NULL,
+        spec_digest TEXT
+      ) STRICT;
 CREATE TABLE run_instances (
         job_id INTEGER PRIMARY KEY,
         attempt INTEGER NOT NULL,

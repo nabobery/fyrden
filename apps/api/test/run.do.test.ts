@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { startRun } from "../src/ci/runs.js";
 import type { AssignAnswer } from "../src/do/RunDO.js";
+import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
   assignNamed,
@@ -34,6 +35,36 @@ const chain = workflow(
 );
 
 describe("creating a run", () => {
+  it("rejects another repository before recording its association with an existing run", async () => {
+    const first = await repoWithCommit();
+    const second = await repoWithCommit();
+    const spec = specFor(first, chain);
+    expect(await startRun(env, spec)).toMatchObject({ ok: true });
+    expect(await startRun(env, specFor(second, chain, { runId: spec.runId }))).toEqual({
+      ok: false,
+      code: "run_exists",
+    });
+    const rows = await inRepo(env.REPO.getByName(second.repo.id), (repo) =>
+      repo.git.context.storage.sql.exec("SELECT run_id FROM ci_runs").toArray(),
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("records only the winning repository when two reserve the same run concurrently", async () => {
+    const fixtures = await Promise.all([repoWithCommit(), repoWithCommit()]);
+    const spec = specFor(fixtures[0] as Fixture, chain);
+    const answers = await Promise.all(
+      fixtures.map((f) => startRun(env, specFor(f, chain, { runId: spec.runId }))),
+    );
+    expect(answers.filter((answer) => answer.ok)).toHaveLength(1);
+    for (const [i, f] of fixtures.entries()) {
+      const rows = await inRepo(env.REPO.getByName(f.repo.id), (repo) =>
+        repo.git.context.storage.sql.exec("SELECT run_id FROM ci_runs").toArray(),
+      );
+      expect(rows).toEqual(answers[i]?.ok ? [{ run_id: spec.runId }] : []);
+    }
+  });
+
   it("is idempotent per run id and refuses another spec under the same id", async () => {
     const f = await repoWithCommit();
     const spec = specFor(f, chain);
@@ -410,11 +441,35 @@ describe("re-runs", () => {
 });
 
 describe("erasure", () => {
+  it("protects a reservation before creation and fences a delayed create after erasure", async () => {
+    const f = await repoWithCommit();
+    const other = await repoWithCommit();
+    const spec = specFor(f, chain);
+    expect(await runStub(spec.runId).reserve(spec)).toEqual({ ok: true });
+    expect(await runStub(spec.runId).get()).toBeUndefined();
+    expect(await runStub(spec.runId).erase(other.repo.id)).toBe(false);
+    expect(await runStub(spec.runId).erase(f.repo.id)).toBe(true);
+    expect(await startRun(env, spec)).toEqual({ ok: false, code: "run_erased" });
+    expect(
+      await inRepo(env.REPO.getByName(f.repo.id), (repo) =>
+        repo.git.context.storage.sql.exec("SELECT run_id FROM ci_runs").toArray(),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not erase a run owned by another repository", async () => {
+    const f = await repoWithCommit();
+    const other = await repoWithCommit();
+    const runId = await started(f, chain);
+    await runStub(runId).erase(other.repo.id);
+    expect(await runStub(runId).get()).toMatchObject({ repoId: f.repo.id });
+  });
+
   it("leaves a tombstone: reads see nothing, a later create is refused, a repeat succeeds", async () => {
     const f = await repoWithCommit();
     const runId = await started(f, chain);
-    await runStub(runId).erase();
-    await runStub(runId).erase();
+    await runStub(runId).erase(f.repo.id);
+    await runStub(runId).erase(f.repo.id);
     expect(await runStub(runId).get()).toBeUndefined();
     expect(await runStub(runId).create(specFor(f, chain, { runId }))).toEqual({
       ok: false,
@@ -426,7 +481,7 @@ describe("erasure", () => {
   it("refuses create on an erased object that never held a run", async () => {
     const f = await repoWithCommit();
     const spec = specFor(f, chain);
-    await runStub(spec.runId).erase();
+    await runStub(spec.runId).erase(f.repo.id);
     expect(await runStub(spec.runId).create(spec)).toEqual({ ok: false, code: "run_erased" });
   });
 });

@@ -85,6 +85,8 @@ export async function eraseRepository(
 ): Promise<EraseOutcome> {
   const { storage, now, metrics } = git.context;
   const sql = storage.sql;
+  metrics.count("do.request", { class: "ConcurrencyDO", method: "erase" });
+  await env.CONCURRENCY.getByName(repoId).erase();
   const leased = () =>
     sql
       .exec<{ held: number }>(
@@ -232,12 +234,17 @@ export async function eraseRepository(
 
   // 2b. Its CI runs: each run object erases itself (leaving a tombstone, so
   // a delayed create cannot bring it back), then its row goes.
-  const runs = sql.exec<{ run_id: string }>("SELECT run_id FROM ci_runs ORDER BY run_id").toArray();
+  const runs = sql
+    .exec<{ run_id: string }>(
+      "SELECT run_id FROM ci_runs ORDER BY run_id LIMIT ?",
+      ERASE_R2_CALLS - calls + 1,
+    )
+    .toArray();
   for (const { run_id } of runs) {
     if (spent()) return "partial";
     calls++;
     metrics.count("do.request", { class: "RunDO", method: "erase" });
-    await env.RUN.getByName(run_id).erase();
+    await env.RUN.getByName(run_id).erase(repoId);
     sql.exec("DELETE FROM ci_runs WHERE run_id = ?", run_id);
   }
 

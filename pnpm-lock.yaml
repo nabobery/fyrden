@@ -569,6 +569,9 @@ importers:
       '@fyrden/api-contract':
         specifier: workspace:*
         version: link:../../packages/api-contract
+      '@fyrden/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@fyrden/domain':
         specifier: workspace:*
         version: link:../../packages/domain

@@ -14,9 +14,33 @@ import { runSchema } from "../src/do/schema/run.js";
 import runV0 from "./fixtures/do-schemas/RunDO/v0.sql?raw";
 import runV1 from "./fixtures/do-schemas/RunDO/v1.sql?raw";
 
-const versions: Record<number, string> = { 0: runV0, 1: runV1 };
+import runV2 from "./fixtures/do-schemas/RunDO/v2.sql?raw";
+
+const versions: Record<number, string> = { 0: runV0, 1: runV1, 2: runV2 };
 
 describe("RunDO schema", () => {
+  it("binds an existing v1 run to its repository and original spec", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const identity = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      state.storage.sql.exec(runV1);
+      state.storage.sql.exec(
+        `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
+         VALUES (1, 'old-run', 'old-repo', ?, 'refs/heads/main', 'push', 'usr_old',
+           '.github/workflows/ci.yml', '', '{}', 'original-digest', 1, 0, 0)`,
+        "a".repeat(40),
+      );
+      state.storage.sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)",
+      );
+      state.storage.sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 1)");
+      applyDoMigrations(state.storage, runSchema);
+      return state.storage.sql.exec("SELECT repo_id, spec_digest FROM run_identity").toArray();
+    });
+    expect(identity).toEqual([{ repo_id: "old-repo", spec_digest: "original-digest" }]);
+  });
+
   it("matches the committed expected schema (no drift)", async () => {
     const stub = env.RUN.getByName(uniqueId("run"));
     const schema = await runInDurableObject(stub, (_, state) => dumpSchema(state.storage));

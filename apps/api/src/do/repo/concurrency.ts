@@ -1,4 +1,4 @@
-import type { RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
+import type { GitStorageContext } from "@fyrden/adapters-cloudflare/git";
 import {
   acquire,
   type ConcurrencyContext,
@@ -86,18 +86,18 @@ const groupKey = concurrencyGroupKey;
 export class RepoConcurrency {
   constructor(
     private readonly deps: {
-      readonly git: RepoGitStorage;
+      readonly context: GitStorageContext;
       /** Wakes the delivery and settling job at `at`. */
       readonly wake: (at: number) => void;
     },
   ) {}
 
   #sql<T>(query: string, ...bindings: (string | number | null)[]): T[] {
-    return this.deps.git.context.storage.sql.exec(query, ...bindings).toArray() as T[];
+    return this.deps.context.storage.sql.exec(query, ...bindings).toArray() as T[];
   }
 
   #now(): number {
-    return this.deps.git.context.now();
+    return this.deps.context.now();
   }
 
   #context(now: number): ConcurrencyContext {
@@ -276,7 +276,7 @@ export class RepoConcurrency {
     const now = this.#now();
     const key = groupKey(request.group);
     const ref = { runId: request.runId, ownerKey: request.ownerKey };
-    return this.deps.git.context.storage.transactionSync(() => {
+    return this.deps.context.storage.transactionSync(() => {
       this.settleDue(now);
       const receipt = this.#receipt(key, ref);
       if (!receipt) {
@@ -303,7 +303,7 @@ export class RepoConcurrency {
     scopes: readonly { group: string; runId: string; ownerKey: string }[],
   ): (ReceiptAnswer | null)[] {
     const now = this.#now();
-    return this.deps.git.context.storage.transactionSync(() => {
+    return this.deps.context.storage.transactionSync(() => {
       this.settleDue(now);
       return scopes.map((s) =>
         this.#answer(groupKey(s.group), { runId: s.runId, ownerKey: s.ownerKey }, now),
@@ -314,7 +314,7 @@ export class RepoConcurrency {
   /** Renews the run's lease (one row) and answers each owned scope. */
   renew(runId: string, scopes: readonly RenewScope[]): RenewAnswer[] {
     const now = this.#now();
-    return this.deps.git.context.storage.transactionSync(() => {
+    return this.deps.context.storage.transactionSync(() => {
       this.settleDue(now);
       const answers = scopes.map((scope): RenewAnswer => {
         const key = groupKey(scope.group);
@@ -370,7 +370,7 @@ export class RepoConcurrency {
     const now = this.#now();
     const key = groupKey(input.group);
     const ref = { runId: input.runId, ownerKey: input.ownerKey };
-    return this.deps.git.context.storage.transactionSync(() => {
+    return this.deps.context.storage.transactionSync(() => {
       // A release that finds no request is a withdrawal before the request arrived (its call
       // was delayed): a receipt says so, and answers that request when it lands.
       if (!this.#receipt(key, ref))
@@ -445,7 +445,7 @@ export class RepoConcurrency {
   /** Forgets a run erased with the repository's step: its receipts, signals and lease; releases what it holds. */
   forgetRun(runId: string): void {
     const now = this.#now();
-    this.deps.git.context.storage.transactionSync(() => {
+    this.deps.context.storage.transactionSync(() => {
       const held = this.#sql<{ group_key: string; owner_key: string; pending: number }>(
         `SELECT group_key, owner_key, 0 AS pending FROM concurrency_groups WHERE owner_run = ?
          UNION ALL SELECT group_key, pending_key, 1 FROM concurrency_groups WHERE pending_run = ?`,

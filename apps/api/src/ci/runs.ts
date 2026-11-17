@@ -12,11 +12,13 @@ export type StartRunAnswer =
 
 /**
  * Starts a CI run: the seam triggers call. The repository records the run
- * first, so erasing the repository always finds it; then the run object is
- * created. Both steps are idempotent per run id, so a trigger retries the
+ * after its id is reserved, so erasing the repository always finds its own
+ * run; then the run object is created. All steps are idempotent per run id, so a trigger retries the
  * whole call with the same spec after any failure.
  */
 export async function startRun(env: Env, spec: RunSpec): Promise<StartRunAnswer> {
+  const reserved = await env.RUN.getByName(spec.runId).reserve(spec);
+  if (!reserved.ok) return reserved;
   const registered = await env.REPO.getByName(spec.repoId).registerRun({
     runId: spec.runId,
     sha: spec.sha,

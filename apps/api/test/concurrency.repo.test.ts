@@ -5,10 +5,14 @@
 // the pending requester changes nothing; an owner whose lease expired is
 // evicted only after its hold; and signals that cannot be delivered are
 // retried without stopping the group's deadlines.
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newUlid } from "@fyrden/adapters-cloudflare/git";
 import { describe, expect, it } from "vitest";
+import type { ConcurrencyDO } from "../src/do/ConcurrencyDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { allocateEpoch } from "../src/events/epochs.js";
+import { inConcurrency } from "./helpers/concurrency.js";
 import { inRepo } from "./helpers/repo-git.js";
 import { repoWithCommit } from "./helpers/runs.js";
 
@@ -24,6 +28,9 @@ async function setup() {
     await inRepo(repo, (r: RepoDO) => {
       (r.git.context as { now: () => number }).now = () => clock;
     });
+    await inConcurrency(f.repo.id, (coordinator) => {
+      (coordinator.context as { now: () => number }).now = () => clock;
+    });
   };
   await tick();
   const request = (runId: string, cancelInProgress = false, holdMs = HOLD, ownerKey = "a1") => ({
@@ -33,25 +40,76 @@ async function setup() {
     cancelInProgress,
     holdMs,
   });
+  const inspect = <R>(fn: (coordinator: ConcurrencyDO) => R | Promise<R>) =>
+    inConcurrency(f.repo.id, fn);
   const groupRow = () =>
-    inRepo(
-      repo,
-      (r: RepoDO) =>
-        r.git.context.storage.sql.exec("SELECT * FROM concurrency_groups").toArray()[0] as
+    inspect(
+      (r: ConcurrencyDO) =>
+        r.context.storage.sql.exec("SELECT * FROM concurrency_groups").toArray()[0] as
           | Record<string, unknown>
           | undefined,
     );
   const signals = () =>
-    inRepo(repo, (r: RepoDO) =>
-      r.git.context.storage.sql
+    inspect((r: ConcurrencyDO) =>
+      r.context.storage.sql
         .exec("SELECT run_id, kind, attempts FROM concurrency_signals ORDER BY created_at, kind")
         .toArray(),
     );
-  const settle = () => inRepo(repo, (r: RepoDO) => r.concurrency.settleDue());
-  return { f, repo, tick, request, groupRow, signals, settle, now: () => clock };
+  const settle = () => inspect((r) => r.concurrency.settleDue());
+  return { f, repo, inspect, tick, request, groupRow, signals, settle, now: () => clock };
 }
 
 describe("concurrency groups in the repository", () => {
+  it("refuses to replace concurrency state from an earlier unpublished implementation", async () => {
+    const { repo, request } = await setup();
+    await inRepo(repo, (r) => {
+      r.git.context.storage.sql.exec(
+        `INSERT INTO concurrency_receipts
+           (group_key, run_id, owner_key, outcome, generation, updated_at)
+         VALUES ('deploy', ?, 'a1', 'owner', 1, ?)`,
+        newUlid(),
+        r.git.context.now(),
+      );
+    });
+    const error = await inRepo(repo, async (r) => {
+      try {
+        await r.acquireConcurrency([request(newUlid())]);
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+    expect(error).toMatch(/ci_concurrency_upgrade_required/);
+  });
+
+  it("does not grant a restored group while an earlier grant can still be held", async () => {
+    const { f, repo, request, now } = await setup();
+    const first = (await repo.acquireConcurrency([request(newUlid())]))[0];
+    expect(first?.outcome).toBe("owner");
+    expect(first?.leaseRemainingMs).toBeGreaterThan(0);
+    await inRepo(repo, (r: RepoDO) => {
+      r.git.context.storage.transactionSync(() => {
+        for (const table of [
+          "concurrency_groups",
+          "concurrency_receipts",
+          "concurrency_signals",
+          "concurrency_leases",
+          "ci_meta",
+        ])
+          r.git.context.storage.sql.exec(`DELETE FROM ${table}`);
+      });
+    });
+    await allocateEpoch(env.DIRECTORY, f.repo.id);
+    await runInDurableObject(repo, (_: RepoDO, state) => state.abort("restore")).catch(() => {});
+    const restored = env.REPO.getByName(f.repo.id);
+    await inRepo(restored, (r: RepoDO) => {
+      (r.git.context as { now: () => number }).now = now;
+    });
+    const second = (await restored.acquireConcurrency([request(newUlid())]))[0];
+    expect(second).toBeDefined();
+    expect(second?.outcome).not.toBe("owner");
+  });
+
   it("leaves one owner and one pending requester when three ask at once", async () => {
     const { repo, request } = await setup();
     const [a, b, c] = [newUlid(), newUlid(), newUlid()];
@@ -151,11 +209,11 @@ describe("concurrency groups in the repository", () => {
   });
 
   it("keeps settling deadlines while a signal cannot be delivered, and retries the signal", async () => {
-    const { repo, request, groupRow, signals, tick } = await setup();
+    const { repo, inspect, request, groupRow, signals, tick } = await setup();
     const [a, b] = [newUlid(), newUlid()];
     await repo.acquireConcurrency([request(a, false, MIN)]);
     await repo.acquireConcurrency([request(b, true)]);
-    await inRepo(repo, (r: RepoDO) => {
+    await inspect((r: ConcurrencyDO) => {
       (r as unknown as { env: Env }).env = {
         ...(r as unknown as { env: Env }).env,
         RUN: {
@@ -168,7 +226,7 @@ describe("concurrency groups in the repository", () => {
     // a's deadline is its 10-minute lease; the cancel to it fails at every try before that.
     for (let i = 0; i < 2; i++) {
       await tick(5 * MIN);
-      await inRepo(repo, (r: RepoDO) => r.alarm());
+      await inspect((r) => r.alarm());
     }
     // a was evicted at its deadline though its cancel never arrived; b owns the group.
     expect((await groupRow())?.owner_run).toBe(b);

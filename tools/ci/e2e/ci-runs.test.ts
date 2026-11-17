@@ -49,14 +49,14 @@ async function seamCall<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function startRun(): Promise<string> {
+async function startRun(source = WORKFLOW): Promise<string> {
   const started = await seamCall<{ runId: string; answer: { ok: boolean } }>("/start", {
     repoId,
     sha,
     ref: "refs/heads/main",
     event: "push",
     actor: owner.id,
-    workflow: { path: ".github/workflows/ci.yml", source: WORKFLOW },
+    workflow: { path: ".github/workflows/ci.yml", source },
     github: { ref: "refs/heads/main", event_name: "push" },
   });
   expect(started.answer.ok).toBe(true);
@@ -97,6 +97,38 @@ afterAll(async () => {
 });
 
 describe("a CI run through the public operations", () => {
+  it("promotes a waiting run through the coordinator after the owner finishes", async () => {
+    const source = `concurrency: deploy\n${WORKFLOW}`;
+    const first = await startRun(source);
+    await eventually("owner job queued", async () =>
+      (await jobsOf(first)).jobs.find((job) => job.name === "a" && job.status === "queued"),
+    );
+    const second = await startRun(source);
+    const pending = await eventually("second run pending", async () => {
+      const run = await owner.api.call("actions.runs.get", {
+        owner: owner.handle,
+        repo: REPO,
+        run_id: second,
+      });
+      return run.status === "pending" ? run : undefined;
+    });
+    expect(pending.status).toBe("pending");
+    expect((await jobsOf(second)).jobs).toEqual([]);
+    await runJob(first, "a", "success");
+    await runJob(first, "b", "success");
+    await runJob(second, "a", "success");
+    await runJob(second, "b", "success");
+    const completed = await eventually("promoted run completed", async () => {
+      const run = await owner.api.call("actions.runs.get", {
+        owner: owner.handle,
+        repo: REPO,
+        run_id: second,
+      });
+      return run.status === "completed" ? run : undefined;
+    });
+    expect(completed.conclusion).toBe("success");
+  });
+
   it("runs its jobs as their needs end, re-runs as a new attempt, and cancels", async () => {
     const runId = await startRun();
     const run = await owner.api.call("actions.runs.get", {

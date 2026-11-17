@@ -8,9 +8,8 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { startRun } from "../src/ci/runs.js";
-import type { RepoDO } from "../src/do/RepoDO.js";
 import type { AssignAnswer } from "../src/do/RunDO.js";
-import { inRepo } from "./helpers/repo-git.js";
+import { inConcurrency } from "./helpers/concurrency.js";
 import {
   advance,
   assignNamed,
@@ -36,11 +35,53 @@ const grouped = (cancel = false) =>
 
 /** Delivers the repository's due concurrency signals and runs what they wake in each run. */
 async function settle(f: Fixture, runIds: string[]) {
-  await inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) => r.alarm());
+  await inConcurrency(f.repo.id, (r) => r.alarm());
   for (const runId of runIds) await drain(runId);
 }
 
 describe("runs in one concurrency group", () => {
+  it("recreates a pending scope when its repository receipt is missing", async () => {
+    const f = await repoWithCommit();
+    const first = await started(f, grouped());
+    const second = await started(f, grouped());
+    const repo = env.REPO.getByName(f.repo.id);
+    await inConcurrency(f.repo.id, (r) => {
+      r.context.storage.transactionSync(() => {
+        r.context.storage.sql.exec("DELETE FROM concurrency_receipts WHERE run_id = ?", second);
+        r.context.storage.sql.exec("DELETE FROM concurrency_signals WHERE run_id = ?", second);
+        r.context.storage.sql.exec(
+          `UPDATE concurrency_groups SET pending_run = NULL, pending_key = NULL,
+             pending_since = NULL, pending_hold_ms = NULL WHERE pending_run = ?`,
+          second,
+        );
+      });
+    });
+    let clock = T0 + 3 * 60_000;
+    await at(second, clock);
+    await inRun(second, async (run) => {
+      (run.context as { now: () => number }).now = () => clock;
+      run.hooks = {
+        afterRepoCall: (op) => {
+          if (op === "concurrencyStatus") clock += 60_000;
+        },
+      };
+      try {
+        await run.alarm();
+      } finally {
+        run.hooks = {};
+      }
+    });
+    expect(await inRun(second, (run) => run.engine.owner("a1")?.state)).toBe("admitting");
+    await at(second, clock);
+    await drain(second);
+    expect(
+      (await repo.concurrencyStatus([{ group: "deploy", runId: second, ownerKey: "a1" }]))[0],
+    ).toMatchObject({ outcome: "pending" });
+    await finish(first, "a");
+    await settle(f, [first, second]);
+    expect(await runStub(second).get()).toMatchObject({ status: "in_progress" });
+  });
+
   it("keeps the second pending until the first releases, then starts it", async () => {
     const f = await repoWithCommit();
     const first = await started(f, grouped());
@@ -241,8 +282,8 @@ describe("grants", () => {
     await drain(runId);
     expect((await jobNamed(runId, "b")).status).toBe("blocked");
     await advance(runId, 60_000);
-    const group = await inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) =>
-      r.git.context.storage.sql
+    const group = await inConcurrency(f.repo.id, (r) =>
+      r.context.storage.sql
         .exec("SELECT * FROM concurrency_groups WHERE group_key = 'other'")
         .toArray(),
     );
@@ -273,8 +314,8 @@ describe("grants", () => {
       status: "completed",
       conclusion: "cancelled",
     });
-    const group = await inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) =>
-      r.git.context.storage.sql.exec("SELECT * FROM concurrency_groups").toArray(),
+    const group = await inConcurrency(f.repo.id, (r) =>
+      r.context.storage.sql.exec("SELECT * FROM concurrency_groups").toArray(),
     );
     expect(group).toEqual([]);
     // A new run is admitted at once.

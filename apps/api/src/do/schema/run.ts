@@ -20,7 +20,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   state and revision against what the repository acknowledged.
  * - `run_owners`: the concurrency scopes the run holds or waits for.
  * - `run_faults`: background work that exhausted its attempts, shown on the run.
- * - `run_erasure`: present once the run was erased; then nothing else is.
+ * - `run_erasure`: present once the run was erased; only its identity remains.
+ * - `run_identity`: the immutable repository and spec reservation, made before registration.
  * - `jobs`: this object's background work (the same table the repository
  *   objects use, so the same job queue runs it).
  */
@@ -185,6 +186,19 @@ export const runSchema: readonly DoMigration[] = [
         updated_at INTEGER NOT NULL
       ) STRICT;
       CREATE INDEX jobs_due ON jobs (state, next_run_at);
+    `,
+  },
+  {
+    version: 2,
+    name: "run_identity",
+    sql: `
+      CREATE TABLE run_identity (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        repo_id TEXT NOT NULL,
+        spec_digest TEXT
+      ) STRICT;
+      INSERT INTO run_identity (id, repo_id, spec_digest)
+        SELECT id, repo_id, spec_digest FROM runs;
     `,
   },
 ];

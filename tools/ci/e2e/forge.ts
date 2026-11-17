@@ -20,6 +20,7 @@ import {
   type OutputOf,
 } from "@fyrden/sdk";
 import { expect } from "vitest";
+import { auxiliaryApiConfig } from "./auxiliary-api-config.js";
 import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 
 const root = resolve(import.meta.dirname, "../../..");
@@ -140,11 +141,14 @@ export async function startForge(
     }
   };
   try {
+    const devConfig = options.primary
+      ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile)
+      : apiConfig;
     server = await startWranglerDev({
       args: [
         ...(options.primary ? ["-c", options.primary] : []),
         "-c",
-        apiConfig,
+        devConfig,
         "--persist-to",
         persist,
         "--env-file",

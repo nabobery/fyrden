@@ -83,7 +83,7 @@ describe("faults", () => {
       r.hooks = {
         beforeRepoCall: async () => {
           calls++;
-          if (calls === 10) await r.erase();
+          if (calls === 10) await r.erase(f.repo.id);
           throw new Error("outage");
         },
       };
@@ -345,7 +345,7 @@ describe("the repository's record of a run", () => {
     const f = await repoWithCommit();
     const runId = await finishedRun(f);
     await inRun(runId, (r) => {
-      r.hooks = { afterRepoCall: () => r.erase() };
+      r.hooks = { afterRepoCall: () => r.erase(f.repo.id).then(() => {}) };
     });
     await advance(runId, WEEK);
     const left = await inRun(runId, (r) => ({
