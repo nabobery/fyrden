@@ -1,0 +1,19 @@
+# A workflow_payload gitea/runner v6.0.0 and v5.4.1 accepted and ran (job outputs, GITHUB_OUTPUT).
+# Copied unchanged below this header from the runner protocol spike (2026-11-12).
+name: probe
+"on": push
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    outputs:
+      answer: ${{ steps.hello.outputs.out }}
+    steps:
+      - name: hello
+        id: hello
+        run: |
+          echo "hello from probe"
+          env | grep -E '^(ACTIONS_|GITHUB_SERVER_URL|GITHUB_API_URL|GITEA_|GITHUB_RUN_ID|GITHUB_JOB|GITHUB_ACTIONS|RUNNER_)' | sed -E 's/(TOKEN=.{0,16}).*/\1.../' | sort
+          echo "out=42" >> "$GITHUB_OUTPUT"
+      - name: count
+        run: for i in $(seq 1 30); do echo "line $i"; done

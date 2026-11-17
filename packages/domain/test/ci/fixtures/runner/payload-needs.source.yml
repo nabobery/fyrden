@@ -1,0 +1,16 @@
+# The workflow file payload-needs.yml was written from.
+# Copied unchanged below this header from the runner protocol spike (2026-11-12).
+name: needs
+"on": push
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    needs: [prep]
+    steps:
+      - run: |
+          echo "prep result=${{ needs.prep.result }} out=${{ needs.prep.outputs.version }}"
+          echo "var=${{ vars.PROBE_VAR }} secret-len=${#S}"
+        env:
+          S: ${{ secrets.PROBE_SECRET }}
+      - run: echo "masked? ${{ secrets.PROBE_SECRET }}"
