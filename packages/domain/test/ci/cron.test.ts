@@ -272,7 +272,11 @@ describe("cronNext: properties", () => {
         expect(cronMatches(cron, next)).toBe(true);
         const first = Math.floor(t / MINUTE) * MINUTE + MINUTE;
         const end = Math.min(next, first + WINDOW * MINUTE);
-        for (let m = first; m < end; m += MINUTE) expect(specMatches(spec, m)).toBe(false);
+        let earlier: number | null = null;
+        for (let m = first; m < end && earlier === null; m += MINUTE) {
+          if (specMatches(spec, m)) earlier = m;
+        }
+        expect(earlier).toBeNull();
       }),
       { numRuns: 300 },
     );
