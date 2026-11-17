@@ -35,13 +35,15 @@ export type AssignTaskAnswer =
       /**
        * `wrong_account`: the runner's account no longer owns the run's repository (it moved);
        * `repo_transferring`: the repository is being transferred; `released`: the offer was
-       * given up by its poll before the assignment could be recorded.
+       * given up by its poll before the assignment could be recorded; `confirmed`: a report
+       * made the stale offer no longer replayable.
        */
       readonly refused:
         | Extract<AssignAnswer, { ok: false }>["code"]
         | "wrong_account"
         | "repo_transferring"
-        | "released";
+        | "released"
+        | "confirmed";
     };
 
 /** What `reportTask` answers: an encoded UpdateTaskResponse, or a Connect error. */
@@ -67,6 +69,7 @@ export interface DispatchHooks {
   beforeTaskRecord?: () => Promise<void> | void;
   /** After a job token is minted and mapped to its task, before liveness is checked again. */
   afterMint?: (token: string) => Promise<void> | void;
+  beforeTokenRotation?: () => Promise<void> | void;
   /** When a report arrives, before anything is decoded or written. */
   beforeReport?: () => Promise<void> | void;
   /** On every liveness question about a task. */
@@ -154,11 +157,10 @@ export class RunDispatch {
   // ---------------------------------------------------------------- assignment
 
   /**
-   * Assigns job `jobId` as wire task `wireId` (idempotent: the same wire id
-   * gets the same task while it lives), records the map, mints the task's job
-   * token (revoking any earlier one of the same wire id, a lost answer's) and
-   * returns the encoded `Task`. A token minted while the task ended is
-   * revoked before the answer.
+   * Assigns a job and returns its encoded task. Replaying an unconfirmed
+   * offer rotates its job token. A confirmed offer is refused without
+   * changing the active token. A token minted after confirmation or task
+   * completion is revoked before the answer.
    */
   async assignTask(
     wireId: number,
@@ -197,17 +199,22 @@ export class RunDispatch {
     );
     await host.hooks.beforeTaskRecord?.();
     const db = host.env.DIRECTORY;
-    this.#count("ci_task_assigned", 2);
-    const [recorded, earlier] = await db.batch([
+    this.#count("ci_task_assigned", 3);
+    const [recorded, earlier, offer] = await db.batch([
       // Only on an offer still standing: one given up at its poll's deadline is not assigned
       // (that release and this write exclude each other through `superseded_at` and `task`).
       db
-        .prepare("UPDATE ci_tasks SET task = ? WHERE id = ? AND superseded_at IS NULL")
+        .prepare(
+          "UPDATE ci_tasks SET task = ? WHERE id = ? AND superseded_at IS NULL AND confirmed_at IS NULL",
+        )
         .bind(ref.task, wireId),
       db.prepare("SELECT token_id FROM ci_job_tokens WHERE task_id = ?").bind(wireId),
+      db.prepare("SELECT confirmed_at FROM ci_tasks WHERE id = ?").bind(wireId),
     ]);
-    // The instance was assigned but no runner will run it: run-state's heartbeat deadline ends it.
-    if ((recorded?.meta.changes ?? 0) === 0) return { refused: "released" };
+    if ((recorded?.meta.changes ?? 0) === 0) {
+      const row = offer?.results[0] as { confirmed_at: number | null } | undefined;
+      return { refused: row && row.confirmed_at !== null ? "confirmed" : "released" };
+    }
     const previous = ((earlier?.results ?? []) as { token_id: string }[]).map((r) => r.token_id);
 
     const store = this.#store();
@@ -224,7 +231,28 @@ export class RunDispatch {
       .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
       .bind(minted.id, wireId, host.now())
       .run();
-    for (const id of previous) await store.revoke(id, { actorId: null });
+    await host.hooks.beforeTokenRotation?.();
+    const eligible = `id IN (SELECT value FROM json_each(?1)) AND revoked_at IS NULL
+      AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?2 AND confirmed_at IS NULL)`;
+    const at = host.now();
+    this.#count("ci_job_token_rotate", 3);
+    const [, , rotated] = await db.batch([
+      db
+        .prepare(
+          `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?3, NULL, NULL, 'token.revoke', id, NULL, NULL FROM tokens WHERE ${eligible}`,
+        )
+        .bind(JSON.stringify(previous), wireId, at),
+      db
+        .prepare(`UPDATE tokens SET revoked_at = ?3 WHERE ${eligible}`)
+        .bind(JSON.stringify(previous), wireId, at),
+      db.prepare("SELECT confirmed_at FROM ci_tasks WHERE id = ?").bind(wireId),
+    ]);
+    const state = rotated?.results[0] as { confirmed_at: number | null } | undefined;
+    if (!state || state.confirmed_at !== null) {
+      await store.revoke(minted.id, { actorId: null });
+      return { refused: state ? "confirmed" : "released" };
+    }
     await host.hooks.afterMint?.(minted.token);
     // The task may have ended while the token was minted: such a token is never handed out.
     if (!host.taskLive(ref)) {

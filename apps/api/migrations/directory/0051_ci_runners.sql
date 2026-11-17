@@ -34,6 +34,7 @@ CREATE TABLE ci_pending_jobs (
   UNIQUE (run_id, job_id)                -- job ids are never reused in a run
 ) STRICT;
 CREATE INDEX ci_pending_account ON ci_pending_jobs (account_id, id);
+CREATE INDEX ci_pending_nonce ON ci_pending_jobs (claim_nonce) WHERE claim_nonce IS NOT NULL;
 CREATE INDEX ci_pending_claims ON ci_pending_jobs (account_id, claim_until) WHERE claim_until IS NOT NULL;
 
 -- Tasks offered to runners; `id` is the task id the runner protocol carries.

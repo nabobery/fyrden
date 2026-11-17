@@ -844,6 +844,9 @@ CREATE INDEX ci_pending_account ON ci_pending_jobs (account_id, id);
 -- index ci_pending_claims
 CREATE INDEX ci_pending_claims ON ci_pending_jobs (account_id, claim_until) WHERE claim_until IS NOT NULL;
 
+-- index ci_pending_nonce
+CREATE INDEX ci_pending_nonce ON ci_pending_jobs (claim_nonce) WHERE claim_nonce IS NOT NULL;
+
 -- index ci_runners_account
 CREATE INDEX ci_runners_account ON ci_runners (account_id, id);
 

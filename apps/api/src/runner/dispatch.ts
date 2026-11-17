@@ -80,6 +80,7 @@ export async function dispatchTask(
       call.log.info("task offered again", { taskId: offered.id, runId: offered.runId });
       return answer(assigned.task, requestVersion);
     }
+    if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
     await refuseTask(
       db,
       {

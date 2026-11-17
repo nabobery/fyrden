@@ -524,6 +524,42 @@ describe("a lost answer", () => {
     expect(tokens[0]?.revoked_at).toBeNull();
   });
 
+  it.each(["beforeTaskRecord", "beforeTokenRotation"] as const)(
+    "keeps the active token when confirmation interleaves at %s",
+    async (hook) => {
+      const f = await orgRepo();
+      const runner = await registerRunner(f.org.login, f.owner);
+      const version = await primed(f);
+      const runId = await started(f, one);
+      const first = (await fetchTask(runner, version)).task;
+      if (!first) throw new Error("no task");
+      const held = gate();
+      await inRun(runId, (r) => {
+        r.hooks = { [hook]: () => held.hold() };
+      });
+      const replaying = fetchTask(runner, version);
+      await held.started;
+      try {
+        await updateTask(runner, first.id);
+        expect((await taskRow(first.id))?.confirmed_at).not.toBeNull();
+      } finally {
+        held.release();
+      }
+      expect((await replaying).task).toBeUndefined();
+      expect(await taskRow(first.id)).toMatchObject({ superseded_at: null, ended_at: null });
+      const tokens = await jobTokensOf(first.id);
+      expect(tokens[0]?.revoked_at).toBeNull();
+      const audit = await env.DIRECTORY.prepare(
+        "SELECT COUNT(*) AS n FROM audit_log WHERE action = 'token.revoke' AND target_id = ?",
+      )
+        .bind(tokens[0]?.id ?? "")
+        .first<{ n: number }>();
+      expect(audit?.n).toBe(0);
+      expect((await uploadPack(f, jobTokenOf(first))).status).toBe(200);
+      expect(tokens.slice(1).every((t) => t.revoked_at !== null)).toBe(true);
+    },
+  );
+
   it("after its task completed: the assignment answers task_finished, the row ends, and the poll searches as usual", async () => {
     const f = await orgRepo();
     const runner = await registerRunner(f.org.login, f.owner);
@@ -1015,6 +1051,51 @@ describe("a job token", () => {
       };
     });
     const res = await uploadPack(f, jobTokenOf(task));
+    expect(res.status).toBe(503);
+    expect(await text(res)).not.toContain("packfile");
+  });
+
+  it("answers 503 with no pack data when the task mapping lookup fails", async () => {
+    const f = await orgRepo();
+    await started(f, one);
+    const runner = await registerRunner(f.org.login, f.owner);
+    const task = (await fetchTask(runner, 0)).task;
+    if (!task) throw new Error("no task");
+    const database = new Proxy(env.DIRECTORY, {
+      get(target, prop) {
+        if (prop === "withSession")
+          return (constraint?: D1SessionConstraint | D1SessionBookmark) => {
+            const session = target.withSession(constraint);
+            return new Proxy(session, {
+              get(source, key) {
+                if (key === "prepare")
+                  return (sql: string) => {
+                    if (sql.includes("FROM ci_job_tokens j JOIN ci_tasks"))
+                      throw new Error("task mapping unavailable");
+                    return source.prepare(sql);
+                  };
+                const value = Reflect.get(source, key);
+                return typeof value === "function" ? value.bind(source) : value;
+              },
+            });
+          };
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const res = await call(
+      `/${f.org.login}/${f.repo.name}.git/git-upload-pack`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-git-upload-pack-request",
+          "Git-Protocol": "version=2",
+          Authorization: basic(jobTokenOf(task)),
+        },
+        body: fetchBody([`want ${f.sha}`, "done"]),
+      },
+      { DIRECTORY: database },
+    );
     expect(res.status).toBe(503);
     expect(await text(res)).not.toContain("packfile");
   });

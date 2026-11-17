@@ -46,3 +46,26 @@ describe("clearing an account's lapsed claims", () => {
     ).toEqual([]);
   });
 });
+
+describe("claim nonce lookup", () => {
+  it.each(["present", "absent"])("uses an index for a %s nonce", async (kind) => {
+    const nonce = crypto.randomUUID();
+    if (kind === "present") {
+      await env.DIRECTORY.prepare(
+        `INSERT INTO ci_pending_jobs (account_id, run_id, job_id, attempt, labels, queued_at, claim_nonce)
+         VALUES (?, ?, 1, 1, '["ubuntu-latest"]', 0, ?)`,
+      )
+        .bind(crypto.randomUUID(), crypto.randomUUID(), nonce)
+        .run();
+    }
+    const details = await plan(
+      "SELECT run_id, job_id, claimed_by FROM ci_pending_jobs WHERE claim_nonce = ?",
+      nonce,
+    );
+    expect(
+      details.some((d) => /USING INDEX ci_pending_nonce/.test(d)),
+      details.join("\n"),
+    ).toBe(true);
+    expect(details.filter((d) => /^SCAN ci_pending_jobs\b/.test(d))).toEqual([]);
+  });
+});

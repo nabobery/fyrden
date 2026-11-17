@@ -15,16 +15,16 @@ export async function jobTokenTask(
   metrics?: Metrics,
 ): Promise<"live" | "ended" | "unavailable"> {
   metrics?.count("d1.query", { db: "directory", op: "ci_job_token_task" });
-  const row = await env.DIRECTORY.withSession("first-primary")
-    .prepare(
-      `SELECT t.run_id, t.job_id, t.task FROM ci_job_tokens j JOIN ci_tasks t ON t.id = j.task_id
-       WHERE j.token_id = ?`,
-    )
-    .bind(tokenId)
-    .first<{ run_id: string; job_id: number; task: number | null }>();
-  if (!row || row.task === null) return "ended";
-  metrics?.count("do.request", { class: "RunDO", method: "taskLive" });
   try {
+    const row = await env.DIRECTORY.withSession("first-primary")
+      .prepare(
+        `SELECT t.run_id, t.job_id, t.task FROM ci_job_tokens j JOIN ci_tasks t ON t.id = j.task_id
+         WHERE j.token_id = ?`,
+      )
+      .bind(tokenId)
+      .first<{ run_id: string; job_id: number; task: number | null }>();
+    if (!row || row.task === null) return "ended";
+    metrics?.count("do.request", { class: "RunDO", method: "taskLive" });
     const live = await env.RUN.getByName(row.run_id).taskLive({
       jobId: row.job_id,
       task: row.task,

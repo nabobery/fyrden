@@ -27,6 +27,7 @@ export const RUNNER_PATHS: readonly string[] = [
   // the API Worker's config, and the locked dependencies (wrangler among them).
   "tools/ci/e2e/wrangler-dev.ts",
   "tools/ci/e2e/forge.ts",
+  "tools/ci/e2e/auxiliary-api-config.ts",
   "tools/ci/e2e/fixtures/run-seam/",
   "apps/api/wrangler.jsonc",
   "pnpm-lock.yaml",

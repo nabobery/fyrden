@@ -35,6 +35,7 @@ describe("selectRunner", () => {
       "tools/ci/runner/runner.test.ts",
       "tools/ci/e2e/fixtures/run-seam/worker.js",
       "tools/ci/e2e/forge.ts",
+      "tools/ci/e2e/auxiliary-api-config.ts",
       "tools/ci/e2e/wrangler-dev.ts",
       "tools/ci/vitest.runner.config.ts",
       "tools/ci/package.json",
