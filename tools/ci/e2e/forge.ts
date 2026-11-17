@@ -1,14 +1,16 @@
 // What the pull request end-to-end tests share: fyrden-api under `wrangler
 // dev` (its own state in a temporary directory, the cron run on request),
 // accounts made through the admin API, a typed REST client, an MCP client,
-// stock git with no user or system config, and bounded polling for what the
-// server does in the background (alarms, queues).
+// stock git with no user or system config, bounded polling for what the
+// server does in the background (alarms, queues), and reads of its local
+// state where no operation shows what a test checks.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { mentionsToken } from "@fyrden/domain";
 import {
   createDpopKey,
@@ -91,6 +93,12 @@ export interface Forge {
   client(token: string, dpop?: DpopKey): FyrdenClient;
   /** Runs the Worker's cron once, as the platform would on `schedule`. */
   cron(schedule: string): Promise<void>;
+  /**
+   * Runs one statement on the local D1 database `database` (`wrangler d1
+   * execute --local`, beside the running server): its result rows. For
+   * state no operation sets, such as a repository's visibility.
+   */
+  d1(database: "DIRECTORY", sql: string): Promise<Record<string, unknown>[]>;
   /** What the servers printed so far: the Workers' logs and wrangler's access log. */
   output(): string;
   /** Stops the server; fails if its output (the Worker's logs, the access log) shows a token. */
@@ -209,6 +217,27 @@ export async function startForge(
         });
         expect(res.status).toBe(200);
       },
+      async d1(database, sql) {
+        const executed = await run(
+          process.execPath,
+          [
+            wranglerBin,
+            "d1",
+            "execute",
+            database,
+            "--local",
+            "--persist-to",
+            persist,
+            "--json",
+            "--command",
+            sql,
+          ],
+          { cwd: apiDir, env: { NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" } },
+        );
+        expect(executed.code, executed.stdout + executed.stderr).toBe(0);
+        const [result] = JSON.parse(executed.stdout) as { results: Record<string, unknown>[] }[];
+        return result?.results ?? [];
+      },
       output: () => output,
       stop,
     };
@@ -216,6 +245,134 @@ export async function startForge(
     await stop().catch(() => undefined);
     throw error;
   }
+}
+
+/** A run as its run object stores it in the forge's local state. */
+export interface StoredRun {
+  readonly runId: string;
+  readonly repoId: string;
+  readonly sha: string;
+  readonly ref: string;
+  readonly event: string;
+  /** The workflow file. */
+  readonly path: string;
+  readonly createdAt: number;
+  /** The `github` context the run's jobs get. */
+  readonly github: Record<string, unknown> & { readonly event: Record<string, unknown> };
+  /** The `inputs` context (typed dispatch inputs). */
+  readonly inputs: Record<string, unknown>;
+}
+
+/**
+ * What `read` answers for each run object's SQLite database in the forge's
+ * local state (undefined left out). A run object still applying its schema
+ * has no tables yet and is left out too, so a caller asks again.
+ */
+async function readRunObjects<T>(
+  forge: Forge,
+  read: (db: DatabaseSync) => T | undefined,
+): Promise<T[]> {
+  const dir = join(forge.scratch, "state", "v3", "do", "fyrden-api-RunDO");
+  const files = await readdir(dir).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const out: T[] = [];
+  for (const file of files.filter((f) => f.endsWith(".sqlite"))) {
+    // Waits out the server's write lock rather than skipping a run being written.
+    const db = new DatabaseSync(join(dir, file), { readOnly: true, timeout: 10_000 });
+    try {
+      const value = read(db);
+      if (value !== undefined) out.push(value);
+    } catch (error) {
+      if (!/no such table: runs/.test(String(error))) throw error;
+    } finally {
+      db.close();
+    }
+  }
+  return out;
+}
+
+/**
+ * The runs of repository `repoId` in the forge's local state, oldest first,
+ * each read from its run object's SQLite database: no operation lists a
+ * repository's runs, so a run a trigger started is found here. A run object
+ * whose run is not written yet is left out, so a caller asks again.
+ */
+export async function storedRuns(forge: Forge, repoId: string): Promise<StoredRun[]> {
+  const runs = await readRunObjects(forge, (db): StoredRun | undefined => {
+    const row = db
+      .prepare(
+        `SELECT run_id, repo_id, sha, ref, event, workflow_path, created_at, contexts
+         FROM runs WHERE repo_id = ?`,
+      )
+      .get(repoId) as
+      | {
+          run_id: string;
+          repo_id: string;
+          sha: string;
+          ref: string;
+          event: string;
+          workflow_path: string;
+          created_at: number;
+          contexts: string;
+        }
+      | undefined;
+    if (!row) return undefined;
+    const contexts = JSON.parse(row.contexts) as Pick<StoredRun, "github" | "inputs">;
+    return {
+      runId: row.run_id,
+      repoId: row.repo_id,
+      sha: row.sha,
+      ref: row.ref,
+      event: row.event,
+      path: row.workflow_path,
+      createdAt: row.created_at,
+      github: contexts.github,
+      inputs: contexts.inputs,
+    };
+  });
+  return runs.sort((a, b) => a.createdAt - b.createdAt || a.runId.localeCompare(b.runId));
+}
+
+/**
+ * Where a run stands inside its run object, which the operations do not
+ * show as stored (a run waiting for approval reads as completed there):
+ * its current attempt's status, that attempt's jobs, and its approval.
+ */
+export interface StoredRunState {
+  readonly attempt: { readonly attempt: number; readonly status: string };
+  /** The current attempt's jobs, by job id; none before the attempt is admitted. */
+  readonly jobs: readonly { readonly job: string; readonly status: string }[];
+  readonly approval: { readonly state: string; readonly decided_by: string | null } | null;
+}
+
+/** Run `runId`'s state as its run object stores it; undefined until the run is written. */
+export async function storedRunState(
+  forge: Forge,
+  runId: string,
+): Promise<StoredRunState | undefined> {
+  const [state] = await readRunObjects(forge, (db): StoredRunState | undefined => {
+    const run = db.prepare("SELECT run_id, attempt FROM runs").get() as
+      | { run_id: string; attempt: number }
+      | undefined;
+    if (run?.run_id !== runId) return undefined;
+    const attempt = db
+      .prepare("SELECT attempt, status FROM run_attempts WHERE attempt = ?")
+      .get(run.attempt) as { attempt: number; status: string };
+    const jobs = db
+      .prepare("SELECT job_key AS job, status FROM run_instances WHERE attempt = ? ORDER BY job_id")
+      .all(run.attempt) as { job: string; status: string }[];
+    const approval = db.prepare("SELECT state, decided_by FROM run_approval").get() as
+      | { state: string; decided_by: string | null }
+      | undefined;
+    return {
+      attempt: { ...attempt },
+      jobs: jobs.map((j) => ({ ...j })),
+      approval: approval ? { ...approval } : null,
+    };
+  });
+  return state;
 }
 
 /**

@@ -384,15 +384,38 @@ describe("scheduled workflows", () => {
     ]);
   });
 
-  it("refuse a test tick in the future, and run one that is due", async () => {
-    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
-    f.clock.now = f.base + 10_000;
-    expect(await f.stub.ciScheduleTick(f.clock.now + MINUTE)).toEqual({
-      ok: false,
-      code: "at_in_future",
+  it("fire a test tick ahead of the repository's clock: the ticks due then, and nothing else", async () => {
+    const LATER = ".github/workflows/later.yml";
+    const f = await scheduleRepo({
+      [CI]: scheduled(["*/5 * * * *"]),
+      [LATER]: scheduled(["10 * * * *"], "later"),
     });
-    expect(await f.stub.ciScheduleTick(f.clock.now)).toMatchObject({ ok: true });
-    expect(await scheduleRuns(f)).toHaveLength(1);
+    // The clock is held a minute before `base`, the five-minute entry's first tick.
+    expect(f.clock.now).toBe(f.base - MINUTE);
+    expect(await f.stub.ciScheduleTick(f.base)).toEqual({ ok: true });
+    expect(await scheduleRuns(f)).toMatchObject([{ workflow_path: CI, tick: f.base }]);
+    expect(
+      (await rowsOf(f)).map((r) => [r.workflow_path, r.next_at, r.last_fired_at, r.disabled]),
+    ).toEqual([
+      [LATER, f.base + 10 * MINUTE, null, null],
+      [CI, f.base + 5 * MINUTE, f.base, null],
+    ]);
+  });
+
+  it("refuse a test tick while the cutoff is ahead of the repository's clock, changing nothing", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const before = await rowsOf(f);
+    await setVar(f.stub, "FYRDEN_CI_SINCE", String(f.clock.now + 4 * MINUTE));
+    try {
+      expect(await f.stub.ciScheduleTick(f.base + 120 * MINUTE)).toEqual({
+        ok: false,
+        code: "cutoff_ahead",
+      });
+      expect(await rowsOf(f)).toEqual(before);
+      expect(await scheduleRuns(f)).toEqual([]);
+    } finally {
+      await setVar(f.stub, "FYRDEN_CI_SINCE", undefined);
+    }
   });
 
   it("never let an older push's refresh, retried late, overwrite a newer one's", async () => {

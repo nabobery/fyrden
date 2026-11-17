@@ -165,7 +165,9 @@ export default {
       return sealedCall(request, env, url.pathname);
     if (url.pathname === UPDATE_LOG && request.method === "POST")
       return recordUpdateLog(request, env);
-    // A schedule tick for the evidence run: body `{ repoId, at }` (`at` no later than now).
+    // A schedule tick through `RepoDO.ciScheduleTick`, which no route of fyrden-api reaches:
+    // body `{ repoId, at }`, `at` by default now and possibly later than the repository's
+    // clock, to fire a tick the repository's alarm has not reached.
     if (url.pathname === "/__runs/schedule-tick" && request.method === "POST") {
       const { repoId, at } = await request.json();
       return json(await env.REPO.getByName(repoId).ciScheduleTick(at ?? Date.now()));

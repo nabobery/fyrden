@@ -2603,15 +2603,21 @@ export class RepoDO extends MigratingDO {
 
   /**
    * For tests and the evidence run only (no route of fyrden-api reaches
-   * it): fires the schedule entries due at `at`, which may not be later
-   * than this object's clock, then decides the inbox as the alarm would.
+   * it): fires the schedule entries due at `at`, then decides the inbox as
+   * the alarm would. `at` may be later than this object's clock, so a test
+   * fires a tick the alarm has not reached. Refused while the CI cutoff is
+   * ahead of the clock: the tick's event would carry the clock's time, be
+   * closed as before the cutoff, and its occurrence be lost.
    */
   ciScheduleTick(
     at: number,
-  ): Promise<{ ok: true } | { ok: false; code: "at_in_future" | "ci_off" }> {
+  ): Promise<{ ok: true } | { ok: false; code: "ci_off" | "cutoff_ahead" }> {
     return this.#measured("ciScheduleTick", async () => {
-      if (at > this.git.context.now()) return { ok: false, code: "at_in_future" };
       if (!runnersOn(this.env)) return { ok: false, code: "ci_off" };
+      const since = this.#ciSince();
+      if (since !== null && since > this.git.context.now()) {
+        return { ok: false, code: "cutoff_ahead" };
+      }
       await this.ciSchedules.fire(at);
       await this.git.jobs.runJob(
         CI_TRIGGERS_JOB,
