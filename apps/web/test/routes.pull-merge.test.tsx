@@ -338,3 +338,147 @@ describe("reviewing, merging and updating the branch", () => {
     });
   });
 });
+
+describe("the required status checks of a merge", () => {
+  const requiring = (strict: boolean) =>
+    ruleset({
+      name: "main needs CI",
+      rules: [
+        {
+          type: "required_status_checks",
+          parameters: {
+            required_status_checks: [{ context: "ci/build" }],
+            strict_required_status_checks_policy: strict,
+            do_not_enforce_on_create: false,
+          },
+        },
+      ],
+    });
+
+  it("count among the rulesets, and ask the head up to date when strict", () => {
+    expect(mergeRules([requiring(true)], "main", "main")).toMatchObject({
+      upToDate: true,
+      rulesets: ["main needs CI"],
+    });
+    expect(mergeRules([requiring(false)], "main", "main")).toMatchObject({
+      upToDate: false,
+      rulesets: ["main needs CI"],
+    });
+  });
+
+  const blocking = {
+    head_sha: HEAD,
+    strict: true,
+    blocking: true,
+    checks: [
+      {
+        context: "ci/build",
+        integration_id: null,
+        state: "passed",
+        rulesets: ["main needs CI"],
+        deciding: [
+          { kind: "status", source: "usr_1", state: "passed", details_url: "https://ci.example/1" },
+        ],
+      },
+      {
+        context: "test",
+        integration_id: "ci",
+        state: "pending",
+        rulesets: ["main needs CI"],
+        deciding: [{ kind: "check", source: "ci", state: "pending", details_url: null }],
+      },
+      {
+        context: "lint",
+        integration_id: null,
+        state: "failing",
+        rulesets: ["main needs CI"],
+        deciding: [{ kind: "status", source: "usr_1", state: "failing", details_url: null }],
+      },
+      {
+        context: "docs",
+        integration_id: null,
+        state: "expected",
+        rulesets: ["main needs CI"],
+        deciding: [],
+      },
+    ],
+  };
+
+  const loaded = async (requiredChecks: () => Response) => {
+    const { context, calls } = api({
+      "GET /api/repos/ada/demo/pulls/7": () => json(pullRequest()),
+      "GET /api/repos/ada/demo/issues/7/comments": () => json({ comments: [], next_cursor: null }),
+      "GET /api/repos/ada/demo/pulls/7/reviews": () => json({ reviews: [], next_cursor: null }),
+      "GET /api/repos/ada/demo": () => json(repo),
+      "GET /api/repos/ada/demo/rulesets": () => json({ rulesets: [requiring(true)] }),
+      "GET /api/repos/ada/demo/pulls/7/required-checks": requiredChecks,
+    });
+    const data = await loader({
+      request: new Request(`${ORIGIN}/ada/demo/pull/7`, {
+        headers: { Cookie: "__Host-fyrden_session=s" },
+      }),
+      context,
+      params,
+    } as never);
+    return { data, calls };
+  };
+
+  it("are read for an open pull request and listed, each with where it stands", async () => {
+    const { data, calls } = await loaded(() => json(blocking));
+    expect(calls.some((c) => pathOf(c).endsWith("/pulls/7/required-checks"))).toBe(true);
+    expect(data.requiredChecks).toEqual(blocking);
+    // Text React renders in pieces reads as one.
+    const html = renderPage(Pull, "/ada/demo/pull/7", data).replaceAll("<!-- -->", "");
+    expect(html).toContain("Required checks");
+    // A list to assistive technology even without its markers.
+    expect(html).toMatch(/<ul role="list" aria-labelledby="[^"]+-title">/);
+    expect(html).toContain("3 required checks have not passed.");
+    expect(html).toContain("Merging needs them to pass, or permission to bypass the ruleset.");
+    for (const [name, words] of [
+      ["ci/build", "Passed"],
+      ["test", "Pending"],
+      ["lint", "Failing"],
+      ["docs", "Expected"],
+    ])
+      expect(html).toMatch(new RegExp(`${words}</span>.*<code>${name}</code>`, "s"));
+    expect(html).toContain("from <code>ci</code>");
+    expect(html).toContain('href="https://ci.example/1"');
+    // The server decides: a role that bypasses the ruleset may still merge.
+    expect(html).toMatch(/<button type="submit" class="primary">Merge pull request/);
+  });
+
+  it("say so when every required check passed", async () => {
+    const { data } = await loaded(() =>
+      json({
+        ...blocking,
+        blocking: false,
+        checks: [blocking.checks[0]],
+      }),
+    );
+    const html = renderPage(Pull, "/ada/demo/pull/7", data);
+    expect(html).toContain("All required checks passed.");
+    expect(html).not.toContain("have not passed");
+  });
+
+  it("are left out when they were judged on another head than the page shows", async () => {
+    const { data } = await loaded(() =>
+      json({
+        ...blocking,
+        head_sha: "c".repeat(40),
+        blocking: false,
+        checks: [blocking.checks[0]],
+      }),
+    );
+    expect(data.requiredChecks).toBeNull();
+    const html = renderPage(Pull, "/ada/demo/pull/7", data);
+    expect(html).not.toContain("All required checks passed.");
+    expect(html).toContain("The required checks of this head could not be read");
+  });
+
+  it("are left out, saying so, when they cannot be read", async () => {
+    const { data } = await loaded(() => json({ code: "missing_permission", detail: "No." }, 403));
+    expect(data.requiredChecks).toBeNull();
+    const html = renderPage(Pull, "/ada/demo/pull/7", data);
+    expect(html).toContain("The required checks of this head could not be read");
+  });
+});

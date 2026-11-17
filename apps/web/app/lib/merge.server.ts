@@ -52,6 +52,10 @@ export function mergeRules(
       } else if (rule.type === "required_signatures") {
         out.signatures = true;
         applies = true;
+      } else if (rule.type === "required_status_checks") {
+        // Strict (GitHub's default) asks what require_up_to_date asks; the checks are read apart.
+        out.upToDate ||= rule.parameters.strict_required_status_checks_policy;
+        applies = true;
       }
     }
     if (applies) out.rulesets.push(ruleset.name);

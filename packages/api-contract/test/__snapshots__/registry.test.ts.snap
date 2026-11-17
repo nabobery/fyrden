@@ -32637,6 +32637,183 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/pulls/{pull_number}/required-checks": {
+      "get": {
+        "description": "Fyrden: the status checks the active rulesets on the pull request's base branch require (\`required_status_checks\`), each judged on its head as a merge judges it: \`passed\` (success, skipped or neutral), \`pending\` (pending, queued, in progress, or a re-run started), \`failing\` (anything else) or \`expected\` (not reported). \`deciding\` lists the statuses and checks that decided each, with their links. \`blocking\` when any has not passed. Who merges plays no part: a role that bypasses a ruleset, or an actor type it leaves out, may merge anyway, and the merge decides. Needs \`statuses:read\` too.",
+        "operationId": "pulls.required_checks.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "pull_number",
+            "required": true,
+            "schema": {
+              "description": "The pull request's number.",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "blocking": {
+                      "description": "A required check has not passed.",
+                      "type": "boolean",
+                    },
+                    "checks": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "context": {
+                            "type": "string",
+                          },
+                          "deciding": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "details_url": {
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "kind": {
+                                  "enum": [
+                                    "status",
+                                    "check",
+                                  ],
+                                  "type": "string",
+                                },
+                                "source": {
+                                  "description": "Who published it: a principal id, or \`ci\`.",
+                                  "type": "string",
+                                },
+                                "state": {
+                                  "enum": [
+                                    "passed",
+                                    "pending",
+                                    "failing",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "kind",
+                                "source",
+                                "state",
+                                "details_url",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                          "integration_id": {
+                            "description": "The publisher it must come from (\`ci\` or a principal id); null for any.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "rulesets": {
+                            "description": "The rulesets requiring it.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "state": {
+                            "enum": [
+                              "passed",
+                              "pending",
+                              "failing",
+                              "expected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "context",
+                          "integration_id",
+                          "state",
+                          "rulesets",
+                          "deciding",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "head_sha": {
+                      "description": "The commit the checks are judged on.",
+                      "type": "string",
+                    },
+                    "strict": {
+                      "description": "A rule also asks the head to contain the base branch's latest commit.",
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "head_sha",
+                    "strict",
+                    "blocking",
+                    "checks",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a pull request's required checks",
+        "x-fyrden-permission": "pull_requests:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/pulls/{pull_number}/reviews": {
       "get": {
         "description": "A pull request's reviews, in the order submitted.",
@@ -37706,102 +37883,178 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           },
                           "rules": {
                             "items": {
-                              "additionalProperties": false,
-                              "properties": {
-                                "parameters": {
+                              "oneOf": [
+                                {
                                   "additionalProperties": false,
-                                  "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
                                   "properties": {
-                                    "allow_agent_approvals": {
-                                      "default": false,
-                                      "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                                      "type": "boolean",
-                                    },
-                                    "allowed_merge_methods": {
-                                      "default": [
-                                        "merge",
-                                        "squash",
-                                        "rebase",
+                                    "parameters": {
+                                      "additionalProperties": false,
+                                      "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                                      "properties": {
+                                        "allow_agent_approvals": {
+                                          "default": false,
+                                          "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                          "type": "boolean",
+                                        },
+                                        "allowed_merge_methods": {
+                                          "default": [
+                                            "merge",
+                                            "squash",
+                                            "rebase",
+                                          ],
+                                          "items": {
+                                            "enum": [
+                                              "merge",
+                                              "squash",
+                                              "rebase",
+                                            ],
+                                            "type": "string",
+                                          },
+                                          "maxItems": 3,
+                                          "minItems": 1,
+                                          "type": "array",
+                                        },
+                                        "dismiss_stale_reviews_on_push": {
+                                          "default": false,
+                                          "description": "A push makes earlier reviews stop counting.",
+                                          "type": "boolean",
+                                        },
+                                        "require_code_owner_review": {
+                                          "default": false,
+                                          "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                          "type": "boolean",
+                                        },
+                                        "require_last_push_approval": {
+                                          "default": false,
+                                          "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                          "type": "boolean",
+                                        },
+                                        "required_approving_review_count": {
+                                          "default": 0,
+                                          "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                          "maximum": 10,
+                                          "minimum": 0,
+                                          "type": "integer",
+                                        },
+                                        "required_review_thread_resolution": {
+                                          "default": false,
+                                          "description": "Every review thread must be resolved.",
+                                          "type": "boolean",
+                                        },
+                                        "required_reviewers": {
+                                          "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                          "items": {
+                                            "not": {},
+                                          },
+                                          "maxItems": 0,
+                                          "type": "array",
+                                        },
+                                      },
+                                      "required": [
+                                        "required_approving_review_count",
+                                        "dismiss_stale_reviews_on_push",
+                                        "require_last_push_approval",
+                                        "required_review_thread_resolution",
+                                        "require_code_owner_review",
+                                        "allowed_merge_methods",
+                                        "allow_agent_approvals",
                                       ],
-                                      "items": {
-                                        "enum": [
-                                          "merge",
-                                          "squash",
-                                          "rebase",
-                                        ],
-                                        "type": "string",
-                                      },
-                                      "maxItems": 3,
-                                      "minItems": 1,
-                                      "type": "array",
+                                      "type": "object",
                                     },
-                                    "dismiss_stale_reviews_on_push": {
-                                      "default": false,
-                                      "description": "A push makes earlier reviews stop counting.",
-                                      "type": "boolean",
-                                    },
-                                    "require_code_owner_review": {
-                                      "default": false,
-                                      "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                                      "type": "boolean",
-                                    },
-                                    "require_last_push_approval": {
-                                      "default": false,
-                                      "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                                      "type": "boolean",
-                                    },
-                                    "required_approving_review_count": {
-                                      "default": 0,
-                                      "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                                      "maximum": 10,
-                                      "minimum": 0,
-                                      "type": "integer",
-                                    },
-                                    "required_review_thread_resolution": {
-                                      "default": false,
-                                      "description": "Every review thread must be resolved.",
-                                      "type": "boolean",
-                                    },
-                                    "required_reviewers": {
-                                      "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                                      "items": {
-                                        "not": {},
-                                      },
-                                      "maxItems": 0,
-                                      "type": "array",
+                                    "type": {
+                                      "const": "pull_request",
+                                      "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                      "type": "string",
                                     },
                                   },
                                   "required": [
-                                    "required_approving_review_count",
-                                    "dismiss_stale_reviews_on_push",
-                                    "require_last_push_approval",
-                                    "required_review_thread_resolution",
-                                    "require_code_owner_review",
-                                    "allowed_merge_methods",
-                                    "allow_agent_approvals",
+                                    "type",
                                   ],
                                   "type": "object",
                                 },
-                                "type": {
-                                  "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                                  "enum": [
-                                    "creation",
-                                    "update",
-                                    "deletion",
-                                    "non_fast_forward",
-                                    "required_signatures",
-                                    "pull_request",
-                                    "require_up_to_date",
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "parameters": {
+                                      "additionalProperties": false,
+                                      "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                                      "properties": {
+                                        "do_not_enforce_on_create": {
+                                          "default": false,
+                                          "description": "A branch being created skips this rule.",
+                                          "type": "boolean",
+                                        },
+                                        "required_status_checks": {
+                                          "items": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "context": {
+                                                "description": "The status context or check name, compared case-insensitively.",
+                                                "type": "string",
+                                              },
+                                              "integration_id": {
+                                                "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                                "type": "string",
+                                              },
+                                            },
+                                            "required": [
+                                              "context",
+                                            ],
+                                            "type": "object",
+                                          },
+                                          "maxItems": 50,
+                                          "minItems": 1,
+                                          "type": "array",
+                                        },
+                                        "strict_required_status_checks_policy": {
+                                          "default": true,
+                                          "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                          "type": "boolean",
+                                        },
+                                      },
+                                      "required": [
+                                        "required_status_checks",
+                                        "strict_required_status_checks_policy",
+                                        "do_not_enforce_on_create",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    "type": {
+                                      "const": "required_status_checks",
+                                      "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "type",
+                                    "parameters",
                                   ],
-                                  "type": "string",
+                                  "type": "object",
                                 },
-                              },
-                              "required": [
-                                "type",
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "type": {
+                                      "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                      "enum": [
+                                        "creation",
+                                        "update",
+                                        "deletion",
+                                        "non_fast_forward",
+                                        "required_signatures",
+                                        "require_up_to_date",
+                                      ],
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "type",
+                                  ],
+                                  "type": "object",
+                                },
                               ],
-                              "type": "object",
                             },
-                            "maxItems": 7,
+                            "maxItems": 8,
                             "minItems": 1,
                             "type": "array",
                           },
@@ -38004,92 +38257,165 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "rules": {
                     "items": {
-                      "properties": {
-                        "parameters": {
-                          "additionalProperties": false,
-                          "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                      "oneOf": [
+                        {
                           "properties": {
-                            "allow_agent_approvals": {
-                              "default": false,
-                              "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                              "type": "boolean",
-                            },
-                            "allowed_merge_methods": {
-                              "default": [
-                                "merge",
-                                "squash",
-                                "rebase",
-                              ],
-                              "items": {
-                                "enum": [
-                                  "merge",
-                                  "squash",
-                                  "rebase",
-                                ],
-                                "type": "string",
+                            "parameters": {
+                              "additionalProperties": false,
+                              "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                              "properties": {
+                                "allow_agent_approvals": {
+                                  "default": false,
+                                  "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                  "type": "boolean",
+                                },
+                                "allowed_merge_methods": {
+                                  "default": [
+                                    "merge",
+                                    "squash",
+                                    "rebase",
+                                  ],
+                                  "items": {
+                                    "enum": [
+                                      "merge",
+                                      "squash",
+                                      "rebase",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "maxItems": 3,
+                                  "minItems": 1,
+                                  "type": "array",
+                                },
+                                "dismiss_stale_reviews_on_push": {
+                                  "default": false,
+                                  "description": "A push makes earlier reviews stop counting.",
+                                  "type": "boolean",
+                                },
+                                "require_code_owner_review": {
+                                  "default": false,
+                                  "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                  "type": "boolean",
+                                },
+                                "require_last_push_approval": {
+                                  "default": false,
+                                  "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                  "type": "boolean",
+                                },
+                                "required_approving_review_count": {
+                                  "default": 0,
+                                  "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                  "maximum": 10,
+                                  "minimum": 0,
+                                  "type": "integer",
+                                },
+                                "required_review_thread_resolution": {
+                                  "default": false,
+                                  "description": "Every review thread must be resolved.",
+                                  "type": "boolean",
+                                },
+                                "required_reviewers": {
+                                  "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                  "items": {
+                                    "not": {},
+                                  },
+                                  "maxItems": 0,
+                                  "type": "array",
+                                },
                               },
-                              "maxItems": 3,
-                              "minItems": 1,
-                              "type": "array",
+                              "type": "object",
                             },
-                            "dismiss_stale_reviews_on_push": {
-                              "default": false,
-                              "description": "A push makes earlier reviews stop counting.",
-                              "type": "boolean",
-                            },
-                            "require_code_owner_review": {
-                              "default": false,
-                              "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                              "type": "boolean",
-                            },
-                            "require_last_push_approval": {
-                              "default": false,
-                              "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                              "type": "boolean",
-                            },
-                            "required_approving_review_count": {
-                              "default": 0,
-                              "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                              "maximum": 10,
-                              "minimum": 0,
-                              "type": "integer",
-                            },
-                            "required_review_thread_resolution": {
-                              "default": false,
-                              "description": "Every review thread must be resolved.",
-                              "type": "boolean",
-                            },
-                            "required_reviewers": {
-                              "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                              "items": {
-                                "not": {},
-                              },
-                              "maxItems": 0,
-                              "type": "array",
+                            "type": {
+                              "const": "pull_request",
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "type": "string",
                             },
                           },
+                          "required": [
+                            "type",
+                          ],
                           "type": "object",
                         },
-                        "type": {
-                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                          "enum": [
-                            "creation",
-                            "update",
-                            "deletion",
-                            "non_fast_forward",
-                            "required_signatures",
-                            "pull_request",
-                            "require_up_to_date",
+                        {
+                          "properties": {
+                            "parameters": {
+                              "additionalProperties": false,
+                              "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                              "properties": {
+                                "do_not_enforce_on_create": {
+                                  "default": false,
+                                  "description": "A branch being created skips this rule.",
+                                  "type": "boolean",
+                                },
+                                "required_status_checks": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "context": {
+                                        "description": "The status context or check name, compared case-insensitively.",
+                                        "type": "string",
+                                      },
+                                      "integration_id": {
+                                        "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                        "type": "string",
+                                      },
+                                    },
+                                    "required": [
+                                      "context",
+                                    ],
+                                    "type": "object",
+                                  },
+                                  "maxItems": 50,
+                                  "minItems": 1,
+                                  "type": "array",
+                                },
+                                "strict_required_status_checks_policy": {
+                                  "default": true,
+                                  "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                  "type": "boolean",
+                                },
+                              },
+                              "required": [
+                                "required_status_checks",
+                              ],
+                              "type": "object",
+                            },
+                            "type": {
+                              "const": "required_status_checks",
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "type",
+                            "parameters",
                           ],
-                          "type": "string",
+                          "type": "object",
                         },
-                      },
-                      "required": [
-                        "type",
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "enum": [
+                                "creation",
+                                "update",
+                                "deletion",
+                                "non_fast_forward",
+                                "required_signatures",
+                                "require_up_to_date",
+                              ],
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "type",
+                          ],
+                          "type": "object",
+                        },
                       ],
-                      "type": "object",
                     },
-                    "maxItems": 7,
+                    "maxItems": 8,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -38248,102 +38574,178 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "rules": {
                       "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "parameters": {
+                        "oneOf": [
+                          {
                             "additionalProperties": false,
-                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
                             "properties": {
-                              "allow_agent_approvals": {
-                                "default": false,
-                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                                "type": "boolean",
-                              },
-                              "allowed_merge_methods": {
-                                "default": [
-                                  "merge",
-                                  "squash",
-                                  "rebase",
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                                "properties": {
+                                  "allow_agent_approvals": {
+                                    "default": false,
+                                    "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                    "type": "boolean",
+                                  },
+                                  "allowed_merge_methods": {
+                                    "default": [
+                                      "merge",
+                                      "squash",
+                                      "rebase",
+                                    ],
+                                    "items": {
+                                      "enum": [
+                                        "merge",
+                                        "squash",
+                                        "rebase",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "maxItems": 3,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "dismiss_stale_reviews_on_push": {
+                                    "default": false,
+                                    "description": "A push makes earlier reviews stop counting.",
+                                    "type": "boolean",
+                                  },
+                                  "require_code_owner_review": {
+                                    "default": false,
+                                    "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                    "type": "boolean",
+                                  },
+                                  "require_last_push_approval": {
+                                    "default": false,
+                                    "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                    "type": "boolean",
+                                  },
+                                  "required_approving_review_count": {
+                                    "default": 0,
+                                    "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                    "maximum": 10,
+                                    "minimum": 0,
+                                    "type": "integer",
+                                  },
+                                  "required_review_thread_resolution": {
+                                    "default": false,
+                                    "description": "Every review thread must be resolved.",
+                                    "type": "boolean",
+                                  },
+                                  "required_reviewers": {
+                                    "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                    "items": {
+                                      "not": {},
+                                    },
+                                    "maxItems": 0,
+                                    "type": "array",
+                                  },
+                                },
+                                "required": [
+                                  "required_approving_review_count",
+                                  "dismiss_stale_reviews_on_push",
+                                  "require_last_push_approval",
+                                  "required_review_thread_resolution",
+                                  "require_code_owner_review",
+                                  "allowed_merge_methods",
+                                  "allow_agent_approvals",
                                 ],
-                                "items": {
-                                  "enum": [
-                                    "merge",
-                                    "squash",
-                                    "rebase",
-                                  ],
-                                  "type": "string",
-                                },
-                                "maxItems": 3,
-                                "minItems": 1,
-                                "type": "array",
+                                "type": "object",
                               },
-                              "dismiss_stale_reviews_on_push": {
-                                "default": false,
-                                "description": "A push makes earlier reviews stop counting.",
-                                "type": "boolean",
-                              },
-                              "require_code_owner_review": {
-                                "default": false,
-                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                                "type": "boolean",
-                              },
-                              "require_last_push_approval": {
-                                "default": false,
-                                "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                                "type": "boolean",
-                              },
-                              "required_approving_review_count": {
-                                "default": 0,
-                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                                "maximum": 10,
-                                "minimum": 0,
-                                "type": "integer",
-                              },
-                              "required_review_thread_resolution": {
-                                "default": false,
-                                "description": "Every review thread must be resolved.",
-                                "type": "boolean",
-                              },
-                              "required_reviewers": {
-                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                                "items": {
-                                  "not": {},
-                                },
-                                "maxItems": 0,
-                                "type": "array",
+                              "type": {
+                                "const": "pull_request",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
                               },
                             },
                             "required": [
-                              "required_approving_review_count",
-                              "dismiss_stale_reviews_on_push",
-                              "require_last_push_approval",
-                              "required_review_thread_resolution",
-                              "require_code_owner_review",
-                              "allowed_merge_methods",
-                              "allow_agent_approvals",
+                              "type",
                             ],
                             "type": "object",
                           },
-                          "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                            "enum": [
-                              "creation",
-                              "update",
-                              "deletion",
-                              "non_fast_forward",
-                              "required_signatures",
-                              "pull_request",
-                              "require_up_to_date",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                                "properties": {
+                                  "do_not_enforce_on_create": {
+                                    "default": false,
+                                    "description": "A branch being created skips this rule.",
+                                    "type": "boolean",
+                                  },
+                                  "required_status_checks": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "context": {
+                                          "description": "The status context or check name, compared case-insensitively.",
+                                          "type": "string",
+                                        },
+                                        "integration_id": {
+                                          "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                          "type": "string",
+                                        },
+                                      },
+                                      "required": [
+                                        "context",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    "maxItems": 50,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "strict_required_status_checks_policy": {
+                                    "default": true,
+                                    "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                    "type": "boolean",
+                                  },
+                                },
+                                "required": [
+                                  "required_status_checks",
+                                  "strict_required_status_checks_policy",
+                                  "do_not_enforce_on_create",
+                                ],
+                                "type": "object",
+                              },
+                              "type": {
+                                "const": "required_status_checks",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "parameters",
                             ],
-                            "type": "string",
+                            "type": "object",
                           },
-                        },
-                        "required": [
-                          "type",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "enum": [
+                                  "creation",
+                                  "update",
+                                  "deletion",
+                                  "non_fast_forward",
+                                  "required_signatures",
+                                  "require_up_to_date",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                            ],
+                            "type": "object",
+                          },
                         ],
-                        "type": "object",
                       },
-                      "maxItems": 7,
+                      "maxItems": 8,
                       "minItems": 1,
                       "type": "array",
                     },
@@ -38883,102 +39285,178 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "rules": {
                       "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "parameters": {
+                        "oneOf": [
+                          {
                             "additionalProperties": false,
-                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
                             "properties": {
-                              "allow_agent_approvals": {
-                                "default": false,
-                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                                "type": "boolean",
-                              },
-                              "allowed_merge_methods": {
-                                "default": [
-                                  "merge",
-                                  "squash",
-                                  "rebase",
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                                "properties": {
+                                  "allow_agent_approvals": {
+                                    "default": false,
+                                    "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                    "type": "boolean",
+                                  },
+                                  "allowed_merge_methods": {
+                                    "default": [
+                                      "merge",
+                                      "squash",
+                                      "rebase",
+                                    ],
+                                    "items": {
+                                      "enum": [
+                                        "merge",
+                                        "squash",
+                                        "rebase",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "maxItems": 3,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "dismiss_stale_reviews_on_push": {
+                                    "default": false,
+                                    "description": "A push makes earlier reviews stop counting.",
+                                    "type": "boolean",
+                                  },
+                                  "require_code_owner_review": {
+                                    "default": false,
+                                    "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                    "type": "boolean",
+                                  },
+                                  "require_last_push_approval": {
+                                    "default": false,
+                                    "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                    "type": "boolean",
+                                  },
+                                  "required_approving_review_count": {
+                                    "default": 0,
+                                    "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                    "maximum": 10,
+                                    "minimum": 0,
+                                    "type": "integer",
+                                  },
+                                  "required_review_thread_resolution": {
+                                    "default": false,
+                                    "description": "Every review thread must be resolved.",
+                                    "type": "boolean",
+                                  },
+                                  "required_reviewers": {
+                                    "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                    "items": {
+                                      "not": {},
+                                    },
+                                    "maxItems": 0,
+                                    "type": "array",
+                                  },
+                                },
+                                "required": [
+                                  "required_approving_review_count",
+                                  "dismiss_stale_reviews_on_push",
+                                  "require_last_push_approval",
+                                  "required_review_thread_resolution",
+                                  "require_code_owner_review",
+                                  "allowed_merge_methods",
+                                  "allow_agent_approvals",
                                 ],
-                                "items": {
-                                  "enum": [
-                                    "merge",
-                                    "squash",
-                                    "rebase",
-                                  ],
-                                  "type": "string",
-                                },
-                                "maxItems": 3,
-                                "minItems": 1,
-                                "type": "array",
+                                "type": "object",
                               },
-                              "dismiss_stale_reviews_on_push": {
-                                "default": false,
-                                "description": "A push makes earlier reviews stop counting.",
-                                "type": "boolean",
-                              },
-                              "require_code_owner_review": {
-                                "default": false,
-                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                                "type": "boolean",
-                              },
-                              "require_last_push_approval": {
-                                "default": false,
-                                "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                                "type": "boolean",
-                              },
-                              "required_approving_review_count": {
-                                "default": 0,
-                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                                "maximum": 10,
-                                "minimum": 0,
-                                "type": "integer",
-                              },
-                              "required_review_thread_resolution": {
-                                "default": false,
-                                "description": "Every review thread must be resolved.",
-                                "type": "boolean",
-                              },
-                              "required_reviewers": {
-                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                                "items": {
-                                  "not": {},
-                                },
-                                "maxItems": 0,
-                                "type": "array",
+                              "type": {
+                                "const": "pull_request",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
                               },
                             },
                             "required": [
-                              "required_approving_review_count",
-                              "dismiss_stale_reviews_on_push",
-                              "require_last_push_approval",
-                              "required_review_thread_resolution",
-                              "require_code_owner_review",
-                              "allowed_merge_methods",
-                              "allow_agent_approvals",
+                              "type",
                             ],
                             "type": "object",
                           },
-                          "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                            "enum": [
-                              "creation",
-                              "update",
-                              "deletion",
-                              "non_fast_forward",
-                              "required_signatures",
-                              "pull_request",
-                              "require_up_to_date",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                                "properties": {
+                                  "do_not_enforce_on_create": {
+                                    "default": false,
+                                    "description": "A branch being created skips this rule.",
+                                    "type": "boolean",
+                                  },
+                                  "required_status_checks": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "context": {
+                                          "description": "The status context or check name, compared case-insensitively.",
+                                          "type": "string",
+                                        },
+                                        "integration_id": {
+                                          "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                          "type": "string",
+                                        },
+                                      },
+                                      "required": [
+                                        "context",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    "maxItems": 50,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "strict_required_status_checks_policy": {
+                                    "default": true,
+                                    "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                    "type": "boolean",
+                                  },
+                                },
+                                "required": [
+                                  "required_status_checks",
+                                  "strict_required_status_checks_policy",
+                                  "do_not_enforce_on_create",
+                                ],
+                                "type": "object",
+                              },
+                              "type": {
+                                "const": "required_status_checks",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "parameters",
                             ],
-                            "type": "string",
+                            "type": "object",
                           },
-                        },
-                        "required": [
-                          "type",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "enum": [
+                                  "creation",
+                                  "update",
+                                  "deletion",
+                                  "non_fast_forward",
+                                  "required_signatures",
+                                  "require_up_to_date",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                            ],
+                            "type": "object",
+                          },
                         ],
-                        "type": "object",
                       },
-                      "maxItems": 7,
+                      "maxItems": 8,
                       "minItems": 1,
                       "type": "array",
                     },
@@ -39184,92 +39662,165 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "rules": {
                     "items": {
-                      "properties": {
-                        "parameters": {
-                          "additionalProperties": false,
-                          "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                      "oneOf": [
+                        {
                           "properties": {
-                            "allow_agent_approvals": {
-                              "default": false,
-                              "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                              "type": "boolean",
-                            },
-                            "allowed_merge_methods": {
-                              "default": [
-                                "merge",
-                                "squash",
-                                "rebase",
-                              ],
-                              "items": {
-                                "enum": [
-                                  "merge",
-                                  "squash",
-                                  "rebase",
-                                ],
-                                "type": "string",
+                            "parameters": {
+                              "additionalProperties": false,
+                              "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                              "properties": {
+                                "allow_agent_approvals": {
+                                  "default": false,
+                                  "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                  "type": "boolean",
+                                },
+                                "allowed_merge_methods": {
+                                  "default": [
+                                    "merge",
+                                    "squash",
+                                    "rebase",
+                                  ],
+                                  "items": {
+                                    "enum": [
+                                      "merge",
+                                      "squash",
+                                      "rebase",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "maxItems": 3,
+                                  "minItems": 1,
+                                  "type": "array",
+                                },
+                                "dismiss_stale_reviews_on_push": {
+                                  "default": false,
+                                  "description": "A push makes earlier reviews stop counting.",
+                                  "type": "boolean",
+                                },
+                                "require_code_owner_review": {
+                                  "default": false,
+                                  "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                  "type": "boolean",
+                                },
+                                "require_last_push_approval": {
+                                  "default": false,
+                                  "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                  "type": "boolean",
+                                },
+                                "required_approving_review_count": {
+                                  "default": 0,
+                                  "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                  "maximum": 10,
+                                  "minimum": 0,
+                                  "type": "integer",
+                                },
+                                "required_review_thread_resolution": {
+                                  "default": false,
+                                  "description": "Every review thread must be resolved.",
+                                  "type": "boolean",
+                                },
+                                "required_reviewers": {
+                                  "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                  "items": {
+                                    "not": {},
+                                  },
+                                  "maxItems": 0,
+                                  "type": "array",
+                                },
                               },
-                              "maxItems": 3,
-                              "minItems": 1,
-                              "type": "array",
+                              "type": "object",
                             },
-                            "dismiss_stale_reviews_on_push": {
-                              "default": false,
-                              "description": "A push makes earlier reviews stop counting.",
-                              "type": "boolean",
-                            },
-                            "require_code_owner_review": {
-                              "default": false,
-                              "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                              "type": "boolean",
-                            },
-                            "require_last_push_approval": {
-                              "default": false,
-                              "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                              "type": "boolean",
-                            },
-                            "required_approving_review_count": {
-                              "default": 0,
-                              "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                              "maximum": 10,
-                              "minimum": 0,
-                              "type": "integer",
-                            },
-                            "required_review_thread_resolution": {
-                              "default": false,
-                              "description": "Every review thread must be resolved.",
-                              "type": "boolean",
-                            },
-                            "required_reviewers": {
-                              "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                              "items": {
-                                "not": {},
-                              },
-                              "maxItems": 0,
-                              "type": "array",
+                            "type": {
+                              "const": "pull_request",
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "type": "string",
                             },
                           },
+                          "required": [
+                            "type",
+                          ],
                           "type": "object",
                         },
-                        "type": {
-                          "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                          "enum": [
-                            "creation",
-                            "update",
-                            "deletion",
-                            "non_fast_forward",
-                            "required_signatures",
-                            "pull_request",
-                            "require_up_to_date",
+                        {
+                          "properties": {
+                            "parameters": {
+                              "additionalProperties": false,
+                              "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                              "properties": {
+                                "do_not_enforce_on_create": {
+                                  "default": false,
+                                  "description": "A branch being created skips this rule.",
+                                  "type": "boolean",
+                                },
+                                "required_status_checks": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "context": {
+                                        "description": "The status context or check name, compared case-insensitively.",
+                                        "type": "string",
+                                      },
+                                      "integration_id": {
+                                        "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                        "type": "string",
+                                      },
+                                    },
+                                    "required": [
+                                      "context",
+                                    ],
+                                    "type": "object",
+                                  },
+                                  "maxItems": 50,
+                                  "minItems": 1,
+                                  "type": "array",
+                                },
+                                "strict_required_status_checks_policy": {
+                                  "default": true,
+                                  "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                  "type": "boolean",
+                                },
+                              },
+                              "required": [
+                                "required_status_checks",
+                              ],
+                              "type": "object",
+                            },
+                            "type": {
+                              "const": "required_status_checks",
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "type",
+                            "parameters",
                           ],
-                          "type": "string",
+                          "type": "object",
                         },
-                      },
-                      "required": [
-                        "type",
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "type": {
+                              "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                              "enum": [
+                                "creation",
+                                "update",
+                                "deletion",
+                                "non_fast_forward",
+                                "required_signatures",
+                                "require_up_to_date",
+                              ],
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "type",
+                          ],
+                          "type": "object",
+                        },
                       ],
-                      "type": "object",
                     },
-                    "maxItems": 7,
+                    "maxItems": 8,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -39428,102 +39979,178 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     },
                     "rules": {
                       "items": {
-                        "additionalProperties": false,
-                        "properties": {
-                          "parameters": {
+                        "oneOf": [
+                          {
                             "additionalProperties": false,
-                            "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
                             "properties": {
-                              "allow_agent_approvals": {
-                                "default": false,
-                                "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
-                                "type": "boolean",
-                              },
-                              "allowed_merge_methods": {
-                                "default": [
-                                  "merge",
-                                  "squash",
-                                  "rebase",
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`pull_request\` only: what a merge needs; left out, nothing beyond the pull request.",
+                                "properties": {
+                                  "allow_agent_approvals": {
+                                    "default": false,
+                                    "description": "Fyrden: reviews submitted by agents count toward approvals (a person's own agents count as that person). By default only people's reviews count.",
+                                    "type": "boolean",
+                                  },
+                                  "allowed_merge_methods": {
+                                    "default": [
+                                      "merge",
+                                      "squash",
+                                      "rebase",
+                                    ],
+                                    "items": {
+                                      "enum": [
+                                        "merge",
+                                        "squash",
+                                        "rebase",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    "maxItems": 3,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "dismiss_stale_reviews_on_push": {
+                                    "default": false,
+                                    "description": "A push makes earlier reviews stop counting.",
+                                    "type": "boolean",
+                                  },
+                                  "require_code_owner_review": {
+                                    "default": false,
+                                    "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
+                                    "type": "boolean",
+                                  },
+                                  "require_last_push_approval": {
+                                    "default": false,
+                                    "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
+                                    "type": "boolean",
+                                  },
+                                  "required_approving_review_count": {
+                                    "default": 0,
+                                    "description": "Approving reviews a merge needs, from people with write access other than the author.",
+                                    "maximum": 10,
+                                    "minimum": 0,
+                                    "type": "integer",
+                                  },
+                                  "required_review_thread_resolution": {
+                                    "default": false,
+                                    "description": "Every review thread must be resolved.",
+                                    "type": "boolean",
+                                  },
+                                  "required_reviewers": {
+                                    "description": "Reviews required from specific teams are not supported yet: empty or left out.",
+                                    "items": {
+                                      "not": {},
+                                    },
+                                    "maxItems": 0,
+                                    "type": "array",
+                                  },
+                                },
+                                "required": [
+                                  "required_approving_review_count",
+                                  "dismiss_stale_reviews_on_push",
+                                  "require_last_push_approval",
+                                  "required_review_thread_resolution",
+                                  "require_code_owner_review",
+                                  "allowed_merge_methods",
+                                  "allow_agent_approvals",
                                 ],
-                                "items": {
-                                  "enum": [
-                                    "merge",
-                                    "squash",
-                                    "rebase",
-                                  ],
-                                  "type": "string",
-                                },
-                                "maxItems": 3,
-                                "minItems": 1,
-                                "type": "array",
+                                "type": "object",
                               },
-                              "dismiss_stale_reviews_on_push": {
-                                "default": false,
-                                "description": "A push makes earlier reviews stop counting.",
-                                "type": "boolean",
-                              },
-                              "require_code_owner_review": {
-                                "default": false,
-                                "description": "A changed path with designated code owners needs an approval from one of them (CODEOWNERS at the base branch's tip: users, agents when agents' approvals count, or teams of the repository's organization, with write access).",
-                                "type": "boolean",
-                              },
-                              "require_last_push_approval": {
-                                "default": false,
-                                "description": "Someone other than the last pusher must approve the current head after the last push (an approval of an earlier head does not count).",
-                                "type": "boolean",
-                              },
-                              "required_approving_review_count": {
-                                "default": 0,
-                                "description": "Approving reviews a merge needs, from people with write access other than the author.",
-                                "maximum": 10,
-                                "minimum": 0,
-                                "type": "integer",
-                              },
-                              "required_review_thread_resolution": {
-                                "default": false,
-                                "description": "Every review thread must be resolved.",
-                                "type": "boolean",
-                              },
-                              "required_reviewers": {
-                                "description": "Reviews required from specific teams are not supported yet: empty or left out.",
-                                "items": {
-                                  "not": {},
-                                },
-                                "maxItems": 0,
-                                "type": "array",
+                              "type": {
+                                "const": "pull_request",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
                               },
                             },
                             "required": [
-                              "required_approving_review_count",
-                              "dismiss_stale_reviews_on_push",
-                              "require_last_push_approval",
-                              "required_review_thread_resolution",
-                              "require_code_owner_review",
-                              "allowed_merge_methods",
-                              "allow_agent_approvals",
+                              "type",
                             ],
                             "type": "object",
                           },
-                          "type": {
-                            "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
-                            "enum": [
-                              "creation",
-                              "update",
-                              "deletion",
-                              "non_fast_forward",
-                              "required_signatures",
-                              "pull_request",
-                              "require_up_to_date",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "parameters": {
+                                "additionalProperties": false,
+                                "description": "For \`required_status_checks\` only: the checks a commit must pass (success, skipped or neutral) before a matching branch may point at it, by a push or a merge (a merge judges the pull request's head).",
+                                "properties": {
+                                  "do_not_enforce_on_create": {
+                                    "default": false,
+                                    "description": "A branch being created skips this rule.",
+                                    "type": "boolean",
+                                  },
+                                  "required_status_checks": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "context": {
+                                          "description": "The status context or check name, compared case-insensitively.",
+                                          "type": "string",
+                                        },
+                                        "integration_id": {
+                                          "description": "Fyrden: the publisher the check must come from, \`ci\` for Fyrden's own runs or the id of the principal that posts it (an agent, not the user it acts for); left out, any. GitHub's integer app ids name no publisher here.",
+                                          "type": "string",
+                                        },
+                                      },
+                                      "required": [
+                                        "context",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    "maxItems": 50,
+                                    "minItems": 1,
+                                    "type": "array",
+                                  },
+                                  "strict_required_status_checks_policy": {
+                                    "default": true,
+                                    "description": "A pull request merged into the branch must contain its latest commit, as \`require_up_to_date\` asks. GitHub's default for the rule.",
+                                    "type": "boolean",
+                                  },
+                                },
+                                "required": [
+                                  "required_status_checks",
+                                  "strict_required_status_checks_policy",
+                                  "do_not_enforce_on_create",
+                                ],
+                                "type": "object",
+                              },
+                              "type": {
+                                "const": "required_status_checks",
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                              "parameters",
                             ],
-                            "type": "string",
+                            "type": "object",
                           },
-                        },
-                        "required": [
-                          "type",
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "type": {
+                                "description": "\`creation\`, \`update\`, \`deletion\` (of a matching ref), \`non_fast_forward\` (no force pushes), \`required_signatures\` (every new commit verified), \`pull_request\` (no direct pushes; changes come through pull requests, merged as its \`parameters\` require), \`required_status_checks\` (named checks must pass on the commit first), Fyrden's \`require_up_to_date\` (a pull request merged into the branch must already contain the branch's latest commit).",
+                                "enum": [
+                                  "creation",
+                                  "update",
+                                  "deletion",
+                                  "non_fast_forward",
+                                  "required_signatures",
+                                  "require_up_to_date",
+                                ],
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "type",
+                            ],
+                            "type": "object",
+                          },
                         ],
-                        "type": "object",
                       },
-                      "maxItems": 7,
+                      "maxItems": 8,
                       "minItems": 1,
                       "type": "array",
                     },

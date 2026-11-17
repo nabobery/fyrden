@@ -119,7 +119,7 @@ import type { AclSnapshot, RoleConfirmation, TeamAudience } from "./OrgDO.js";
 import { type AclPurpose, RepoAcl } from "./repo/acl.js";
 import { RepoAdministration, type RepoDetails, type RulesetChange } from "./repo/administration.js";
 import { type ArchiveFormat, type ArchiveStatus, RepoArchives } from "./repo/archive.js";
-import { RepoAuthority } from "./repo/authority.js";
+import { type PushRuleHooks, RepoAuthority } from "./repo/authority.js";
 import { type BlameRequest, RepoBlame } from "./repo/blame.js";
 import { blamePruneHandler } from "./repo/blame-prune.js";
 import {
@@ -498,6 +498,8 @@ export class RepoDO extends MigratingDO {
   assetBucket: R2Bucket;
   /** Hooks between a release asset completion's steps. For tests. */
   assetHooks: AssetHooks = {};
+  /** For tests: runs between a push's rule check and its commit. */
+  pushRuleHooks: PushRuleHooks = {};
   readonly blameRuns: RepoBlame;
 
   /** Reactions to issues, pull requests and their comments. */
@@ -658,7 +660,11 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
-    this.checks = new RepoChecks({ git: this.git, events: this.events });
+    this.checks = new RepoChecks({
+      git: this.git,
+      events: this.events,
+      required: (baseRef) => this.#authority.requiredOn(baseRef).checks.map((c) => c.check),
+    });
     this.releases = new RepoReleases({
       git: this.git,
       events: this.events,
@@ -907,6 +913,8 @@ export class RepoDO extends MigratingDO {
       acl: this.acl,
       rulesets: () => this.rulesetStore,
       memoryBlocks: () => this.#memoryBlocks(),
+      checks: () => this.checks,
+      hooks: () => this.pushRuleHooks,
     });
     this.#admin = new RepoAdministration({
       git: this.git,
@@ -2938,6 +2946,19 @@ export class RepoDO extends MigratingDO {
   }
 
   /** The conflicts of merging an open pull request's base branch into its head. */
+  /**
+   * The required checks of a pull request's base branch, judged on its
+   * head; undefined for no such pull request, null once the repository is
+   * gone.
+   */
+  requiredChecks(number: number) {
+    return this.#measured("requiredChecks", () => {
+      if (this.#refusesReads()) return null;
+      const pull = this.pulls.get(number);
+      return pull ? this.#authority.pullRequiredChecks(pull) : undefined;
+    });
+  }
+
   pullConflicts(number: number): Promise<Browsed<ConflictsView>> {
     return this.#measured("pullConflicts", async () =>
       this.#refusesReads()

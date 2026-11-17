@@ -435,6 +435,53 @@ export const getPullConflicts = defineOperation({
   },
 });
 
+export const getPullRequiredChecks = defineOperation({
+  id: "pulls.required_checks.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/pulls/{pull_number}/required-checks",
+  summary: "Get a pull request's required checks",
+  description:
+    "Fyrden: the status checks the active rulesets on the pull request's base branch require (`required_status_checks`), each judged on its head as a merge judges it: `passed` (success, skipped or neutral), `pending` (pending, queued, in progress, or a re-run started), `failing` (anything else) or `expected` (not reported). `deciding` lists the statuses and checks that decided each, with their links. `blocking` when any has not passed. Who merges plays no part: a role that bypasses a ruleset, or an actor type it leaves out, may merge anyway, and the merge decides. Needs `statuses:read` too.",
+  input: z.object({ ...RepoInput, pull_number: PullNumber }),
+  output: z.object({
+    head_sha: z.string().describe("The commit the checks are judged on."),
+    strict: z
+      .boolean()
+      .describe("A rule also asks the head to contain the base branch's latest commit."),
+    blocking: z.boolean().describe("A required check has not passed."),
+    checks: z.array(
+      z.object({
+        context: z.string(),
+        integration_id: z
+          .string()
+          .nullable()
+          .describe("The publisher it must come from (`ci` or a principal id); null for any."),
+        state: z.enum(["passed", "pending", "failing", "expected"]),
+        rulesets: z.array(z.string()).describe("The rulesets requiring it."),
+        deciding: z.array(
+          z.object({
+            kind: z.enum(["status", "check"]),
+            source: z.string().describe("Who published it: a principal id, or `ci`."),
+            state: z.enum(["passed", "pending", "failing"]),
+            details_url: z.string().nullable(),
+          }),
+        ),
+      }),
+    ),
+  }),
+  permission: "pull_requests:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_required_checks",
+    title: "Get a pull request's required checks",
+    description:
+      "Get the status checks a pull request's base branch requires and where each stands on its head, with what decided each: which have not passed. The merge itself decides (a role that bypasses a ruleset may merge anyway, and strict rulesets also need the head up to date). Needs pull_requests:read and statuses:read.",
+    readOnly: true,
+  },
+});
+
 const BaseMergeOutput = z.object({
   sha: z.string().describe("The merge commit the head branch now points at."),
   markers: z

@@ -3,6 +3,7 @@ import type {
   createPull,
   getPull,
   getPullConflicts,
+  getPullRequiredChecks,
   Input,
   listPullCommits,
   listPullFiles,
@@ -20,7 +21,7 @@ import {
 } from "@fyrden/domain";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeBytesCursor, decodeCursor, encodeBytesCursor, encodeCursor } from "../ops/cursor.js";
-import { type OpContext, OperationError } from "../ops/execute.js";
+import { hasPermission, type OpContext, OperationError } from "../ops/execute.js";
 import { pageOf } from "../ops/pages.js";
 import { resolveVerification } from "../signing/verification.js";
 import { authorize, findReposById, networkReposOf, type RepoEntry } from "./directory.js";
@@ -251,6 +252,44 @@ export async function getPullOperation(
   if (pull === null) throw repoNotFound(entry);
   if (!pull) throw pullNotFound(input.pull_number);
   return pullOutput(pull, readable(ctx, entry));
+}
+
+/** The `pulls.required_checks.get` operation (Fyrden's). */
+export async function getPullRequiredChecksOperation(
+  ctx: OpContext,
+  input: Input<typeof getPullRequiredChecks>,
+): Promise<Output<typeof getPullRequiredChecks>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "pull_requests:read");
+  // The answer is commit statuses: the token reads them too.
+  if (!hasPermission("statuses:read", ctx.auth))
+    throw new OperationError(
+      403,
+      "missing_permission",
+      "pulls.required_checks.get needs the statuses:read permission too.",
+    );
+  if (!(await authorize(ctx.env, ctx.auth, entry, "statuses:read", ctx.metrics)))
+    throw repoNotFound(entry);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "requiredChecks" });
+  const found = await ctx.env.REPO.getByName(entry.id).requiredChecks(input.pull_number);
+  if (found === null) throw repoNotFound(entry);
+  if (!found) throw pullNotFound(input.pull_number);
+  return {
+    head_sha: found.headSha,
+    strict: found.strict,
+    blocking: found.checks.some((c) => c.state !== "passed"),
+    checks: found.checks.map((c) => ({
+      context: c.check.context,
+      integration_id: c.check.integration_id ?? null,
+      state: c.state,
+      rulesets: [...c.rulesets],
+      deciding: c.deciding.map((d) => ({
+        kind: d.kind,
+        source: d.source,
+        state: d.state,
+        details_url: d.detailsUrl,
+      })),
+    })),
+  };
 }
 
 /** The `pulls.create` operation. */

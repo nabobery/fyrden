@@ -859,10 +859,11 @@ the API carries GitHub's `verification` object.
 Repository rulesets (`/repos/{owner}/{repo}/rulesets`, GitHub's shape) hold
 rules on the branches or tags whose full names match: `creation`, `update`,
 `deletion`, `non_fast_forward`, `required_signatures`, `pull_request` (no
-direct change at all; changes come through pull requests), and Fyrden's
-`require_up_to_date` (a pull request merged into the branch must already
-contain its latest commit; GitHub ties this to required status checks, which
-Fyrden does not have yet). Bypass is by repository role; Fyrden's
+direct change at all; changes come through pull requests),
+`required_status_checks` (named checks must pass on a commit before the branch
+may point at it), and Fyrden's `require_up_to_date` (a pull request merged
+into the branch must already contain its latest commit: GitHub's strict
+policy of required status checks, settable on its own). Bypass is by repository role; Fyrden's
 `actor_types` limits a ruleset to principal types (`["agent"]` with
 `pull_request`: agents must use pull requests).
 
@@ -874,10 +875,16 @@ Fyrden does not have yet). Bypass is by repository role; Fyrden's
 | Required signatures | Branch rulesets only. Each new commit verified as the API shows it (platform key, or a user's key on that user's commits); at most 1,000 new commits per ref update (and 20,000 commits walked to find them), more is refused (push in parts); commits are read from the repository's packs and the push's own, once a push however many refs share them, within 800 R2 reads for the whole push (a commit not read by then is refused as `unreadable`) |
 | Default branch | `~DEFAULT_BRANCH` names the current default branch and, for an import, the one it sets |
 | Refusal text | 2,000 bytes at most per ref |
-| Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole |
+| Refusals | `ng <ref> <reason> (ruleset "<name>")`; an atomic push fails as a whole. Required checks read as `required status check "<name>" is expected` (or `pending`, `failing`), at most 5 named and the rest counted |
 | `evaluate` | Does not block; what it would have refused at a push's commit point (its signatures too) is listed at `GET /repos/{owner}/{repo}/rulesets/rule-suites` (MCP `list_rule_suites`): one suite per ref update one of them objected to, the newest 1,000 kept, nothing for an update they all let through |
 | Actor types | Each principal type at most once |
 | `pull_request` parameters | GitHub's: `required_approving_review_count` 0-10, `dismiss_stale_reviews_on_push`, `require_last_push_approval`, `required_review_thread_resolution`, `allowed_merge_methods` (`merge`, `squash`, `rebase`; each once); `require_code_owner_review` (see Code owners' review), `required_reviewers` empty (required team reviews come later); any other parameter is refused, never stored unenforced. Fyrden's `allow_agent_approvals` (default false): reviews submitted by agents count, a person's own agents as that person. A rule stored without parameters reads as all defaults (no requirement beyond the pull request) |
+| Required status checks | Branch rulesets only. 1-50 checks per rule, each a status context or check name (1-255 characters, no control characters, compared case-insensitively) and an optional `integration_id`: `ci` for Fyrden's own runs or the id of the principal that posts the status (an agent, not the user it acts for). GitHub's integer app ids are refused. Left out, any principal allowed to post statuses can satisfy the check, and the latest status of the name stands (unlike GitHub's classic branch protection, which pins the app that reported last); set it to pin a publisher. A check passes on `success`, `skipped` or `neutral`; missing, pending, a re-run in progress and anything else block. A status and a check of one name must both pass. `strict_required_status_checks_policy` defaults to true and asks what `require_up_to_date` asks; `do_not_enforce_on_create` lets a branch be created without the checks |
+| Which commit's checks | A push, a file write or an import: the new tip, so a commit must be checked on another branch first and then pushed or merged (a fast-forward or a new branch at a checked commit passes). A merge (merge, squash or rebase): the pull request's head, never the commit the merge makes; there is no test-merge commit, so under a loose policy passing head checks do not prove the merged result. A merge whose checks block is refused before it is built (405 `merge_refused`) |
+| Checks changing during a push | The checks are read with the rulesets at the commit point and read again in the commit's transaction: a required check that changed in between (a re-run starting, a status landing) refuses that ref update with "a required status check changed while the push was checked; try the push again". Only the publishers a requirement counts matter; an `evaluate` ruleset never refuses |
+| A pull request's required checks | `GET /repos/{owner}/{repo}/pulls/{number}/required-checks` (MCP `get_required_checks`; `pull_requests:read` and `statuses:read`): each check the active rulesets on its base branch require, judged on its head as a merge judges it, with the statuses and checks that decided it; whoever merges, so a role that bypasses a ruleset may still merge |
+| Failed CI notifications | Once an active ruleset on a pull request's base branch names required checks, only those checks, as the rule decides them, open a `ci_failed` item on its author's feed: an unrequired check failing tells no one, and another publisher's later success of a check with no expected source resolves it. Without such a rule every check counts. A ruleset change is applied when the pull request's checks are next worked out: a status on its head, a check's completion (a start, progress or a repeated completion changes nothing), a push to it, or its being edited, retargeted, closed or reopened |
+| Reads | One read of a commit's check summaries at the check (shared by the refs that point at it) and one per committed ref update; at most 1,000 status and 1,000 check summaries a commit |
 | Approvals | One vote per person (an agent acting for a person, or a person's own agent, is that person); the author's never counts; only people with write access or above count, checked when merging; a person's latest review that is not a comment and not dismissed stands; an eligible request for changes blocks until that person approves or it is dismissed |
 
 ## Pull requests

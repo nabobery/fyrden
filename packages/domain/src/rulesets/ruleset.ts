@@ -1,5 +1,10 @@
 import type { RepoRole } from "../authz/roles.js";
 import type { PrincipalType } from "../principals/principal.js";
+import {
+  type RequiredStatusCheck,
+  type RequiredStatusChecksParameters,
+  requiredStatusChecksParameters,
+} from "./status-checks.js";
 
 /**
  * Rulesets, shaped as GitHub's repository rulesets: rules on the branches
@@ -12,8 +17,8 @@ import type { PrincipalType } from "../principals/principal.js";
 /**
  * The rules Fyrden enforces, by GitHub's names, and Fyrden's
  * `require_up_to_date`: a pull request merged into a matching branch must
- * already contain the branch's current tip (GitHub ties this to required
- * status checks; Fyrden has none yet).
+ * already contain the branch's current tip (GitHub's strict policy of
+ * `required_status_checks`, settable on its own).
  */
 export const RULE_TYPES = [
   "creation",
@@ -23,6 +28,7 @@ export const RULE_TYPES = [
   "required_signatures",
   "pull_request",
   "require_up_to_date",
+  "required_status_checks",
 ] as const;
 export type RuleType = (typeof RULE_TYPES)[number];
 
@@ -60,15 +66,35 @@ export const DEFAULT_PULL_REQUEST_PARAMETERS: PullRequestParameters = Object.fre
   allow_agent_approvals: false,
 });
 
+/** A `required_status_checks` rule's parameters as stored: the checks, and the settings given. */
+export type RequiredStatusChecksInput = Partial<RequiredStatusChecksParameters> & {
+  readonly required_status_checks: readonly RequiredStatusCheck[];
+};
+
 export interface Rule {
   readonly type: RuleType;
-  /** A `pull_request` rule's; what is missing (a ruleset stored before they existed) takes its default. */
-  readonly parameters?: Partial<PullRequestParameters>;
+  /**
+   * A `pull_request` rule's (what is missing, a ruleset stored before they
+   * existed, takes its default) or a `required_status_checks` rule's.
+   */
+  readonly parameters?: Partial<PullRequestParameters> | RequiredStatusChecksInput;
 }
 
 /** A `pull_request` rule's parameters with every default filled in. */
 export function pullRequestParameters(rule: Rule): PullRequestParameters {
-  return { ...DEFAULT_PULL_REQUEST_PARAMETERS, ...rule.parameters };
+  return {
+    ...DEFAULT_PULL_REQUEST_PARAMETERS,
+    ...(rule.parameters as Partial<PullRequestParameters> | undefined),
+  };
+}
+
+/** A `required_status_checks` rule's parameters with the defaults filled in (strict). */
+export function requiredChecksOf(rule: Rule): RequiredStatusChecksParameters {
+  const given = rule.parameters as RequiredStatusChecksInput | undefined;
+  return requiredStatusChecksParameters({
+    ...given,
+    required_status_checks: given?.required_status_checks ?? [],
+  });
 }
 
 /** A ruleset's own state: `active` blocks, `evaluate` only reports, `disabled` does nothing. */
