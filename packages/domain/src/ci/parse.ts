@@ -12,6 +12,7 @@ import {
   type Scalar,
   type YAMLMap,
 } from "yaml";
+import { checkWorkflowExpressions, noExpressions } from "./expression-sites.js";
 import {
   featureOf,
   type SupportedKey,
@@ -119,7 +120,14 @@ export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
       return doc === null ? wholeFile("yaml_too_complex", tooComplex()) : walk.result(undefined);
     if (!walk.checkDiagnostics(doc)) return walk.result(undefined);
     if (!walk.resolveAnchors(doc)) return walk.result(undefined);
-    return walk.result(readWorkflow(walk, doc.contents, path));
+    const workflow = readWorkflow(walk, doc.contents, path);
+    // Expressions are checked once the structure is valid: a field's site is known only then.
+    if (workflow && walk.errors.length === 0) {
+      for (const e of checkWorkflowExpressions(workflow)) {
+        walk.fail(e.code, e.feature, e.path, { line: e.line, column: e.column }, e.message);
+      }
+    }
+    return walk.result(workflow);
   } catch (error) {
     if (error instanceof Stop) return walk.result(undefined);
     throw error;
@@ -474,6 +482,22 @@ function readText(
 }
 
 /** A string, or a list of strings, as a list; repeats refused when `unique`. */
+/**
+ * `${{` in a field that takes no expressions, named as such before the field's own type or
+ * format checks would refuse it under another name. True when it was refused.
+ */
+function refuseExpression(
+  w: Walk,
+  n: Node | null,
+  path: string,
+  feature: string,
+  fallback: number,
+): boolean {
+  if (!isScalar(n) || typeof n.value !== "string" || !n.value.includes("${{")) return false;
+  w.fail("expression_not_allowed", feature, path, w.at(n, fallback), noExpressions(feature));
+  return true;
+}
+
 function readTexts(
   w: Walk,
   node: Node | null,
@@ -482,10 +506,35 @@ function readTexts(
   fallback: number,
   unique: boolean,
 ): Text[] | undefined {
+  return readTextItems(w, node, path, feature, fallback, unique)?.map((item) => item.text);
+}
+
+/**
+ * A string or a list of strings, each with its own path (`path` for a single string,
+ * `path[i]` by its index in the list as written). With `noExpressions`, an item holding
+ * `${{` is refused as such and left out, so the caller never judges it as a value.
+ */
+function readTextItems(
+  w: Walk,
+  node: Node | null,
+  path: string,
+  feature: string,
+  fallback: number,
+  unique: boolean,
+  refuseExpressions = false,
+  onRefused?: () => void,
+): { text: Text; path: string }[] | undefined {
+  const refused = (text: Text, itemPath: string) => {
+    if (!refuseExpressions || !text.value.includes("${{")) return false;
+    onRefused?.();
+    w.fail("expression_not_allowed", feature, itemPath, text.at, noExpressions(feature));
+    return true;
+  };
   return w.enter(node, path, fallback, (n) => {
     if (isScalar(n)) {
       const one = readScalarText(w, n, path, feature, fallback);
-      return one ? [one] : undefined;
+      if (!one) return undefined;
+      return refused(one, path) ? [] : [{ text: one, path }];
     }
     if (!isSeq(n)) {
       return w.fail(
@@ -496,25 +545,26 @@ function readTexts(
         `\`${path}\` must be a string or a list of strings.`,
       );
     }
-    const texts: Text[] = [];
+    const items: { text: Text; path: string }[] = [];
     const seen = new Set<string>();
     n.items.forEach((item, i) => {
-      const text = readText(w, item as Node, `${path}[${i}]`, feature, n.range?.[0] ?? fallback);
-      if (!text) return;
+      const itemPath = `${path}[${i}]`;
+      const text = readText(w, item as Node, itemPath, feature, n.range?.[0] ?? fallback);
+      if (!text || refused(text, itemPath)) return;
       if (unique && seen.has(text.value)) {
         w.fail(
           "invalid_value",
           feature,
-          `${path}[${i}]`,
+          itemPath,
           text.at,
           `\`${cut(text.value, 60)}\` is listed twice in \`${path}\`.`,
         );
         return;
       }
       seen.add(text.value);
-      texts.push(text);
+      items.push({ text, path: itemPath });
     });
-    return texts;
+    return items;
   });
 }
 
@@ -949,8 +999,10 @@ const ACCESS = new Set(["read", "write", "none"]);
 const GRANTABLE: ReadonlySet<string> = new Set<string>(PERMISSION_SCOPES);
 
 function readPermissions(w: Walk, entry: Entry): Permissions | undefined {
+  const feature = entry.path.startsWith("jobs.") ? "jobs.<job_id>.permissions" : "permissions";
   return w.enter(entry.value, entry.path, entry.offset, (n): Permissions | undefined => {
     const at = w.at(n, entry.offset);
+    if (refuseExpression(w, n, entry.path, feature, entry.offset)) return undefined;
     if (isScalar(n) && (n.value === "read-all" || n.value === "write-all")) {
       return { kind: "all", access: n.value === "read-all" ? "read" : "write", at };
     }
@@ -979,6 +1031,10 @@ function readPermissions(w: Walk, entry: Entry): Permissions | undefined {
       }
       const access = readText(w, e.value, e.path, "permissions", e.offset);
       if (!access) continue;
+      if (access.value.includes("${{")) {
+        w.fail("expression_not_allowed", feature, e.path, access.at, noExpressions(feature));
+        continue;
+      }
       const allowed =
         scope === "id-token" || scope === "copilot-requests"
           ? ["write", "none"]
@@ -1056,10 +1112,10 @@ function readTypes(
   event: "pull_request" | "pull_request_target",
 ): readonly Text[] | undefined {
   const feature = `on.${event}.types`;
-  const types = readTexts(w, e.value, e.path, feature, e.offset, true);
+  const types = readTextItems(w, e.value, e.path, feature, e.offset, true, true);
   if (!types) return undefined;
   const kept: Text[] = [];
-  for (const type of types) {
+  for (const { text: type } of types) {
     const known = featureOf(feature, type.value);
     if (!known) {
       w.fail(
@@ -1182,6 +1238,15 @@ function readSchedule(
             cron: (w2, e) => {
               const cron = readText(w2, e.value, e.path, "on.schedule[*].cron", e.offset);
               if (!cron) return undefined;
+              if (cron.value.includes("${{")) {
+                return w2.fail(
+                  "expression_not_allowed",
+                  "on.schedule[*].cron",
+                  e.path,
+                  cron.at,
+                  noExpressions("on.schedule[*].cron"),
+                );
+              }
               const fields = cron.value.trim().split(/\s+/);
               if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) {
                 return w2.fail(
@@ -1295,15 +1360,17 @@ function readInputFields(
         opt("description", readText(w2, e.value, e.path, `${INPUT}.description`, e.offset)),
       required: (w2, e) =>
         w2.enter(e.value, e.path, e.offset, (n) =>
-          isScalar(n) && typeof n.value === "boolean"
-            ? { required: n.value }
-            : w2.fail(
-                "invalid_type",
-                `${INPUT}.required`,
-                e.path,
-                w2.at(n, e.offset),
-                `\`${e.path}\` must be true or false.`,
-              ),
+          refuseExpression(w2, n, e.path, `${INPUT}.required`, e.offset)
+            ? undefined
+            : isScalar(n) && typeof n.value === "boolean"
+              ? { required: n.value }
+              : w2.fail(
+                  "invalid_type",
+                  `${INPUT}.required`,
+                  e.path,
+                  w2.at(n, e.offset),
+                  `\`${e.path}\` must be true or false.`,
+                ),
         ),
       default: (w2, e) => {
         const value = readValue(w2, e.value, e.path, `${INPUT}.default`, e.offset);
@@ -1321,6 +1388,16 @@ function readInputFields(
       type: (w2, e) => {
         const type = readText(w2, e.value, e.path, `${INPUT}.type`, e.offset);
         if (!type) return undefined;
+        if (type.value.includes("${{")) {
+          const feature = `${INPUT}.type`;
+          return w2.fail(
+            "expression_not_allowed",
+            feature,
+            e.path,
+            type.at,
+            noExpressions(feature),
+          );
+        }
         const known = featureOf(`${INPUT}.type`, type.value);
         if (!known) {
           return w2.fail(
@@ -1432,11 +1509,14 @@ function readOn(w: Walk, entry: Entry): readonly Trigger[] | undefined {
       return undefined;
     };
     if (isScalar(n) || isSeq(n)) {
-      const names = readTexts(w, n, "on", "on", entry.offset, true) ?? [];
-      for (const [i, name] of names.entries()) {
-        add(name.value, isSeq(n) ? `on[${i}]` : "on", name.at, null, entry.offset);
-      }
-      if (names.length === 0 && isSeq(n))
+      // A refused expression still counts as an event written, for the empty-list check.
+      let refused = 0;
+      const items =
+        readTextItems(w, n, "on", "on", entry.offset, true, true, () => {
+          refused++;
+        }) ?? [];
+      for (const { text: name, path } of items) add(name.value, path, name.at, null, entry.offset);
+      if (items.length + refused === 0 && isSeq(n))
         w.fail(
           "invalid_value",
           "on",
@@ -1729,6 +1809,16 @@ const STEP_READERS = {
     const uses = readText(w, e.value, e.path, `${STEP}.uses`, e.offset);
     if (!uses) return undefined;
     const v = uses.value;
+    // An expression is named as such, not as a malformed reference.
+    if (v.includes("${{")) {
+      return w.fail(
+        "expression_not_allowed",
+        `${STEP}.uses`,
+        e.path,
+        uses.at,
+        noExpressions(`${STEP}.uses`),
+      );
+    }
     const ok =
       v.startsWith("./") ||
       (v.startsWith("docker://") && v.length > "docker://".length) ||

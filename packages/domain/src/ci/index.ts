@@ -1,7 +1,10 @@
-// Workflow files: discovery, parsing and the supported subset. A subpath of
+// Workflow files: discovery, parsing, the supported subset and expressions. A subpath of
 // its own (`@fyrden/domain/ci`) so the YAML parser stays out of everything
 // that imports the package root, the web app's client bundle included.
 export * from "./discover.js";
+export * from "./expression-sites.js";
+export * from "./expression-values.js";
+export * from "./expressions.js";
 export * from "./parse.js";
 export * from "./support-matrix.js";
 export * from "./workflow-schema.js";

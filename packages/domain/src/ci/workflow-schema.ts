@@ -253,7 +253,15 @@ export type WorkflowErrorCode =
   | "invalid_encoding"
   | "file_too_large"
   | "limit_exceeded"
-  | "too_many_errors";
+  | "too_many_errors"
+  | "expression_syntax"
+  | "unknown_context"
+  | "unknown_function"
+  | "context_not_available"
+  | "function_not_available"
+  | "expression_not_allowed"
+  | "expression_failed"
+  | "condition_not_single_expression";
 
 /** Why a workflow file cannot run, naming the key or value. */
 export interface WorkflowError {
