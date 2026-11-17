@@ -170,7 +170,7 @@ describe("validateDispatchInputs", () => {
       {},
     );
     expect(result.inputs).toStrictEqual({ s: "", b: false, n: "", c: "" });
-    expect(result.eventInputs).toStrictEqual({ s: "", b: "", n: "", c: "" });
+    expect(result.eventInputs).toStrictEqual({ s: "", b: "false", n: "", c: "" });
   });
 
   describe("boolean", () => {

@@ -36,9 +36,9 @@ export type DispatchInputsResult =
 /**
  * Checks `given` (the request's `inputs`, absent meaning none) against
  * `declared`. An absent input takes its default; a required one without a
- * default is refused. An optional absent input without a default is `""`
- * in `github.event.inputs`, and in `inputs` `false` for a boolean and `""`
- * otherwise (GitHub's value for an absent number or boolean: unverified).
+ * default is refused. An optional absent input without a default is `false`
+ * for a boolean (`"false"` in `github.event.inputs`) and `""` otherwise
+ * (GitHub's value for an absent number or boolean: unverified).
  * A string or choice input takes only a string: a number or boolean given
  * for one is refused rather than guessed at.
  */
@@ -84,9 +84,7 @@ export function validateDispatchInputs(
     } else if (input.required) {
       errors.push({ input: name, message: `Input \`${name}\` is required.` });
     } else {
-      inputs.push([name, input.type === "boolean" ? false : ""]);
-      eventInputs.push([name, ""]);
-      continue;
+      value = input.type === "boolean" ? false : "";
     }
     if (value === undefined) continue;
     inputs.push([name, value]);
