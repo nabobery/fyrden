@@ -90,6 +90,16 @@ function concat(...chunks: Uint8Array[]): Uint8Array {
   return bytes(...chunks);
 }
 
+/** The varint of `value` with `extra` redundant bytes: longer, but the same value to a reader. */
+function padded(value: number, extra: number): number[] {
+  const out = varint(value);
+  if (extra === 0) return out;
+  out[out.length - 1] = (out[out.length - 1] as number) | 0x80;
+  for (let k = 1; k < extra; k++) out.push(0x80);
+  out.push(0);
+  return out;
+}
+
 const SECONDS = 1_794_554_407;
 const ts = (nanos: number) => bytes(vi(0x08, SECONDS), vi(0x10, nanos));
 const at = (nanos: number): Timestamp => ({ seconds: SECONDS, nanos });
@@ -834,6 +844,223 @@ describe("decodeUpdateLogRequest bounds", () => {
     it("still refuses a malformed complete row", () => {
       const body = concat(vi(0x08, 9), ld(0x1a, ld(0x12, 0xff)), bytes(0x10));
       expectProtoError(() => decodeUpdateLogRequest(body, { truncated: true }));
+    });
+  });
+
+  describe("an oversized first row", () => {
+    // A row whose bytes run past the prefix, with only the task id and index before it.
+    const content = "x".repeat(300);
+    const oneRow = encodeLogRow({ time: at(1), content });
+    const header = concat(vi(0x08, 9), vi(0x10, 4));
+    const rowField = ld(0x1a, oneRow);
+    const cutInRow = (before: Uint8Array, keep = 10) =>
+      concat(before, rowField).subarray(0, before.length + rowField.length - keep);
+
+    it("is proven when the prefix ends inside the first row after the header", () => {
+      expect(decodeUpdateLogRequest(cutInRow(header), { truncated: true })).toEqual({
+        taskId: 9,
+        index: 4,
+        rows: [],
+        noMore: false,
+        whole: false,
+        oversizedFirstRow: { bytes: oneRow.length },
+      });
+    });
+
+    it("is proven at index 0, whose field the runner leaves out", () => {
+      expect(decodeUpdateLogRequest(cutInRow(vi(0x08, 9)), { truncated: true })).toMatchObject({
+        index: 0,
+        rows: [],
+        oversizedFirstRow: { bytes: oneRow.length },
+      });
+    });
+
+    it("is proven by the declared length alone: the row's partial bytes are not decoded", () => {
+      // The cut falls inside a two-byte UTF-8 character: never read, so never invalid.
+      const wide = encodeLogRow({ content: "é".repeat(200) });
+      const body = concat(header, ld(0x1a, wide)).subarray(0, header.length + 3 + 101);
+      expect(decodeUpdateLogRequest(body, { truncated: true }).oversizedFirstRow).toEqual({
+        bytes: wide.length,
+      });
+    });
+
+    it("is not proven past a large unknown field, even with a small row after it", () => {
+      const unknown = ld(0x2a, "u".repeat(1000));
+      const small = ld(0x1a, encodeLogRow({ content: "small" }));
+      const body = concat(header, unknown, small).subarray(0, header.length + 500);
+      const decoded = decodeUpdateLogRequest(body, { truncated: true });
+      expect(decoded).toMatchObject({ rows: [], whole: false });
+      expect(decoded.oversizedFirstRow).toBeUndefined();
+    });
+
+    it.each([
+      ["a complete unknown field", ld(0x2a, "u")],
+      ["a complete row", ld(0x1a, encodeLogRow({ content: "first" }))],
+      ["no_more", vi(0x20, 1)],
+      ["the task id with another wire type", ld(0x0a, "9")],
+    ])("is not proven after %s", (_what, field) => {
+      const decoded = decodeUpdateLogRequest(cutInRow(concat(header, field)), { truncated: true });
+      expect(decoded.whole).toBe(false);
+      expect(decoded.oversizedFirstRow).toBeUndefined();
+    });
+
+    it("is not proven when the prefix ends in the row's tag or length", () => {
+      for (const keep of [header.length, header.length + 1, header.length + 2]) {
+        const body = concat(header, ld(0x1a, "y".repeat(200))).subarray(0, keep);
+        const decoded = decodeUpdateLogRequest(body, { truncated: true });
+        expect(decoded.oversizedFirstRow, `cut at ${keep}`).toBeUndefined();
+      }
+    });
+
+    it("is not proven when the row ends exactly at the prefix's end: it decodes", () => {
+      const body = concat(header, rowField);
+      expect(decodeUpdateLogRequest(body, { truncated: true })).toMatchObject({
+        rows: [{ time: at(1), content }],
+        whole: false,
+      });
+      expect(decodeUpdateLogRequest(body, { truncated: true }).oversizedFirstRow).toBeUndefined();
+    });
+
+    it("is never proven in a body that is not a prefix: that is a malformed message", () => {
+      expectProtoError(() => decodeUpdateLogRequest(cutInRow(header)));
+    });
+
+    it("leaves a length above the safe range a malformed message", () => {
+      const body = concat(header, bytes(0x1a, varint(2 ** 53 + 2), 0x0a));
+      expectProtoError(() => decodeUpdateLogRequest(body, { truncated: true }));
+    });
+
+    describe("framed less compactly than the runner frames it", () => {
+      // A reader takes each of these as the request `canonical` is, in more bytes. A prefix of
+      // `canonical`'s length cuts each inside the row, though the row fits a request that long.
+      const canonical = encodeUpdateLogRequest({
+        taskId: 9,
+        index: 4,
+        rows: [{ time: at(1), content }],
+      });
+      const rowAfter = (tagPad: number, lengthPad: number) =>
+        bytes(padded(0x1a, tagPad), padded(oneRow.length, lengthPad), oneRow);
+      const framings: [string, Uint8Array][] = [
+        ["a repeated task id", concat(vi(0x08, 9), header, rowField)],
+        ["a repeated index", concat(header, vi(0x10, 4), rowField)],
+        [
+          "an earlier index, then the index",
+          concat(vi(0x08, 9), vi(0x10, 3), vi(0x10, 4), rowField),
+        ],
+        ["a padded task id", concat(bytes(0x08, padded(9, 1)), vi(0x10, 4), rowField)],
+        ["a padded index", concat(vi(0x08, 9), bytes(0x10, padded(4, 2)), rowField)],
+        ["a padded task id tag", concat(bytes(padded(0x08, 1), 9), vi(0x10, 4), rowField)],
+        ["a padded row tag", concat(header, rowAfter(1, 0))],
+        ["a padded row length", concat(header, rowAfter(0, 1))],
+      ];
+
+      it("frames the same request", () => {
+        expect(canonical).toEqual(concat(header, rowField));
+        for (const [what, body] of framings) {
+          expect(body.length, what).toBeGreaterThan(canonical.length);
+          expect(decodeUpdateLogRequest(body), what).toEqual(decodeUpdateLogRequest(canonical));
+        }
+      });
+
+      it.each(framings)(
+        "is not proven by %s: the row fits the canonical request",
+        (_what, body) => {
+          const decoded = decodeUpdateLogRequest(body.subarray(0, canonical.length), {
+            truncated: true,
+          });
+          expect(decoded).toMatchObject({ taskId: 9, index: 4, rows: [], whole: false });
+          expect(decoded.oversizedFirstRow).toBeUndefined();
+          // The canonical request, cut at the same length, holds the row whole.
+          expect(
+            decodeUpdateLogRequest(canonical, { truncated: true }).rows.map((r) => r.content),
+          ).toEqual([content]);
+        },
+      );
+
+      it.each(framings)(
+        "is proven past %s by one byte less: no request carries the row",
+        (_what, body) => {
+          const decoded = decodeUpdateLogRequest(body.subarray(0, canonical.length - 1), {
+            truncated: true,
+          });
+          expect(decoded.oversizedFirstRow).toEqual({ bytes: oneRow.length });
+        },
+      );
+
+      it("is not proven by an index 0 written out, which the canonical request leaves out", () => {
+        const fits = concat(vi(0x08, 9), rowField);
+        const body = concat(vi(0x08, 9), vi(0x10, 0), rowField);
+        const cut = (n: number) => decodeUpdateLogRequest(body.subarray(0, n), { truncated: true });
+        expect(cut(fits.length)).toMatchObject({ index: 0, rows: [] });
+        expect(cut(fits.length).oversizedFirstRow).toBeUndefined();
+        expect(cut(fits.length - 1).oversizedFirstRow).toEqual({ bytes: oneRow.length });
+      });
+    });
+
+    it("holds exactly when the cut is inside the first row's bytes, after only task ids and indexes, and the row's canonical request is longer than the cut", () => {
+      const pad = fc.integer({ min: 0, max: 2 });
+      // Task ids and indexes in any number and order, their tags and values padded or not.
+      const scalar = fc.record({
+        field: fc.constantFrom(1, 2),
+        value: safe,
+        tagPad: pad,
+        valuePad: pad,
+      });
+      const unknown = fc.option(
+        fc.uint8Array({ maxLength: 20 }).map((u) => ld(0x2a, u)),
+        { nil: undefined },
+      );
+      fc.assert(
+        fc.property(
+          fc.array(scalar, { maxLength: 4 }),
+          pad,
+          pad,
+          row,
+          unknown,
+          updateLog,
+          fc.nat(),
+          (scalars, tagPad, lengthPad, first, extra, rest, point) => {
+            const top = concat(
+              ...scalars.map((f) =>
+                bytes(padded(f.field * 8, f.tagPad), padded(f.value, f.valuePad)),
+              ),
+            );
+            const encoded = encodeLogRow(first);
+            const before = extra === undefined ? top : concat(top, extra);
+            const framing = bytes(padded(0x1a, tagPad), padded(encoded.length, lengthPad));
+            const body = concat(
+              before,
+              framing,
+              encoded,
+              encodeUpdateLogRequest({ rows: rest.rows, noMore: rest.noMore }),
+            );
+            const cut = point % body.length;
+            const decoded = decodeUpdateLogRequest(body.subarray(0, cut), { truncated: true });
+            // The row's own bytes start after its tag and length. The request's task id and index
+            // are the last sent; the canonical request (the runners' marshaller's, here the test
+            // encoder's) carrying the row from there is the shortest request that carries it.
+            const rowFrom = before.length + framing.length;
+            const last = (field: number) => scalars.findLast((f) => f.field === field)?.value ?? 0;
+            const shortest = encodeUpdateLogRequest({
+              taskId: last(1),
+              index: last(2),
+              rows: [first],
+            }).length;
+            const proven =
+              extra === undefined &&
+              cut >= rowFrom &&
+              cut < rowFrom + encoded.length &&
+              shortest > cut;
+            expect(decoded.oversizedFirstRow).toEqual(
+              proven ? { bytes: encoded.length } : undefined,
+            );
+            // Whatever is proven, decoded rows stay a prefix of the rows sent.
+            const sent = [first, ...rest.rows];
+            expect(decoded.rows).toEqual(sent.slice(0, decoded.rows.length));
+            if (proven) expect(decoded.rows).toEqual([]);
+          },
+        ),
+      );
     });
   });
 });

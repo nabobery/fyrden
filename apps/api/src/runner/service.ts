@@ -373,8 +373,9 @@ async function updateTask(call: CallContext): Promise<Response> {
 /**
  * The runner's log rows for its task: at most the first 4 MiB of the body
  * (a longer one is passed on as a prefix, whose complete rows may be
- * stored), routed by the scanned task id to the task's run, which decodes
- * the rows, stores what it takes and answers with the stored ack.
+ * stored, or whose first row may be proven too large and omitted), routed
+ * by the scanned task id to the task's run, which decodes the rows, stores
+ * what it takes and answers with the stored ack.
  */
 async function updateLog(call: CallContext): Promise<Response> {
   const { bytes, truncated } = await readPrefix(call.c.req.raw, UPDATE_LOG_PREFIX_BYTES);

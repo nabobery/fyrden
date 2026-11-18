@@ -30,8 +30,12 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   and the time the runner first reported.
  *
  * v4 (job logs):
- * - `ci_logs`: contiguous stored rows, acknowledgement and completion state per task.
- * - `ci_log_chunks`: the stored ranges and their authoritative R2 objects.
+ * - `ci_logs`: contiguous acknowledged positions, completion state and stored
+ *   row and byte counts per task, and `omitted_rows`: positions acknowledged
+ *   as omitted (a row too large for any request), never decreased; a log with
+ *   one is never `complete`.
+ * - `ci_log_chunks`: the stored ranges and their authoritative R2 objects (an
+ *   omission is a range of one position whose object holds its record).
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -234,7 +238,9 @@ export const runSchema: readonly DoMigration[] = [
           CHECK (state IN ('streaming', 'complete', 'incomplete')),
         rows INTEGER NOT NULL DEFAULT 0,
         bytes INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
+        omitted_rows INTEGER NOT NULL DEFAULT 0 CHECK (omitted_rows >= 0),
+        updated_at INTEGER NOT NULL,
+        CHECK (state <> 'complete' OR omitted_rows = 0)
       ) STRICT;
 
       CREATE TABLE ci_log_chunks (

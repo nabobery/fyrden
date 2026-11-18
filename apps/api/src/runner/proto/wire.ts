@@ -46,6 +46,11 @@ export class Reader {
     return this.pos >= this.buf.length;
   }
 
+  /** Bytes left after the current position. */
+  get remaining(): number {
+    return this.buf.length - this.pos;
+  }
+
   /** The next field's number and wire type. */
   tag(): { field: number; wire: WireType } {
     const [lo, hi] = this.varint();
@@ -97,7 +102,11 @@ export class Reader {
 
   /** A length-delimited field's content, as a view into the input. */
   bytes(): Uint8Array {
-    const length = this.uint64();
+    return this.take(this.uint64());
+  }
+
+  /** The next `length` bytes (a length already read), as a view into the input. */
+  take(length: number): Uint8Array {
     if (length > this.buf.length - this.pos) throw new ProtoError("length past the end", true);
     const out = this.buf.subarray(this.pos, this.pos + length);
     this.pos += length;

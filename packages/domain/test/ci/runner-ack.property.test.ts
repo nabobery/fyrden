@@ -17,6 +17,14 @@
 // trailing rows with `noMore`, and when none are left the newer release sends
 // zero rows while the older one sends one row with empty content at the next
 // index.
+//
+// A row too large for any request the server reads (a line of more than 4 MiB,
+// which the runner sends whole) is modelled as the decoder sees it: a request
+// whose body is cut inside that row. With rows before it, those rows are what
+// decodes; with it first, the decoder proves it oversized and the server
+// records an omission for that position. Every position below the ack is then
+// either the row the runner printed or an omission of a row that was too
+// large, never anything else, and a log with an omission never completes.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
@@ -32,6 +40,10 @@ const RUNNER_BATCH = 100;
 const RUNNER_MAX_LATENCY_MS = 3_000;
 /** Padding that makes a printed row large enough to reach the byte threshold in a few rows. */
 const PAD = "x".repeat(200 * 1024);
+/** The encoded size the model's oversized rows declare. */
+const HUGE_BYTES = 5 * 1024 * 1024;
+/** An omission record's object holds no line of content. */
+const NO_LINES: readonly string[] = [];
 
 type Fault = "none" | "putFails" | "casLost";
 
@@ -48,7 +60,8 @@ interface SendOptions {
 const healthy: SendOptions = { lost: false, cut: null, fault: "none", printDuring: 0 };
 
 type Action =
-  | { kind: "print"; count: number; big: boolean }
+  /** `huge`: the first printed row is too large for any request (the rest are ordinary). */
+  | { kind: "print"; count: number; big: boolean; huge: boolean }
   /** The log ticker fires; `jitter` skips ticks that find the buffer empty or are not modelled. */
   | { kind: "timer"; jitter: number; send: SendOptions }
   /** The maximum-latency timer fires, if armed. */
@@ -62,12 +75,16 @@ interface Chunk {
   start: number;
   end: number;
   lines: readonly string[];
+  /** An omission record for the one position `start`, with no line of content. */
+  omitted: boolean;
   key: string;
 }
 
 /** The runner's side: everything it printed, its acked offset, and whether it has closed. */
 class ModelRunner {
   printed: string[] = [];
+  /** Positions of rows too large for any request. */
+  huge = new Set<number>();
   offset = 0;
   closing = false;
   sentinel = false;
@@ -87,10 +104,11 @@ class ModelRunner {
     return position < this.printed.length ? (this.printed[position] as string) : "";
   }
 
-  print(count: number, big: boolean, now: number): void {
+  print(count: number, big: boolean, now: number, huge = false): void {
     if (this.closing) return;
     for (let i = 0; i < count; i++) {
       const n = this.printed.length;
+      if (huge && i === 0) this.huge.add(n);
       this.printed.push(big && i % 2 === 0 ? `row ${n} ${PAD}` : `row ${n}`);
     }
     if (count > 0 && this.latencyArmedAt === null) this.latencyArmedAt = now;
@@ -105,6 +123,27 @@ class ModelRunner {
     for (let p = this.offset; p < this.positions; p++) rows.push({ content: this.contentAt(p) });
     this.rowsSent += rows.length;
     return { index: this.offset, rows, noMore: this.closing, whole: true };
+  }
+
+  /**
+   * What the server decodes of a request: cut inside the first oversized row
+   * it carries, so only the rows before that row, and never `noMore` (written
+   * after the rows); with that row first, the decoder's evidence instead.
+   */
+  decoded(sent: LogFlushRequest): LogFlushRequest {
+    for (let k = 0; k < sent.rows.length; k++) {
+      if (!this.huge.has(sent.index + k)) continue;
+      return k === 0
+        ? {
+            index: sent.index,
+            rows: [],
+            noMore: false,
+            whole: false,
+            oversizedFirstRow: { bytes: HUGE_BYTES },
+          }
+        : { index: sent.index, rows: sent.rows.slice(0, k), noMore: false, whole: false };
+    }
+    return sent;
   }
 
   close(): void {
@@ -125,6 +164,9 @@ class ModelRunner {
 class FakeStore {
   ack = 0;
   complete = false;
+  /** A whole final call committed; complete only with no omission. */
+  ended = false;
+  omitted = 0;
   sentinelAt: number | null = null;
   manifest = new Map<number, Chunk>();
   objects = new Map<string, readonly string[]>();
@@ -147,6 +189,7 @@ class FakeStore {
       now,
     );
     if (decision.kind === "ahead") throw new Error("request ahead of the stored ack");
+    if (decision.kind === "omit") return this.omit(decision.index, now, fault);
     if (decision.kind === "hold") {
       this.firstUnackedSeenAt = decision.firstUnackedSeenAt;
       // The decision's ack is what the runner hears; it must be the durable one.
@@ -178,6 +221,41 @@ class FakeStore {
     return { ack: this.ack, committed: true, final, held: false };
   }
 
+  /** An omission record, stored like a chunk: its own object, then the manifest and the ack by compare-and-set. */
+  private omit(
+    index: number,
+    now: number,
+    fault: Fault,
+  ): { ack: number; committed: boolean; final: boolean; held: boolean } {
+    expect(index).toBe(this.ack);
+    if (fault === "putFails") {
+      this.firstUnackedSeenAt ??= now;
+      return { ack: this.ack, committed: false, final: false, held: false };
+    }
+    const key = `${index}-${index + 1}-${this.writes++}`;
+    this.objects.set(key, NO_LINES);
+    if (fault === "casLost") {
+      const other = `${index}-${index + 1}-${this.writes++}`;
+      this.objects.set(other, NO_LINES);
+      this.recordOmission(index, other);
+    }
+    if (this.ack !== index) {
+      this.objects.delete(key);
+      this.firstUnackedSeenAt = undefined;
+      return { ack: this.ack, committed: false, final: false, held: false };
+    }
+    this.recordOmission(index, key);
+    this.firstUnackedSeenAt = undefined;
+    return { ack: this.ack, committed: true, final: false, held: false };
+  }
+
+  private recordOmission(index: number, key: string): void {
+    if (this.ack !== index) return;
+    this.manifest.set(index, { start: index, end: index + 1, lines: NO_LINES, omitted: true, key });
+    this.ack = index + 1;
+    this.omitted++;
+  }
+
   private put(start: number, end: number, lines: readonly string[]): string {
     const key = `${start}-${end}-${this.writes++}`;
     this.objects.set(key, lines);
@@ -192,10 +270,15 @@ class FakeStore {
     key: string | null,
   ): void {
     if (this.ack !== start) return;
-    if (key !== null) this.manifest.set(start, { start, end: start + lines.length, lines, key });
+    if (key !== null)
+      this.manifest.set(start, { start, end: start + lines.length, lines, omitted: false, key });
     if (lines.length < end - start) this.sentinelAt = start + lines.length;
     this.ack = end;
-    if (final) this.complete = true;
+    if (final) {
+      this.ended = true;
+      // An omission is sticky: no final call, late or repeated, completes the log.
+      if (this.omitted === 0) this.complete = true;
+    }
   }
 }
 
@@ -225,6 +308,8 @@ const actions = (healthy: boolean, tickerOnly = false): fc.Arbitrary<Action[]> =
           // Trickles of one or a few rows, and bursts of hundreds.
           count: fc.oneof(fc.integer({ min: 1, max: 5 }), fc.integer({ min: 40, max: 400 })),
           big: fc.boolean(),
+          // Rows too large for any request only where failures are modelled: they are overhead.
+          huge: healthy ? fc.constant(false) : fc.integer({ min: 0, max: 5 }).map((n) => n === 0),
         }),
       },
       {
@@ -287,7 +372,14 @@ function checkStore(store: FakeStore, runner: ModelRunner): void {
   for (const chunk of [...store.manifest.values()].sort((a, b) => a.start - b.start)) {
     expect(chunk.start).toBe(covered);
     expect(store.objects.get(chunk.key)).toBe(chunk.lines);
+    if (chunk.omitted) {
+      // Only a row too large for any request is ever omitted, one position at a time.
+      expect(chunk.end).toBe(chunk.start + 1);
+      expect(runner.huge.has(chunk.start)).toBe(true);
+      expect(chunk.lines).toEqual([]);
+    }
     chunk.lines.forEach((line, i) => {
+      expect(runner.huge.has(chunk.start + i)).toBe(false);
       expect(line).toBe(runner.contentAt(chunk.start + i));
     });
     covered = chunk.end;
@@ -300,9 +392,11 @@ function checkStore(store: FakeStore, runner: ModelRunner): void {
     // Only the final call's sentinel is acked without a line, and nothing follows it.
     expect(store.sentinelAt).toBe(covered);
     expect(store.ack).toBe(covered + 1);
-    expect(store.complete).toBe(true);
+    expect(store.ended).toBe(true);
     expect(runner.sentinel).toBe(true);
   }
+  expect(store.omitted).toBe([...store.manifest.values()].filter((c) => c.omitted).length);
+  if (store.omitted > 0) expect(store.complete).toBe(false);
 }
 
 interface RunResult {
@@ -323,12 +417,18 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
   let overhead = 0;
 
   const send = (options: SendOptions): void => {
-    if (store.complete && runner.closing && runner.buffered() === 0) return;
+    if (store.ended && runner.closing && runner.buffered() === 0) return;
     const sent = runner.snapshot();
-    const cut = options.cut !== null && sent.rows.length > 0;
-    const request: LogFlushRequest = cut
-      ? { ...sent, rows: sent.rows.slice(0, (options.cut ?? 0) % sent.rows.length), whole: false }
-      : sent;
+    const seenWhole = runner.decoded(sent);
+    const cut = (options.cut !== null && seenWhole.rows.length > 0) || !seenWhole.whole;
+    const request: LogFlushRequest =
+      options.cut !== null && seenWhole.rows.length > 0
+        ? {
+            ...seenWhole,
+            rows: seenWhole.rows.slice(0, (options.cut ?? 0) % seenWhole.rows.length),
+            whole: false,
+          }
+        : seenWhole;
     // Any call stops the maximum-latency timer; rows printed during the call rearm it.
     runner.latencyArmedAt = null;
     runner.print(options.printDuring, false, now);
@@ -367,10 +467,19 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
     if (!request.whole) {
       expect(answer.final).toBe(false);
       expect(store.complete).toBe(wasComplete);
-      // Ack moves only by a flush of this request's new rows: its own, or an equal one that won.
-      expect([0, fresh]).toContain(store.ack - before);
-      if (options.fault === "none") expect(store.ack - before).toBe(answer.committed ? fresh : 0);
-      expect(store.ack).toBeLessThanOrEqual(Math.max(before, request.index + request.rows.length));
+      if (request.oversizedFirstRow !== undefined) {
+        // Past exactly the one row proven too large, and only when it is the row at the ack.
+        const omittable = request.index === before ? 1 : 0;
+        expect([0, omittable]).toContain(store.ack - before);
+        if (options.fault === "none") expect(store.ack - before).toBe(omittable);
+      } else {
+        // Ack moves only by a flush of this request's new rows: its own, or an equal one that won.
+        expect([0, fresh]).toContain(store.ack - before);
+        if (options.fault === "none") expect(store.ack - before).toBe(answer.committed ? fresh : 0);
+        expect(store.ack).toBeLessThanOrEqual(
+          Math.max(before, request.index + request.rows.length),
+        );
+      }
     }
     if (store.complete && !wasComplete) {
       expect(request.whole && request.noMore).toBe(true);
@@ -384,7 +493,7 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
   for (const action of script) {
     switch (action.kind) {
       case "print":
-        runner.print(action.count, action.big, now);
+        runner.print(action.count, action.big, now, action.huge);
         if (runner.buffered() >= RUNNER_BATCH && !runner.closing) send(healthy);
         break;
       case "timer":
@@ -412,11 +521,15 @@ function run(olderRelease: boolean, interval: number, script: readonly Action[])
         break;
     }
   }
-  // The runner closes and its final call reaches a healthy server.
+  // The runner closes and its final calls reach a healthy server. A row too large still unacked
+  // takes a call of its own to omit, and the rows before it one more (the final flush retries).
   runner.close();
   now += interval;
-  send(healthy);
-  expect(store.complete).toBe(true);
+  for (let k = 0; k <= 2 * runner.huge.size && !(store.ended && runner.buffered() === 0); k++)
+    send(healthy);
+  expect(store.ended).toBe(true);
+  expect(store.complete).toBe(runner.huge.size === 0);
+  expect(store.omitted).toBe(runner.huge.size);
   expect(store.ack).toBe(runner.positions);
   expect(runner.offset).toBe(runner.positions);
   checkStore(store, runner);
@@ -498,9 +611,9 @@ describe("runner log acks", () => {
   it("resends a quiet log on every rapid step transition until the age threshold", () => {
     // Ten rows, then twenty steps 100 ms apart that print one row each: every call holds
     // (under 50 new rows, the oldest seen under 15 s ago) and resends everything buffered.
-    const script: Action[] = [{ kind: "print", count: 10, big: false }];
+    const script: Action[] = [{ kind: "print", count: 10, big: false, huge: false }];
     for (let i = 0; i < 20; i++) {
-      script.push({ kind: "print", count: 1, big: false });
+      script.push({ kind: "print", count: 1, big: false, huge: false });
       script.push({ kind: "step", after: 100, send: healthy });
     }
     const { runner, store, held, overhead } = run(false, 5_000, script);

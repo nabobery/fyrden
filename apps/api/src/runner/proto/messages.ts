@@ -517,6 +517,40 @@ export interface DecodedUpdateLog extends UpdateLogRequest {
    * contiguous run from `index`; after the first row left out, none is taken.
    */
   whole: boolean;
+  /**
+   * Present only in a truncated prefix that ends inside the bytes of its
+   * first row, with nothing but task ids (field 1) and indexes (field 2)
+   * before that row, when even the shortest request carrying that row from
+   * that index (`shortestFirstRowRequest`) is longer than the prefix: no
+   * request, however it is framed, can bring the row within a prefix of
+   * this length. `bytes` is the row's declared encoded length, read from its
+   * framing; the row itself is not decoded. Anything else before the row (an
+   * unknown field, `no_more`, another row), a cut in the row's tag or length,
+   * or a row that a shorter framing of the same request would carry within
+   * the prefix (repeated fields, padded varints, an index 0 written out)
+   * leaves it absent.
+   */
+  oversizedFirstRow?: { bytes: number };
+}
+
+/** The bytes a varint of a non-negative safe integer takes, at its shortest. */
+function varintSize(value: number): number {
+  let size = 1;
+  for (let rest = value; rest >= 0x80; rest = Math.floor(rest / 0x80)) size++;
+  return size;
+}
+
+/**
+ * The fewest bytes an UpdateLog request for task `taskId` from `index` takes
+ * to carry a first row of `rowBytes` encoded bytes: each scalar once with a
+ * one-byte tag and its shortest varint, left out when 0 (proto3's default),
+ * then the row's one-byte tag, shortest length and bytes. Any other framing
+ * a reader takes as the same request (a field repeated, a varint padded) is
+ * longer. The bound does not depend on how a runner frames its requests.
+ */
+function shortestFirstRowRequest(taskId: number, index: number, rowBytes: number): number {
+  const scalar = (value: number) => (value === 0 ? 0 : 1 + varintSize(value));
+  return scalar(taskId) + scalar(index) + 1 + varintSize(rowBytes) + rowBytes;
 }
 
 /**
@@ -540,6 +574,8 @@ export function decodeUpdateLogRequest(
   };
   let contentBytes = 0;
   let capped = false;
+  // Only task ids and indexes read so far: a row now is the request's first field of any other kind.
+  let headerOnly = true;
   const r = new Reader(bytes);
   while (!r.done) {
     let rowBody: Uint8Array | undefined;
@@ -548,9 +584,24 @@ export function decodeUpdateLogRequest(
       const key = fieldKey(field, wire);
       if (key === fieldKey(1, Varint)) result.taskId = r.uint64();
       else if (key === fieldKey(2, Varint)) result.index = r.uint64();
-      else if (key === fieldKey(3, Bytes)) rowBody = r.bytes();
-      else if (key === fieldKey(4, Varint)) result.noMore = r.bool();
-      else r.skip(wire);
+      else {
+        if (key === fieldKey(3, Bytes)) {
+          const length = r.uint64();
+          if (
+            truncated &&
+            headerOnly &&
+            length > r.remaining &&
+            // The values read last are the request's (protobuf's rule for a repeated scalar).
+            shortestFirstRowRequest(result.taskId, result.index, length) > bytes.length
+          ) {
+            result.oversizedFirstRow = { bytes: length };
+            break;
+          }
+          rowBody = r.take(length);
+        } else if (key === fieldKey(4, Varint)) result.noMore = r.bool();
+        else r.skip(wire);
+        headerOnly = false;
+      }
     } catch (error) {
       // Only the top-level field the prefix ends in; a complete row that is malformed still throws.
       if (truncated && error instanceof ProtoError && error.endOfInput) break;

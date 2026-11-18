@@ -1,7 +1,12 @@
 import type { DoMemoryBudget } from "@fyrden/adapters-cloudflare/git";
 import { countSubrequests, type Logger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
-import { decideLogFlush, type LogFlushDecision } from "@fyrden/domain/ci";
-import type { ConnectCode } from "../../runner/connect.js";
+import {
+  decideLogFlush,
+  LOG_ROW_TOO_LARGE,
+  type LogFlushDecision,
+  type StoredLogLine,
+} from "@fyrden/domain/ci";
+import { type ConnectCode, UPDATE_LOG_PREFIX_BYTES } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
   LOG_INDEX_AHEAD,
@@ -27,6 +32,13 @@ import type { RunEngine } from "./engine.js";
  * in R2 (bucket `CI`), named in the manifest, and acked, or not acked at all
  * and sent again. The ack is durable before it is sent, so a reset loses
  * nothing that was acked.
+ *
+ * An ack of N means each position below N is stored: as its row, or, for a
+ * row too large for any request this server reads, as an omission record
+ * (`StoredLogOmission`), written the same way. The one exception is the
+ * older runner's final sentinel, acked and never stored. An omission is
+ * counted in `ci_logs.omitted_rows`, which never goes down, and a log with
+ * one is never complete.
  */
 
 /** What `appendLog` answers: an encoded UpdateLogResponse, or a Connect error. */
@@ -80,6 +92,18 @@ interface MapRow {
 }
 
 type Flush = Extract<LogFlushDecision, { kind: "flush" }>;
+type Omission = Extract<LogFlushDecision, { kind: "omit" }>;
+
+/** What one store writes: lines for positions `[start, end)`, then the ack `end`. */
+interface Write {
+  readonly start: number;
+  readonly end: number;
+  readonly lines: readonly StoredLogLine[];
+  /** Lines that are rows (the rest are omissions). */
+  readonly rows: number;
+  readonly omitted: number;
+  readonly final: boolean;
+}
 
 export class RunLogs {
   /** Tasks with a request in progress: another request for one is answered at once. */
@@ -99,7 +123,7 @@ export class RunLogs {
     );
   }
 
-  /** Whether every row of task `task` is stored: a whole final request committed. */
+  /** Whether every row of task `task` is stored: a final request committed, no row omitted. */
   complete(task: number): boolean {
     return (
       this.host.engine.rows<{ state: string }>("SELECT state FROM ci_logs WHERE task = ?", task)[0]
@@ -109,8 +133,8 @@ export class RunLogs {
 
   /**
    * Task `task` completed: a log not complete by then ends incomplete. A
-   * whole final request arriving later still completes it. Call in the
-   * completion's transaction.
+   * whole final request arriving later still completes it, unless a row was
+   * omitted. Call in the completion's transaction.
    */
   taskEnded(task: number): void {
     this.host.engine.exec(
@@ -191,6 +215,10 @@ export class RunLogs {
       throw error;
     }
     if (request.taskId !== wireId) return invalid(TASK_ID_MISMATCH);
+    // The decoder's evidence proves a row unreadable from a prefix of this length: it counts only
+    // for the Worker's full prefix, the most any request is read.
+    if (request.oversizedFirstRow && !(truncated && body.byteLength >= UPDATE_LOG_PREFIX_BYTES))
+      delete request.oversizedFirstRow;
     if (unconfirmed) await host.confirm(wireId, runnerId);
     // A heartbeat too. Rows for a finished task are still taken: a cancelled job's last rows,
     // or a final call that lands after the runner reported its result.
@@ -218,36 +246,36 @@ export class RunLogs {
       else this.#firstSeen.set(ref.task, decision.firstUnackedSeenAt);
       return acked(decision.ackIndex);
     }
+    if (decision.kind === "omit") {
+      host.log.warn("log row omitted: too large for any request", {
+        taskId: wireId,
+        task: ref.task,
+        index: decision.index,
+        bytes: decision.bytes,
+      });
+    }
     await host.hooks.beforeLogStore?.();
-    const ack = await this.#store(wireId, ref, decision, request);
+    const write = decision.kind === "omit" ? omission(decision) : rowsOf(decision, request);
+    const ack = await this.#store(wireId, ref, write);
     if (ack === "erased") return notFound();
     await host.hooks.afterLogCommit?.();
     return acked(ack);
   }
 
   /**
-   * Writes the flush's lines as a new object, then records it in the
-   * manifest and advances the ack from `start` to `end` in one transaction,
-   * only if the ack is still `start` and the run was not erased meanwhile.
-   * A flush that loses, or whose run is gone, deletes its own object (its key
-   * is its alone). The stored ack, or `erased`.
+   * Writes the lines as a new object, then records it in the manifest and
+   * advances the ack from `start` to `end` in one transaction, only if the
+   * ack is still `start` and the run was not erased meanwhile. A store that
+   * loses, or whose run is gone, deletes its own object (its key is its
+   * alone). A final store completes the log unless a position of it was ever
+   * omitted. The stored ack, or `erased`.
    */
-  async #store(
-    wireId: number,
-    ref: TaskRef,
-    flush: Flush,
-    request: DecodedUpdateLog,
-  ): Promise<number | "erased"> {
+  async #store(wireId: number, ref: TaskRef, write: Write): Promise<number | "erased"> {
     const { host } = this;
-    const { start, end, lines, final } = flush;
+    const { start, end, lines, final } = write;
     let chunk: { key: string; bytes: number } | undefined;
     if (lines.length > 0) {
-      const from = start - request.index;
-      const text = lines
-        .map((content, k) =>
-          JSON.stringify({ i: start + k, t: unixMs(request.rows[from + k]?.time), c: content }),
-        )
-        .join("\n");
+      const text = lines.map((line) => JSON.stringify(line)).join("\n");
       const encoded = new TextEncoder().encode(`${text}\n`);
       const key = this.#key(ref, start, end);
       host.metrics.count("r2.class_a", { bucket: BUCKET, op: "put_log_chunk" });
@@ -257,7 +285,7 @@ export class RunLogs {
       chunk = { key, bytes: encoded.byteLength };
       await host.hooks.afterLogPut?.(key);
     }
-    const outcome = host.tx((): "won" | "lost" | "erased" => {
+    const outcome = host.tx((): "complete" | "won" | "lost" | "erased" => {
       // Erasure removes every log row: nothing may be written after it.
       if (host.erased()) return "erased";
       const now = host.now();
@@ -278,21 +306,29 @@ export class RunLogs {
           chunk.key,
           now,
         );
+      // Right-hand sides read the row as it was: `omitted_rows` is the count before this store.
       host.engine.exec(
-        `UPDATE ci_logs SET ack_index = ?, rows = rows + ?, bytes = bytes + ?,
-           state = CASE WHEN ? THEN 'complete' ELSE state END, updated_at = ?
-         WHERE task = ? AND ack_index = ?`,
+        `UPDATE ci_logs SET ack_index = ?1, rows = rows + ?2, bytes = bytes + ?3,
+           omitted_rows = omitted_rows + ?4,
+           state = CASE
+             WHEN NOT ?5 THEN state
+             WHEN omitted_rows + ?4 = 0 THEN 'complete'
+             ELSE 'incomplete'
+           END,
+           updated_at = ?6
+         WHERE task = ?7 AND ack_index = ?8`,
         end,
-        lines.length,
+        write.rows,
         chunk?.bytes ?? 0,
+        write.omitted,
         final ? 1 : 0,
         now,
         ref.task,
         start,
       );
-      return "won";
+      return final && this.complete(ref.task) ? "complete" : "won";
     });
-    if (outcome !== "won") {
+    if (outcome === "lost" || outcome === "erased") {
       host.log.info(
         outcome === "erased"
           ? "log chunk not recorded: the run was erased"
@@ -303,8 +339,10 @@ export class RunLogs {
       return outcome === "erased" ? "erased" : this.ackOf(ref.task);
     }
     this.#firstSeen.delete(ref.task);
-    // The run may have completed the task first, with its log incomplete: now it is complete.
-    if (final && host.engine.instance(ref.jobId)?.status === "completed") host.markLogComplete(ref);
+    // The run may have completed the task first, with its log incomplete: now it is complete
+    // (never when a row was omitted: the log stays incomplete).
+    if (outcome === "complete" && host.engine.instance(ref.jobId)?.status === "completed")
+      host.markLogComplete(ref);
     return end;
   }
 
@@ -339,6 +377,39 @@ export class RunLogs {
 }
 
 const pad = (n: number) => String(n).padStart(10, "0");
+
+/** A flush's new rows as stored lines, at the positions they were sent at. */
+function rowsOf(flush: Flush, request: DecodedUpdateLog): Write {
+  const from = flush.start - request.index;
+  const lines = flush.lines.map(
+    (c, k): StoredLogLine => ({
+      i: flush.start + k,
+      t: unixMs(request.rows[from + k]?.time),
+      c,
+    }),
+  );
+  return {
+    start: flush.start,
+    end: flush.end,
+    lines,
+    rows: lines.length,
+    omitted: 0,
+    final: flush.final,
+  };
+}
+
+/** The record of a position whose row was too large: no content, the reason and the declared size. */
+function omission(omit: Omission): Write {
+  const line: StoredLogLine = { i: omit.index, omitted: LOG_ROW_TOO_LARGE, bytes: omit.bytes };
+  return {
+    start: omit.index,
+    end: omit.index + 1,
+    lines: [line],
+    rows: 0,
+    omitted: 1,
+    final: false,
+  };
+}
 
 /** A row's time in Unix milliseconds; null when the runner sent none. */
 function unixMs(time: Timestamp | undefined): number | null {

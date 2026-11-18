@@ -3,11 +3,15 @@
 // ones as one NDJSON object in R2 named in its manifest, and acks only what
 // is stored. The runner keeps and resends every row past its ack, so rows
 // that are not stored yet are never lost: a held request, a busy task, a
-// full memory pool or a reset only means the runner sends them again.
+// full memory pool or a reset only means the runner sends them again. A row
+// too large for any request is the one exception: proven so, it is stored as
+// an omission record, and the log after it keeps flowing but never completes.
 import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { LOG_ROW_TOO_LARGE } from "@fyrden/domain/ci";
 import { describe, expect, it } from "vitest";
 import type { RunDO } from "../src/do/RunDO.js";
+import { UPDATE_LOG_PREFIX_BYTES } from "../src/runner/connect.js";
 import { type LogRow, Result } from "../src/runner/proto/messages.js";
 import { Writer } from "../src/runner/proto/wire.js";
 import {
@@ -78,6 +82,7 @@ interface LogState {
   state: string;
   rows: number;
   bytes: number;
+  omitted_rows: number;
 }
 
 interface Chunk {
@@ -93,7 +98,7 @@ const logOf = (runId: string, task: number) =>
     runId,
     (r) =>
       r.engine.rows<LogState>(
-        "SELECT task, ack_index, state, rows, bytes FROM ci_logs WHERE task = ?",
+        "SELECT task, ack_index, state, rows, bytes, omitted_rows FROM ci_logs WHERE task = ?",
         task,
       )[0],
   );
@@ -112,10 +117,13 @@ async function objectsOf(runId: string, task: number): Promise<string[]> {
   return listed.objects.map((o) => o.key).filter((key) => key.split("/")[4] === String(task));
 }
 
+/** A stored line: a row (`t`, `c`) or an omission record (`omitted`, `bytes`). */
 interface Line {
   i: number;
-  t: number | null;
-  c: string;
+  t?: number | null;
+  c?: string;
+  omitted?: string;
+  bytes?: number;
 }
 
 /** The lines of every chunk the manifest names, in order, checked contiguous with no duplicates. */
@@ -142,8 +150,13 @@ const instanceLog = (runId: string, task: number) =>
   inRun(
     runId,
     (r) =>
-      r.engine.rows<{ status: string; log_complete: number | null; heartbeat_at: number | null }>(
-        "SELECT status, log_complete, heartbeat_at FROM run_instances WHERE task = ?",
+      r.engine.rows<{
+        status: string;
+        conclusion: string | null;
+        log_complete: number | null;
+        heartbeat_at: number | null;
+      }>(
+        "SELECT status, conclusion, log_complete, heartbeat_at FROM run_instances WHERE task = ?",
         task,
       )[0],
   );
@@ -452,20 +465,20 @@ describe("the final UpdateLog", () => {
   });
 });
 
-describe("a reset", () => {
-  /** Has the hook throw once, as a reset there would, then drops the object's memory. */
-  async function resetOnce(runId: string, point: "afterLogPut" | "afterLogCommit") {
-    let armed = true;
-    await hook(runId, () => ({
-      [point]: () => {
-        if (armed) {
-          armed = false;
-          throw new Error("reset");
-        }
-      },
-    }));
-  }
+/** Has the hook throw once, as a reset there would; the test then drops the object's memory. */
+async function resetOnce(runId: string, point: "afterLogPut" | "afterLogCommit") {
+  let armed = true;
+  await hook(runId, () => ({
+    [point]: () => {
+      if (armed) {
+        armed = false;
+        throw new Error("reset");
+      }
+    },
+  }));
+}
 
+describe("a reset", () => {
   it("after the object is written, before the manifest: the resend stores the rows once, under one manifest row", async () => {
     const { runId, runner, task, number } = await withTask();
     await resetOnce(runId, "afterLogPut");
@@ -676,5 +689,364 @@ describe("UpdateLog fencing", () => {
     await sendLog(runner, { taskId: task.id, index: 99, rows: rowsAt(99, 1) });
     await ackOf(runner, { taskId: task.id, index: 50, rows: [], noMore: true });
     expect(logs.lines.filter((l) => l.includes(runner.token) || l.includes(jobToken))).toEqual([]);
+  });
+});
+
+/** The bytes a varint of `value` takes. */
+const varintBytes = (value: number) =>
+  value < 2 ** 7 ? 1 : value < 2 ** 14 ? 2 : value < 2 ** 21 ? 3 : value < 2 ** 28 ? 4 : 5;
+
+/**
+ * The most content bytes a row at `index` (with a time, as `rowsAt` writes)
+ * can carry while ending within the Worker's prefix as the first row of a
+ * request from `index`: the prefix holds the task id, the index and the
+ * row's own framing too.
+ */
+function largestFitting(taskId: number, index: number): number {
+  const header = encodeUpdateLogRequest({ taskId, index }).length;
+  const time = encodeLogRow(rowsAt(index, 1, () => "")[0] as LogRow).length;
+  const size = (n: number) => {
+    const row = time + 1 + varintBytes(n) + n;
+    return header + 1 + varintBytes(row) + row;
+  };
+  let n = UPDATE_LOG_PREFIX_BYTES;
+  while (size(n) > UPDATE_LOG_PREFIX_BYTES) n--;
+  return n;
+}
+
+const join = (...parts: Uint8Array[]): Uint8Array => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+};
+
+/**
+ * A length-delimited field whose length varint has `pad` redundant bytes: a
+ * reader takes it as the canonical field, which is `pad` bytes shorter.
+ */
+function paddedField(field: number, content: Uint8Array, pad: number): Uint8Array {
+  const length: number[] = [];
+  let rest = content.length;
+  while (rest > 0x7f) {
+    length.push((rest % 0x80) | 0x80);
+    rest = Math.floor(rest / 0x80);
+  }
+  length.push(rest);
+  if (pad > 0) {
+    length[length.length - 1] = (length[length.length - 1] as number) | 0x80;
+    for (let k = 1; k < pad; k++) length.push(0x80);
+    length.push(0);
+  }
+  return join(Uint8Array.of(field * 8 + 2), Uint8Array.from(length), content);
+}
+
+describe("a row too large for any request", () => {
+  /** Exactly 4 MiB of content: with its framing, it cannot fit in a 4 MiB prefix. */
+  const huge = (index: number) => rowsAt(index, 1, () => "x".repeat(4 * MiB));
+  const declared = (rows: LogRow[]) => encodeLogRow(rows[0] as LogRow).length;
+
+  it("is recorded as omitted at its position; the rows after it are stored, the log never completes, the result stands", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const big = huge(0);
+    const tail = rowsAt(1, 3, (i) => `tail ${i}`);
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: [...big, ...tail] })).toBe(1);
+    expect(await storedLines(runId, number)).toEqual([
+      { i: 0, omitted: LOG_ROW_TOO_LARGE, bytes: declared(big) },
+    ]);
+    expect(await logOf(runId, number)).toMatchObject({
+      ack_index: 1,
+      rows: 0,
+      omitted_rows: 1,
+      state: "streaming",
+    });
+    expect(logs.lines.some((l) => l.includes("log row omitted: too large for any request"))).toBe(
+      true,
+    );
+    // The runner drops the row the ack passed and sends the rest in its final call.
+    expect(await ackOf(runner, { taskId: task.id, index: 1, rows: tail, noMore: true })).toBe(4);
+    const lines = await storedLines(runId, number);
+    expect(lines.map((l) => l.i)).toEqual([0, 1, 2, 3]);
+    expect(lines.slice(1).map((l) => l.c)).toEqual(tail.map((r) => r.content));
+    expect(await logOf(runId, number)).toMatchObject({
+      ack_index: 4,
+      rows: 3,
+      omitted_rows: 1,
+      state: "incomplete",
+    });
+    await updateTask(runner, task.id, Result.SUCCESS);
+    expect(await instanceLog(runId, number)).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+      log_complete: 0,
+    });
+    // Late and repeated final calls, in either runner's form, never complete it.
+    expect(await ackOf(runner, { taskId: task.id, index: 1, rows: tail, noMore: true })).toBe(4);
+    expect(await ackOf(runner, { taskId: task.id, index: 4, rows: [], noMore: true })).toBe(4);
+    expect(await logOf(runId, number)).toMatchObject({ state: "incomplete", omitted_rows: 1 });
+    expect((await instanceLog(runId, number))?.log_complete).toBe(0);
+    expect((await chunksOf(runId, number)).map((c) => [c.start_index, c.end_index])).toEqual([
+      [0, 1],
+      [1, 4],
+    ]);
+  });
+
+  it("resent below the ack (a lost answer) is held and recorded once", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const sent = [...huge(0), ...rowsAt(1, 2)];
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: sent })).toBe(1);
+    for (let k = 0; k < 3; k++)
+      expect(await ackOf(runner, { taskId: task.id, index: 0, rows: sent })).toBe(1);
+    expect(await logOf(runId, number)).toMatchObject({ ack_index: 1, omitted_rows: 1 });
+    expect((await chunksOf(runId, number)).length).toBe(1);
+    expect((await objectsOf(runId, number)).length).toBe(1);
+  });
+
+  it.each<[string, LogRow[], number]>([
+    ["the newer runner's empty final call", [], 1],
+    ["the older runner's sentinel", [{ content: "" }], 2],
+  ])(
+    "ended right after it by %s stores only the record and stays incomplete",
+    async (_form, rows, ack) => {
+      const { runId, runner, task, number } = await withTask();
+      expect(await ackOf(runner, { taskId: task.id, index: 0, rows: huge(0) })).toBe(1);
+      expect(await ackOf(runner, { taskId: task.id, index: 1, rows, noMore: true })).toBe(ack);
+      expect(await storedLines(runId, number)).toEqual([
+        { i: 0, omitted: LOG_ROW_TOO_LARGE, bytes: declared(huge(0)) },
+      ]);
+      expect(await logOf(runId, number)).toMatchObject({
+        ack_index: ack,
+        rows: 0,
+        omitted_rows: 1,
+        state: "incomplete",
+      });
+    },
+  );
+
+  it("before the older runner's sentinel leaves the log incomplete", async () => {
+    const { runId, runner, task, number } = await withTask();
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: huge(0) })).toBe(1);
+    expect(
+      await ackOf(runner, { taskId: task.id, index: 1, rows: [{ content: "" }], noMore: true }),
+    ).toBe(2);
+    expect(await logOf(runId, number)).toMatchObject({
+      ack_index: 2,
+      rows: 0,
+      omitted_rows: 1,
+      state: "incomplete",
+    });
+    await updateTask(runner, task.id, Result.FAILURE);
+    expect(await instanceLog(runId, number)).toMatchObject({
+      conclusion: "failure",
+      log_complete: 0,
+    });
+  });
+
+  it("is a row past the largest that fits with its framing; one that fits, to the byte, is stored", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const send = (index: number, rows: LogRow[]) => ackOf(runner, { taskId: task.id, index, rows });
+    const exactly = (index: number, content: (n: number) => string) => {
+      const n = largestFitting(task.id, index);
+      expect(n).toBeLessThan(4 * MiB);
+      return rowsAt(index, 1, () => content(n));
+    };
+    // A whole body of exactly the prefix: not cut, stored.
+    const whole = exactly(0, (n) => "a".repeat(n));
+    expect(encodeUpdateLogRequest({ taskId: task.id, index: 0, rows: whole }).length).toBe(
+      UPDATE_LOG_PREFIX_BYTES,
+    );
+    expect(await send(0, whole)).toBe(1);
+    // A row ending exactly at the prefix's end, with more after it: the body is cut, the row is not.
+    const atEnd = exactly(1, (n) => "b".repeat(n));
+    expect(await send(1, [...atEnd, ...rowsAt(2, 1)])).toBe(2);
+    // One byte more: omitted.
+    const over = exactly(2, (n) => "c".repeat(n + 1));
+    expect(await send(2, [...over, ...rowsAt(3, 1)])).toBe(3);
+    // Multibyte content: a two-byte character ending exactly at the prefix's end is stored whole …
+    const wide = exactly(3, (n) => `${"d".repeat(n - 2)}é`);
+    expect(await send(3, [...wide, ...rowsAt(4, 1)])).toBe(4);
+    // … and cut between its bytes, the row is omitted, not refused as invalid UTF-8.
+    const split = exactly(4, (n) => `${"e".repeat(n - 1)}é`);
+    expect(await send(4, [...split, ...rowsAt(5, 1)])).toBe(5);
+    expect(
+      await ackOf(runner, { taskId: task.id, index: 5, rows: rowsAt(5, 1), noMore: true }),
+    ).toBe(6);
+    const lines = await storedLines(runId, number);
+    expect(lines.map((l) => l.i)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(lines.map((l) => (l.omitted ? "omitted" : l.c?.length))).toEqual([
+      whole[0]?.content.length,
+      atEnd[0]?.content.length,
+      "omitted",
+      wide[0]?.content.length,
+      "omitted",
+      "line 5".length,
+    ]);
+    expect(lines[0]?.c).toBe(whole[0]?.content);
+    expect(lines[3]?.c).toBe(wide[0]?.content);
+    expect(lines[2]).toEqual({ i: 2, omitted: LOG_ROW_TOO_LARGE, bytes: declared(over) });
+    expect(await logOf(runId, number)).toMatchObject({
+      ack_index: 6,
+      rows: 4,
+      omitted_rows: 2,
+      state: "incomplete",
+    });
+  });
+
+  it("is not a row that fits once framed as the runner frames it: a repeated task id or a padded length is held, never omitted", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const raw = async (body: Uint8Array) =>
+      ackOfRaw(await runnerCall("UpdateLog", body, { credentials: runner }));
+    /** The request from `index` of `rows`' one row, its header written `repeat` times and its length padded by `pad` bytes. */
+    const framed = (index: number, rows: LogRow[], repeat: number, pad: number) => {
+      const header = encodeUpdateLogRequest({ taskId: task.id, index });
+      const row = encodeLogRow(rows[0] as LogRow);
+      return join(...Array.from({ length: repeat }, () => header), paddedField(3, row, pad));
+    };
+    const fits = rowsAt(0, 1, (i) => "f".repeat(largestFitting(task.id, i)));
+    const canonical = encodeUpdateLogRequest({ taskId: task.id, index: 0, rows: fits });
+    expect(canonical.length).toBe(UPDATE_LOG_PREFIX_BYTES);
+    expect(framed(0, fits, 1, 0)).toEqual(canonical);
+    // Each framing is longer than the prefix and is cut inside the row: held, nothing recorded.
+    for (const body of [framed(0, fits, 2, 0), framed(0, fits, 1, 1)]) {
+      expect(body.length).toBeGreaterThan(UPDATE_LOG_PREFIX_BYTES);
+      expect(await raw(body)).toBe(0);
+    }
+    expect(await chunksOf(runId, number)).toEqual([]);
+    expect(await objectsOf(runId, number)).toEqual([]);
+    // The runner's framing of the same row: stored whole.
+    expect(await raw(canonical)).toBe(1);
+    // One content byte more, in the same framings: no request carries it, so it is omitted.
+    const over = rowsAt(1, 1, (i) => "g".repeat(largestFitting(task.id, i) + 1));
+    expect(await raw(framed(1, over, 2, 0))).toBe(2);
+    const padded = rowsAt(2, 1, (i) => "h".repeat(largestFitting(task.id, i) + 1));
+    expect(await raw(framed(2, padded, 1, 1))).toBe(3);
+    const lines = await storedLines(runId, number);
+    expect(lines.map((l) => l.omitted ?? l.c)).toEqual([
+      fits[0]?.content,
+      LOG_ROW_TOO_LARGE,
+      LOG_ROW_TOO_LARGE,
+    ]);
+    expect(lines.slice(1).map((l) => l.bytes)).toEqual([declared(over), declared(padded)]);
+    expect(await logOf(runId, number)).toMatchObject({ ack_index: 3, rows: 1, omitted_rows: 2 });
+  });
+
+  it("is not a row cut only by the rows before it: that one is stored from the resend", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const rows = [
+      ...rowsAt(0, 3, (i) => `${i}`.padEnd(MiB, "m")),
+      ...rowsAt(3, 1, () => "n".repeat(2 * MiB)),
+      ...rowsAt(4, 1),
+    ];
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows })).toBe(3);
+    expect(await ackOf(runner, { taskId: task.id, index: 3, rows: rows.slice(3) })).toBe(5);
+    expect((await storedLines(runId, number)).map((l) => l.c)).toEqual(rows.map((r) => r.content));
+    expect(await logOf(runId, number)).toMatchObject({ omitted_rows: 0, rows: 5 });
+  });
+
+  it("is never inferred from a cut body with no decoded row: a large unknown field before a small row is held", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const body = new Writer()
+      .uint64(1, task.id)
+      .bytes(15, new Uint8Array(5 * MiB))
+      .message(3, encodeLogRow({ content: "small" }))
+      .finish();
+    for (let k = 0; k < 2; k++)
+      expect(await ackOfRaw(await runnerCall("UpdateLog", body, { credentials: runner }))).toBe(0);
+    expect(await chunksOf(runId, number)).toEqual([]);
+    expect(await objectsOf(runId, number)).toEqual([]);
+  });
+
+  it("is not proven by a prefix shorter than the Worker's", async () => {
+    const { runId, runner, task, number } = await withTask();
+    const short = encodeUpdateLogRequest({
+      taskId: task.id,
+      rows: [{ content: "x".repeat(100) }],
+    }).subarray(0, 40);
+    const answer = await runStub(runId).appendLog(task.id, short, true, runner.id);
+    if (!answer.ok) throw new Error(answer.message);
+    expect(decodeUpdateLogResponse(answer.response).ackIndex).toBe(0);
+    expect(await chunksOf(runId, number)).toEqual([]);
+  });
+
+  it("after its record is written, before the manifest: the resend records it once", async () => {
+    const { runId, runner, task, number } = await withTask();
+    await resetOnce(runId, "afterLogPut");
+    await connectError(
+      await sendLog(runner, { taskId: task.id, index: 0, rows: huge(0) }),
+      "unavailable",
+      503,
+    );
+    await reset(runId);
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: huge(0) })).toBe(1);
+    expect((await chunksOf(runId, number)).map((c) => [c.start_index, c.end_index])).toEqual([
+      [0, 1],
+    ]);
+    expect(await logOf(runId, number)).toMatchObject({ ack_index: 1, omitted_rows: 1 });
+    // The first record is an orphan nothing names, left for retention.
+    expect((await objectsOf(runId, number)).length).toBe(2);
+  });
+
+  it("after the manifest, before the answer: the resend is held at the ack", async () => {
+    const { runId, runner, task, number } = await withTask();
+    await resetOnce(runId, "afterLogCommit");
+    await connectError(
+      await sendLog(runner, { taskId: task.id, index: 0, rows: huge(0) }),
+      "unavailable",
+      503,
+    );
+    await reset(runId);
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: huge(0) })).toBe(1);
+    expect(await logOf(runId, number)).toMatchObject({ ack_index: 1, omitted_rows: 1 });
+    expect((await objectsOf(runId, number)).length).toBe(1);
+  });
+
+  it("whose run is erased while its record is written records nothing and deletes the record", async () => {
+    const { f, runId, runner, task, number } = await withTask();
+    await hook(runId, (r) => ({
+      afterLogPut: async () => {
+        await r.erase(f.repo.id);
+      },
+    }));
+    await connectError(
+      await sendLog(runner, { taskId: task.id, index: 0, rows: huge(0) }),
+      "not_found",
+      404,
+    );
+    expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_logs"))).toEqual([]);
+    expect(await objectsOf(runId, number)).toEqual([]);
+  });
+
+  it("while its task has a request in progress, or the pool is taken, is answered with the stored ack, unread", async () => {
+    const f = await orgRepo();
+    const runId = await started(f, two);
+    const a = await registerRunner(f.org.login, f.owner);
+    const b = await registerRunner(f.org.login, f.owner);
+    const taskA = (await fetchTask(a, 0)).task;
+    const taskB = (await fetchTask(b, 0)).task;
+    if (!taskA || !taskB) throw new Error("no tasks");
+    const numberA = (await taskRow(taskA.id))?.task as number;
+    const numberB = (await taskRow(taskB.id))?.task as number;
+    const held = gate();
+    await hook(runId, () => ({ beforeLogStore: () => held.hold() }));
+    // 60 rows of 64 KiB: about 11.8 MiB of the 16 MiB pool while held.
+    const first = sendLog(a, {
+      taskId: taskA.id,
+      index: 0,
+      rows: rowsAt(0, 60, (i) => `${i}`.padEnd(64 * KiB, "x")),
+    }).then(ackOfRaw);
+    await held.started;
+    expect(await ackOf(a, { taskId: taskA.id, index: 0, rows: huge(0) })).toBe(0);
+    expect(await ackOf(b, { taskId: taskB.id, index: 0, rows: huge(0) })).toBe(0);
+    held.release();
+    expect(await first).toBe(60);
+    await hook(runId, () => ({}));
+    expect(await logOf(runId, numberA)).toMatchObject({ ack_index: 60, omitted_rows: 0 });
+    expect(await logOf(runId, numberB)).toBeUndefined();
+    // Resent with room: recorded.
+    expect(await ackOf(b, { taskId: taskB.id, index: 0, rows: huge(0) })).toBe(1);
+    expect(await logOf(runId, numberB)).toMatchObject({ ack_index: 1, omitted_rows: 1 });
   });
 });

@@ -18,7 +18,9 @@ CREATE TABLE ci_logs (
           CHECK (state IN ('streaming', 'complete', 'incomplete')),
         rows INTEGER NOT NULL DEFAULT 0,
         bytes INTEGER NOT NULL DEFAULT 0,
-        updated_at INTEGER NOT NULL
+        omitted_rows INTEGER NOT NULL DEFAULT 0 CHECK (omitted_rows >= 0),
+        updated_at INTEGER NOT NULL,
+        CHECK (state <> 'complete' OR omitted_rows = 0)
       ) STRICT;
 CREATE TABLE ci_tasks (
         wire_id INTEGER PRIMARY KEY,

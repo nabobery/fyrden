@@ -45,6 +45,15 @@ export interface LogFlushRequest {
   readonly noMore: boolean;
   /** False when the body was cut or the decoder stopped early: rows past `rows` were sent but not read. */
   readonly whole: boolean;
+  /**
+   * Set only by the decoder's positive evidence that the row at `index`
+   * cannot be carried by any request the server reads: the body was cut
+   * inside that row's own bytes, with only task ids and indexes before it,
+   * and even the shortest framing of a request carrying that row from
+   * `index` is longer than the body read. `bytes` is the row's encoded size
+   * as the runner framed it (declared, not read).
+   */
+  readonly oversizedFirstRow?: { readonly bytes: number } | undefined;
 }
 
 export type LogFlushDecision =
@@ -59,7 +68,8 @@ export type LogFlushDecision =
   /**
    * Store `lines` as positions `[start, end)` and then ack `end`. `lines` is
    * shorter than `end - start` only by a final sentinel, which is acked but is
-   * not a line. `final`: the log is complete once this commits.
+   * not a line. `final`: the log is complete once this commits, unless a row
+   * of it was omitted.
    */
   | {
       readonly kind: "flush";
@@ -67,7 +77,45 @@ export type LogFlushDecision =
       readonly end: number;
       readonly lines: readonly string[];
       readonly final: boolean;
-    };
+    }
+  /**
+   * Store an omission record for position `index` (the stored ack) and then
+   * ack `index + 1`: the row there can never be read, so it is recorded as
+   * omitted, and the log can never be complete.
+   */
+  | { readonly kind: "omit"; readonly index: number; readonly bytes: number };
+
+/** Why a stored position holds no row: the row was too large for any request the server reads. */
+export const LOG_ROW_TOO_LARGE = "row_too_large";
+
+/** A stored row: its position, its time in Unix milliseconds (null: none sent) and its content. */
+export interface StoredLogRow {
+  readonly i: number;
+  readonly t: number | null;
+  readonly c: string;
+}
+
+/**
+ * A stored position whose row was omitted: no content and no time, only the
+ * reason and the row's encoded size as the runner declared it. A log holding
+ * one is never complete.
+ */
+export interface StoredLogOmission {
+  readonly i: number;
+  readonly omitted: typeof LOG_ROW_TOO_LARGE;
+  readonly bytes: number;
+}
+
+/**
+ * One line of a stored log chunk (NDJSON). Every position below the ack is
+ * exactly one of these, except the older runner's final sentinel
+ * (`isFinalSentinel`): its position is acked and never stored.
+ */
+export type StoredLogLine = StoredLogRow | StoredLogOmission;
+
+export function isLogOmission(line: StoredLogLine): line is StoredLogOmission {
+  return "omitted" in line;
+}
 
 /**
  * The older supported runner release ends a log with nothing left to send by
@@ -92,12 +140,18 @@ export function isFinalSentinel(request: LogFlushRequest): boolean {
  *   nothing to write and only marks the log complete).
  * - A `noMore` request that is not whole stores the new rows it carried, so
  *   the runner, in its terminal flush, resends only the rest; it is never
- *   final, since rows it did not carry may follow.
+ *   final, since rows it did not carry may follow. Any other request that is
+ *   not whole stores its new rows at once too: waiting cannot make a cut
+ *   body whole, and each resend of it costs a full prefix read.
  * - Any other request stores its new rows once there are at least
  *   `LOG_FLUSH_ROWS` of them, or `LOG_FLUSH_BYTES` of content, or the oldest
  *   unacked row was first seen `LOG_FLUSH_AGE_MS` ago. Storing every batch of
  *   50 at once keeps the server from making rows pile up to the runner's
  *   100-row batch size, past which the runner calls once per new row.
+ * - A cut request at the ack with no decoded row and the decoder's evidence
+ *   that its first row cannot fit (`oversizedFirstRow`) omits that row:
+ *   waiting cannot help, since every resend is cut at the same row. Zero
+ *   rows from a cut body without that evidence are held like any other.
  */
 export function decideLogFlush(
   state: LogFlushState,
@@ -106,6 +160,14 @@ export function decideLogFlush(
 ): LogFlushDecision {
   const { ackIndex } = state;
   if (request.index > ackIndex) return { kind: "ahead" };
+  if (
+    request.oversizedFirstRow !== undefined &&
+    !request.whole &&
+    request.rows.length === 0 &&
+    request.index === ackIndex
+  ) {
+    return { kind: "omit", index: ackIndex, bytes: request.oversizedFirstRow.bytes };
+  }
   const fresh = request.rows.slice(ackIndex - request.index);
   const end = ackIndex + fresh.length;
   if (request.noMore && request.whole) {
@@ -116,6 +178,7 @@ export function decideLogFlush(
   const seen = state.firstUnackedSeenAt;
   if (
     request.noMore ||
+    !request.whole ||
     fresh.length >= LOG_FLUSH_ROWS ||
     (seen !== undefined && now - seen >= LOG_FLUSH_AGE_MS) ||
     reachesBytes(fresh, LOG_FLUSH_BYTES)

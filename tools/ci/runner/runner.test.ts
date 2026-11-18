@@ -7,6 +7,11 @@
 // R2 chunks, named by the run object's manifest from row 0, holding every row
 // the runner sent (the seam, its instance URL, records each UpdateLog on the
 // way to the API) once and in order, and the final ack covering the final call.
+// A second job prints one line larger than the API's 4 MiB request prefix and
+// then more: the runner sends that line as one row, the API records it as
+// omitted, the runner receives the ack past it (its next call starts there),
+// the lines after it are stored, and the log ends incomplete while the job
+// still succeeds.
 //
 // Needs Docker (the daemon's socket is handed to the runner, which starts the
 // job container) and the job image; the binary is downloaded once, checked
@@ -19,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { mentionsToken } from "@fyrden/domain";
+import { isFinalSentinel } from "@fyrden/domain/ci";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type DecodedUpdateLog,
@@ -27,6 +33,7 @@ import {
 import { decodeUpdateLogResponse } from "../../../apps/api/test/helpers/runner-proto.js";
 import { type Account, eventually, type Forge, Git, startForge } from "../e2e/forge.js";
 import { hostArch, runnerBinary, runnerVersion } from "./binary.js";
+import { storedLogShape } from "./log-accounting.js";
 
 const VERSION = runnerVersion(process.env.RUNNER_VERSION);
 const ARCH = hostArch();
@@ -71,6 +78,21 @@ const PRINTED = [
   ...Array.from({ length: BURST }, (_, i) => `burst ${i + 1}`),
   ...Array.from({ length: TRICKLE }, (_, i) => `trickle ${i + 1}`),
 ];
+/** One line of 5 MiB: past the API's 4 MiB request prefix even alone, so never readable. */
+const HUGE = 5 * 1024 * 1024;
+const BIG_NAME = `${WORKFLOW_NAME}-big`;
+const BIG_WORKFLOW = [
+  `name: ${BIG_NAME}`,
+  "on: push",
+  "jobs:",
+  "  big:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - name: huge",
+  `        run: node -e "process.stdout.write('h'.repeat(${HUGE}) + '\\n')"; echo "after ${nonce}"`,
+  "      - name: tail",
+  `        run: echo "tail ${nonce}"`,
+].join("\n");
 
 interface Exit {
   code: number | null;
@@ -219,26 +241,43 @@ interface RecordedUpdateLog {
   readonly status: number;
   readonly request: DecodedUpdateLog;
   readonly ack: number;
+  /** The API stopped reading the body before its end. */
+  readonly cancelled: boolean;
 }
 
-/** The UpdateLog calls the seam recorded, in arrival order, decoded with the API's own codec. */
-async function recordedUpdateLogs(): Promise<RecordedUpdateLog[]> {
+/**
+ * The UpdateLog calls the seam recorded for wire task `wireId`, in arrival
+ * order, decoded with the API's own codec (a body longer than the 4 MiB the
+ * seam records as the prefix it is).
+ */
+async function recordedUpdateLogs(wireId: number): Promise<RecordedUpdateLog[]> {
   const res = await fetch(`${forge.origin}/__runs/recorded`);
   expect(res.status).toBe(200);
   const entries = (await res.json()) as {
     request: string;
+    whole: boolean;
+    cancelled: boolean;
     status: number | null;
     response: string | null;
+    error: string | null;
   }[];
-  return entries.map((entry) => {
-    expect(entry.status, "an UpdateLog still unanswered").not.toBeNull();
-    const ok = entry.status === 200;
-    return {
-      status: entry.status as number,
-      request: decodeUpdateLogRequest(Buffer.from(entry.request, "base64")),
-      ack: ok ? decodeUpdateLogResponse(Buffer.from(entry.response ?? "", "base64")).ackIndex : -1,
-    };
-  });
+  return entries
+    .map((entry) => {
+      expect(entry.error, "an UpdateLog the seam could not forward").toBeNull();
+      expect(entry.status, "an UpdateLog still unanswered").not.toBeNull();
+      const ok = entry.status === 200;
+      return {
+        status: entry.status as number,
+        request: decodeUpdateLogRequest(Buffer.from(entry.request, "base64"), {
+          truncated: !entry.whole,
+        }),
+        ack: ok
+          ? decodeUpdateLogResponse(Buffer.from(entry.response ?? "", "base64")).ackIndex
+          : -1,
+        cancelled: entry.cancelled,
+      };
+    })
+    .filter((call) => call.request.taskId === wireId);
 }
 
 /** The run object's SQLite database in the local persistence, found by its run id. */
@@ -253,8 +292,11 @@ async function runDatabase(runId: string): Promise<DatabaseSync> {
   throw new Error(`no run object database for ${runId} in ${dir}`);
 }
 
-describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
-  it("registers, runs a job and stores its whole log", async () => {
+let registration: Promise<void> | undefined;
+
+/** Registers the runner, once: its credential stays in the data directory for every later job. */
+function register(): Promise<void> {
+  registration ??= (async () => {
     const { token } = await owner.api.call("orgs.runners.registration_tokens.create", { org });
     const registered = await docker(
       runnerArgs(
@@ -278,64 +320,97 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
     expect(registered.code, shown(registered.output)).toBe(0);
     const runners = await owner.api.call("orgs.runners.list", { org });
     expect(runners.runners).toMatchObject([{ name: CONTAINER, version: `v${VERSION}` }]);
+  })();
+  return registration;
+}
 
-    // --once: it polls until it gets a task, runs it, and exits.
-    const daemon = exec(
-      "docker",
-      runnerArgs(
-        CONTAINER,
-        ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
-        ["daemon", "--once"],
-      ),
-    );
-    const started = await (
-      await fetch(`${forge.origin}/__runs/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          repoId,
+/** Starts a run of `source` (workflow `name`) and lets the registered runner take its one job. */
+async function runWorkflow(name: string, source: string) {
+  await register();
+  // --once: it polls until it gets a task, runs it, and exits.
+  const daemon = exec(
+    "docker",
+    runnerArgs(
+      CONTAINER,
+      ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
+      ["daemon", "--once"],
+    ),
+  );
+  const started = await (
+    await fetch(`${forge.origin}/__runs/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repoId,
+        sha,
+        ref: "refs/heads/main",
+        event: "push",
+        actor: owner.id,
+        workflow: { path: ".github/workflows/ci.yml", source },
+        // What a push trigger will give: the runner names its workspace after the repository.
+        github: {
+          server_url: forge.origin,
+          repository: `${org}/app`,
+          repository_owner: org,
+          actor: owner.handle,
+          workflow: name,
           sha,
           ref: "refs/heads/main",
-          event: "push",
-          actor: owner.id,
-          workflow: { path: ".github/workflows/ci.yml", source: WORKFLOW },
-          // What a push trigger will give: the runner names its workspace after the repository.
-          github: {
-            server_url: forge.origin,
-            repository: `${org}/app`,
-            repository_owner: org,
-            actor: owner.handle,
-            workflow: WORKFLOW_NAME,
-            sha,
-            ref: "refs/heads/main",
-            ref_name: "main",
-            ref_type: "branch",
-            event_name: "push",
-            event: {},
-          },
-        }),
-      })
-    ).json();
-    expect(started).toMatchObject({ answer: { ok: true } });
-    const runId = (started as { runId: string }).runId;
+          ref_name: "main",
+          ref_type: "branch",
+          event_name: "push",
+          event: {},
+        },
+      }),
+    })
+  ).json();
+  expect(started).toMatchObject({ answer: { ok: true } });
+  const runId = (started as { runId: string }).runId;
 
-    const exit = await daemon;
-    note(`daemon: exit ${exit.code}\n${shown(exit.output)}`);
-    expect(exit.code, shown(exit.output)).toBe(0);
+  const exit = await daemon;
+  note(`daemon: exit ${exit.code}\n${shown(exit.output)}`);
+  expect(exit.code, shown(exit.output)).toBe(0);
 
-    const run = await eventually("the run completed", async () => {
-      const r = await owner.api.call("actions.runs.get", {
-        owner: org,
-        repo: "app",
-        run_id: runId,
-      });
-      return r.status === "completed" ? r : undefined;
-    });
-    const { jobs } = await owner.api.call("actions.runs.jobs.list", {
+  const run = await eventually("the run completed", async () => {
+    const r = await owner.api.call("actions.runs.get", {
       owner: org,
       repo: "app",
       run_id: runId,
     });
+    return r.status === "completed" ? r : undefined;
+  });
+  const { jobs } = await owner.api.call("actions.runs.jobs.list", {
+    owner: org,
+    repo: "app",
+    run_id: runId,
+  });
+  return { runId, run, jobs, exit };
+}
+
+/** Every object under the run's prefix, and the lines of the chunks the manifest names, in its order. */
+async function storedLines(
+  runId: string,
+  manifest: readonly { start_index: number; end_index: number; r2_key: string }[],
+) {
+  const res = await fetch(`${forge.origin}/__runs/${runId}/chunks`);
+  expect(res.status).toBe(200);
+  const objects = (await res.json()) as { key: string; text: string | null }[];
+  const text = new Map(objects.map((o) => [o.key, o.text ?? ""]));
+  const rows = manifest.flatMap((chunk) =>
+    (text.get(chunk.r2_key) ?? "")
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => ({
+        ...(JSON.parse(l) as { i: number; c?: string; omitted?: string; bytes?: number }),
+        chunk,
+      })),
+  );
+  return { objects, rows };
+}
+
+describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
+  it("registers, runs a job and stores its whole log", async () => {
+    const { runId, run, jobs } = await runWorkflow(WORKFLOW_NAME, WORKFLOW);
 
     const db = await runDatabase(runId);
     try {
@@ -370,7 +445,10 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       expect(JSON.parse(instance.outputs ?? "null")).toEqual({ answer: "42" });
       expect(log.state).toBe("complete");
       // What the runner sent, as the seam recorded it on the way to the API.
-      const calls = await recordedUpdateLogs();
+      const { wire_id: wireId } = db
+        .prepare("SELECT wire_id FROM ci_tasks WHERE task = ?")
+        .get(instance.task) as { wire_id: number };
+      const calls = await recordedUpdateLogs(wireId);
       expect(calls.length).toBeGreaterThan(0);
       for (const call of calls) expect(call.status, "an UpdateLog refused").toBe(200);
       const sent = new Map<number, string>();
@@ -428,6 +506,99 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       note(
         `run ${runId}: ${calls.length} UpdateLog calls (acks ${calls.map((c) => c.ack).join(", ")}); ${manifest.length} chunks, acks ${acks}; ` +
           `${log.rows} rows stored, ack ${log.ack_index}, log ${log.state}; outputs ${instance.outputs}`,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it("omits a line too large for any request, receives the ack past it and stores the lines after it", async () => {
+    const { runId, run, jobs, exit } = await runWorkflow(BIG_NAME, BIG_WORKFLOW);
+    const db = await runDatabase(runId);
+    try {
+      const instance = db.prepare("SELECT task FROM run_instances WHERE job_key = 'big'").get() as {
+        task: number;
+      };
+      const { wire_id: wireId } = db
+        .prepare("SELECT wire_id FROM ci_tasks WHERE task = ?")
+        .get(instance.task) as { wire_id: number };
+      const log = db
+        .prepare("SELECT ack_index, state, rows, omitted_rows FROM ci_logs WHERE task = ?")
+        .get(instance.task) as {
+        ack_index: number;
+        state: string;
+        rows: number;
+        omitted_rows: number;
+      };
+      const manifest = db
+        .prepare(
+          "SELECT start_index, end_index, r2_key FROM ci_log_chunks WHERE task = ? ORDER BY start_index",
+        )
+        .all(instance.task) as { start_index: number; end_index: number; r2_key: string }[];
+      const { objects, rows } = await storedLines(runId, manifest);
+      const stored = shown(rows.map((r) => r.c ?? `[omitted: ${r.omitted}]`).join("\n"));
+
+      // The job's result does not depend on its log; the log is incomplete for good.
+      expect(run.conclusion, stored).toBe("success");
+      expect(jobs).toMatchObject([
+        { name: "big", status: "completed", conclusion: "success", log_complete: false },
+      ]);
+      expect(log).toMatchObject({ state: "incomplete", omitted_rows: 1 });
+
+      // One position is an omission record, of a row the runner framed at the line's size or more.
+      const omitted = rows.filter((r) => r.omitted !== undefined);
+      expect(omitted).toHaveLength(1);
+      const gap = omitted[0] as (typeof rows)[number];
+      expect(gap).toMatchObject({ omitted: "row_too_large" });
+      expect(gap.bytes).toBeGreaterThanOrEqual(HUGE);
+      expect(gap.c).toBeUndefined();
+      expect(gap.chunk).toMatchObject({ start_index: gap.i, end_index: gap.i + 1 });
+      // The lines after it are stored, in order, each once.
+      const after = rows.filter((r) => r.i > gap.i).map((r) => r.c);
+      expect(after.filter((c) => c === `after ${nonce}` || c === `tail ${nonce}`)).toEqual([
+        `after ${nonce}`,
+        `tail ${nonce}`,
+      ]);
+      expect(rows.every((r) => (r.c ?? "").length < HUGE)).toBe(true);
+      expect(objects.map((o) => o.key).sort()).toEqual(manifest.map((c) => c.r2_key).sort());
+
+      // What the runner sent: the line as one row, cut by the API's prefix in every call that
+      // carried it first, and the API's answer past it reaching the runner, whose next call
+      // starts there.
+      const calls = await recordedUpdateLogs(wireId);
+      for (const call of calls) expect(call.status, "an UpdateLog refused").toBe(200);
+      const final = calls.findLast((call) => call.request.noMore);
+      expect(final, "no final UpdateLog").toBeDefined();
+      const { request: last, ack: finalAck } = final as RecordedUpdateLog;
+      expect(last.whole).toBe(true);
+      expect(finalAck).toBe(log.ack_index);
+      // Contiguous from 0 to the ack: every position a row or the one omission, but for the
+      // older runner's sentinel, which either runner form may end with after the gap.
+      const shape = storedLogShape(last, finalAck, omitted.length);
+      note(
+        `log end: ${isFinalSentinel(last) ? `the sentinel at ${last.index} (acked, not stored)` : `a final call of ${last.rows.length} rows from ${last.index}`}`,
+      );
+      expect(rows.map((r) => r.i)).toEqual(shape.positions);
+      expect(log.rows).toBe(shape.rows);
+      const proven = calls.filter((c) => c.request.oversizedFirstRow !== undefined);
+      expect(proven.length).toBeGreaterThan(0);
+      for (const call of proven) {
+        expect(call.request.index).toBe(gap.i);
+        expect(call.ack).toBe(gap.i + 1);
+        expect(call.request.oversizedFirstRow?.bytes).toBe(gap.bytes);
+      }
+      const firstPast = calls.findIndex((c) => c.request.index > gap.i);
+      expect(firstPast, "no call after the omission started past it").toBeGreaterThan(
+        calls.indexOf(proven[0] as RecordedUpdateLog),
+      );
+
+      const cut = calls.filter((c) => !c.request.whole);
+      note(
+        `run ${runId}: ${calls.length} UpdateLog calls (index→ack ${calls.map((c) => `${c.request.index}→${c.ack}`).join(", ")}); ` +
+          `${cut.length} cut by the prefix (API stopped reading: ${cut.map((c) => c.cancelled).join(", ")}); ` +
+          `${proven.length} proving row ${gap.i} oversized (${gap.bytes} bytes declared); ` +
+          `${log.rows} rows stored, ${log.omitted_rows} omitted, ack ${log.ack_index}, log ${log.state}; ` +
+          `runner errors reporting logs: ${exit.output.split("\n").filter((l) => /update ?log|report ?log|not all logs/i.test(l) && /error|fail/i.test(l)).length}`,
       );
     } finally {
       db.close();

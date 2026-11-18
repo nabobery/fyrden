@@ -5,11 +5,14 @@ import {
   decideLogFlush,
   endsLikeUnregisteredRunner,
   isFinalSentinel,
+  isLogOmission,
   LOG_FLUSH_AGE_MS,
   LOG_FLUSH_BYTES,
   LOG_FLUSH_ROWS,
+  LOG_ROW_TOO_LARGE,
   type LogFlushRequest,
   labelsMatch,
+  type StoredLogLine,
 } from "../../src/ci/index.js";
 
 describe("labelsMatch", () => {
@@ -287,13 +290,99 @@ describe("decideLogFlush", () => {
     ).toEqual({ kind: "flush", start: 3, end: 4, lines: [""], final: false });
   });
 
-  it("applies the thresholds to a cut request that is not final", () => {
-    expect(
-      decideLogFlush({ ackIndex: 0 }, request({ rows: rows(1), whole: false }), now).kind,
-    ).toBe("hold");
+  it("stores the new rows of a cut request at once: waiting cannot make it whole", () => {
+    // A body cut by the request cap never shows `no_more` (written after the rows), and every
+    // resend is cut at the same row until the rows before it are stored.
+    expect(decideLogFlush({ ackIndex: 0 }, request({ rows: rows(1), whole: false }), now)).toEqual({
+      kind: "flush",
+      start: 0,
+      end: 1,
+      lines: ["line 0"],
+      final: false,
+    });
     expect(
       decideLogFlush({ ackIndex: 0 }, request({ rows: rows(50), whole: false }), now),
     ).toMatchObject({ kind: "flush", end: 50, final: false });
+    expect(
+      decideLogFlush({ ackIndex: 3 }, request({ index: 1, rows: rows(2), whole: false }), now),
+    ).toEqual({ kind: "hold", ackIndex: 3, firstUnackedSeenAt: undefined });
+  });
+});
+
+describe("decideLogFlush with an oversized first row", () => {
+  const now = 1_000_000;
+  const cut = (overrides: Partial<LogFlushRequest>) =>
+    request({ whole: false, oversizedFirstRow: { bytes: 5 * 1024 * 1024 }, ...overrides });
+
+  it("omits the row at the ack when the decoder proved it cannot fit", () => {
+    expect(decideLogFlush({ ackIndex: 7 }, cut({ index: 7 }), now)).toEqual({
+      kind: "omit",
+      index: 7,
+      bytes: 5 * 1024 * 1024,
+    });
+  });
+
+  it("omits it whatever the age of the rows waiting behind it", () => {
+    expect(
+      decideLogFlush({ ackIndex: 0, firstUnackedSeenAt: now - 1 }, cut({ index: 0 }), now),
+    ).toMatchObject({ kind: "omit", index: 0 });
+  });
+
+  it("holds a resend below the ack that carries the omitted row again", () => {
+    // The answer to the omission was lost: the runner starts at the omitted row once more.
+    expect(decideLogFlush({ ackIndex: 8 }, cut({ index: 7 }), now)).toEqual({
+      kind: "hold",
+      ackIndex: 8,
+      firstUnackedSeenAt: undefined,
+    });
+  });
+
+  it("refuses evidence that starts past the ack", () => {
+    expect(decideLogFlush({ ackIndex: 3 }, cut({ index: 4 }), now)).toEqual({ kind: "ahead" });
+  });
+
+  it("never omits without the decoder's evidence: zero rows of a cut body at the ack are held", () => {
+    // What a large unknown field before a small first row looks like once cut.
+    expect(decideLogFlush({ ackIndex: 7 }, request({ index: 7, whole: false }), now)).toEqual({
+      kind: "hold",
+      ackIndex: 7,
+      firstUnackedSeenAt: undefined,
+    });
+  });
+
+  it("ignores evidence alongside decoded rows or on a whole request", () => {
+    expect(decideLogFlush({ ackIndex: 0 }, cut({ index: 0, rows: rows(1) }), now)).toMatchObject({
+      kind: "flush",
+      start: 0,
+      end: 1,
+      final: false,
+    });
+    expect(decideLogFlush({ ackIndex: 0 }, cut({ index: 0, rows: rows(50) }), now)).toMatchObject({
+      kind: "flush",
+      start: 0,
+      end: 50,
+      final: false,
+    });
+    expect(decideLogFlush({ ackIndex: 2 }, cut({ index: 2, whole: true }), now)).toEqual({
+      kind: "hold",
+      ackIndex: 2,
+      firstUnackedSeenAt: undefined,
+    });
+  });
+});
+
+describe("stored log lines", () => {
+  it("tell an omitted row from a stored one by its `omitted` reason", () => {
+    const row: StoredLogLine = { i: 0, t: null, c: "omitted" };
+    const gap: StoredLogLine = { i: 1, omitted: LOG_ROW_TOO_LARGE, bytes: 5_000_000 };
+    expect(isLogOmission(row)).toBe(false);
+    expect(isLogOmission(gap)).toBe(true);
+    expect(LOG_ROW_TOO_LARGE).toBe("row_too_large");
+    expect(JSON.parse(JSON.stringify(gap))).toEqual({
+      i: 1,
+      omitted: "row_too_large",
+      bytes: 5_000_000,
+    });
   });
 });
 
