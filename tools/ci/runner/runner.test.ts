@@ -37,9 +37,11 @@ import { type Account, eventually, type Forge, Git, startForge } from "../e2e/fo
 import { hostArch, runnerBinary, runnerVersion } from "./binary.js";
 import { storedLogShape } from "./log-accounting.js";
 import { watchLog } from "./log-viewer.js";
+import { runRunnerStep } from "./run-step.js";
 
 const VERSION = runnerVersion(process.env.RUNNER_VERSION);
 const ARCH = hostArch();
+let fixtureCleanupFailed = false;
 /**
  * The job image the runner's label names; the runner itself runs in it too
  * (it needs nothing else). Pinned to the multi-platform index (linux/amd64 and
@@ -454,6 +456,8 @@ async function runWorkflow(
   source: string,
   afterStart?: (runId: string, signal: AbortSignal) => Promise<void>,
 ) {
+  if (fixtureCleanupFailed)
+    throw new Error("The runner fixture was not cleaned up; it cannot be reused.");
   await register();
   // --once: it polls until it gets a task, runs it, and exits.
   const daemon = exec(
@@ -497,21 +501,11 @@ async function runWorkflow(
   expect(started).toMatchObject({ answer: { ok: true } });
   const runId = (started as { runId: string }).runId;
   if (afterStart) {
-    const controller = new AbortController();
-    const step = afterStart(runId, controller.signal);
-    let complete = false;
-    try {
-      await Promise.race([
-        step,
-        daemon.then((exit) => {
-          throw new Error(`The runner exited (${exit.code}) before the test's step finished.`);
-        }),
-      ]);
-      complete = true;
-    } finally {
-      if (!complete) controller.abort();
-      await step.catch(() => undefined);
-    }
+    await runRunnerStep(
+      daemon,
+      (signal) => afterStart(runId, signal),
+      () => docker(["rm", "-f", CONTAINER]),
+    );
   }
 
   note(`run ${runId}: waiting for runner exit`);
@@ -758,6 +752,7 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
     const gate = await createLogGate();
     const marker = `before-sealed-log ${nonce}`;
     let sealedRun: string | undefined;
+    let cleanupFailure: unknown;
     const source = [
       `name: ${WORKFLOW_NAME}-sealed`,
       "on: push",
@@ -815,6 +810,7 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
             }
             return undefined;
           });
+          sealedRun = runId;
           const sealed = await fetch(`${forge.origin}/__runs/${runId}/seal`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -822,7 +818,6 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
             signal,
           });
           expect(sealed.status).toBe(200);
-          sealedRun = runId;
           gate.release();
         },
       );
@@ -870,9 +865,28 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
         `run ${runId}: frozen log ack ${control.ackIndex}, ${calls.length} uploads (${final.length} final), job-token git read and final SUCCESS accepted, log incomplete`,
       );
     } finally {
-      if (sealedRun) await fetch(`${forge.origin}/__runs/${sealedRun}/unseal`, { method: "POST" });
-      await gate.close();
+      try {
+        if (sealedRun) {
+          const cleared = await fetch(`${forge.origin}/__runs/${sealedRun}/unseal`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!cleared.ok)
+            cleanupFailure = new Error(`The sealed-log cleanup failed (${cleared.status}).`);
+          await cleared.arrayBuffer();
+        }
+      } catch (error) {
+        cleanupFailure = error;
+      } finally {
+        await gate.close().catch((error: unknown) => {
+          cleanupFailure ??= error;
+        });
+      }
+      if (cleanupFailure) fixtureCleanupFailed = true;
     }
+    if (cleanupFailure) throw cleanupFailure;
   });
 
   it("masks stored and live rows from a stock runner, with backfill before the job resumes", async () => {

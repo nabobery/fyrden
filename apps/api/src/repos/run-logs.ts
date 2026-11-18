@@ -47,7 +47,11 @@ export async function issueJobLogTicketOperation(
   const run = await runOf(ctx, entry, input.run_id).catch((error: unknown) => {
     if (error instanceof OperationError) throw error;
     ctx.log.error("live log run not reached", { error });
-    throw new OperationError(503, "run_unavailable", "The run cannot be reached. Try again.");
+    throw new OperationError(
+      503,
+      "run_lookup_unavailable",
+      "The run cannot be reached. Try again.",
+    );
   });
   // A socket's upgrade carries no delegation chain or proof of a key: the caller's own only.
   if (ctx.auth.grantId !== null || ctx.auth.dpopJkt !== null || ctx.auth.requiresDpop)

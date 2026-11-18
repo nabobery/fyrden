@@ -174,6 +174,32 @@ async function reset(runId: string) {
   await at(runId, now(runId));
 }
 
+async function waitAtGate(held: ReturnType<typeof gate>, request: Promise<unknown>): Promise<void> {
+  await Promise.race([
+    held.started,
+    request.then((answer) => {
+      const status =
+        typeof answer === "object" && answer !== null && "status" in answer
+          ? ` (${String(answer.status)})`
+          : "";
+      throw new Error(`The request settled before its gate${status}.`);
+    }),
+  ]);
+}
+
+describe("a masking race's gate wait", () => {
+  it("reports an early response instead of waiting for a gate it never reaches", async () => {
+    await expect(
+      waitAtGate(gate(), Promise.resolve(new Response(null, { status: 503 }))),
+    ).rejects.toThrow("before its gate (503)");
+  });
+
+  it("preserves a request error before its gate", async () => {
+    const failure = new Error("assignment failed before mint");
+    await expect(waitAtGate(gate(), Promise.reject(failure))).rejects.toBe(failure);
+  });
+});
+
 async function releaseHeld(
   runId: string,
   holds: readonly ReturnType<typeof gate>[],
@@ -295,10 +321,10 @@ describe("the job token", () => {
       try {
         const a = call();
         pending.push(a);
-        await gates.A.started;
+        await waitAtGate(gates.A, a);
         const b = call();
         pending.push(b);
-        await gates.B.started;
+        await waitAtGate(gates.B, b);
         const answers = { A: a, B: b };
         const second = first === "A" ? "B" : "A";
         gates[first].release();
@@ -365,7 +391,7 @@ describe("the job token", () => {
     try {
       const slow = fetchTask(runner, version);
       pending.push(slow);
-      await held.started;
+      await waitAtGate(held, slow);
       const received = (await fetchTask(runner, version)).task;
       if (!received) throw new Error("no task");
       held.release();
@@ -401,7 +427,7 @@ describe("the job token", () => {
     try {
       const slow = fetchTask(runner, version);
       pending.push(slow);
-      await held.started;
+      await waitAtGate(held, slow);
       const received = (await fetchTask(runner, version)).task;
       if (!received) throw new Error("no task");
       const token = jobTokenOf(received);
@@ -414,7 +440,7 @@ describe("the job token", () => {
       });
       const storing = ackOf(runner, { taskId: received.id, index: 0, rows });
       pending.push(storing);
-      await put.started;
+      await waitAtGate(put, storing);
       held.release();
       await slow;
       await inRun(runId, (r) => {
@@ -444,7 +470,7 @@ describe("the job token", () => {
     try {
       const reoffer = fetchTask(runner, version);
       pending.push(reoffer);
-      await held.started;
+      await waitAtGate(held, reoffer);
       expect(
         await ackOf(runner, { taskId: lost.id, index: 0, rows: filler(0, 3), noMore: true }),
       ).toBe(3);
@@ -483,8 +509,9 @@ describe("the job token", () => {
     const reoffers = [];
     try {
       for (const g of gates) {
-        reoffers.push(fetchTask(runner, version));
-        await g.started;
+        const reoffer = fetchTask(runner, version);
+        reoffers.push(reoffer);
+        await waitAtGate(g, reoffer);
       }
       const rows = [...values.map((v) => row(`::add-mask::${v}`)), ...filler(4, 46)];
       expect(await ackOf(runner, { taskId: lost.id, index: 0, rows })).toBe(50);
@@ -750,7 +777,7 @@ describe("::add-mask::", () => {
     try {
       const assigning = fetchTask(runner, 0);
       pending.push(assigning);
-      await held.started;
+      await waitAtGate(held, assigning);
       // The runner's assignment is recorded before its token is: rows can name it already.
       const task = await inRun(
         runId,

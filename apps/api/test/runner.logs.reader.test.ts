@@ -143,6 +143,7 @@ describe("stored log streaming reader", () => {
     abort.abort();
     const lines = readLogLines(input.body, abort.signal);
     await expect(lines.next()).rejects.toMatchObject({ name: "AbortError" });
+    expect(input.largestRead).toBe(0);
     expect(input.cancelled).toBe(true);
     expect(input.body.locked).toBe(false);
   });

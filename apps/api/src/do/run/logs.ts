@@ -107,7 +107,7 @@ export interface LogHooks {
 
 /** Where a request's final rows go: the job's live sockets (`viewers.ts`). */
 export interface LogPublisher {
-  /** Pauses catch-up reservations until release; yielding waits for active readers to release memory. */
+  /** Yielding pauses new catch-up reservations until release and waits for active readers to release memory. */
   beginUpload(): { yieldMemory(): Promise<void>; release(): void };
   logsExpired(): void;
   watched(jobId: number): boolean;

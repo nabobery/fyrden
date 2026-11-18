@@ -61,4 +61,30 @@ describe("the stock-runner log viewer's setup lifetime", () => {
     await expect(viewer.completed()).rejects.toThrow(/cancelled/);
     expect(socket?.closes).toBe(1);
   });
+  it("settles completion on failure even when the peer never closes", async () => {
+    vi.stubGlobal("WebSocket", Socket);
+    const controller = new AbortController();
+    const opening = watchLog("ws://localhost/logs", "fixture", controller.signal);
+    const socket = Socket.instances[0];
+    if (!socket) throw new Error("no socket");
+    socket.open();
+    const viewer = await opening;
+    vi.spyOn(socket, "close").mockImplementation(() => {
+      socket.closes++;
+    });
+    let completedError: unknown;
+    const completed = viewer.completed().catch((error: unknown) => {
+      completedError = error;
+    });
+    const rows = viewer.waitForRows((rows) => rows.length > 0);
+    try {
+      controller.abort();
+      await expect(rows).rejects.toThrow(/cancelled/);
+      await Promise.resolve();
+      expect(completedError).toBeInstanceOf(Error);
+    } finally {
+      socket.dispatchEvent(Object.assign(new Event("close"), { code: 1000 }));
+      await completed;
+    }
+  });
 });

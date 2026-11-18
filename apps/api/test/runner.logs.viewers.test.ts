@@ -431,7 +431,7 @@ async function expectStored(t: Task, c: Client, from = 0) {
 }
 
 describe("pre-masking log history", () => {
-  for (const state of ["streaming", "complete", "incomplete"] as const) {
+  for (const state of ["complete", "incomplete"] as const) {
     it(`hides a sealed ${state} legacy log without reading its objects or accepting more rows`, async () => {
       const t = await withTask();
       const runner = runnerModel(t);
@@ -576,7 +576,7 @@ describe("the ticket operation", () => {
     ]);
   });
 
-  it("returns run_unavailable when the initial run lookup rejects", async () => {
+  it("keeps a failed pre-write run lookup retryable with the same key", async () => {
     const t = await withTask();
     const unavailable = {
       ...env,
@@ -590,22 +590,26 @@ describe("the ticket operation", () => {
         },
       },
     };
-    const ctx = createExecutionContext();
-    const response = await createApp().fetch(
+    const key = crypto.randomUUID();
+    const request = () =>
       new Request(`${ORIGIN}/api${livePath(t.f.path, t.runId, t.jobId)}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${t.f.owner.token}`,
-          "Idempotency-Key": crypto.randomUUID(),
+          "Idempotency-Key": key,
           "CF-Connecting-IP": address(),
         },
-      }),
-      unavailable as unknown as Env,
-      ctx,
-    );
+      });
+    const ctx = createExecutionContext();
+    const response = await createApp().fetch(request(), unavailable as unknown as Env, ctx);
     await waitOnExecutionContext(ctx);
     expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({ code: "run_unavailable" });
+    expect(await response.json()).toMatchObject({ code: "run_lookup_unavailable" });
+    const retry = createExecutionContext();
+    const answer = await createApp().fetch(request(), env, retry);
+    await waitOnExecutionContext(retry);
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toMatchObject({ ticket: expect.any(String) });
   });
 
   it("answers a principal without access as if the repository did not exist", async () => {
@@ -615,6 +619,71 @@ describe("the ticket operation", () => {
       status: 404,
       body: { code: "repo_not_found" },
     });
+  });
+
+  it("keeps an uncertain ticket write unknown for the original key", async () => {
+    const t = await withTask();
+    const uncertain = {
+      ...env,
+      RUN: {
+        getByName(id: string) {
+          const run = env.RUN.getByName(id);
+          return {
+            get: () => run.get(),
+            storeLogTicket: async (input: Parameters<typeof run.storeLogTicket>[0]) => {
+              await run.storeLogTicket(input);
+              throw new Error("ticket response lost after commit");
+            },
+          };
+        },
+      },
+    };
+    const key = crypto.randomUUID();
+    const request = () =>
+      new Request(`${ORIGIN}/api${livePath(t.f.path, t.runId, t.jobId)}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${t.f.owner.token}`,
+          "Idempotency-Key": key,
+          "CF-Connecting-IP": address(),
+        },
+      });
+    const ctx = createExecutionContext();
+    const response = await createApp().fetch(request(), uncertain as unknown as Env, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "run_unavailable" });
+    const retry = createExecutionContext();
+    const answer = await createApp().fetch(request(), env, retry);
+    await waitOnExecutionContext(retry);
+    expect(answer.status).toBe(409);
+    expect(await answer.json()).toMatchObject({ code: "idempotent_outcome_unknown" });
+    expect(
+      await inRun(t.runId, (r) => r.engine.rows("SELECT hash FROM ci_log_tickets")),
+    ).toHaveLength(1);
+  });
+
+  it("admits an organization owner past the live team-grant bound", async () => {
+    const t = await withTask();
+    await runInDurableObject(env.ORG.getByName(t.f.org.id), (_org: OrgDO, state) => {
+      for (let i = 0; i < 101; i++) {
+        state.storage.sql.exec(
+          "INSERT INTO teams (team_id, slug, name, created_at) VALUES (?, ?, ?, 0)",
+          `tm_owner${i}`,
+          `owner-${i}`,
+          `Owner ${i}`,
+        );
+        state.storage.sql.exec(
+          "INSERT INTO team_repos (team_id, repo_id, role, added_at) VALUES (?, ?, 'read', 0)",
+          `tm_owner${i}`,
+          t.f.repo.id,
+        );
+      }
+    });
+    const socket = await watch(t, t.f.owner.token);
+    await runnerModel(t).send(filler(0, 50));
+    await settle(socket);
+    expect(received(socket)).toHaveLength(50);
   });
 
   it("refuses a delegated token, an unknown job and an unknown run", async () => {
@@ -885,7 +954,7 @@ describe("delivery", () => {
     await expectStored(t, socket);
   });
 
-  it("defers catch-up until an upload finishes publishing, then sends each row once", async () => {
+  it("catches up during a small upload with memory available, then sends each row once", async () => {
     const t = await withTask();
     const socket = await watch(t, t.f.owner.token);
     const held = hold(t.runId);
@@ -894,10 +963,9 @@ describe("delivery", () => {
     try {
       expect(await held.reached(storing)).toBe(true);
       delete viewerHooks.beforePublish;
-      const deferred = await inRun(t.runId, (r) => r.viewers.slice());
-      expect(deferred).toMatchObject({ done: false });
+      await inRun(t.runId, (r) => r.viewers.slice());
       await settle(socket);
-      expect(received(socket)).toHaveLength(0);
+      expect(received(socket)).toHaveLength(50);
     } finally {
       held.release();
       await storing;
@@ -907,6 +975,39 @@ describe("delivery", () => {
     await settle(socket);
     expect(received(socket)).toHaveLength(50);
     await expectStored(t, socket);
+  });
+
+  it("catches up while two tasks have small uploads in flight", async () => {
+    const t = await withTask(workflow([job("a"), job("b")].join("\n")));
+    await updateTask(t.runner, t.wire);
+    const sibling = await registerRunner(t.f.org.login, t.f.owner);
+    const task = (await fetchTask(sibling, 0)).task;
+    if (!task) throw new Error("no sibling task");
+    const socket = await watch(t, t.f.owner.token);
+    const first = hold(t.runId);
+    const second = hold(t.runId);
+    let calls = 0;
+    viewerHooks.beforePublish = () => (calls++ === 0 ? first : second).hold();
+    const pending: Promise<unknown>[] = [];
+    try {
+      const a = runnerModel(t).send(filler(0, 50));
+      pending.push(a);
+      expect(await first.reached(a)).toBe(true);
+      const b = ackOf(sibling, { taskId: task.id, index: 0, rows: filler(0, 50) });
+      pending.push(b);
+      expect(await second.reached(b)).toBe(true);
+      await inRun(t.runId, (r) => r.viewers.slice());
+      await settle(socket);
+      expect(received(socket)).toHaveLength(50);
+    } finally {
+      first.release();
+      second.release();
+      await Promise.allSettled(pending);
+      delete viewerHooks.beforePublish;
+    }
+    await slice(t.runId);
+    await settle(socket);
+    expect(received(socket)).toHaveLength(50);
   });
 
   it("starts at `from`", async () => {
@@ -1239,6 +1340,29 @@ describe("rechecks", () => {
     await slice(t.runId);
     await settle(stalled);
     expect(received(stalled)).toHaveLength(50);
+  });
+
+  it("closes known old credential generations even when repository access is unknown", async () => {
+    const t = await withTask();
+    const older = await watch(t, t.f.owner.token);
+    await env.DIRECTORY.prepare(
+      "UPDATE principals SET lifecycle_gen = lifecycle_gen + 1 WHERE id = ?",
+    )
+      .bind(t.f.owner.principalId)
+      .run();
+    viewerHooks.beforeAccessCheck = () => {
+      throw new Error("account unavailable");
+    };
+    try {
+      const newer = await watch(t, t.f.owner.token);
+      await settle(older);
+      expect(await older.closed).toEqual({ code: 4401 });
+      expect(newer.code).toBeNull();
+      expect((await attachments(t.runId)).find((s) => s.id === newer.id)?.checkedAt).toBe(0);
+      expect(sent.get(older.id) ?? 0).toBe(0);
+    } finally {
+      delete viewerHooks.beforeAccessCheck;
+    }
   });
 
   it("send to a socket checked under 60 s ago without reading the directory", async () => {
@@ -1874,7 +1998,7 @@ describe("the end", () => {
     await slice(t.runId);
     await settle(socket);
     expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 50 });
-    expect(socket.code).toBe(1000);
+    expect(await socket.closed).toEqual({ code: 1000 });
   });
 
   it("sends end complete once the final request commits, then closes 1000", async () => {

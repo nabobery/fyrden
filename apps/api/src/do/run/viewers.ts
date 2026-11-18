@@ -257,18 +257,22 @@ export class LogViewers {
   readonly #closed = new WeakSet<WebSocket>();
   readonly #pendingChecks = new Set<string>();
   readonly #reads = new Set<BackfillRead>();
-  #uploads = 0;
+  #waitingUploads = 0;
   #backfillDeferred = false;
 
   constructor(private readonly host: ViewersHost) {}
 
   beginUpload(): { yieldMemory(): Promise<void>; release(): void } {
-    this.#uploads++;
+    let waiting = false;
     let released = false;
     return {
       yieldMemory: async () => {
         const reads = [...this.#reads];
         if (reads.length === 0) return;
+        if (!waiting) {
+          waiting = true;
+          this.#waitingUploads++;
+        }
         this.#backfillDeferred = true;
         for (const read of reads) read.abort.abort();
         await Promise.all(reads.map((read) => read.released));
@@ -276,8 +280,9 @@ export class LogViewers {
       release: () => {
         if (released) return;
         released = true;
-        this.#uploads--;
-        if (this.#uploads === 0 && this.#backfillDeferred) {
+        if (!waiting) return;
+        this.#waitingUploads--;
+        if (this.#waitingUploads === 0 && this.#backfillDeferred) {
           this.#backfillDeferred = false;
           if (this.#open().length > 0) this.host.ensureSlice();
         }
@@ -688,17 +693,19 @@ export class LogViewers {
         const startedAt = host.now();
         const checked = await this.#checkCredential(runId, run.repo_id, credentialId, startedAt);
         await viewerHooks.afterRecheck?.(runId, credentialId);
-        if (checked === null || checked.access === "unknown") return true;
+        if (checked === null) return true;
         const { credential, access } = checked;
+        let deferred = false;
         for (const ws of sockets) {
           const state = stateOf(ws);
           if (!state || this.#closed.has(ws) || ws.readyState !== OPEN) continue;
           if (!credential || !sameDependencies(credential.dependencies, state.dependencies))
             this.#close(ws, "credential", "the credential no longer holds");
           else if (access === false) this.#close(ws, "access", "access to the repository was lost");
+          else if (access === "unknown") deferred = true;
           else write(ws, { ...state, checkedAt: Math.max(state.checkedAt, startedAt) });
         }
-        return false;
+        return deferred;
       }),
     );
     return results.some(Boolean);
@@ -717,11 +724,14 @@ export class LogViewers {
       return null;
     this.#pendingChecks.add(credentialId);
     let expired = false;
+    let credential: LiveCredential | null | undefined;
+    const unknownAccess = () =>
+      credential === undefined ? null : { credential, access: "unknown" as const };
     let deadline!: AuthorizationDeadline;
-    const unanswered = new Promise<null>((resolve) => {
+    const unanswered = new Promise<ReturnType<typeof unknownAccess>>((resolve) => {
       const expire = () => {
         expired = true;
-        resolve(null);
+        resolve(unknownAccess());
       };
       const at = startedAt + LIVE_AUTHORIZATION_RESULT_MS;
       deadline =
@@ -737,7 +747,7 @@ export class LogViewers {
         await viewerHooks.beforeRecheck?.(runId, credentialId);
         checkpoint();
         host.metrics.count("d1.query", { db: "directory", op: "live_log_recheck" });
-        const credential = await liveCredential(host.env.DIRECTORY, credentialId, clock());
+        credential = await liveCredential(host.env.DIRECTORY, credentialId, clock());
         checkpoint();
         if (!credential) return { credential: null, access: false };
         await viewerHooks.beforeAccessCheck?.(runId, credentialId);
@@ -758,7 +768,7 @@ export class LogViewers {
         checkpoint();
         return { credential, access };
       } catch {
-        return null;
+        return unknownAccess();
       } finally {
         deadline.cancel();
         this.#pendingChecks.delete(credentialId);
@@ -778,7 +788,7 @@ export class LogViewers {
     const runId = this.#runId();
     const pages = new Map<string, { chunks: number; bytes: number }>();
     for (let reads = 0; reads < LOG_VIEWER_POLICY.sliceReads; reads++) {
-      if (this.#uploads > 0) {
+      if (this.#waitingUploads > 0) {
         this.#backfillDeferred = true;
         return true;
       }
@@ -824,7 +834,7 @@ export class LogViewers {
           for (const ws of group) this.#close(ws, "unavailable", "the log cannot be read");
           continue;
         }
-        if (this.#uploads > 0) {
+        if (this.#waitingUploads > 0) {
           this.#backfillDeferred = true;
           await object.body.cancel().catch(() => undefined);
           return true;

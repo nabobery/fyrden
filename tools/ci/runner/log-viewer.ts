@@ -13,8 +13,8 @@ export async function watchLog(url: string, token: string, signal?: AbortSignal)
   let closed = false;
   let frames = 0;
   let end: { log: string; durable: number } | undefined;
-  let finish: (code: number) => void = () => undefined;
-  const finished = new Promise<number>((resolve) => {
+  let finish: (code: number | Error) => void = () => undefined;
+  const finished = new Promise<number | Error>((resolve) => {
     finish = resolve;
   });
   const notify = () => {
@@ -22,6 +22,7 @@ export async function watchLog(url: string, token: string, signal?: AbortSignal)
   };
   const fail = (message: string) => {
     error ??= new Error(message);
+    finish(error);
     notify();
     socket.close();
   };
@@ -86,6 +87,7 @@ export async function watchLog(url: string, token: string, signal?: AbortSignal)
     async completed() {
       const code = await finished;
       if (error) throw error;
+      if (code instanceof Error) throw code;
       return { code, end, frames };
     },
     close: () => socket.close(),
