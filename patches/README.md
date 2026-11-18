@@ -14,7 +14,9 @@ a leading `]` or another `[` inside them, runs of four or more backslashes, and
 unclosed forms use the literal fallback when a star follows. The same safeguard
 covers bracketed stars with `nobracket: true` and bodies containing both a
 backslash and a star with `unescape: true`. Some malformed class forms produce a non-matching expression
-instead of a literal. The accompanying [MIT notice](LICENSE.picomatch) applies.
+instead of a literal. Rewrite offsets are recorded after opening-token
+normalization, so a globstar prefix cannot discard the repeated branch.
+The accompanying [MIT notice](LICENSE.picomatch) applies.
 
 This is a mitigation for repeated-star extglobs, not a guarantee that arbitrary
 untrusted globs are safe. Negated repeats and raw regex syntax can still

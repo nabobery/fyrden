@@ -1,5 +1,5 @@
 diff --git a/lib/parse.js b/lib/parse.js
-index 29207512c60183b4bb9bf5112be3b9b5f4a9a9fd..015a70bb601677869d557f21c87397e3c0179a8e 100644
+index 29207512c60183b4bb9bf5112be3b9b5f4a9a9fd..d064011f63f37529db81496d9c390bea83e3e8cd 100644
 --- a/lib/parse.js
 +++ b/lib/parse.js
 @@ -270,6 +270,154 @@ const getStarExtglobSequenceChars = pattern => {
@@ -195,14 +195,20 @@ index 29207512c60183b4bb9bf5112be3b9b5f4a9a9fd..015a70bb601677869d557f21c87397e3
    return { risky: false };
  };
  
-@@ -541,6 +713,16 @@ const parse = (input, options) => {
+@@ -533,6 +705,7 @@ const parse = (input, options) => {
+     increment('parens');
+     push({ type, value, output: state.output ? '' : ONE_CHAR });
+     push({ type: 'paren', extglob: true, value: advance(), output });
++    token.bodyOutputStart = state.output.length;
+     extglobs.push(token);
+   };
+ 
+@@ -541,6 +714,14 @@ const parse = (input, options) => {
      const body = input.slice(token.startIndex + 2, state.index);
      const analysis = analyzeRepeatedExtglob(body, opts);
  
 +    if (analysis.absorb) {
-+      const open = tokens[token.tokensIndex];
-+      const prefix = token.output.length + open.output.length + tokens[token.tokensIndex + 1].output.length;
-+      const outputs = splitTopLevel(state.output.slice(prefix));
++      const outputs = splitTopLevel(state.output.slice(token.bodyOutputStart));
 +
 +      analysis.safeOutput = outputs.length === analysis.absorb.starred.length
 +        ? buildAbsorbedRepeat(token.type, outputs, analysis.absorb)

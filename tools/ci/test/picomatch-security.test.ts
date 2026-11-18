@@ -73,6 +73,14 @@ describe.each(consumers)("$name's installed picomatch", (consumer) => {
 
   it.each<[string, string, boolean]>([
     ["+(*a)", "ba", true],
+    ["**+(*a)", "bbb", false],
+    ["**+(*a)", "bba", true],
+    ["**+(*a|b)", "bba", true],
+    ["**+(*a|b)", "bbc", false],
+    ["**+(*a)b", "bbbb", false],
+    ["**+(*a)b", "bbab", true],
+    ["foo/**+(*a)", "foo/bbb", false],
+    ["foo/**+(*a)", "foo/bba", true],
     ["+(*a)", "bbb", false],
     ["*(b|*a)", "baba", true],
     ["+(a|b)", "abba", true],
