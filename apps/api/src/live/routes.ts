@@ -630,7 +630,7 @@ export async function openOwnedLiveSocket(
 }
 
 /** The credential a live upgrade presents: the session of its cookie, or its bearer token. */
-async function presented(c: Context<AppEnv>): Promise<string | null> {
+export async function presented(c: Context<AppEnv>): Promise<string | null> {
   const authorization = c.req.header("Authorization");
   // A DPoP-bound token proves its key per request; live sockets take none (see `liveCredential`).
   if (authorization !== undefined && !authorization.startsWith("Bearer ")) return null;

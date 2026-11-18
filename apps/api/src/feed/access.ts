@@ -29,8 +29,8 @@ export class FreshAccess {
 
   constructor(
     private readonly ctx: Pick<OpContext, "env" | "metrics">,
-    /** The reader's credential, as the directory's primary has it now. */
-    private readonly auth: TokenRecord,
+    /** The reader's credential, as the directory's primary has it now (its principal, and a delegation's grant). */
+    private readonly auth: Pick<TokenRecord, "principalId" | "grantId">,
   ) {}
 
   /**

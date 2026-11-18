@@ -7813,6 +7813,27 @@ export type ActionsRunsRerunOutput = {
   run_attempt: number;
 };
 
+/** Input of `actions.runs.jobs.live_ticket`: Get a ticket to watch a job's log live. */
+export type ActionsRunsJobsLiveTicketInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+  /** The job's id within its run. */
+  job_id: number;
+};
+
+/** Output of `actions.runs.jobs.live_ticket`. */
+export type ActionsRunsJobsLiveTicketOutput = {
+  ticket: string;
+  /** Seconds the ticket can be redeemed. */
+  expires_in: number;
+  /** Where to open the WebSocket (the ticket in its query). */
+  url: string;
+};
+
 /** Input of `repos.blame.get`: Blame a file. */
 export type ReposBlameGetInput = {
   /** The owner's handle. */
@@ -9216,6 +9237,7 @@ export const OPERATIONS = {
   "actions.runs.cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.force_cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.rerun": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", pathParams: ["owner","repo","run_id"], idempotent: true },
+  "actions.runs.jobs.live_ticket": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/live", pathParams: ["owner","repo","run_id","job_id"], idempotent: true },
   "repos.blame.get": { method: "GET", path: "/repos/{owner}/{repo}/blame", pathParams: ["owner","repo"], idempotent: false },
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
   "repos.contents.get": { method: "GET", path: "/repos/{owner}/{repo}/contents/{path+}", pathParams: ["owner","repo","path"], idempotent: false, items: "entries" },
@@ -9667,6 +9689,8 @@ export interface Operations {
   "actions.runs.force_cancel": { input: ActionsRunsForceCancelInput; output: ActionsRunsForceCancelOutput };
   /** Re-run a workflow. Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 `rerun_limit`); one still running, or whose workflow could not run (`errors`), is 409 `run_not_completed`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.runs.rerun": { input: ActionsRunsRerunInput; output: ActionsRunsRerunOutput };
+  /** Get a ticket to watch a job's log live. A single-use ticket (30 seconds) to open a WebSocket at `url` (`GET` with `Upgrade: websocket`; add `&from=<index>` to start at a row, 0 by default) that streams the job's log rows, masked as they are stored: `{"t":"rows","rows":[{"i":<index>,"t":<Unix ms or null>,"c":"<text>"}]}` in order, each position once. An oversized omitted row is a whole record in the same `rows` array: `{"i":<index>,"omitted":"row_too_large","bytes":<declared size>}`. It has no content or timestamp, is never split into parts, and keeps the log incomplete. The stream immediately after a gap is conservatively masked and can hide non-secret text. A row too long for one frame comes as `{"t":"part","i","o","c","end"}` pieces (the first with `"ts"`, the row's time) to join in order. Once the log is closed and every stored row was sent: `{"t":"end","log":"complete"|"incomplete","durable":<n>}` (rows at or past `durable` were sent live and never stored; `"unfinished":<index>` names a row whose parts cannot be finished, to discard), then close 1000. Acknowledge with `{"t":"ack","i":<next index>,"o":<offset in it>}` after each 256 KiB or 16 frames handled: at most 64 frames or 1 MiB go unacknowledged, and a socket full for 2 minutes closes 4408. `ping` is answered `pong`. Closes: 4401 the credential no longer holds, 4403 access to the repository was lost (checked at least every 60 seconds while rows flow), 4404 the run was erased, 1001 after 24 hours, 1008 any other message, or more than 20 a minute that are not acknowledgements moving forward. The upgrade needs the same credential: the session's cookie from this origin, or the token in `Authorization`. The caller's own credentials only (a delegated or DPoP-bound token: 403 `delegated_listing`). At most 20 tickets a run unredeemed (429 `too_many_tickets`); a run takes 20 sockets, 5 a credential and 10 a principal. Takes the `actions:read` permission. A Fyrden extension. */
+  "actions.runs.jobs.live_ticket": { input: ActionsRunsJobsLiveTicketInput; output: ActionsRunsJobsLiveTicketOutput };
   /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
   "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };
   /** List the repository's root directory. The root directory's entries at a branch, tag or commit, a page at a time. */

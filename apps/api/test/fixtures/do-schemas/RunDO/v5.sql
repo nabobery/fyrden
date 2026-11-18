@@ -15,6 +15,14 @@ CREATE TABLE ci_log_masks (
         value TEXT NOT NULL,
         PRIMARY KEY (task, seq)
       ) STRICT;
+CREATE TABLE ci_log_tickets (
+        hash TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        job_id INTEGER NOT NULL,
+        credential_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE ci_logs (
         task INTEGER PRIMARY KEY,
         ack_index INTEGER NOT NULL DEFAULT 0,
@@ -183,6 +191,7 @@ CREATE TABLE runs (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       ) STRICT;
+CREATE INDEX ci_log_tickets_expiry ON ci_log_tickets (expires_at);
 CREATE INDEX ci_tasks_task ON ci_tasks (task);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX run_checks_dirty ON run_checks (attempt) WHERE parked IS NULL AND sent_rev < rev;

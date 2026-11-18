@@ -204,3 +204,33 @@ export const rerunWorkflowRun = defineOperation({
     readOnly: false,
   },
 });
+
+export const issueJobLogTicket = defineOperation({
+  id: "actions.runs.jobs.live_ticket",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/live",
+  summary: "Get a ticket to watch a job's log live",
+  description:
+    'A single-use ticket (30 seconds) to open a WebSocket at `url` (`GET` with `Upgrade: websocket`; add `&from=<index>` to start at a row, 0 by default) that streams the job\'s log rows, masked as they are stored: `{"t":"rows","rows":[{"i":<index>,"t":<Unix ms or null>,"c":"<text>"}]}` in order, each position once. An oversized omitted row is a whole record in the same `rows` array: `{"i":<index>,"omitted":"row_too_large","bytes":<declared size>}`. It has no content or timestamp, is never split into parts, and keeps the log incomplete. The stream immediately after a gap is conservatively masked and can hide non-secret text. A row too long for one frame comes as `{"t":"part","i","o","c","end"}` pieces (the first with `"ts"`, the row\'s time) to join in order. Once the log is closed and every stored row was sent: `{"t":"end","log":"complete"|"incomplete","durable":<n>}` (rows at or past `durable` were sent live and never stored; `"unfinished":<index>` names a row whose parts cannot be finished, to discard), then close 1000. Acknowledge with `{"t":"ack","i":<next index>,"o":<offset in it>}` after each 256 KiB or 16 frames handled: at most 64 frames or 1 MiB go unacknowledged, and a socket full for 2 minutes closes 4408. `ping` is answered `pong`. Closes: 4401 the credential no longer holds, 4403 access to the repository was lost (checked at least every 60 seconds while rows flow), 4404 the run was erased, 1001 after 24 hours, 1008 any other message, or more than 20 a minute that are not acknowledgements moving forward. The upgrade needs the same credential: the session\'s cookie from this origin, or the token in `Authorization`. The caller\'s own credentials only (a delegated or DPoP-bound token: 403 `delegated_listing`). At most 20 tickets a run unredeemed (429 `too_many_tickets`); a run takes 20 sockets, 5 a credential and 10 a principal. Takes the `actions:read` permission. A Fyrden extension.',
+  input: z.object({
+    ...RepoInput,
+    run_id: RunId,
+    job_id: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(2 ** 31 - 1)
+      .describe("The job's id within its run."),
+  }),
+  output: z.object({
+    ticket: z.string(),
+    expires_in: z.number().int().describe("Seconds the ticket can be redeemed."),
+    url: z.string().describe("Where to open the WebSocket (the ticket in its query)."),
+  }),
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  secretResponse: true,
+  mcp: false,
+});

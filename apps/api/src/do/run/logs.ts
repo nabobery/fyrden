@@ -30,6 +30,7 @@ import {
 import { ProtoError } from "../../runner/proto/wire.js";
 import type { TaskAnswer, TaskRef } from "../RunDO.js";
 import type { RunEngine } from "./engine.js";
+import { type LogLine, logLine, viewerHooks } from "./viewers.js";
 
 /*
  * A task's log inside its run's object. The runner keeps every row past the
@@ -47,6 +48,11 @@ import type { RunEngine } from "./engine.js";
  * masks the same. The values are kept until the log closes: when it
  * completes, or `LOG_LATE_MS` after its task ended incomplete, after which its
  * rows are refused.
+ *
+ * While a job is watched live, each request's rows that are final as masked
+ * (stored now, or settled and left unacked) are published to its sockets:
+ * settled rows are masked with what the store will use (the stored masks,
+ * the carry at the ack), so they are the rows stored later, byte for byte.
  */
 
 /** How long an incomplete log takes rows after its task ended (a spent runner's report margin). Proposed. */
@@ -99,6 +105,15 @@ export interface LogHooks {
   afterLogCommit?: () => Promise<void> | void;
 }
 
+/** Where a request's final rows go: the job's live sockets (`viewers.ts`). */
+export interface LogPublisher {
+  watched(jobId: number): boolean;
+  /** `rows` from position `base` are final as masked (stored, or settled). */
+  publish(jobId: number, task: number, base: number, rows: readonly LogLine[]): void;
+  /** Gives back the memory held for sockets. */
+  dropCaches(): void;
+}
+
 /** What the log work needs from its object. */
 export interface LogsHost {
   readonly env: Env;
@@ -118,6 +133,7 @@ export interface LogsHost {
   /** Has the close job run by `runAt` (sooner if it already will). */
   ensureLogClose(runAt: number): void;
   readonly masks: MaskSource;
+  readonly viewers: LogPublisher;
 }
 
 /**
@@ -351,8 +367,13 @@ export class RunLogs {
       return acked(this.ackOf(ref.task));
     }
     const bytes = Math.max(1, MEMORY_PER_BODY_BYTE * body.byteLength);
-    const reservation =
-      bytes <= host.memory.stats().totalBytes ? host.memory.tryReserve(bytes) : undefined;
+    const fits = bytes <= host.memory.stats().totalBytes;
+    let reservation = fits ? host.memory.tryReserve(bytes) : undefined;
+    // What sockets hold gives way to the rows themselves (losing it only means a read).
+    if (!reservation && fits) {
+      host.viewers.dropCaches();
+      reservation = host.memory.tryReserve(bytes);
+    }
     if (!reservation) {
       host.log.warn("log request not admitted: the memory pool is taken", {
         taskId: wireId,
@@ -418,9 +439,18 @@ export class RunLogs {
       });
       return invalid(LOG_INDEX_AHEAD);
     }
+    const timeOf = (index: number) => unixMs(request.rows[index - request.index]?.time);
+    const lineAt = (start: number) => (content: string, k: number) =>
+      logLine(start + k, timeOf(start + k), content);
     if (decision.kind === "hold") {
       if (decision.firstUnackedSeenAt === undefined) this.#firstSeen.delete(ref.task);
       else this.#firstSeen.set(ref.task, decision.firstUnackedSeenAt);
+      // Watched: its settled rows go live, masked as they will be stored; nothing is kept.
+      const fresh = request.rows.slice(ackIndex - request.index).map((row) => row.content);
+      if (fresh.length > 0 && host.viewers.watched(ref.jobId)) {
+        const settled = await this.#settled(ref, log, ackIndex, fresh);
+        await this.#publish(ref, ackIndex, settled.map(lineAt(ackIndex)));
+      }
       return acked(decision.ackIndex);
     }
     const stored = this.#masks(ref.task);
@@ -467,6 +497,12 @@ export class RunLogs {
     const settle = settleFlush(decision, first.settled, state, now);
     if (settle.kind === "hold") {
       this.#firstSeen.set(ref.task, settle.firstUnackedSeenAt);
+      if (host.viewers.watched(ref.jobId))
+        await this.#publish(
+          ref,
+          decision.start,
+          first.lines.slice(0, first.settled).map(lineAt(decision.start)),
+        );
       return acked(settle.ackIndex);
     }
     const masked = settle.force ? mask(true) : first;
@@ -497,6 +533,44 @@ export class RunLogs {
     }
     await host.hooks.afterLogCommit?.();
     return acked(ack);
+  }
+
+  /**
+   * The masked text of the leading rows of `fresh` (from `start`, the ack)
+   * that no later row can change, exactly as a store would mask them: the
+   * stored masks and those fetched, the carry stored with the ack, unforced.
+   * Nothing is committed: values the rows register count within these rows
+   * only, and none is reported dropped (their store reports them).
+   */
+  async #settled(
+    ref: TaskRef,
+    log: LogRow | undefined,
+    start: number,
+    fresh: readonly string[],
+  ): Promise<readonly string[]> {
+    const stored = this.#masks(ref.task);
+    const fetched = await this.host.masks.masksFor(ref);
+    const masked = maskRows(
+      [...stored, ...fetched.map((value) => ({ value, fromIndex: 0 }))],
+      parseCarry(log?.mask_carry ?? null),
+      fresh,
+      {
+        start,
+        final: false,
+        force: false,
+        reserve: TOKEN_RESERVE,
+        gapRemaining: log?.gap_remaining ?? 0,
+      },
+    );
+    return masked.lines.slice(0, masked.settled);
+  }
+
+  /** Publishes final rows to the job's sockets (a test may pause first). */
+  async #publish(ref: TaskRef, base: number, rows: readonly LogLine[]): Promise<void> {
+    const hook = viewerHooks.beforePublish;
+    if (hook) await hook(this.host.engine.run()?.run_id ?? "");
+    if (this.host.erased()) return;
+    this.host.viewers.publish(ref.jobId, ref.task, base, rows);
   }
 
   /** Reports the `::add-mask::` values of stored rows that the caps kept from being registered. */
@@ -615,11 +689,17 @@ export class RunLogs {
         { taskId: wireId, task: ref.task, start, end },
       );
       if (chunk) await this.#deleteOwn(wireId, ref, chunk.key);
-      return outcome === "lost" ? this.ackOf(ref.task) : outcome;
+      if (outcome === "lost") {
+        const ack = this.ackOf(ref.task);
+        await this.#publish(ref, ack, []);
+        return ack;
+      }
+      return outcome;
     }
     // The run may have completed the task first, with its log incomplete: now it is complete.
     if (outcome === "complete" && host.engine.instance(ref.jobId)?.status === "completed")
       host.markLogComplete(ref);
+    await this.#publish(ref, start, lines);
     return end;
   }
 

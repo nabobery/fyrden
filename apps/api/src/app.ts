@@ -9,6 +9,7 @@ import { gitRouter } from "./git/router.js";
 import { deepHealth } from "./health.js";
 import { problem } from "./http/problem.js";
 import { mountLive } from "./live/routes.js";
+import { mountRunLogs } from "./live/run-logs-route.js";
 import { mountMcp } from "./mcp/mount.js";
 import type { AuthVariables } from "./middleware/auth.js";
 import { obs } from "./middleware/obs.js";
@@ -58,6 +59,7 @@ export function createApp() {
   app.route("/auth", authRouter);
   app.route("/.well-known", wellKnownRouter);
   mountLive(app);
+  mountRunLogs(app);
   // Under /api/actions/, which no operation's path takes: before the REST routes.
   mountRunnerService(app);
   mountRest(app);

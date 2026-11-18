@@ -246,6 +246,7 @@ const CASES: Record<
   // No such run: past authorization, every run operation answers it as missing.
   "actions.runs.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.list": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.jobs.live_ticket": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.force_cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.rerun": { input: {}, expected: { status: 404, code: "run_not_found" } },
@@ -386,6 +387,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{template_repo}", name)
     .replace("{upload_id}", UPLOAD_ID)
     .replace("{run_id}", UPLOAD_ID)
+    .replace("{job_id}", "1")
     .replace("{pull_number}", "1")
     .replace("{review_id}", "1")
     .replace("{issue_number}", "1")

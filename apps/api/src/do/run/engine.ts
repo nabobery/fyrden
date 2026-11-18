@@ -59,6 +59,7 @@ export const RUN_JOB = {
   dispatch: "dispatch",
   taskEnd: "task-end",
   logClose: "log-close",
+  logViewers: "log-viewers",
   concurrency: "concurrency",
   reconcile: "reconcile",
 } as const;
@@ -240,6 +241,8 @@ export interface EngineHost {
   logEnded(task: number, completedAt: number): void;
   /** Whether task `task`'s stored log is complete (a whole final request committed). */
   logComplete(task: number): boolean;
+  /** Job `jobId`'s instance completed, by any path, with a task or none: its watchers are told. */
+  jobEnded?(jobId: number): void;
 }
 
 type Bindable = string | number | null;
@@ -413,6 +416,7 @@ export class RunEngine {
       this.#ensure("ci_task_end", RUN_JOB.taskEnd);
       this.host.logEnded(row.task, now);
     }
+    if (completed && row.status !== "completed") this.host.jobEnded?.(row.job_id);
     // Complete stays complete: rows that reached durable storage do not leave it. Without a
     // runner's word, the stored log decides: a forced end leaves a complete log complete.
     let log = row.log_complete;

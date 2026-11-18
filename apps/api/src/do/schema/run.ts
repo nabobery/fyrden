@@ -272,6 +272,16 @@ export const runSchema: readonly DoMigration[] = [
       ALTER TABLE ci_logs ADD COLUMN gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0);
       ALTER TABLE ci_logs ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1));
       UPDATE ci_logs SET finalized = 1 WHERE state = 'complete';
+
+      CREATE TABLE ci_log_tickets (
+        hash TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        job_id INTEGER NOT NULL,
+        credential_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX ci_log_tickets_expiry ON ci_log_tickets (expires_at);
     `,
   },
 ];

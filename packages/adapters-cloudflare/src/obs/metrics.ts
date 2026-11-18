@@ -135,6 +135,9 @@ export const METRICS = {
   // An `::add-mask::` value a job log registered past the task's caps, so not masked by the
   // server (reason = values | bytes); the value is never recorded.
   "ci.mask_dropped": ["run", "task", "reason"],
+  // Live job log sockets opened, and closed by reason (done, life, protocol, unavailable, broken,
+  // credential, access, erased, slow, client).
+  "live.log_socket": ["event", "reason"],
   "d1.invocation_statements": ["where", "op"],
   // D1's rows one platform invocation read and wrote in all (kind = read | written), as D1
   // reports each result's, one point each an invocation: what live work's prices are measured by.

@@ -47,6 +47,7 @@ import {
   RunLogs,
 } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
+import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
 const LEASE_MARGIN_MS = 60_000;
@@ -174,6 +175,8 @@ export class RunDO extends MigratingDO {
   readonly engine: RunEngine;
   readonly #dispatch: RunDispatch;
   readonly #logs: RunLogs;
+  /** The job logs' live sockets. */
+  readonly viewers: LogViewers;
   /** The object's memory pool (NetworkDO's size, proposed): job slices and log requests reserve from it. */
   readonly memory = createDoMemoryBudget(16 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
@@ -205,6 +208,7 @@ export class RunDO extends MigratingDO {
       model: () => host.#loadModel(),
       logEnded: (task, completedAt) => host.#logs.taskEnded(task, completedAt),
       logComplete: (task) => host.#logs.complete(task),
+      jobEnded: (jobId) => host.viewers.jobEnded(jobId),
     });
     this.#dispatch = new RunDispatch({
       env,
@@ -228,6 +232,21 @@ export class RunDO extends MigratingDO {
       addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
       jobTokensFull: (task) => host.#logs.jobTokensFull(task),
     });
+    this.viewers = new LogViewers({
+      env,
+      engine: this.engine,
+      metrics: this.context.metrics,
+      log: this.#log,
+      memory: this.memory,
+      now: () => host.context.now(),
+      erased: () => host.#erased(),
+      tx: (fn) => host.#tx(fn),
+      sockets: (tag) => ctx.getWebSockets(tag),
+      accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
+      ensureSlice: () => host.jobs.ensure("ci_log_viewers", RUN_JOB.logViewers),
+    });
+    // A viewer's keepalive, answered by the runtime without a message for the object to handle.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
     this.#logs = new RunLogs({
       env,
       engine: this.engine,
@@ -247,6 +266,7 @@ export class RunDO extends MigratingDO {
       get masks() {
         return host.maskSource;
       },
+      viewers: this.viewers,
     });
   }
 
@@ -709,6 +729,40 @@ export class RunDO extends MigratingDO {
     return this.#logs.append(wireId, body, truncated, runnerId);
   }
 
+  // ------------------------------------------------------------------ live log sockets
+
+  /**
+   * Stores a live log ticket's hash for job `jobId` (its credential and
+   * principal, redeemable through repository `repoId` only); refused for an
+   * erased or unknown run, an unknown job, or past the run's unredeemed tickets.
+   */
+  storeLogTicket(input: {
+    hash: string;
+    repoId: string;
+    jobId: number;
+    credentialId: string;
+    principalId: string;
+  }): StoreTicketAnswer {
+    return this.viewers.storeTicket(input);
+  }
+
+  /** A live log upgrade, as the Worker's route forwards it with the credential it verified. */
+  override async fetch(request: Request): Promise<Response> {
+    return this.viewers.redeem(request);
+  }
+
+  override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    this.viewers.message(ws, message);
+  }
+
+  override async webSocketClose(ws: WebSocket): Promise<void> {
+    this.viewers.gone(ws);
+  }
+
+  override async webSocketError(ws: WebSocket): Promise<void> {
+    this.viewers.gone(ws);
+  }
+
   // ------------------------------------------------------------------ concurrency
 
   /**
@@ -1005,6 +1059,7 @@ export class RunDO extends MigratingDO {
         "ci_logs",
         "ci_log_chunks",
         "ci_log_masks",
+        "ci_log_tickets",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1012,6 +1067,7 @@ export class RunDO extends MigratingDO {
       return true;
     });
     if (!erased) return false;
+    this.viewers.erased();
     this.#model = undefined;
     await this.ctx.storage.deleteAlarm();
     return true;
@@ -1117,6 +1173,7 @@ export class RunDO extends MigratingDO {
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
       ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
       ci_log_close: { runSlice: async () => this.#logs.closeSlice() },
+      ci_log_viewers: { runSlice: () => this.viewers.slice() },
     };
     for (const [kind, handler] of Object.entries(handlers) as [JobKind, JobHandler][])
       handlers[kind] = this.#marked(kind, handler);
