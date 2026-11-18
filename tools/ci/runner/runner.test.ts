@@ -194,11 +194,15 @@ const instanceUrl = () =>
 beforeAll(async () => {
   binary = await runnerBinary(VERSION, ARCH);
   note(`binary ${binary} (SHA-256 checked)`);
+  note("checking job image");
   if ((await docker(["image", "inspect", IMAGE])).code !== 0) {
+    note("pulling job image");
     const pulled = await docker(["pull", IMAGE]);
     expect(pulled.code, pulled.output).toBe(0);
   }
+  note("starting local forge");
   forge = await startForge("runner", { primary: seam, vars: { FYRDEN_CI_RUNNERS: "on" } });
+  note("creating fixture repository");
   owner = await forge.user(`own${nonce}`);
   org = `org${nonce}`;
   await forge.admin.api.call("admin.orgs.create", { login: org, admin: owner.handle });
@@ -229,12 +233,16 @@ beforeAll(async () => {
       "",
     ].join("\n"),
   );
+  note("fixture ready");
 }, 300_000);
 
 afterAll(async () => {
+  note("cleaning up runner resources");
   await cleanUp();
   if (data) await rm(data, { recursive: true, force: true });
+  note("stopping local forge");
   await forge?.stop();
+  note("cleanup complete");
 }, 120_000);
 
 interface RecordedUpdateLog {
@@ -297,6 +305,7 @@ let registration: Promise<void> | undefined;
 /** Registers the runner, once: its credential stays in the data directory for every later job. */
 function register(): Promise<void> {
   registration ??= (async () => {
+    note("registering runner");
     const { token } = await owner.api.call("orgs.runners.registration_tokens.create", { org });
     const registered = await docker(
       runnerArgs(
@@ -335,7 +344,9 @@ async function runWorkflow(name: string, source: string) {
       ["-v", "/var/run/docker.sock:/var/run/docker.sock"],
       ["daemon", "--once"],
     ),
+    (line) => note(shown(line).slice(0, 2000)),
   );
+  note(`starting workflow ${name}`);
   const started = await (
     await fetch(`${forge.origin}/__runs/start`, {
       method: "POST",
@@ -367,10 +378,12 @@ async function runWorkflow(name: string, source: string) {
   expect(started).toMatchObject({ answer: { ok: true } });
   const runId = (started as { runId: string }).runId;
 
+  note(`run ${runId}: waiting for runner exit`);
   const exit = await daemon;
-  note(`daemon: exit ${exit.code}\n${shown(exit.output)}`);
+  note(`daemon: exit ${exit.code}`);
   expect(exit.code, shown(exit.output)).toBe(0);
 
+  note(`run ${runId}: checking completion`);
   const run = await eventually("the run completed", async () => {
     const r = await owner.api.call("actions.runs.get", {
       owner: org,
