@@ -1,5 +1,11 @@
 // See wrangler.jsonc. Routes under /__runs/ are this Worker's; the rest go to fyrden-api.
 import { startRun } from "../../../../../apps/api/src/ci/runs.ts";
+import { readPrefix } from "../../../../../apps/api/src/runner/connect.ts";
+import {
+  decodeUpdateLogRequest,
+  decodeUpdateTaskRequest,
+  encodeUpdateLogResponse,
+} from "../../../../../apps/api/src/runner/proto/messages.ts";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -34,6 +40,8 @@ async function chunks(env, runId) {
 }
 
 const UPDATE_LOG = "/api/actions/runner.v1.RunnerService/UpdateLog";
+const UPDATE_TASK = "/api/actions/runner.v1.RunnerService/UpdateTask";
+let sealedLog;
 function base64(buffer) {
   const bytes = new Uint8Array(buffer);
   let text = "";
@@ -114,9 +122,47 @@ async function recordUpdateLog(request, env) {
   }
 }
 
+/** The sealed-log probe models a fixed ack only; it does not run the schema migration. */
+async function sealedCall(request, env, method) {
+  const control = sealedLog;
+  const { bytes, truncated } = await readPrefix(request, RECORD_BYTES);
+  if (truncated) throw new Error("the sealed-log probe exceeded its request bound");
+  if (method === UPDATE_LOG) {
+    const message = decodeUpdateLogRequest(bytes);
+    if (message.taskId !== control.taskId)
+      return recordUpdateLog(new Request(request, { body: bytes }), env);
+    // Reporter serializes its calls. Its first index after sealing is the last ack it received.
+    control.ackIndex ??= message.index;
+    const answer = encodeUpdateLogResponse({ ackIndex: control.ackIndex });
+    recorded.push({
+      request: base64(bytes),
+      whole: true,
+      cancelled: false,
+      status: 200,
+      response: base64(answer),
+      error: null,
+      sealed: true,
+    });
+    return new Response(answer, { headers: { "Content-Type": "application/proto" } });
+  }
+  const message = decodeUpdateTaskRequest(bytes);
+  const response = await env.API.fetch(new Request(request, { body: bytes }));
+  if (message.state?.id === control.taskId && message.state.result !== 0) {
+    if (control.results.length === 10) throw new Error("too many final task reports in the probe");
+    control.results.push({ result: message.state.result, status: response.status });
+  }
+  return response;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (
+      sealedLog &&
+      request.method === "POST" &&
+      (url.pathname === UPDATE_LOG || url.pathname === UPDATE_TASK)
+    )
+      return sealedCall(request, env, url.pathname);
     if (url.pathname === UPDATE_LOG && request.method === "POST")
       return recordUpdateLog(request, env);
     const match = /^\/__runs(?:\/([0-9A-Z]{26}))?\/([a-z]+)$/.exec(url.pathname);
@@ -130,6 +176,17 @@ export default {
     }
     if (!runId) return json({ error: "no run" }, 400);
     if (action === "chunks") return json(await chunks(env, runId));
+    if (action === "seal" && request.method === "POST") {
+      if (!Number.isSafeInteger(body.taskId) || body.taskId <= 0 || sealedLog)
+        return json({ error: "invalid sealed-log probe task" }, 400);
+      sealedLog = { runId, taskId: body.taskId, ackIndex: undefined, results: [] };
+      return json({ ok: true });
+    }
+    if (action === "sealstate") return json(sealedLog?.runId === runId ? sealedLog : null);
+    if (action === "unseal" && request.method === "POST") {
+      if (sealedLog?.runId === runId) sealedLog = undefined;
+      return json({ ok: true });
+    }
     const run = env.RUN.getByName(runId);
     switch (action) {
       case "queued":

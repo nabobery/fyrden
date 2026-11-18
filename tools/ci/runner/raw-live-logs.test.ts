@@ -306,11 +306,12 @@ describe("raw runner logs through wrangler dev", () => {
     expect(await upload(active.task, 0, first)).toBe(50);
     const viewer = await view(active);
     await viewer.count(50);
-    const next = Array.from({ length: 50 }, (_, i) => (i === 0 ? `live ${token}` : `live ${i}`));
-    expect(await upload(active.task, 50, next)).toBe(100);
-    await viewer.count(100);
-    expect(await upload(active.task, 100, [], true)).toBe(100);
-    expect(await viewer.closed()).toEqual({ code: 1000, end: { log: "complete", durable: 100 } });
+    const next = Array.from({ length: 5 }, (_, i) => (i === 0 ? `live ${token}` : `live ${i}`));
+    expect(await upload(active.task, 50, next)).toBe(50);
+    await viewer.count(55);
+    expect((await stored(active.runId)).length).toBe(50);
+    expect(await upload(active.task, 50, next, true)).toBe(55);
+    expect(await viewer.closed()).toEqual({ code: 1000, end: { log: "complete", durable: 55 } });
     const lines = await stored(active.runId);
     const text = lines.map((line) => (isLogOmission(line) ? "" : line.c)).join("\n");
     expect(
@@ -370,8 +371,12 @@ describe("raw runner logs through wrangler dev", () => {
     await viewer.count(50);
     expect(await upload(active.task, 50, final, true)).toBe(ack);
     expect(await viewer.closed()).toEqual({ code: 1000, end: { log: "complete", durable: count } });
-    expect((await stored(active.runId)).length).toBe(count);
+    const beforeLateUpload = await stored(active.runId);
+    expect(beforeLateUpload.length).toBe(count);
     expect(await upload(active.task, ack, ["not stored"], true)).toBe(ack);
+    expect(JSON.stringify(await stored(active.runId)) === JSON.stringify(beforeLateUpload)).toBe(
+      true,
+    );
     await finish(active.task);
   });
 

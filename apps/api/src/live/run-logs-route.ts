@@ -30,7 +30,7 @@ const MAX_INDEX = 2 ** 31 - 1;
 /** Mounts the upgrade (before the REST routes, whose `POST` on the path issues the ticket). */
 export function mountRunLogs(app: Hono<AppEnv>): void {
   app.get("/api/repos/:owner/:repo/actions/runs/:run_id/jobs/:job_id/logs/live", async (c) => {
-    if (c.req.header("Upgrade") !== "websocket")
+    if (c.req.header("Upgrade")?.toLowerCase() !== "websocket")
       return c.text("Open this with a WebSocket upgrade.", 426, { Upgrade: "websocket" });
     const { owner, repo } = c.req.param();
     const runId = c.req.param("run_id");

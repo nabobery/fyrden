@@ -87,11 +87,12 @@ export async function freshlyAllowed(
   credential: LiveCredential,
   repo: RepoEntry,
   permission: RepoPermission,
+  checkpoint?: () => void,
 ): Promise<boolean | "unknown"> {
   const decided = await new FreshAccess(
     { env, metrics },
     { principalId: credential.principalId, grantId: null },
-  ).decide([repo]);
+  ).decide([repo], { live: true, ...(checkpoint && { checkpoint }) });
   const decision = decided.get(repo.id);
   if (decision === undefined || decision === "unknown") return "unknown";
   return (

@@ -585,12 +585,11 @@ function run(
         break;
     }
   }
-  // The runner closes and its final calls reach a healthy server. A row too large still unacked
-  // takes a call of its own to omit, and the rows before it one more (the final flush retries).
+  // Each healthy cut call advances at least one buffered position; the final call seals the log.
   runner.close();
   now += interval;
-  for (let k = 0; k <= 2 * runner.huge.size && !(store.ended && runner.buffered() === 0); k++)
-    send(healthy);
+  const drainCalls = runner.buffered() + 1;
+  for (let k = 0; k < drainCalls && !(store.ended && runner.buffered() === 0); k++) send(healthy);
   expect(store.ended).toBe(true);
   expect(store.complete).toBe(runner.huge.size === 0);
   expect(store.omitted).toBe(runner.huge.size);
@@ -662,6 +661,21 @@ function tickerBound(interval: number): number {
 }
 
 describe("runner log acks", () => {
+  it.each([false, true])("drains partial settlement before an oversized row, older=%s", (older) => {
+    const { store, runner } = run(
+      older,
+      5_000,
+      [
+        { kind: "print", count: 2, big: false, huge: false },
+        { kind: "print", count: 1, big: false, huge: true },
+      ],
+      [1],
+    );
+    expect(store.ended).toBe(true);
+    expect(store.complete).toBe(false);
+    expect(store.ack).toBe(runner.positions);
+  });
+
   it("keeps stored rows contiguous and acks only what is stored, through failures", () => {
     fc.assert(
       fc.property(fc.boolean(), intervals, actions(false), (olderRelease, interval, script) => {

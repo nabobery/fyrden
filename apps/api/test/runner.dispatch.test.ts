@@ -618,6 +618,158 @@ describe("a lost answer", () => {
     },
   );
 
+  it.each([false, true])(
+    "skips an exhausted offer while its eighth answer is in flight (lapsed claim: %s)",
+    async (lapsed) => {
+      const f = await orgRepo();
+      const runner = await registerRunner(f.org.login, f.owner);
+      const version = await primed(f);
+      const runId = await started(f, one);
+      const first = (await fetchTask(runner, version)).task;
+      if (!first) throw new Error("no task");
+      for (let i = 0; i < 6; i++)
+        expect((await fetchTask(runner, version)).task?.id).toBe(first.id);
+      const held = gate();
+      await inRun(runId, (r) => {
+        r.hooks = { beforeTaskAnswer: () => held.hold() };
+      });
+      const eighth = fetchTask(runner, version);
+      let delivered: Task | undefined;
+      try {
+        await held.started;
+        const otherRun = await started(f, one);
+        if (lapsed)
+          await env.DIRECTORY.prepare("UPDATE ci_pending_jobs SET claim_until = 0 WHERE run_id = ?")
+            .bind(runId)
+            .run();
+        const other = (await fetchTask(runner, version)).task;
+        expect(other).toBeDefined();
+        expect(other?.id).not.toBe(first.id);
+        expect((await taskRow(other?.id ?? 0))?.run_id).toBe(otherRun);
+        expect(await taskRow(first.id)).toMatchObject({
+          confirmed_at: null,
+          ended_at: null,
+          superseded_at: null,
+        });
+        const tokens = await jobTokensOf(first.id);
+        expect(tokens).toHaveLength(8);
+        expect(tokens.filter((token) => token.revoked_at === null)).toHaveLength(1);
+      } finally {
+        held.release();
+        try {
+          delivered = (await eighth).task;
+        } finally {
+          await inRun(runId, (r) => {
+            r.hooks = {};
+          });
+        }
+      }
+      if (!delivered) throw new Error("the eighth answer was lost");
+      expect(delivered.id).toBe(first.id);
+      await updateTask(runner, delivered.id);
+      expect((await uploadPack(f, jobTokenOf(delivered))).status).toBe(200);
+      const logged = await runnerCall(
+        "UpdateLog",
+        encodeUpdateLogRequest({
+          taskId: delivered.id,
+          index: 0,
+          rows: [{ content: "after the exhausted offer" }],
+          noMore: true,
+        }),
+        { credentials: runner },
+      );
+      expect(logged.status).toBe(200);
+      expect(decodeUpdateLogResponse(new Uint8Array(await logged.arrayBuffer())).ackIndex).toBe(1);
+      expect(await jobTokensOf(first.id)).toHaveLength(8);
+    },
+  );
+
+  it.each(["before commit", "after commit"] as const)(
+    "retries a losing token's revocation that fails %s without duplicating its audit",
+    async (failure) => {
+      const f = await orgRepo();
+      const runner = await registerRunner(f.org.login, f.owner);
+      const version = await primed(f);
+      const runId = await started(f, one);
+      const first = (await fetchTask(runner, version)).task;
+      if (!first) throw new Error("no task");
+      const held = gate();
+      await inRun(runId, (r) => {
+        r.hooks = { beforeTokenRotation: () => held.hold() };
+      });
+      const replaying = runnerCall("FetchTask", encodeFetchTaskRequest({ tasksVersion: version }), {
+        credentials: runner,
+      }).then(async (response) => ({
+        status: response.status,
+        body: await response.json<{ code: string }>(),
+      }));
+      const prototype = Object.getPrototypeOf(env.DIRECTORY) as D1Database;
+      const prepare = prototype.prepare;
+      const batch = prototype.batch;
+      const sqlByStatement = new WeakMap<D1PreparedStatement, string>();
+      const tracked = (statement: D1PreparedStatement, sql: string): D1PreparedStatement => {
+        const proxy = new Proxy(statement, {
+          get(target, key) {
+            if (key === "bind")
+              return (...values: unknown[]) => tracked(target.bind(...values), sql);
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+        sqlByStatement.set(proxy, sql);
+        return proxy;
+      };
+      let attempts = 0;
+      const prepareSpy = vi.spyOn(prototype, "prepare");
+      const batchSpy = vi.spyOn(prototype, "batch");
+      try {
+        await held.started;
+        await updateTask(runner, first.id);
+        prepareSpy.mockImplementation(function (this: D1Database, sql: string) {
+          return tracked(prepare.call(this, sql), sql);
+        });
+        batchSpy.mockImplementation(async function <T>(
+          this: D1Database,
+          statements: D1PreparedStatement[],
+        ): Promise<D1Result<T>[]> {
+          const own = statements.some((statement) => {
+            const sql = sqlByStatement.get(statement) ?? "";
+            return sql.includes("UPDATE tokens SET revoked_at") && !sql.includes("json_each");
+          });
+          if (own) attempts++;
+          if (own && attempts === 1 && failure === "before commit")
+            throw new Error("revocation write unavailable");
+          const results = (await batch.call(this, statements)) as D1Result<T>[];
+          if (own && attempts === 1 && failure === "after commit")
+            throw new Error("revocation answer lost");
+          return results;
+        });
+        held.release();
+        expect(await replaying).toMatchObject({ status: 503, body: { code: "unavailable" } });
+        expect(attempts).toBe(2);
+        const tokens = await jobTokensOf(first.id);
+        expect(tokens).toHaveLength(2);
+        expect(tokens[0]?.revoked_at).toBeNull();
+        expect(typeof tokens[1]?.revoked_at).toBe("number");
+        const audit = await env.DIRECTORY.prepare(
+          "SELECT COUNT(*) AS n FROM audit_log WHERE action = 'token.revoke' AND target_id = ?",
+        )
+          .bind(tokens[1]?.id ?? "")
+          .first<{ n: number }>();
+        expect(audit?.n).toBe(1);
+        expect((await uploadPack(f, jobTokenOf(first))).status).toBe(200);
+      } finally {
+        held.release();
+        await replaying.catch(() => undefined);
+        prepareSpy.mockRestore();
+        batchSpy.mockRestore();
+        await inRun(runId, (r) => {
+          r.hooks = {};
+        });
+      }
+    },
+  );
+
   it("after its task completed: the assignment answers task_finished, the row ends, and the poll searches as usual", async () => {
     const f = await orgRepo();
     const runner = await registerRunner(f.org.login, f.owner);
@@ -1180,7 +1332,8 @@ describe("a job token", () => {
     const [row] = await tasksOfRun(runId);
     expect(row?.ended_at).not.toBeNull();
     const [minted] = await jobTokensOf(row?.id ?? 0);
-    expect(minted?.revoked_at).not.toBeNull();
+    expect(minted).toBeDefined();
+    expect(typeof minted?.revoked_at).toBe("number");
     // Had the revocation been skipped, the task's end would still refuse it.
     await env.DIRECTORY.prepare("UPDATE tokens SET revoked_at = NULL WHERE id = ?")
       .bind(minted?.id ?? "")
@@ -1203,7 +1356,8 @@ describe("a job token", () => {
     expect((await fetching).task).toBeUndefined();
     const [row] = await tasksOfRun(runId);
     const [minted] = await jobTokensOf(row?.id ?? 0);
-    expect(minted?.revoked_at).not.toBeNull();
+    expect(minted).toBeDefined();
+    expect(typeof minted?.revoked_at).toBe("number");
   });
 
   it("of an agent is no OAuth exchange subject", async () => {

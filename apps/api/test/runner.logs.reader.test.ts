@@ -79,6 +79,74 @@ const omission = fc.record({
 });
 
 describe("stored log streaming reader", () => {
+  it.each([false, true])(
+    "cancels a pending BYOB read on abort and releases its lock, cancellation rejects: %s",
+    async (rejectCancel) => {
+      let started!: () => void;
+      const pulling = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let cancelled = false;
+      let stream!: ReadableByteStreamController;
+      const body = new ReadableStream({
+        type: "bytes",
+        start(controller) {
+          stream = controller;
+        },
+        pull() {
+          started();
+        },
+        cancel() {
+          cancelled = true;
+          if (rejectCancel) throw new Error("the source cancellation failed");
+        },
+      });
+      const abort = new AbortController();
+      const lines = readLogLines(body, abort.signal);
+      const pending = lines.next();
+      try {
+        await pulling;
+        abort.abort();
+        expect(cancelled).toBe(true);
+        await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+        expect(body.locked).toBe(false);
+      } finally {
+        if (!cancelled) {
+          stream.close();
+          stream.byobRequest?.respond(0);
+        }
+        await pending.catch(() => undefined);
+        await lines.return(undefined);
+      }
+    },
+  );
+
+  it("does not emit another buffered row after aborting between yields", async () => {
+    const input = source(
+      encoded([
+        { i: 0, t: null, c: "left" },
+        { i: 1, t: null, c: "right" },
+      ]),
+    );
+    const abort = new AbortController();
+    const lines = readLogLines(input.body, abort.signal);
+    expect((await lines.next()).value?.i).toBe(0);
+    abort.abort();
+    await expect(lines.next()).rejects.toMatchObject({ name: "AbortError" });
+    expect(input.cancelled).toBe(true);
+    expect(input.body.locked).toBe(false);
+  });
+
+  it("cancels without reading when its signal was already aborted", async () => {
+    const input = source(encoded([{ i: 0, t: null, c: "never decoded" }]));
+    const abort = new AbortController();
+    abort.abort();
+    const lines = readLogLines(input.body, abort.signal);
+    await expect(lines.next()).rejects.toMatchObject({ name: "AbortError" });
+    expect(input.cancelled).toBe(true);
+    expect(input.body.locked).toBe(false);
+  });
+
   it("bounds masking expansion including row edges and omission protection", () => {
     const masks = ["ab", "secretxy"].map((value) => ({ value, fromIndex: 0 }));
     fc.assert(
@@ -257,7 +325,7 @@ describe("stored log streaming reader", () => {
   });
 
   it("refuses a source without bounded BYOB support", async () => {
-    const body = new ReadableStream<Uint8Array>({
+    const body = new ReadableStream({
       start(controller) {
         controller.enqueue(encoded([{ i: 0, t: null, c: "row" }]));
         controller.close();
@@ -298,18 +366,16 @@ describe("stored log streaming reader", () => {
     expect(input.body.locked).toBe(false);
   });
 
-  it.each([
-    [0xc0, 0x80],
-    [0xed, 0xa0, 0x80],
-    [0xf4, 0x90, 0x80, 0x80],
-    [0xe2, 0x22],
-  ])("rejects invalid UTF-8: case %#", async (...invalid) => {
-    const prefix = utf8.encode('{"i":0,"t":null,"c":"');
-    const suffix = utf8.encode('"}');
-    const bytes = new Uint8Array(prefix.length + invalid.length + suffix.length);
-    bytes.set(prefix);
-    bytes.set(invalid, prefix.length);
-    bytes.set(suffix, prefix.length + invalid.length);
-    await expect(collect(source(bytes, [1]).body)).rejects.toThrow(/^invalid stored log$/);
-  });
+  it.each([[0xc0, 0x80], [0xed, 0xa0, 0x80], [0xf4, 0x90, 0x80, 0x80], [0xe2]])(
+    "rejects invalid UTF-8: case %#",
+    async (...invalid) => {
+      const prefix = utf8.encode('{"i":0,"t":null,"c":"');
+      const suffix = utf8.encode('"}');
+      const bytes = new Uint8Array(prefix.length + invalid.length + suffix.length);
+      bytes.set(prefix);
+      bytes.set(invalid, prefix.length);
+      bytes.set(suffix, prefix.length + invalid.length);
+      await expect(collect(source(bytes, [1]).body)).rejects.toThrow(/^invalid stored log$/);
+    },
+  );
 });

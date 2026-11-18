@@ -107,6 +107,9 @@ export interface LogHooks {
 
 /** Where a request's final rows go: the job's live sockets (`viewers.ts`). */
 export interface LogPublisher {
+  /** Pauses catch-up reservations until release; yielding waits for active readers to release memory. */
+  beginUpload(): { yieldMemory(): Promise<void>; release(): void };
+  logsExpired(): void;
   watched(jobId: number): boolean;
   /** `rows` from position `base` are final as masked (stored, or settled). */
   publish(jobId: number, task: number, base: number, rows: readonly LogLine[]): void;
@@ -121,7 +124,7 @@ export interface LogsHost {
   readonly hooks: LogHooks;
   readonly metrics: Metrics;
   readonly log: Logger;
-  /** The object's memory pool: each request reserves from it on arrival, or is not taken. */
+  /** Each request reserves before decoding; stored-log catch-up yields first when needed. */
   readonly memory: DoMemoryBudget;
   now(): number;
   erased(): boolean;
@@ -169,7 +172,7 @@ interface Store {
   readonly lines: readonly StoredLogLine[];
   readonly rows: number;
   readonly omitted: number;
-  readonly gapRemaining: (storedMasks: readonly LogMask[]) => number;
+  readonly gapRemaining: number | ((storedMasks: readonly LogMask[]) => number);
   readonly final: boolean;
   /** `::add-mask::` values the stored rows registered, in order, with their rows. */
   readonly added: readonly { readonly value: string; readonly index: number }[];
@@ -286,6 +289,7 @@ export class RunLogs {
    */
   closeSlice(): SliceResult {
     const { host } = this;
+    host.viewers.logsExpired();
     return host.tx((): SliceResult => {
       if (host.erased()) return { done: true };
       const now = host.now();
@@ -308,8 +312,7 @@ export class RunLogs {
       if (tasks.length === CLOSE_PAGE) return { done: false, cursor: null, runAfterMs: 0 };
       const next = host.engine.rows<{ ended_at: number | null }>(
         `SELECT MIN(ended_at) AS ended_at FROM ci_logs
-         WHERE state = 'incomplete' AND finalized = 0 AND ended_at > ?
-           AND (gap_remaining > 0 OR mask_carry IS NOT NULL OR EXISTS (SELECT 1 FROM ci_log_masks m WHERE m.task = ci_logs.task))`,
+         WHERE state = 'incomplete' AND finalized = 0 AND ended_at > ?`,
         due,
       )[0]?.ended_at;
       return next === null || next === undefined
@@ -366,28 +369,35 @@ export class RunLogs {
       });
       return acked(this.ackOf(ref.task));
     }
-    const bytes = Math.max(1, MEMORY_PER_BODY_BYTE * body.byteLength);
-    const fits = bytes <= host.memory.stats().totalBytes;
-    let reservation = fits ? host.memory.tryReserve(bytes) : undefined;
-    // What sockets hold gives way to the rows themselves (losing it only means a read).
-    if (!reservation && fits) {
-      host.viewers.dropCaches();
-      reservation = host.memory.tryReserve(bytes);
-    }
-    if (!reservation) {
-      host.log.warn("log request not admitted: the memory pool is taken", {
-        taskId: wireId,
-        task: ref.task,
-        bytes,
-      });
-      return acked(this.ackOf(ref.task));
-    }
     this.#busy.add(ref.task);
+    const priority = host.viewers.beginUpload();
+    let reservation: ReturnType<DoMemoryBudget["tryReserve"]>;
     try {
+      const bytes = Math.max(1, MEMORY_PER_BODY_BYTE * body.byteLength);
+      const fits = bytes <= host.memory.stats().totalBytes;
+      reservation = fits ? host.memory.tryReserve(bytes) : undefined;
+      if (!reservation && fits) {
+        host.viewers.dropCaches();
+        reservation = host.memory.tryReserve(bytes);
+      }
+      if (!reservation && fits) {
+        await priority.yieldMemory();
+        if (host.erased()) return notFound();
+        reservation = host.memory.tryReserve(bytes);
+      }
+      if (!reservation) {
+        host.log.warn("log request not admitted: the memory pool is taken", {
+          taskId: wireId,
+          task: ref.task,
+          bytes,
+        });
+        return acked(this.ackOf(ref.task));
+      }
       return await this.#append(wireId, ref, map.confirmed_at === null, body, truncated, runnerId);
     } finally {
       this.#busy.delete(ref.task);
-      reservation.release();
+      reservation?.release();
+      priority.release();
     }
   }
 
@@ -463,6 +473,7 @@ export class RunLogs {
         index: decision.index,
         bytes: decision.bytes,
       });
+      if (!this.#firstSeen.has(ref.task)) this.#firstSeen.set(ref.task, now);
       await host.hooks.beforeLogStore?.();
       const ack = await this.#store(wireId, ref, {
         start: decision.index,
@@ -508,6 +519,7 @@ export class RunLogs {
     const masked = settle.force ? mask(true) : first;
     const count = Math.min(settle.end - settle.start, decision.lines.length);
     const boundary = settle.final ? null : masked.carryAt(count);
+    if (!this.#firstSeen.has(ref.task)) this.#firstSeen.set(ref.task, now);
     await host.hooks.beforeLogStore?.();
     const from = settle.start - request.index;
     const ack = await this.#store(wireId, ref, {
@@ -520,7 +532,7 @@ export class RunLogs {
       })),
       rows: count,
       omitted: 0,
-      gapRemaining: () => masked.gapRemainingAt(count),
+      gapRemaining: masked.gapRemainingAt(count),
       final: settle.final,
       added: masked.added.filter((a) => a.index < settle.end),
       carry: (storedMasks) => storedCarry(boundary, stored.length, fetched.length, storedMasks),
@@ -657,7 +669,11 @@ export class RunLogs {
             value,
           );
       }
-      const gapRemaining = final ? 0 : flush.gapRemaining(this.#masks(ref.task));
+      const gapRemaining = final
+        ? 0
+        : typeof flush.gapRemaining === "number"
+          ? flush.gapRemaining
+          : flush.gapRemaining(this.#masks(ref.task));
       host.engine.exec(
         `UPDATE ci_logs SET ack_index = ?1, rows = rows + ?2, bytes = bytes + ?3,
            omitted_rows = omitted_rows + ?4,
@@ -711,7 +727,6 @@ export class RunLogs {
     try {
       await this.host.env.CI.delete(key);
     } catch (error) {
-      // Unreferenced either way: retention sweeps the run's prefix.
       this.host.log.warn("log chunk not deleted", {
         taskId: wireId,
         task: ref.task,
@@ -740,10 +755,29 @@ function parseCarry(text: string | null): LogMaskCarry | null {
   if (text === null) return null;
   try {
     const value = JSON.parse(text) as Partial<LogMaskCarry> | null;
-    const { mask, variant, length } = value ?? {};
-    return typeof mask === "number" && typeof variant === "number" && typeof length === "number"
-      ? { mask, variant, length }
-      : null;
+    const { mask, variant, length, starts } = value ?? {};
+    if (typeof mask !== "number" || typeof variant !== "number" || typeof length !== "number")
+      return null;
+    if (starts === undefined) return { mask, variant, length };
+    if (
+      !Array.isArray(starts) ||
+      !starts.every(
+        (start: unknown) =>
+          start !== null &&
+          typeof start === "object" &&
+          "index" in start &&
+          typeof start.index === "number" &&
+          Number.isSafeInteger(start.index) &&
+          start.index >= 0 &&
+          "offset" in start &&
+          typeof start.offset === "number" &&
+          Number.isSafeInteger(start.offset) &&
+          start.offset > -length &&
+          start.offset <= 0,
+      )
+    )
+      return null;
+    return { mask, variant, length, starts };
   } catch {
     return null;
   }

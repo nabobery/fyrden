@@ -435,11 +435,14 @@ export async function claimPending(
     ephemeral: boolean;
     version: number;
     now: number;
+    /** Assigned jobs this poll cannot re-offer; their existing tokens remain valid. */
+    skipJobs?: readonly { runId: string; jobId: number }[];
   },
   metrics?: Metrics,
 ): Promise<Claimed | undefined> {
   count(metrics, "runner_claim");
   const nonce = crypto.randomUUID();
+  const skip = claim.skipJobs && claim.skipJobs.length > 0;
   const [claimed, inserted] = await db.batch([
     db
       .prepare(
@@ -447,6 +450,13 @@ export async function claimPending(
          WHERE id = (
            SELECT p.id FROM ci_pending_jobs p
            WHERE p.account_id = ?4 AND (p.claim_until IS NULL OR p.claim_until < ?5)
+             ${
+               skip
+                 ? `AND NOT EXISTS (SELECT 1 FROM json_each(?8) e
+               WHERE json_extract(e.value, '$.runId') = p.run_id
+                 AND json_extract(e.value, '$.jobId') = p.job_id)`
+                 : ""
+             }
              -- An ephemeral runner holds one task: decided here, so overlapping polls serialise.
              AND (?7 = 0 OR (
                NOT EXISTS (SELECT 1 FROM ci_tasks o WHERE o.runner_id = ?1 AND ${liveOffer("?5")})
@@ -466,6 +476,7 @@ export async function claimPending(
         claim.now,
         JSON.stringify(claim.labels),
         claim.ephemeral ? 1 : 0,
+        ...(skip ? [JSON.stringify(claim.skipJobs)] : []),
       ),
     db
       .prepare(

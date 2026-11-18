@@ -36,14 +36,16 @@ export type AssignTaskAnswer =
        * `wrong_account`: the runner's account no longer owns the run's repository (it moved);
        * `repo_transferring`: the repository is being transferred; `released`: the offer was
        * given up by its poll before the assignment could be recorded; `confirmed`: a report
-       * made the stale offer no longer replayable.
+       * made the stale offer no longer replayable. `tokens_exhausted`: the offer cannot be
+       * repeated, but its last token and an in-flight answer remain valid.
        */
       readonly refused:
         | Extract<AssignAnswer, { ok: false }>["code"]
         | "wrong_account"
         | "repo_transferring"
         | "released"
-        | "confirmed";
+        | "confirmed"
+        | "tokens_exhausted";
     };
 
 /** What `reportTask` answers: an encoded UpdateTaskResponse, or a Connect error. */
@@ -238,12 +240,25 @@ export class RunDispatch {
       ttlMs: Math.min(assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS, JOB_TOKEN_MAX_MS),
       audit: { actorId: null },
     });
-    // Whatever fails from here, this request's token is never left live: it is revoked before
-    // the error goes on. Confirmed tasks are excluded from token rotation.
+    // Failed assignments retry revocation before propagating the error. Confirmed tasks are
+    // excluded from token rotation.
     let ownRevoked = false;
     const revokeOwn = async () => {
+      const at = host.now();
+      this.#count("ci_job_token_revoke", 2);
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+             SELECT ?1, NULL, NULL, 'token.revoke', id, NULL, NULL FROM tokens
+             WHERE id = ?2 AND revoked_at IS NULL`,
+          )
+          .bind(at, minted.id),
+        db
+          .prepare("UPDATE tokens SET revoked_at = ?1 WHERE id = ?2 AND revoked_at IS NULL")
+          .bind(at, minted.id),
+      ]);
       ownRevoked = true;
-      await store.revoke(minted.id, { actorId: null });
     };
     try {
       this.#count("ci_job_token_map");
@@ -311,7 +326,7 @@ export class RunDispatch {
     } catch (error) {
       if (!ownRevoked) {
         try {
-          await store.revoke(minted.id, { actorId: null });
+          await revokeOwn();
         } catch (revocation) {
           host.log.warn("job token of a failed assignment not revoked", {
             taskId: wireId,
@@ -354,17 +369,18 @@ export class RunDispatch {
     };
   }
 
-  /**
-   * Refuses a task whose log masks no more job tokens; the Worker answers
-   * `unavailable`, as any failure after the assignment.
-   */
-  #tokensFull(wireId: number, ref: TaskRef, tokenId?: string): never {
+  /** Keeps the last offered token valid while the Worker searches for other work. */
+  #tokensFull(
+    wireId: number,
+    ref: TaskRef,
+    tokenId?: string,
+  ): { readonly refused: "tokens_exhausted" } {
     this.host.log.warn("job token withheld: the task's log masks no more tokens", {
       taskId: wireId,
       task: ref.task,
       ...(tokenId !== undefined && { tokenId }),
     });
-    throw new Error("the task's log masks no more job tokens");
+    return { refused: "tokens_exhausted" };
   }
 
   /**

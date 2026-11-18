@@ -307,6 +307,19 @@ describe("maskRows", () => {
     expect(result.lines).toEqual(["::add-mask::***", "::add-mask::***", "::add-mask::***"]);
   });
 
+  it("registers a command before an identical scheduled mask takes effect", () => {
+    const masks = [{ value: "abcdefgh", fromIndex: 5 }];
+    const result = mask(masks, ["::add-mask::abcdefgh", "abcdefgh", "::add-mask::abcdefgh"]);
+    expect(result.added).toEqual([{ value: "abcdefgh", index: 0 }]);
+    expect(result.lines).toEqual(["::add-mask::***", "***", "::add-mask::***"]);
+    const resumedMasks = masks.concat(
+      result.added.map(({ value, index }) => ({ value, fromIndex: index })),
+    );
+    expect(maskRows(resumedMasks, result.carryAt(3), ["abcdefgh"], { start: 3 }).lines).toEqual([
+      "***",
+    ]);
+  });
+
   it("does not match a short value across a row boundary", () => {
     const result = mask([], ["::add-mask::OK", "say O", "K now", "OK"]);
     expect(result.lines).toEqual(["::add-mask::***", "say O", "K now", "***"]);
@@ -364,6 +377,35 @@ describe("maskRows", () => {
     const first = mask([jobToken], [`x ${TOKEN.slice(0, 20)}`], { force: true });
     const next = maskRows([jobToken], first.carryAt(1), [`${TOKEN.slice(20)}!`], { start: 1 });
     expect(next.lines).toEqual(["***!"]);
+  });
+
+  it("preserves activation inside a carried prefix across stored boundaries", () => {
+    const masks = [
+      { value: "XabcdefghZ", fromIndex: 0 },
+      { value: "abcdefgh", fromIndex: 1 },
+    ];
+    const rows = ["Xa", "b", "", "cdefgh SAFE"];
+    const whole = mask(masks, rows, { final: true });
+    expect(whole.lines).toEqual(rows);
+    const first = mask(masks, rows.slice(0, 2));
+    expect(first.settled).toBe(2);
+    const carry = JSON.parse(JSON.stringify(first.carryAt(2)));
+    const empty = maskRows(masks, carry, [""], { start: 2 });
+    const resumed = maskRows(masks, empty.carryAt(1), rows.slice(3), { start: 3, final: true });
+    expect([...first.lines, ...empty.lines, ...resumed.lines]).toEqual(whole.lines);
+  });
+
+  it("resumes a later mask whose occurrence starts after activation", () => {
+    const masks = [
+      { value: "XabcdefghZ", fromIndex: 0 },
+      { value: "abcdefgh", fromIndex: 1 },
+    ];
+    const first = mask(masks, ["Xa", "abc"], { force: true });
+    const resumed = maskRows(masks, first.carryAt(2), ["defgh SAFE"], {
+      start: 2,
+      final: true,
+    });
+    expect(resumed.lines).toEqual(["*** SAFE"]);
   });
 
   it("ignores a carry that names no registered variant", () => {

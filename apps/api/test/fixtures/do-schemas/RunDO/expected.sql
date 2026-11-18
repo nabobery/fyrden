@@ -36,7 +36,7 @@ CREATE TABLE ci_logs (
         rows INTEGER NOT NULL DEFAULT 0,
         bytes INTEGER NOT NULL DEFAULT 0,
         omitted_rows INTEGER NOT NULL DEFAULT 0 CHECK (omitted_rows >= 0),
-        updated_at INTEGER NOT NULL, mask_carry TEXT, ended_at INTEGER, gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0), finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
+        updated_at INTEGER NOT NULL, mask_carry TEXT, ended_at INTEGER, gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0), finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)), unmasked INTEGER NOT NULL DEFAULT 0 CHECK (unmasked IN (0, 1)),
         CHECK (state <> 'complete' OR omitted_rows = 0)
       ) STRICT;
 CREATE TABLE ci_tasks (

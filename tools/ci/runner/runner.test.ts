@@ -30,6 +30,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type DecodedUpdateLog,
   decodeUpdateLogRequest,
+  Result,
 } from "../../../apps/api/src/runner/proto/messages.js";
 import { decodeUpdateLogResponse } from "../../../apps/api/test/helpers/runner-proto.js";
 import { type Account, eventually, type Forge, Git, startForge } from "../e2e/forge.js";
@@ -273,7 +274,22 @@ async function createLogGate() {
   if (address === null || typeof address === "string")
     throw new Error("The local log gate has no port.");
   return {
-    ready,
+    async ready(signal: AbortSignal) {
+      signal.throwIfAborted();
+      let abort: () => void = () => undefined;
+      try {
+        await Promise.race([
+          ready,
+          new Promise<never>((_resolve, reject) => {
+            abort = () => reject(signal.reason);
+            signal.addEventListener("abort", abort, { once: true });
+          }),
+        ]);
+        signal.throwIfAborted();
+      } finally {
+        signal.removeEventListener("abort", abort);
+      }
+    },
     release,
     url: `http://${process.platform === "linux" ? "127.0.0.1" : "host.docker.internal"}:${address.port}/${MASK_GATE}`,
     async close() {
@@ -347,6 +363,7 @@ interface RecordedUpdateLog {
   readonly ack: number;
   /** The API stopped reading the body before its end. */
   readonly cancelled: boolean;
+  readonly sealed: boolean;
 }
 
 /**
@@ -364,6 +381,7 @@ async function recordedUpdateLogs(wireId: number): Promise<RecordedUpdateLog[]> 
     status: number | null;
     response: string | null;
     error: string | null;
+    sealed?: boolean;
   }[];
   return entries
     .map((entry) => {
@@ -379,6 +397,7 @@ async function recordedUpdateLogs(wireId: number): Promise<RecordedUpdateLog[]> 
           ? decodeUpdateLogResponse(Buffer.from(entry.response ?? "", "base64")).ackIndex
           : -1,
         cancelled: entry.cancelled,
+        sealed: entry.sealed ?? false,
       };
     })
     .filter((call) => call.request.taskId === wireId);
@@ -433,7 +452,7 @@ function register(): Promise<void> {
 async function runWorkflow(
   name: string,
   source: string,
-  afterStart?: (runId: string) => Promise<void>,
+  afterStart?: (runId: string, signal: AbortSignal) => Promise<void>,
 ) {
   await register();
   // --once: it polls until it gets a task, runs it, and exits.
@@ -477,14 +496,23 @@ async function runWorkflow(
   ).json();
   expect(started).toMatchObject({ answer: { ok: true } });
   const runId = (started as { runId: string }).runId;
-  // A runner that exits first (its job failed before the step's signal) fails the step at once.
-  if (afterStart)
-    await Promise.race([
-      afterStart(runId),
-      daemon.then((exit) => {
-        throw new Error(`The runner exited (${exit.code}) before the test's step finished.`);
-      }),
-    ]);
+  if (afterStart) {
+    const controller = new AbortController();
+    const step = afterStart(runId, controller.signal);
+    let complete = false;
+    try {
+      await Promise.race([
+        step,
+        daemon.then((exit) => {
+          throw new Error(`The runner exited (${exit.code}) before the test's step finished.`);
+        }),
+      ]);
+      complete = true;
+    } finally {
+      if (!complete) controller.abort();
+      await step.catch(() => undefined);
+    }
+  }
 
   note(`run ${runId}: waiting for runner exit`);
   const exit = await daemon;
@@ -726,6 +754,127 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
     }
   });
 
+  it("reports its real result when a sealed log stops acknowledging new rows", async () => {
+    const gate = await createLogGate();
+    const marker = `before-sealed-log ${nonce}`;
+    let sealedRun: string | undefined;
+    const source = [
+      `name: ${WORKFLOW_NAME}-sealed`,
+      "on: push",
+      "jobs:",
+      "  sealed:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: before upgrade",
+      "        run: |",
+      "          node --input-type=module <<'NODE'",
+      `          console.log(${JSON.stringify(marker)});`,
+      '          for (let i = 0; i < 120; i++) console.log("before-seal " + i);',
+      `          const gate = await fetch(${JSON.stringify(gate.url)}, { signal: AbortSignal.timeout(120000) });`,
+      '          if (!gate.ok) throw new Error("The sealed-log gate refused the job.");',
+      "          NODE",
+      "      - name: after upgrade",
+      "        env:",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a workflow expression, as plain text
+      "          JOB_TOKEN: ${{ github.token }}",
+      "        run: |",
+      "          node --input-type=module <<'NODE'",
+      `          const url = ${JSON.stringify(`${instanceUrl()}/${org}/app.git/info/refs?service=git-upload-pack`)};`,
+      '          const auth = Buffer.from("x-access-token:" + process.env.JOB_TOKEN).toString("base64");',
+      '          const response = await fetch(url, { headers: { Authorization: "Basic " + auth, "Git-Protocol": "version=2" }, signal: AbortSignal.timeout(30000) });',
+      '          if (response.status !== 200) throw new Error("The legacy job token could not read git: " + response.status);',
+      '          if (!(await response.text()).startsWith("000eversion 2\\n")) throw new Error("The v2 git advertisement was missing.");',
+      '          console.log("legacy-job-token-still-works");',
+      '          for (let i = 0; i < 20; i++) console.log("discarded-after-seal " + i);',
+      "          NODE",
+    ].join("\n");
+    try {
+      const { runId, run, jobs } = await runWorkflow(
+        `${WORKFLOW_NAME}-sealed`,
+        source,
+        async (runId, signal) => {
+          await gate.ready(signal);
+          const taskId = await eventually("a durable log before sealing", async () => {
+            signal.throwIfAborted();
+            const response = await fetch(`${forge.origin}/__runs/recorded`, { signal });
+            const entries = (await response.json()) as {
+              request: string;
+              whole: boolean;
+              status: number | null;
+              response: string | null;
+            }[];
+            for (const entry of entries) {
+              if (entry.status !== 200 || !entry.whole) continue;
+              const request = decodeUpdateLogRequest(Buffer.from(entry.request, "base64"));
+              const position = request.rows.findIndex((row) => row.content === marker);
+              if (position < 0) continue;
+              const ack = decodeUpdateLogResponse(
+                Buffer.from(entry.response ?? "", "base64"),
+              ).ackIndex;
+              if (ack > request.index + position) return request.taskId;
+            }
+            return undefined;
+          });
+          const sealed = await fetch(`${forge.origin}/__runs/${runId}/seal`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId }),
+            signal,
+          });
+          expect(sealed.status).toBe(200);
+          sealedRun = runId;
+          gate.release();
+        },
+      );
+      expect(run.conclusion).toBe("success");
+      expect(jobs).toMatchObject([{ name: "sealed", conclusion: "success", log_complete: false }]);
+      const response = await fetch(`${forge.origin}/__runs/${runId}/sealstate`);
+      expect(response.status).toBe(200);
+      const control = (await response.json()) as {
+        taskId: number;
+        ackIndex: number;
+        results: { result: number; status: number }[];
+      };
+      expect(control.ackIndex).toBeGreaterThan(0);
+      expect(control.results).toEqual([{ result: Result.SUCCESS, status: 200 }]);
+      const calls = (await recordedUpdateLogs(control.taskId)).filter((call) => call.sealed);
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((call) => call.ack === control.ackIndex)).toBe(true);
+      expect(calls.some((call) => call.request.rows.length > 0)).toBe(true);
+      const final = calls.filter((call) => call.request.noMore);
+      expect(final.length).toBeGreaterThan(0);
+      expect(final.length).toBeLessThanOrEqual(10);
+      expect(
+        calls.some((call) =>
+          call.request.rows.some((row) => row.content === "legacy-job-token-still-works"),
+        ),
+      ).toBe(true);
+      const db = await runDatabase(runId);
+      try {
+        const log = db.prepare("SELECT state, ack_index FROM ci_logs WHERE task = 1").get() as {
+          state: string;
+          ack_index: number;
+        };
+        expect(log).toEqual({ state: "incomplete", ack_index: control.ackIndex });
+        const manifest = db
+          .prepare("SELECT start_index, end_index, r2_key FROM ci_log_chunks ORDER BY start_index")
+          .all() as { start_index: number; end_index: number; r2_key: string }[];
+        const { rows } = await storedLines(runId, manifest);
+        expect(rows.length).toBe(control.ackIndex);
+        expect(rows.some((row) => row.c?.includes("discarded-after-seal"))).toBe(false);
+        expect(rows.some((row) => row.c === "legacy-job-token-still-works")).toBe(false);
+      } finally {
+        db.close();
+      }
+      note(
+        `run ${runId}: frozen log ack ${control.ackIndex}, ${calls.length} uploads (${final.length} final), job-token git read and final SUCCESS accepted, log incomplete`,
+      );
+    } finally {
+      if (sealedRun) await fetch(`${forge.origin}/__runs/${sealedRun}/unseal`, { method: "POST" });
+      await gate.close();
+    }
+  });
+
   it("masks stored and live rows from a stock runner, with backfill before the job resumes", async () => {
     let viewer: Awaited<ReturnType<typeof watchLog>> | undefined;
     const gate = await createLogGate();
@@ -734,11 +883,12 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       const { runId, run, jobs } = await runWorkflow(
         MASK_NAME,
         maskingWorkflow(gate.url),
-        async (runId) => {
-          await gate.ready;
+        async (runId, signal) => {
+          await gate.ready(signal);
           // The marker is acked (so stored) before the viewer joins: it reaches the viewer as backfill.
           await eventually("the backfill marker acked", async () => {
-            const res = await fetch(`${forge.origin}/__runs/recorded`);
+            signal.throwIfAborted();
+            const res = await fetch(`${forge.origin}/__runs/recorded`, { signal });
             const entries = (await res.json()) as {
               request: string;
               whole: boolean;
@@ -760,20 +910,19 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
               }) || undefined
             );
           });
-          const listed = await owner.api.call("actions.runs.jobs.list", {
-            owner: org,
-            repo: "app",
-            run_id: runId,
-          });
+          const listed = await owner.api.call(
+            "actions.runs.jobs.list",
+            { owner: org, repo: "app", run_id: runId },
+            { signal },
+          );
           const job = listed.jobs.find((job) => job.name === "mask");
           if (!job) throw new Error("The masking job was not listed.");
-          const ticket = await owner.api.call("actions.runs.jobs.live_ticket", {
-            owner: org,
-            repo: "app",
-            run_id: runId,
-            job_id: job.id,
-          });
-          viewer = await watchLog(ticket.url, owner.token);
+          const ticket = await owner.api.call(
+            "actions.runs.jobs.live_ticket",
+            { owner: org, repo: "app", run_id: runId, job_id: job.id },
+            { signal },
+          );
+          viewer = await watchLog(ticket.url, owner.token, signal);
           await viewer.waitForRows((rows) => rows.some((row) => row.c === BACKFILL));
           backfillCount = viewer.rows.length;
           expect(viewer.rows.some((row) => row.c === LIVE)).toBe(false);
@@ -798,9 +947,11 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
           )
           .all(instance.task) as { start_index: number; end_index: number; r2_key: string }[];
         const { rows } = await storedLines(runId, manifest);
-        expect(viewer.rows.map((row) => ({ i: row.i, c: row.c }))).toEqual(
-          rows.map((row) => ({ i: row.i, c: row.c })),
+        expect(viewer.rows.length).toBe(rows.length);
+        const mismatch = viewer.rows.findIndex(
+          (row, index) => row.i !== rows[index]?.i || row.c !== rows[index]?.c,
         );
+        expect(mismatch, "the first differing stored/live row index").toBe(-1);
         const contents = rows.map((row) => row.c ?? "");
         expect(contents.includes("mask-plain:***")).toBe(true);
         expect(contents.includes("mask-base64:***")).toBe(true);

@@ -50,16 +50,28 @@ const one = workflow(job("a"));
 const MIN = 60_000;
 const LATE_MS = 10 * MIN;
 
-/** A run of one job in a new organization, with a runner holding its task. */
-async function withTask() {
+/** A run in a new organization, with a runner holding its first task. */
+async function withTask(source = one) {
   const f = await orgRepo();
-  const runId = await started(f, one);
+  const runId = await started(f, source);
   const runner = await registerRunner(f.org.login, f.owner);
   const task = (await fetchTask(runner, 0)).task;
   if (!task) throw new Error("no task");
   const number = (await taskRow(task.id))?.task;
   if (typeof number !== "number") throw new Error("the task was not recorded");
   return { f, runId, runner, task, number, token: jobTokenOf(task) };
+}
+
+async function withTwoTasks() {
+  const first = await withTask(workflow([job("a"), job("b")].join("\n")));
+  await updateTask(first.runner, first.task.id);
+  const runner = await registerRunner(first.f.org.login, first.f.owner);
+  const task = (await fetchTask(runner, 0)).task;
+  if (!task) throw new Error("no second task");
+  const number = (await taskRow(task.id))?.task;
+  if (typeof number !== "number") throw new Error("the second task was not recorded");
+  expect(task.id).not.toBe(first.task.id);
+  return { first, second: { runner, task, number } };
 }
 
 const row = (content: string): LogRow => ({ content });
@@ -96,12 +108,14 @@ async function storedLines(runId: string, task: number): Promise<Line[]> {
     expect(chunk.start_index).toBe(next);
     const object = await env.CI.get(chunk.r2_key);
     if (!object) throw new Error(`the manifest names ${chunk.r2_key}, which is not stored`);
-    lines.push(
-      ...(await object.text())
-        .split("\n")
-        .filter((l) => l !== "")
-        .map((l) => JSON.parse(l) as Line),
+    const chunkLines = (await object.text())
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => JSON.parse(l) as Line);
+    expect(chunkLines.map((line) => line.i)).toEqual(
+      Array.from({ length: chunk.end_index - chunk.start_index }, (_, i) => chunk.start_index + i),
     );
+    lines.push(...chunkLines);
     next = chunk.end_index;
   }
   expect(lines.map((l) => l.i)).toEqual(Array.from({ length: lines.length }, (_, i) => i));
@@ -158,6 +172,21 @@ const logOf = (runId: string, task: number) =>
 async function reset(runId: string) {
   await evictDurableObject(runStub(runId));
   await at(runId, now(runId));
+}
+
+async function releaseHeld(
+  runId: string,
+  holds: readonly ReturnType<typeof gate>[],
+  pending: readonly Promise<unknown>[],
+): Promise<void> {
+  for (const held of holds) held.release();
+  try {
+    await Promise.allSettled(pending);
+  } finally {
+    await inRun(runId, (r) => {
+      r.hooks = {};
+    });
+  }
 }
 
 /** The `ci.mask_dropped` points written while `fn` runs, as [run, task, reason, value]. */
@@ -229,19 +258,14 @@ describe("the job token", () => {
     expect((await contents(runId, number)).slice(0, 2)).toEqual(["new ***", "old ***"]);
   });
 
-  it("past 8 tokens, a re-offer is refused before any token is minted", async () => {
+  it("past 8 tokens, a poll returns no task without minting another token", async () => {
     const { runId, runner, lost, number, version } = await lostAnswer();
     for (let i = 0; i < 7; i++) expect((await fetchTask(runner, version)).task?.id).toBe(lost.id);
     expect((await masksOf(runId, number)).filter((m) => m.kind === "job_token")).toHaveLength(8);
     const minted = (await jobTokensOf(lost.id)).length;
     expect(minted).toBe(8);
     for (let i = 0; i < 2; i++) {
-      const refused = await runnerCall(
-        "FetchTask",
-        encodeFetchTaskRequest({ tasksVersion: version }),
-        { credentials: runner },
-      );
-      await connectError(refused, "unavailable", 503);
+      expect((await fetchTask(runner, version)).task).toBeUndefined();
     }
     expect((await jobTokensOf(lost.id)).length).toBe(minted);
     expect((await masksOf(runId, number)).filter((m) => m.kind === "job_token")).toHaveLength(8);
@@ -267,29 +291,39 @@ describe("the job token", () => {
           task: res.status === 200 ? decodeFetchTaskResponse(await proto(res)).task : undefined,
         }));
       // A minted first; B minted second, after A's token was recorded for the task.
-      const a = call();
-      await gates.A.started;
-      const b = call();
-      await gates.B.started;
-      const answers = { A: a, B: b };
-      const second = first === "A" ? "B" : "A";
-      gates[first].release();
-      const won = await answers[first];
-      expect(won.status).toBe(200);
-      const delivered = won.task;
-      gates[second].release();
-      const lostRace = await answers[second];
-      await inRun(runId, (r) => {
-        r.hooks = {};
-      });
-      expect(lostRace.status).toBe(503);
-      if (!delivered) throw new Error("no task");
-      const token = jobTokenOf(delivered);
-      expect(await revokedAt(token)).toBeNull();
-      const tokens = await jobTokensOf(lost.id);
-      expect(tokens).toHaveLength(9);
-      expect(tokens.filter((t) => t.revoked_at === null)).toHaveLength(1);
-      expect((await masksOf(runId, number)).filter((m) => m.kind === "job_token")).toHaveLength(8);
+      const pending: Promise<unknown>[] = [];
+      try {
+        const a = call();
+        pending.push(a);
+        await gates.A.started;
+        const b = call();
+        pending.push(b);
+        await gates.B.started;
+        const answers = { A: a, B: b };
+        const second = first === "A" ? "B" : "A";
+        gates[first].release();
+        const won = await answers[first];
+        expect(won.status).toBe(200);
+        const delivered = won.task;
+        gates[second].release();
+        const lostRace = await answers[second];
+        await inRun(runId, (r) => {
+          r.hooks = {};
+        });
+        expect(lostRace.status).toBe(200);
+        expect(lostRace.task).toBeUndefined();
+        if (!delivered) throw new Error("no task");
+        const token = jobTokenOf(delivered);
+        expect(await revokedAt(token)).toBeNull();
+        const tokens = await jobTokensOf(lost.id);
+        expect(tokens).toHaveLength(9);
+        expect(tokens.filter((t) => t.revoked_at === null)).toHaveLength(1);
+        expect((await masksOf(runId, number)).filter((m) => m.kind === "job_token")).toHaveLength(
+          8,
+        );
+      } finally {
+        await releaseHeld(runId, [gates.A, gates.B], pending);
+      }
     });
   }
 
@@ -327,64 +361,77 @@ describe("the job token", () => {
       r.hooks = { afterMint: () => (++calls === 1 ? held.hold() : undefined) };
     });
     // An assignment that outlives its poll; the runner polls again and reads the second.
-    const slow = fetchTask(runner, version);
-    await held.started;
-    const received = (await fetchTask(runner, version)).task;
-    if (!received) throw new Error("no task");
-    held.release();
-    const discarded = (await slow).task;
-    if (!discarded) throw new Error("no task");
-    await inRun(runId, (r) => {
-      r.hooks = {};
-    });
-    const token = jobTokenOf(received);
-    expect((await masksOf(runId, number)).map((m) => m.value)).toEqual([
-      jobTokenOf(lost),
-      token,
-      jobTokenOf(discarded),
-    ]);
-    const rows = [row(`credential=${token}`)];
-    expect(await ackOf(runner, { taskId: received.id, index: 0, rows, noMore: true })).toBe(1);
-    expect(await contents(runId, number)).toEqual(["credential=***"]);
-    expect((await everyObject(runId, number)).includes(token)).toBe(false);
+    const pending: Promise<unknown>[] = [];
+    try {
+      const slow = fetchTask(runner, version);
+      pending.push(slow);
+      await held.started;
+      const received = (await fetchTask(runner, version)).task;
+      if (!received) throw new Error("no task");
+      held.release();
+      const discarded = (await slow).task;
+      if (!discarded) throw new Error("no task");
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      const token = jobTokenOf(received);
+      expect((await masksOf(runId, number)).map((m) => m.value)).toEqual([
+        jobTokenOf(lost),
+        token,
+        jobTokenOf(discarded),
+      ]);
+      const rows = [row(`credential=${token}`)];
+      expect(await ackOf(runner, { taskId: received.id, index: 0, rows, noMore: true })).toBe(1);
+      expect(await contents(runId, number)).toEqual(["credential=***"]);
+      expect((await everyObject(runId, number)).includes(token)).toBe(false);
+    } finally {
+      await releaseHeld(runId, [held], pending);
+    }
   });
 
   it("re-offered while a forced store of a token's prefix is being written: the stored carry still masks the suffix", async () => {
     const { runId, runner, number, version } = await lostAnswer();
     const held = gate();
+    const put = gate();
     let calls = 0;
     await inRun(runId, (r) => {
       r.hooks = { afterMint: () => (++calls === 1 ? held.hold() : undefined) };
     });
-    const slow = fetchTask(runner, version);
-    await held.started;
-    const received = (await fetchTask(runner, version)).task;
-    if (!received) throw new Error("no task");
-    const token = jobTokenOf(received);
-    const rows = [row("start"), row(`credential=${token.slice(0, 20)}`)];
-    await at(runId, T0 + 1_000);
-    expect(await ackOf(runner, { taskId: received.id, index: 0, rows })).toBe(0);
-    await at(runId, T0 + 16_000);
-    const put = gate();
-    await inRun(runId, (r) => {
-      r.hooks.afterLogPut = () => put.hold();
-    });
-    const storing = ackOf(runner, { taskId: received.id, index: 0, rows });
-    await put.started;
-    held.release();
-    await slow;
-    await inRun(runId, (r) => {
-      r.hooks = {};
-    });
-    put.release();
-    expect(await storing).toBe(2);
-    const rest = [row(`${token.slice(20)} tail`), ...filler(3, 49)];
-    expect(await ackOf(runner, { taskId: received.id, index: 2, rows: rest })).toBe(52);
-    expect((await contents(runId, number)).slice(0, 3)).toEqual([
-      "start",
-      "credential=***",
-      "*** tail",
-    ]);
+    const pending: Promise<unknown>[] = [];
+    try {
+      const slow = fetchTask(runner, version);
+      pending.push(slow);
+      await held.started;
+      const received = (await fetchTask(runner, version)).task;
+      if (!received) throw new Error("no task");
+      const token = jobTokenOf(received);
+      const rows = [row("start"), row(`credential=${token.slice(0, 20)}`)];
+      await at(runId, T0 + 1_000);
+      expect(await ackOf(runner, { taskId: received.id, index: 0, rows })).toBe(0);
+      await at(runId, T0 + 16_000);
+      await inRun(runId, (r) => {
+        r.hooks.afterLogPut = () => put.hold();
+      });
+      const storing = ackOf(runner, { taskId: received.id, index: 0, rows });
+      pending.push(storing);
+      await put.started;
+      held.release();
+      await slow;
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      put.release();
+      expect(await storing).toBe(2);
+      const rest = [row(`${token.slice(20)} tail`), ...filler(3, 49)];
+      expect(await ackOf(runner, { taskId: received.id, index: 2, rows: rest })).toBe(52);
+      expect((await contents(runId, number)).slice(0, 3)).toEqual([
+        "start",
+        "credential=***",
+        "*** tail",
+      ]);
+    } finally {
+      await releaseHeld(runId, [held, put], pending);
+    }
   });
 
   it("refuses a re-offer confirmed while the log completes and keeps its masks deleted", async () => {
@@ -393,22 +440,28 @@ describe("the job token", () => {
     await inRun(runId, (r) => {
       r.hooks = { afterMint: () => held.hold() };
     });
-    const reoffer = fetchTask(runner, version);
-    await held.started;
-    expect(
-      await ackOf(runner, { taskId: lost.id, index: 0, rows: filler(0, 3), noMore: true }),
-    ).toBe(3);
-    expect(await masksOf(runId, number)).toEqual([]);
-    held.release();
-    const again = (await reoffer).task;
-    expect(again).toBeUndefined();
-    await inRun(runId, (r) => {
-      r.hooks = {};
-    });
-    expect(await masksOf(runId, number)).toEqual([]);
-    await updateTask(runner, lost.id, Result.SUCCESS);
-    await advance(runId, LATE_MS);
-    expect(await masksOf(runId, number)).toEqual([]);
+    const pending: Promise<unknown>[] = [];
+    try {
+      const reoffer = fetchTask(runner, version);
+      pending.push(reoffer);
+      await held.started;
+      expect(
+        await ackOf(runner, { taskId: lost.id, index: 0, rows: filler(0, 3), noMore: true }),
+      ).toBe(3);
+      expect(await masksOf(runId, number)).toEqual([]);
+      held.release();
+      const again = (await reoffer).task;
+      expect(again).toBeUndefined();
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      expect(await masksOf(runId, number)).toEqual([]);
+      await updateTask(runner, lost.id, Result.SUCCESS);
+      await advance(runId, LATE_MS);
+      expect(await masksOf(runId, number)).toEqual([]);
+    } finally {
+      await releaseHeld(runId, [held], pending);
+    }
   });
 
   it("add-mask values filling the caps leave room for 8 job tokens", async () => {
@@ -428,34 +481,43 @@ describe("the job token", () => {
       r.hooks = { afterMint: () => gates[calls++]?.hold() };
     });
     const reoffers = [];
-    for (const g of gates) {
-      reoffers.push(fetchTask(runner, version));
-      await g.started;
+    try {
+      for (const g of gates) {
+        reoffers.push(fetchTask(runner, version));
+        await g.started;
+      }
+      const rows = [...values.map((v) => row(`::add-mask::${v}`)), ...filler(4, 46)];
+      expect(await ackOf(runner, { taskId: lost.id, index: 0, rows })).toBe(50);
+      expect((await masksOf(runId, number)).map((m) => m.kind)).toEqual([
+        "job_token",
+        "add_mask",
+        "add_mask",
+        "add_mask",
+      ]);
+      for (const g of gates) g.release();
+      const answered = await Promise.all(reoffers);
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      expect(answered.every((answer) => answer.task === undefined)).toBe(true);
+      expect(await revokedAt(first)).toBeNull();
+      const masks = await masksOf(runId, number);
+      expect(masks.filter((m) => m.kind === "job_token")).toHaveLength(8);
+      expect(masks.length).toBeLessThanOrEqual(256);
+      const bytes = masks.reduce((n, m) => n + new TextEncoder().encode(m.value).length, 0);
+      expect(bytes).toBeLessThanOrEqual(cap);
+      expect(
+        await ackOf(runner, {
+          taskId: lost.id,
+          index: 50,
+          rows: [row(`t ${first}`)],
+          noMore: true,
+        }),
+      ).toBe(51);
+      expect((await contents(runId, number))[50]).toBe("t ***");
+    } finally {
+      await releaseHeld(runId, gates, reoffers);
     }
-    const rows = [...values.map((v) => row(`::add-mask::${v}`)), ...filler(4, 46)];
-    expect(await ackOf(runner, { taskId: lost.id, index: 0, rows })).toBe(50);
-    expect((await masksOf(runId, number)).map((m) => m.kind)).toEqual([
-      "job_token",
-      "add_mask",
-      "add_mask",
-      "add_mask",
-    ]);
-    for (const g of gates) g.release();
-    const answered = await Promise.all(reoffers);
-    await inRun(runId, (r) => {
-      r.hooks = {};
-    });
-    expect(answered.every((answer) => answer.task === undefined)).toBe(true);
-    expect(await revokedAt(first)).toBeNull();
-    const masks = await masksOf(runId, number);
-    expect(masks.filter((m) => m.kind === "job_token")).toHaveLength(8);
-    expect(masks.length).toBeLessThanOrEqual(256);
-    const bytes = masks.reduce((n, m) => n + new TextEncoder().encode(m.value).length, 0);
-    expect(bytes).toBeLessThanOrEqual(cap);
-    expect(
-      await ackOf(runner, { taskId: lost.id, index: 50, rows: [row(`t ${first}`)], noMore: true }),
-    ).toBe(51);
-    expect((await contents(runId, number))[50]).toBe("t ***");
   });
 
   it("split across two rows of one request is masked in both", async () => {
@@ -494,6 +556,28 @@ describe("the job token", () => {
     expectNoForm(await everyObject(runId, number), token);
   });
 
+  it("keeps the first-seen clock when a partial masked flush fails before commit", async () => {
+    const { runId, runner, task, number, token } = await withTask();
+    const rows = [...filler(0, 49), row(`token: ${token.slice(0, 20)}`)];
+    await at(runId, T0 + 1_000);
+    await inRun(runId, (r) => {
+      r.hooks.afterLogPut = () => {
+        throw new Error("write failed before manifest commit");
+      };
+    });
+    try {
+      expect((await sendLog(runner, { taskId: task.id, index: 0, rows })).status).toBe(503);
+    } finally {
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+    }
+    expect((await logOf(runId, number))?.ack_index ?? 0).toBe(0);
+    await at(runId, T0 + 1_000 + 15_000);
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows })).toBe(50);
+    expect((await contents(runId, number))[49]).toBe("token: ***");
+  });
+
   it("forced out by age: the stored prefix is masked, and the next row's suffix through the stored carry, across a reset", async () => {
     const { runId, runner, task, number, token } = await withTask();
     const rows = [row("start"), row(`token: ${token.slice(0, 20)}`)];
@@ -515,6 +599,44 @@ describe("the job token", () => {
     ]);
     expect((await logOf(runId, number))?.mask_carry).toBeNull();
     expectNoForm(await everyObject(runId, number), token);
+  });
+});
+
+describe("persisted mask activation", () => {
+  it("keeps a later mask out of the earlier carried prefix after a reset", async () => {
+    const { runId, runner, task, number } = await withTask();
+    await inRun(runId, (r) => {
+      r.engine.exec(
+        `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
+         VALUES (?, 1, 'add_mask', 48, ?), (?, 2, 'add_mask', 49, ?)`,
+        number,
+        "XabcdefghZ",
+        number,
+        "abcdefgh",
+      );
+    });
+    expect(
+      await ackOf(runner, {
+        taskId: task.id,
+        index: 0,
+        rows: [...filler(0, 48), row("Xa"), row("b")],
+      }),
+    ).toBe(50);
+    const stored = (await logOf(runId, number))?.mask_carry;
+    expect(JSON.parse(stored ?? "null")).toMatchObject({
+      mask: 1,
+      length: 3,
+      starts: [{ index: 49, offset: -1 }],
+    });
+    await reset(runId);
+    expect(
+      await ackOf(runner, {
+        taskId: task.id,
+        index: 50,
+        rows: [row("cdefgh SAFE"), ...filler(51, 49)],
+      }),
+    ).toBe(100);
+    expect((await contents(runId, number)).slice(48, 51)).toEqual(["Xa", "b", "cdefgh SAFE"]);
   });
 });
 
@@ -624,27 +746,33 @@ describe("::add-mask::", () => {
     await inRun(runId, (r) => {
       r.hooks = { afterMint: () => held.hold() };
     });
-    const assigning = fetchTask(runner, 0);
-    await held.started;
-    // The runner's assignment is recorded before its token is: rows can name it already.
-    const task = await inRun(
-      runId,
-      (r) =>
-        r.engine.rows<{ wire_id: number; task: number }>("SELECT wire_id, task FROM ci_tasks")[0],
-    );
-    if (!task) throw new Error("no task");
-    const value = `K-${"X".repeat(16 * 1024 - 4)}-Z`;
-    const rows = [row(`::add-mask::${value}`), ...filler(1, 49)];
-    expect(await ackOf(runner, { taskId: task.wire_id, index: 0, rows })).toBe(50);
-    held.release();
-    expect((await assigning).task).toBeUndefined();
-    await inRun(runId, (r) => {
-      r.hooks = {};
-    });
-    const masks = await masksOf(runId, task.task);
-    const bytes = masks.reduce((n, m) => n + new TextEncoder().encode(m.value).length, 0);
-    expect(bytes).toBeLessThanOrEqual(16 * 1024);
-    expect(masks.map((m) => m.kind)).toEqual(["job_token"]);
+    const pending: Promise<unknown>[] = [];
+    try {
+      const assigning = fetchTask(runner, 0);
+      pending.push(assigning);
+      await held.started;
+      // The runner's assignment is recorded before its token is: rows can name it already.
+      const task = await inRun(
+        runId,
+        (r) =>
+          r.engine.rows<{ wire_id: number; task: number }>("SELECT wire_id, task FROM ci_tasks")[0],
+      );
+      if (!task) throw new Error("no task");
+      const value = `K-${"X".repeat(16 * 1024 - 4)}-Z`;
+      const rows = [row(`::add-mask::${value}`), ...filler(1, 49)];
+      expect(await ackOf(runner, { taskId: task.wire_id, index: 0, rows })).toBe(50);
+      held.release();
+      expect((await assigning).task).toBeUndefined();
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      const masks = await masksOf(runId, task.task);
+      const bytes = masks.reduce((n, m) => n + new TextEncoder().encode(m.value).length, 0);
+      expect(bytes).toBeLessThanOrEqual(16 * 1024);
+      expect(masks.map((m) => m.kind)).toEqual(["job_token"]);
+    } finally {
+      await releaseHeld(runId, [held], pending);
+    }
   });
 
   it("past 16 KiB of value text is not registered, logged and counted without its value", async () => {
@@ -728,6 +856,58 @@ describe("a closed log", () => {
     expect(await runDurableObjectAlarm(runStub(runId))).toBe(true);
     expect(await masksOf(runId, number)).toEqual([]);
     expect((await logOf(runId, number))?.mask_carry).toBeNull();
+  });
+
+  it("deletes expired masks while preserving a streaming task in the same run", async () => {
+    const { first, second } = await withTwoTasks();
+    const { runId } = first;
+    expect(
+      await ackOf(second.runner, {
+        taskId: second.task.id,
+        index: 0,
+        rows: filler(0, 50),
+      }),
+    ).toBe(50);
+    const streamingMasks = await masksOf(runId, second.number);
+    expect(streamingMasks.length).toBeGreaterThan(0);
+    await at(runId, T0 + MIN);
+    await updateTask(first.runner, first.task.id, Result.SUCCESS);
+    await at(runId, T0 + MIN + LATE_MS);
+    await updateTask(second.runner, second.task.id);
+    await drain(runId);
+    expect(await masksOf(runId, first.number)).toEqual([]);
+    expect((await logOf(runId, second.number))?.state).toBe("streaming");
+    expect(await masksOf(runId, second.number)).toEqual(streamingMasks);
+  });
+
+  it("retains the later close deadline when masks arrive after the earlier cleanup", async () => {
+    const { first, second } = await withTwoTasks();
+    const { runId } = first;
+    await at(runId, T0 + MIN);
+    await updateTask(first.runner, first.task.id, Result.SUCCESS);
+    await inRun(runId, (r) => {
+      r.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", second.number);
+    });
+    await at(runId, T0 + 2 * MIN);
+    await updateTask(second.runner, second.task.id, Result.SUCCESS);
+    expect(await masksOf(runId, second.number)).toEqual([]);
+    await at(runId, T0 + MIN + LATE_MS);
+    await drain(runId);
+    expect(await masksOf(runId, first.number)).toEqual([]);
+    expect(await masksOf(runId, second.number)).toEqual([]);
+    const value = "late-window-registered-value";
+    expect(
+      await ackOf(second.runner, {
+        taskId: second.task.id,
+        index: 0,
+        rows: [row(`::add-mask::${value}`), ...filler(1, 49)],
+      }),
+    ).toBe(50);
+    expect((await contents(runId, second.number))[0]).toBe("::add-mask::***");
+    expect((await masksOf(runId, second.number)).map((m) => m.value)).toEqual([value]);
+    await at(runId, T0 + 2 * MIN + LATE_MS);
+    await drain(runId);
+    expect(await masksOf(runId, second.number)).toEqual([]);
   });
 
   for (const [how, end] of [

@@ -873,7 +873,7 @@ describe("a row too large for any request", () => {
           number,
         )[0]?.gap_remaining ?? 0,
     );
-    expect(protectedPrefix).toBeGreaterThan(0);
+    expect(protectedPrefix).toBe(btoa(jobTokenOf(task)).length - 1);
     // Multibyte content: a two-byte character ending exactly at the prefix's end is stored whole …
     const wide = exactly(3, (n) => `${"d".repeat(n - 2)}é`);
     expect(await send(3, [...wide, ...rowsAt(4, 1)])).toBe(4);

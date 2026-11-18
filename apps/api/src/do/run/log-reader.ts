@@ -252,32 +252,55 @@ class LogParser {
   }
 }
 
-/** Reads the canonical RunLogs NDJSON format without retaining an encoded record. */
-export async function* readLogLines(body: ReadableStream<Uint8Array>): AsyncGenerator<ReadLogLine> {
+/** Reads canonical RunLogs NDJSON. Aborting cancels a pending byte read and releases its lock. */
+export async function* readLogLines(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncGenerator<ReadLogLine> {
   const reader = body.getReader({ mode: "byob" });
   const parser = new LogParser();
   let readBuffer = new Uint8Array(LOG_READER_POLICY.readBytes);
   let complete = false;
+  let cancelling: Promise<void> | undefined;
+  const cancel = () => {
+    if (cancelling) return;
+    cancelling = reader.cancel();
+    void cancelling.catch(() => undefined);
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
   try {
     for (;;) {
+      signal?.throwIfAborted();
       const { value, done } = await reader.read(readBuffer);
+      signal?.throwIfAborted();
       if (value) {
         for (const byte of value) {
           const line = parser.byte(byte);
-          if (line) yield line;
+          if (line) {
+            yield line;
+            signal?.throwIfAborted();
+          }
         }
         readBuffer = new Uint8Array(value.buffer);
       }
       if (done) {
         const final = parser.end();
-        if (final) yield final;
+        if (final) {
+          yield final;
+          signal?.throwIfAborted();
+        }
         complete = true;
         return;
       }
     }
   } finally {
+    signal?.removeEventListener("abort", cancel);
     try {
-      if (!complete) await reader.cancel();
+      if (!complete) {
+        cancel();
+        if (signal?.aborted) await cancelling?.catch(() => undefined);
+        else await cancelling;
+      }
     } finally {
       reader.releaseLock();
     }

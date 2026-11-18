@@ -19,6 +19,7 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
+import { LOG_LATE_MS } from "../src/do/run/logs.js";
 import { LOG_VIEWER_POLICY, type ViewerAttachment, viewerHooks } from "../src/do/run/viewers.js";
 import { ticketHash } from "../src/do/user/live.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
@@ -429,6 +430,127 @@ async function expectStored(t: Task, c: Client, from = 0) {
   expect(lines.map((l) => JSON.stringify(l))).toEqual(stored.slice(from, from + lines.length));
 }
 
+describe("pre-masking log history", () => {
+  for (const state of ["streaming", "complete", "incomplete"] as const) {
+    it(`hides a sealed ${state} legacy log without reading its objects or accepting more rows`, async () => {
+      const t = await withTask();
+      const runner = runnerModel(t);
+      expect(await runner.send(filler(0, 50))).toBe(50);
+      const key = await inRun(t.runId, (r) => {
+        const key = r.engine.rows<{ r2_key: string }>(
+          "SELECT r2_key FROM ci_log_chunks WHERE task = ?",
+          t.number,
+        )[0]?.r2_key;
+        if (!key) throw new Error("no stored chunk");
+        r.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", t.number);
+        r.engine.exec(
+          "UPDATE ci_logs SET unmasked = 1, finalized = 1, state = ? WHERE task = ?",
+          state === "complete" ? "complete" : "incomplete",
+          t.number,
+        );
+        return key;
+      });
+      const history = `${Array.from({ length: 50 }, (_, i) =>
+        JSON.stringify({ i, t: null, c: i === 0 ? t.token : `old line ${i}` }),
+      ).join("\n")}\n`;
+      await env.CI.put(key, history);
+      await inRun(t.runId, (r) =>
+        r.engine.exec(
+          "UPDATE ci_log_chunks SET bytes = ? WHERE r2_key = ?",
+          new TextEncoder().encode(history).byteLength,
+          key,
+        ),
+      );
+      await evictDurableObject(runStub(t.runId));
+      await at(t.runId, now(t.runId));
+      let gets = 0;
+      let published = 0;
+      let puts = 0;
+      await inRun(t.runId, (r) => {
+        r.hooks.afterLogPut = () => {
+          puts++;
+        };
+      });
+      viewerHooks.afterChunkGet = () => {
+        gets++;
+      };
+      viewerHooks.beforePublish = () => {
+        published++;
+      };
+      const socket = await watch(t, t.f.owner.token);
+      expect(await socket.closed).toEqual({ code: 1000 });
+      expect(receivedLines(socket).length).toBe(0);
+      expect(endOf(socket)).toEqual({ t: "end", log: "incomplete", durable: 0 });
+      expect(gets).toBe(0);
+      expect(await runner.send([row(t.token)], true)).toBe(50);
+      expect(published).toBe(0);
+      expect(puts).toBe(0);
+      expect(
+        await inRun(t.runId, (r) =>
+          r.engine.rows(
+            "SELECT ack_index, rows, unmasked, finalized FROM ci_logs WHERE task = ?",
+            t.number,
+          ),
+        ),
+      ).toEqual([{ ack_index: 50, rows: 50, unmasked: 1, finalized: 1 }]);
+      expect((await env.CI.get(key)) !== null).toBe(true);
+      await expect((await env.CI.get(key))?.text().then((text) => text === history)).resolves.toBe(
+        true,
+      );
+      expect(
+        await inRun(t.runId, (r) =>
+          r.engine.rows("SELECT COUNT(*) AS n FROM ci_log_chunks WHERE task = ?", t.number),
+        ),
+      ).toEqual([{ n: 1 }]);
+    });
+  }
+
+  it("keeps an unconfirmed legacy re-offer sealed, while a new task is masked normally", async () => {
+    const t = await withTask(workflow([job("a"), job("b")].join("\n")));
+    await inRun(t.runId, (r) => {
+      r.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", t.number);
+      r.engine.exec(
+        "INSERT INTO ci_logs (task, state, updated_at, unmasked, finalized) VALUES (?, 'incomplete', ?, 1, 1)",
+        t.number,
+        now(t.runId),
+      );
+    });
+    const offered = await taskRow(t.wire);
+    if (!offered) throw new Error("no task mapping");
+    const repeated = await runStub(t.runId).assignTask(
+      t.wire,
+      t.jobId,
+      offered.runner_id,
+      t.f.org.id,
+    );
+    expect("task" in repeated).toBe(true);
+    expect(
+      await inRun(t.runId, (r) =>
+        r.engine.rows("SELECT COUNT(*) AS n FROM ci_log_masks WHERE task = ?", t.number),
+      ),
+    ).toEqual([{ n: 0 }]);
+    expect(
+      await ackOf(t.runner, { taskId: t.wire, index: 0, rows: [row(t.token)], noMore: true }),
+    ).toBe(0);
+    const otherRunner = await registerRunner(t.f.org.login, t.f.owner);
+    const fresh = (await fetchTask(otherRunner, 0)).task;
+    if (!fresh) throw new Error("no new task");
+    const freshNumber = (await taskRow(fresh.id))?.task;
+    expect(freshNumber).not.toBe(t.number);
+    expect(
+      await ackOf(otherRunner, {
+        taskId: fresh.id,
+        index: 0,
+        rows: [row(jobTokenOf(fresh))],
+        noMore: true,
+      }),
+    ).toBe(1);
+    const stored = await storedText(t.runId, freshNumber as number);
+    expect(stored.length).toBe(1);
+    expect(JSON.parse(stored[0] as string).c === "***").toBe(true);
+  });
+});
+
 // ------------------------------------------------------------------ the ticket
 
 describe("the ticket operation", () => {
@@ -452,6 +574,38 @@ describe("the ticket operation", () => {
         expires_at: now(t.runId) + 30_000,
       },
     ]);
+  });
+
+  it("returns run_unavailable when the initial run lookup rejects", async () => {
+    const t = await withTask();
+    const unavailable = {
+      ...env,
+      RUN: {
+        getByName() {
+          return {
+            get: async () => {
+              throw new Error("run transport unavailable");
+            },
+          };
+        },
+      },
+    };
+    const ctx = createExecutionContext();
+    const response = await createApp().fetch(
+      new Request(`${ORIGIN}/api${livePath(t.f.path, t.runId, t.jobId)}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${t.f.owner.token}`,
+          "Idempotency-Key": crypto.randomUUID(),
+          "CF-Connecting-IP": address(),
+        },
+      }),
+      unavailable as unknown as Env,
+      ctx,
+    );
+    await waitOnExecutionContext(ctx);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "run_unavailable" });
   });
 
   it("answers a principal without access as if the repository did not exist", async () => {
@@ -498,6 +652,18 @@ describe("the ticket operation", () => {
 // ------------------------------------------------------------------ the upgrade
 
 describe("the upgrade", () => {
+  it("accepts an ASCII case-insensitive WebSocket upgrade", async () => {
+    const t = await withTask();
+    const ticket = await ticketOf(t, t.f.owner.token);
+    const response = await upgrade(t, ticket, {
+      token: t.f.owner.token,
+      headers: { Upgrade: "WebSocket" },
+    });
+    expect(response.status).toBe(101);
+    const socket = await client(response, ticket);
+    socket.ws.close();
+  });
+
   it("is a WebSocket upgrade with a ticket and a position, or refused before anything is read", async () => {
     const t = await withTask();
     const ticket = await ticketOf(t, t.f.owner.token);
@@ -700,12 +866,15 @@ describe("delivery", () => {
       if (reads++ === 0) await held.hold();
     };
     const running = slice(t.runId);
-    expect(await held.reached(running)).toBe(true);
-    // A hold pass: rows 120..130 settled, published while the page waits on its read.
-    expect(await model.send(filler(120, 11))).toBe(120);
-    expect(sent.get(socket.id) ?? 0).toBe(0);
-    held.release();
-    await running;
+    try {
+      expect(await held.reached(running)).toBe(true);
+      expect(await model.send(filler(120, 11))).toBe(120);
+      expect(sent.get(socket.id) ?? 0).toBe(0);
+    } finally {
+      held.release();
+      await running;
+      delete viewerHooks.afterChunkGet;
+    }
     await slice(t.runId);
     await settle(socket);
     const lines = received(socket);
@@ -716,19 +885,24 @@ describe("delivery", () => {
     await expectStored(t, socket);
   });
 
-  it("sends a stored row once when a slice reads it while the request that stored it waits to publish", async () => {
+  it("defers catch-up until an upload finishes publishing, then sends each row once", async () => {
     const t = await withTask();
     const socket = await watch(t, t.f.owner.token);
     const held = hold(t.runId);
     viewerHooks.beforePublish = () => held.hold();
     const storing = runnerModel(t).send(filler(0, 50));
-    expect(await held.reached(storing)).toBe(true);
-    delete viewerHooks.beforePublish;
-    // Stored and committed, not yet published: a run of the job sends it from storage.
-    await inRun(t.runId, (r) => r.viewers.slice());
-    await settle(socket);
-    expect(received(socket)).toHaveLength(50);
-    held.release();
+    try {
+      expect(await held.reached(storing)).toBe(true);
+      delete viewerHooks.beforePublish;
+      const deferred = await inRun(t.runId, (r) => r.viewers.slice());
+      expect(deferred).toMatchObject({ done: false });
+      await settle(socket);
+      expect(received(socket)).toHaveLength(0);
+    } finally {
+      held.release();
+      await storing;
+      delete viewerHooks.beforePublish;
+    }
     expect(await storing).toBe(50);
     await settle(socket);
     expect(received(socket)).toHaveLength(50);
@@ -994,6 +1168,79 @@ describe("omission records", () => {
 });
 
 describe("rechecks", () => {
+  it("defers a pending credential check without blocking another credential or applying its late result", async () => {
+    const t = await withTask();
+    const reader = await user();
+    await api("PUT", `${t.f.path}/collaborators/${reader.handle}`, t.f.owner.token, {
+      permission: "pull",
+    });
+    const stalled = await watch(t, t.f.owner.token);
+    const revoked = await watch(t, reader.token);
+    const ownerCredential = (await attachments(t.runId)).find(
+      (s) => s.id === stalled.id,
+    )?.credentialId;
+    if (!ownerCredential) throw new Error("no owner credential");
+    await env.DIRECTORY.prepare("UPDATE tokens SET revoked_at = ? WHERE token_hash = ?")
+      .bind(Date.now(), await hashToken(reader.token))
+      .run();
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs);
+    await runnerModel(t).send(filler(0, 50));
+    const held = hold(t.runId);
+    let entered = 0;
+    let expire: (() => void) | undefined;
+    let cancelled = false;
+    viewerHooks.recheckDeadline = (_run, credential, _at, fire) => {
+      if (credential === ownerCredential) expire = fire;
+      return {
+        cancel() {
+          if (credential === ownerCredential) cancelled = true;
+        },
+      };
+    };
+    viewerHooks.beforeAccessCheck = async (_run, credential) => {
+      if (credential === ownerCredential) {
+        entered++;
+        await held.hold();
+        throw new Error("late account rejection");
+      }
+    };
+    let finished = false;
+    const running = inRun(t.runId, (r) => r.viewers.slice()).then((result) => {
+      finished = true;
+      return result;
+    });
+    try {
+      expect(await held.reached(running)).toBe(true);
+      await inRun(t.runId, () => {
+        if (!expire) throw new Error("no recheck deadline");
+        expire();
+      });
+      for (let i = 0; i < 200 && !finished; i++)
+        await runInDurableObject(runStub(t.runId), () => {});
+      expect(finished).toBe(true);
+      expect(await running).toMatchObject({ done: false, runAfterMs: 5_000 });
+      expect(await revoked.closed).toEqual({ code: 4401 });
+      expect((await attachments(t.runId)).find((s) => s.id === stalled.id)?.checkedAt).toBe(
+        now(t.runId) - LOG_VIEWER_POLICY.freshMs,
+      );
+      expect(sent.get(stalled.id) ?? 0).toBe(0);
+      await inRun(t.runId, (r) => r.viewers.slice());
+      expect(entered).toBe(1);
+    } finally {
+      held.release();
+      await running;
+      delete viewerHooks.beforeAccessCheck;
+      delete viewerHooks.recheckDeadline;
+    }
+    for (let i = 0; i < 200 && !cancelled; i++)
+      await runInDurableObject(runStub(t.runId), () => {});
+    expect(cancelled).toBe(true);
+    expect(sent.get(stalled.id) ?? 0).toBe(0);
+    await slice(t.runId);
+    await settle(stalled);
+    expect(received(stalled)).toHaveLength(50);
+  });
+
   it("send to a socket checked under 60 s ago without reading the directory", async () => {
     const t = await withTask();
     const socket = await watch(t, t.f.owner.token);
@@ -1043,6 +1290,44 @@ describe("rechecks", () => {
     expect(newer.code).toBeNull();
     expect(received(newer)).toHaveLength(50);
     expect(sent.get(older.id) ?? 0).toBe(0);
+  });
+
+  it("does not apply an old generation check to a socket opened while that check was pending", async () => {
+    const t = await withTask();
+    const older = await watch(t, t.f.owner.token);
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs);
+    await runnerModel(t).send(filler(0, 50));
+    const held = hold(t.runId);
+    let first = true;
+    viewerHooks.afterRecheck = async () => {
+      if (first) {
+        first = false;
+        await held.hold();
+      }
+    };
+    const running = slice(t.runId);
+    let newer: Client | undefined;
+    try {
+      expect(await held.reached(running)).toBe(true);
+      await env.DIRECTORY.prepare(
+        "UPDATE principals SET lifecycle_gen = lifecycle_gen + 1 WHERE id = ?",
+      )
+        .bind(t.f.owner.principalId)
+        .run();
+      newer = await watch(t, t.f.owner.token, { checked: false });
+    } finally {
+      held.release();
+      await running;
+      delete viewerHooks.afterRecheck;
+    }
+    if (!newer) throw new Error("new socket was not opened");
+    await settle(newer);
+    expect(newer.code).toBeNull();
+    expect(received(newer)).toHaveLength(50);
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs);
+    await runnerModel(t).send(filler(50, 50));
+    await slice(t.runId);
+    expect(await older.closed).toEqual({ code: 4401 });
   });
 
   it("let a check stand for when it started: a clock past 60 s during it sends nothing until the next", async () => {
@@ -1098,11 +1383,15 @@ describe("rechecks", () => {
     const held = hold(t.runId);
     viewerHooks.afterChunkGet = () => held.hold();
     const running = slice(t.runId);
-    expect(await held.reached(running)).toBe(true);
-    await api("DELETE", `${t.f.path}/collaborators/${reader.handle}`, t.f.owner.token);
-    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs + 1_000);
-    held.release();
-    await running;
+    try {
+      expect(await held.reached(running)).toBe(true);
+      await api("DELETE", `${t.f.path}/collaborators/${reader.handle}`, t.f.owner.token);
+      await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs + 1_000);
+    } finally {
+      held.release();
+      await running;
+      delete viewerHooks.afterChunkGet;
+    }
     expect(await socket.closed).toEqual({ code: 4403 });
     expect(sent.get(socket.id) ?? 0).toBe(0);
   });
@@ -1111,6 +1400,38 @@ describe("rechecks", () => {
 // ------------------------------------------------------------------ flow control
 
 describe("flow control", () => {
+  it("counts an ACK inside a whole-row frame as control without extending the slow window", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    for (let k = 0; k < 2; k++)
+      await model.send(
+        Array.from({ length: 50 }, (_, j) => row(`${k * 50 + j} ${"x".repeat(20 * KIB)}`)),
+      );
+    const socket = await watch(t, t.f.owner.token);
+    await settle(socket);
+    const before = (await attachments(t.runId)).find((s) => s.id === socket.id);
+    if (!before || before.out[0] === undefined) throw new Error("missing delivery window");
+    expect(before.out[0]).toBeGreaterThan(1);
+    expect(before.blockedSince).not.toBeNull();
+    await at(t.runId, now(t.runId) + 1_000);
+    await say(t.runId, socket, { t: "ack", i: 1, o: 0 });
+    const after = (await attachments(t.runId)).find((s) => s.id === socket.id);
+    expect(after).toMatchObject({
+      acked: before.acked,
+      ackedPart: before.ackedPart,
+      blockedSince: before.blockedSince,
+      out: before.out,
+      controls: before.controls + 1,
+    });
+    await say(t.runId, socket, { t: "ack", i: before.out[0], o: before.out[1] });
+    expect((await attachments(t.runId)).find((s) => s.id === socket.id)).toMatchObject({
+      acked: before.out[0],
+      ackedPart: before.out[1],
+      blockedSince: null,
+      out: before.out.slice(3),
+    });
+  });
+
   it("sends at most 64 frames or 1 MiB unacknowledged, reopens on an ack, and closes 4408 after 2 minutes full", async () => {
     const t = await withTask();
     const model = runnerModel(t);
@@ -1210,6 +1531,153 @@ describe("flow control", () => {
 });
 
 describe("escaped chunk backfill", () => {
+  it("admits a final upload while viewer catch-up is waiting for its chunk", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    expect(await model.send([row("\u0001".repeat(MIB))])).toBe(1);
+    await forget(t.runId);
+    const socket = await watch(t, t.f.owner.token, { checked: false });
+    const held = hold(t.runId);
+    viewerHooks.afterChunkGet = () => held.hold();
+    const reading = slice(t.runId);
+    try {
+      expect(await held.reached(reading)).toBe(true);
+      const memory = await inRun(t.runId, (r) => r.memory.stats());
+      expect(memory.reservedBytes).toBe(0);
+      expect(await model.send([row("tail".repeat(512 * KIB))], true)).toBe(2);
+    } finally {
+      held.release();
+      await reading;
+      delete viewerHooks.afterChunkGet;
+      socket.ws.close();
+    }
+  });
+
+  it.each([2 * MIB, 4 * MIB - 256])(
+    "cancels a stalled body read before admitting a %i-byte upload and resumes without duplicate rows",
+    async (tailBytes) => {
+      const t = await withTask();
+      const prefix = Array.from({ length: 50 }, (_, i) => row(`row ${i} ${"p".repeat(12 * KIB)}`));
+      const control = row("\u0001".repeat(MIB));
+      const tail = row("tail".repeat(tailBytes / 4));
+      const model = runnerModel(t);
+      expect(await model.send([...prefix, control])).toBe(51);
+      await forget(t.runId);
+      const stalled = hold(t.runId);
+      const cancellation = hold(t.runId);
+      let cancelled = false;
+      await inRun(t.runId, (r) => {
+        const host = r as unknown as { env: Env };
+        const bucket = host.env.CI;
+        Object.defineProperty(host.env, "CI", {
+          configurable: true,
+          value: new Proxy(bucket, {
+            get(target, prop) {
+              if (prop === "get")
+                return async (key: string) => {
+                  Object.defineProperty(host.env, "CI", { configurable: true, value: bucket });
+                  const object = await target.get(key);
+                  if (!object) return object;
+                  const reader = object.body.getReader({ mode: "byob" });
+                  let bytes = 0;
+                  const body = new ReadableStream({
+                    type: "bytes",
+                    async pull(controller) {
+                      if (bytes >= 768 * KIB) await stalled.hold();
+                      if (cancelled) return;
+                      const { value, done } = await reader.read(new Uint8Array(16 * KIB));
+                      if (cancelled) return;
+                      const request = controller.byobRequest;
+                      if (!request?.view) throw new Error("missing BYOB request");
+                      if (done) {
+                        controller.close();
+                        request.respond(0);
+                        return;
+                      }
+                      new Uint8Array(
+                        request.view.buffer,
+                        request.view.byteOffset,
+                        request.view.byteLength,
+                      ).set(value);
+                      bytes += value.byteLength;
+                      request.respond(value.byteLength);
+                    },
+                    async cancel() {
+                      cancelled = true;
+                      stalled.release();
+                      try {
+                        await reader.cancel();
+                      } finally {
+                        reader.releaseLock();
+                      }
+                      await cancellation.hold();
+                    },
+                  });
+                  return new Proxy(object, {
+                    get(target, prop) {
+                      if (prop === "body") return body;
+                      const value = Reflect.get(target, prop);
+                      return typeof value === "function" ? value.bind(target) : value;
+                    },
+                  });
+                };
+              const value = Reflect.get(target, prop);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }),
+        });
+      });
+      const socket = await watch(t, t.f.owner.token, { checked: false });
+      const reading = slice(t.runId);
+      let upload: Promise<number> | undefined;
+      let overlap: Promise<number> | undefined;
+      try {
+        expect(await stalled.reached(reading)).toBe(true);
+        await settle(socket);
+        expect(received(socket).length).toBeGreaterThan(0);
+        upload = model.send([tail], true);
+        expect(await cancellation.reached(upload)).toBe(true);
+        expect(cancelled).toBe(true);
+        expect((await inRun(t.runId, (r) => r.memory.stats())).reservedBytes).toBeGreaterThan(
+          15 * MIB,
+        );
+        let overlapAck: number | undefined;
+        overlap = ackOf(t.runner, {
+          taskId: t.wire,
+          index: 51,
+          rows: [row("overlapping request")],
+          noMore: true,
+        }).then((ack) => {
+          overlapAck = ack;
+          return ack;
+        });
+        for (let i = 0; i < 500 && overlapAck === undefined; i++)
+          await runInDurableObject(runStub(t.runId), () => {});
+        expect(overlapAck).toBe(51);
+        cancellation.release();
+        expect(await upload).toBe(52);
+        await reading;
+        await forget(t.runId);
+        expect((await inRun(t.runId, (r) => r.memory.stats())).reservedBytes).toBe(0);
+        await at(t.runId, now(t.runId) + 1_000);
+        await expectFinished(
+          t,
+          socket,
+          [...prefix, control, tail].map((line, i) => ({ i, t: null, c: line.content })),
+        );
+      } finally {
+        stalled.release();
+        cancellation.release();
+        await Promise.allSettled([
+          reading,
+          ...(upload ? [upload] : []),
+          ...(overlap ? [overlap] : []),
+        ]);
+        socket.ws.close();
+      }
+    },
+  );
+
   async function expectFinished(t: Task, socket: Client, expected: Line[]) {
     for (let i = 0; i < 100 && !endOf(socket); i++) {
       await ackAll(t.runId, socket);
@@ -1317,6 +1785,98 @@ describe("escaped chunk backfill", () => {
 // ------------------------------------------------------------------ the end
 
 describe("the end", () => {
+  it("keeps a completed task's viewer open until its late final rows commit", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    const socket = await watch(t, t.f.owner.token);
+    await model.send(filler(0, 10));
+    await updateTask(t.runner, t.wire, Result.SUCCESS);
+    await slice(t.runId);
+    await settle(socket);
+    expect(endOf(socket)).toBeUndefined();
+    expect(socket.code).toBeNull();
+    expect(await model.send(filler(10, 5), true)).toBe(15);
+    await slice(t.runId);
+    await settle(socket);
+    expect(received(socket)).toHaveLength(15);
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 15 });
+    expect(await socket.closed).toEqual({ code: 1000 });
+  });
+
+  it("ends an idle incomplete viewer at the late deadline even when its log has no masks", async () => {
+    const t = await withTask();
+    const socket = await watch(t, t.f.owner.token);
+    await updateTask(t.runner, t.wire, Result.SUCCESS);
+    const ended = now(t.runId);
+    await inRun(t.runId, (r) => r.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", t.number));
+    await slice(t.runId);
+    expect(endOf(socket)).toBeUndefined();
+    await at(t.runId, ended + LOG_LATE_MS - 1);
+    await slice(t.runId);
+    expect(endOf(socket)).toBeUndefined();
+    await at(t.runId, ended + LOG_LATE_MS);
+    await slice(t.runId);
+    await settle(socket);
+    expect(endOf(socket)).toEqual({ t: "end", log: "incomplete", durable: 0 });
+    expect(await socket.closed).toEqual({ code: 1000 });
+    expect(await slice(t.runId)).toBe(0);
+    const refused = await runnerCall(
+      "UpdateLog",
+      encodeUpdateLogRequest({
+        taskId: t.wire,
+        index: 0,
+        rows: [row("late after deadline")],
+        noMore: true,
+      }),
+      { credentials: t.runner },
+    );
+    expect(refused.status).toBe(404);
+    await refused.arrayBuffer();
+    expect(await storedText(t.runId, t.number)).toEqual([]);
+  });
+
+  it("keeps an omitted log open after task completion and ends incomplete after its final flush", async () => {
+    const t = await withTask();
+    const socket = await watch(t, t.f.owner.token);
+    expect(
+      await ackOf(t.runner, { taskId: t.wire, index: 0, rows: [row("x".repeat(4 * MIB))] }),
+    ).toBe(1);
+    await updateTask(t.runner, t.wire, Result.SUCCESS);
+    await slice(t.runId);
+    await settle(socket);
+    expect(endOf(socket)).toBeUndefined();
+    expect(await ackOf(t.runner, { taskId: t.wire, index: 1, rows: [], noMore: true })).toBe(1);
+    await slice(t.runId);
+    await settle(socket);
+    expect(endOf(socket)).toEqual({ t: "end", log: "incomplete", durable: 1 });
+    expect(await socket.closed).toEqual({ code: 1000 });
+  });
+
+  it("ends a completed job without a task immediately", async () => {
+    const f = await orgRepo();
+    const runId = await started(f, workflow(job("a", ["if: false"])));
+    const { jobId } = await jobNamed(runId, "a");
+    const socket = await watch({ f, runId, jobId }, f.owner.token);
+    await settle(socket);
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 0 });
+    expect(await socket.closed).toEqual({ code: 1000 });
+  });
+
+  it("wakes an idle viewer for an empty final flush whose end waits for a fresh check", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    await model.send(filler(0, 50));
+    const socket = await watch(t, t.f.owner.token);
+    await ackAll(t.runId, socket);
+    await slice(t.runId);
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs);
+    expect(await model.send([], true)).toBe(50);
+    await slice(t.runId);
+    await settle(socket);
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 50 });
+    expect(socket.code).toBe(1000);
+  });
+
   it("sends end complete once the final request commits, then closes 1000", async () => {
     const t = await withTask();
     const socket = await watch(t, t.f.owner.token);
@@ -1353,6 +1913,9 @@ describe("the end", () => {
       if (lost) await forget(t.runId);
       await runStub(t.runId).cancel(t.f.owner.principalId, "force");
       await drain(t.runId);
+      expect(endOf(socket)).toBeUndefined();
+      await at(t.runId, now(t.runId) + LOG_LATE_MS);
+      await drain(t.runId);
       expect(await socket.closed).toEqual({ code: 1000 });
       expect(endOf(socket)).toEqual({ t: "end", log: "incomplete", durable: 50 });
     });
@@ -1380,6 +1943,9 @@ describe("the end", () => {
       delete viewerHooks.beforeSend;
       if (lost) await forget(t.runId);
       await runStub(t.runId).cancel(t.f.owner.principalId, "force");
+      await drain(t.runId);
+      expect(endOf(socket)).toBeUndefined();
+      await at(t.runId, now(t.runId) + LOG_LATE_MS);
       await drain(t.runId);
       expect(await socket.closed).toEqual({ code: 1000 });
       if (lost) {
@@ -1570,11 +2136,14 @@ describe("a socket's cursor", () => {
                   }
                 };
                 const running = slice(runId);
-                await held.reached(running);
-                await model.send(more(step.during, 5));
-                held.release();
-                await running;
-                delete viewerHooks.afterChunkGet;
+                try {
+                  await held.reached(running);
+                  await model.send(more(step.during, 5));
+                } finally {
+                  held.release();
+                  await running;
+                  delete viewerHooks.afterChunkGet;
+                }
                 break;
               }
               case "ack":

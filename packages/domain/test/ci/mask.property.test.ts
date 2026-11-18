@@ -308,6 +308,37 @@ describe("maskRows over generated logs", () => {
     );
   }, 60_000);
 
+  it("preserves scheduled-mask activation through random request boundaries", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 8 }),
+        fc.integer({ min: 0, max: 8 }),
+        fc.array(step, { minLength: 1, maxLength: 12 }),
+        (first, extra, steps) => {
+          const text = "Xabcdefgh";
+          const second = first + (extra % (text.length - first + 1));
+          const rows = [
+            text.slice(0, first),
+            text.slice(first, second),
+            "",
+            `${text.slice(second)} SAFE`,
+          ];
+          const initial = [
+            { value: "XabcdefghZ", fromIndex: 0 },
+            { value: "abcdefgh", fromIndex: 1 },
+          ];
+          const once = maskRows(initial, null, rows, { start: 0, final: true });
+          expect(once.lines).toEqual(reference(initial, rows));
+          const { stored, comparable } = batched(initial, rows, steps);
+          for (let i = 0; i < rows.length; i++) {
+            if (comparable[i]) expect(stored[i]).toBe(once.lines[i]);
+          }
+        },
+      ),
+      { numRuns: 200 },
+    );
+  });
+
   it("reports settled within the rows when resuming a forced carry into empty rows", () => {
     fc.assert(
       fc.property(scenario, fc.nat(), fc.nat({ max: 3 }), ({ secrets, pieces }, pick, empties) => {

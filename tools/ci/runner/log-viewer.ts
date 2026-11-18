@@ -4,7 +4,8 @@ export interface ViewedRow {
 }
 
 /** Captures the small, whole rows used by the stock-runner masking probe. Never logs frames. */
-export async function watchLog(url: string, token: string) {
+export async function watchLog(url: string, token: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const socket = new WebSocket(url, { headers: { Authorization: `Bearer ${token}` } });
   const rows: ViewedRow[] = [];
   const changed = new Set<() => void>();
@@ -27,6 +28,8 @@ export async function watchLog(url: string, token: string) {
   const deadline = AbortSignal.timeout(300_000);
   const expired = () => fail("The local log socket did not finish before its deadline.");
   deadline.addEventListener("abort", expired, { once: true });
+  const cancelled = () => fail("The local log viewer setup was cancelled.");
+  signal?.addEventListener("abort", cancelled, { once: true });
   socket.addEventListener("message", (event) => {
     frames++;
     try {
@@ -57,6 +60,7 @@ export async function watchLog(url: string, token: string) {
   socket.addEventListener("close", (event) => {
     closed = true;
     deadline.removeEventListener("abort", expired);
+    signal?.removeEventListener("abort", cancelled);
     finish(event.code);
     notify();
   });

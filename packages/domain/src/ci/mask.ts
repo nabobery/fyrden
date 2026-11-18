@@ -215,6 +215,8 @@ export interface LogMaskCarry {
   readonly mask: number;
   readonly variant: number;
   readonly length: number;
+  /** Mask activation rows inside the prefix, with stream offsets relative to this boundary. */
+  readonly starts?: readonly { readonly index: number; readonly offset: number }[] | undefined;
 }
 
 export interface MaskRowsOptions {
@@ -296,7 +298,7 @@ export function maskRows(
 
   const entries: Entry[] = [];
   const pending = new Map<number, Entry[]>();
-  const known = new Set<string>();
+  const known = new Map<string, number>();
   let bytes = 0;
   let reservedValues = 0;
   let reservedBytes = 0;
@@ -309,12 +311,49 @@ export function maskRows(
     entries.push(entry);
     if (mask.fromIndex >= start)
       pending.set(mask.fromIndex, [...(pending.get(mask.fromIndex) ?? []), entry]);
-    known.add(mask.value);
+    known.set(
+      mask.value,
+      Math.min(known.get(mask.value) ?? Number.POSITIVE_INFINITY, mask.fromIndex),
+    );
     if (mask.reserved === true) {
       reservedValues++;
       reservedBytes += utf8Length(mask.value);
     } else bytes += utf8Length(mask.value);
   }
+
+  const resumed = resumable(entries, carry, start);
+  if (resumed?.starts !== undefined) {
+    const starts = new Map(resumed.starts.map(({ index, offset }) => [index, offset]));
+    for (const entry of entries) {
+      const offset = starts.get(entry.fromIndex);
+      if (entry.fromIndex < start && offset !== undefined) entry.from = offset;
+    }
+  }
+
+  const activated = new Map<number, number>();
+  for (const entry of entries) {
+    if (Number.isFinite(entry.from)) activated.set(entry.fromIndex, entry.from);
+  }
+  const activations = [...activated].map(([index, offset]) => ({ index, offset }));
+  activations.sort((a, b) => a.offset - b.offset);
+  const boundary = (at: LogMaskCarry | null, end: number): LogMaskCarry | null => {
+    if (at === null) return null;
+    let low = 0;
+    let high = activations.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if ((activations[middle]?.offset ?? 0) <= end - at.length) low = middle + 1;
+      else high = middle;
+    }
+    return low === activations.length
+      ? at
+      : {
+          ...at,
+          starts: activations
+            .slice(low)
+            .map(({ index, offset }) => ({ index, offset: offset - end })),
+        };
+  };
 
   const work = options.work;
   let long = new Matcher(entries, true, work);
@@ -322,8 +361,8 @@ export function maskRows(
   const prefixOf = (c: LogMaskCarry | null): string =>
     c === null ? "" : (entries[c.mask]?.variants[c.variant]?.text.slice(0, c.length) ?? "");
 
-  let state = long.walk(prefixOf(resumable(entries, carry, start)));
-  const carries: (LogMaskCarry | null)[] = [long.carry(state, 0)];
+  let state = long.walk(prefixOf(resumed));
+  const carries: (LogMaskCarry | null)[] = [boundary(long.carry(state, 0), 0)];
   const added: { value: string; index: number }[] = [];
   const dropped: { index: number; reason: "values" | "bytes" }[] = [];
   const ranges = new Ranges();
@@ -353,7 +392,10 @@ export function maskRows(
     let commandEnd = -1;
     if (data !== null && value !== null && data !== "") {
       commandEnd = pos + COMMAND.length + data.length;
-      if (value.length >= MASK_MIN_LENGTH && !known.has(value)) {
+      if (
+        value.length >= MASK_MIN_LENGTH &&
+        (known.get(value) ?? Number.POSITIVE_INFINITY) > index
+      ) {
         const size = utf8Length(value);
         const values = entries.length - reservedValues + Math.max(reserved.values, reservedValues);
         if (values >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
@@ -361,7 +403,7 @@ export function maskRows(
           dropped.push({ index, reason: "bytes" });
         else {
           entries.push({ variants: variantsOf(value), fromIndex: index, from: pos });
-          known.add(value);
+          known.set(value, index);
           bytes += size;
           added.push({ value, index });
           changed = true;
@@ -369,6 +411,7 @@ export function maskRows(
       }
     }
     if (changed) {
+      activations.push({ index, offset: pos });
       // Partial matches in progress here are of earlier values only.
       const prefix = prefixOf(long.carry(state, pos));
       long = new Matcher(entries, true, work);
@@ -385,9 +428,9 @@ export function maskRows(
       if (length > 0) ranges.add(Math.max(pos - length, lastCut), pos);
       if (pos === commandEnd) ranges.add(commandEnd - (data as string).length, commandEnd);
     }
-    const boundary = long.carry(state, pos);
-    carries.push(boundary);
-    if (boundary !== null && boundary.length < MASK_HOLD_MIN_LENGTH) lastCut = pos;
+    const carried = boundary(long.carry(state, pos), pos);
+    carries.push(carried);
+    if (carried !== null && carried.length < MASK_HOLD_MIN_LENGTH) lastCut = pos;
   });
 
   let settled = rows.length;
