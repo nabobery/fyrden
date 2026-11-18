@@ -20,6 +20,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -34,6 +35,7 @@ import { decodeUpdateLogResponse } from "../../../apps/api/test/helpers/runner-p
 import { type Account, eventually, type Forge, Git, startForge } from "../e2e/forge.js";
 import { hostArch, runnerBinary, runnerVersion } from "./binary.js";
 import { storedLogShape } from "./log-accounting.js";
+import { watchLog } from "./log-viewer.js";
 
 const VERSION = runnerVersion(process.env.RUNNER_VERSION);
 const ARCH = hostArch();
@@ -89,7 +91,7 @@ const BIG_WORKFLOW = [
   "    runs-on: ubuntu-latest",
   "    steps:",
   "      - name: huge",
-  `        run: node -e "process.stdout.write('h'.repeat(${HUGE}) + '\\n')"; echo "after ${nonce}"`,
+  `        run: node -e "process.stdout.write('h'.repeat(${HUGE}) + '\\n')"; echo '${"p".repeat(256)}'; echo "after ${nonce}"`,
   "      - name: tail",
   `        run: echo "tail ${nonce}"`,
 ].join("\n");
@@ -124,11 +126,18 @@ function exec(command: string, args: readonly string[], onLine?: (line: string) 
 
 const docker = (args: readonly string[]) => exec("docker", args);
 
-/** For the job's output: lines naming a token are left out. */
+/**
+ * For the job's output: lines naming a token are left out, and so are the masking job's split
+ * lines, each holding half the job token, which the runner prints unmasked in its own output.
+ */
 const shown = (text: string) =>
   text
     .split("\n")
-    .map((line) => (mentionsToken(line) ? "[a line naming a token, left out]" : line))
+    .map((line) =>
+      mentionsToken(line) || line.includes("mask-split")
+        ? "[a line naming a token, left out]"
+        : line,
+    )
     .join("\n");
 
 const note = (text: string) => process.stderr.write(`[runner ${VERSION}] ${text}\n`);
@@ -191,6 +200,92 @@ function runnerArgs(name: string, extra: readonly string[], command: readonly st
 const instanceUrl = () =>
   `http://${process.platform === "linux" ? "127.0.0.1" : "host.docker.internal"}:${forge.port}`;
 
+const MASK_NAME = `${WORKFLOW_NAME}-mask`;
+const MASK_GATE = `mask-${nonce}`;
+const BACKFILL = `viewer-backfill ${nonce}`;
+const LIVE = `viewer-live ${nonce}`;
+const runtimeMask = Buffer.from(`runtime-${nonce}`).toString("hex");
+
+function maskingWorkflow(gateUrl: string): string {
+  return [
+    `name: ${MASK_NAME}`,
+    "on: push",
+    "jobs:",
+    "  mask:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - name: wait for the log viewer",
+    "        run: |",
+    "          node --input-type=module <<'NODE'",
+    `          console.log(${JSON.stringify(BACKFILL)});`,
+    '          for (let i = 0; i < 120; i++) console.log("before-viewer " + i);',
+    `          const response = await fetch(${JSON.stringify(gateUrl)}, { signal: AbortSignal.timeout(120000) });`,
+    '          if (!response.ok) throw new Error("The local gate refused the job.");',
+    "          NODE",
+    "      - name: print masked values",
+    "        env:",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: a workflow expression, as plain text
+    "          JOB_TOKEN: ${{ github.token }}",
+    "        run: |",
+    "          node <<'NODE'",
+    "          const token = process.env.JOB_TOKEN;",
+    '          if (!token) throw new Error("The job token was not provided.");',
+    '          console.log("mask-plain:" + token);',
+    '          console.log("mask-base64:" + Buffer.from(token).toString("base64"));',
+    "          const half = Math.floor(token.length / 2);",
+    '          console.log("mask-split:" + token.slice(0, half));',
+    '          console.log(token.slice(half) + ":mask-split-end");',
+    `          const runtime = Buffer.from(${JSON.stringify(`runtime-${nonce}`)}).toString("hex");`,
+    '          console.log("::add-mask::" + runtime);',
+    '          console.log("mask-runtime:" + runtime);',
+    `          console.log(${JSON.stringify(LIVE)});`,
+    '          for (let i = 0; i < 120; i++) console.log("after-viewer " + i);',
+    "          NODE",
+  ].join("\n");
+}
+
+async function createLogGate() {
+  let arrive!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    arrive = resolve;
+  });
+  let waiting: ServerResponse | undefined;
+  let released = false;
+  const release = () => {
+    released = true;
+    waiting?.end("released");
+  };
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" || request.url !== `/${MASK_GATE}`) {
+      response.writeHead(404).end();
+      return;
+    }
+    waiting = response;
+    arrive();
+    if (released) response.end("released");
+  });
+  server.maxConnections = 4;
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "0.0.0.0", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("The local log gate has no port.");
+  return {
+    ready,
+    release,
+    url: `http://${process.platform === "linux" ? "127.0.0.1" : "host.docker.internal"}:${address.port}/${MASK_GATE}`,
+    async close() {
+      release();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+    },
+  };
+}
+
 beforeAll(async () => {
   binary = await runnerBinary(VERSION, ARCH);
   note(`binary ${binary} (SHA-256 checked)`);
@@ -229,6 +324,7 @@ beforeAll(async () => {
       "cache:",
       "  enabled: false",
       "container:",
+      ...(process.platform === "linux" ? ["  network: host"] : []),
       "  force_pull: false",
       "",
     ].join("\n"),
@@ -334,7 +430,11 @@ function register(): Promise<void> {
 }
 
 /** Starts a run of `source` (workflow `name`) and lets the registered runner take its one job. */
-async function runWorkflow(name: string, source: string) {
+async function runWorkflow(
+  name: string,
+  source: string,
+  afterStart?: (runId: string) => Promise<void>,
+) {
   await register();
   // --once: it polls until it gets a task, runs it, and exits.
   const daemon = exec(
@@ -377,6 +477,14 @@ async function runWorkflow(name: string, source: string) {
   ).json();
   expect(started).toMatchObject({ answer: { ok: true } });
   const runId = (started as { runId: string }).runId;
+  // A runner that exits first (its job failed before the step's signal) fails the step at once.
+  if (afterStart)
+    await Promise.race([
+      afterStart(runId),
+      daemon.then((exit) => {
+        throw new Error(`The runner exited (${exit.code}) before the test's step finished.`);
+      }),
+    ]);
 
   note(`run ${runId}: waiting for runner exit`);
   const exit = await daemon;
@@ -615,6 +723,104 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       );
     } finally {
       db.close();
+    }
+  });
+
+  it("masks stored and live rows from a stock runner, with backfill before the job resumes", async () => {
+    let viewer: Awaited<ReturnType<typeof watchLog>> | undefined;
+    const gate = await createLogGate();
+    let backfillCount = 0;
+    try {
+      const { runId, run, jobs } = await runWorkflow(
+        MASK_NAME,
+        maskingWorkflow(gate.url),
+        async (runId) => {
+          await gate.ready;
+          // The marker is acked (so stored) before the viewer joins: it reaches the viewer as backfill.
+          await eventually("the backfill marker acked", async () => {
+            const res = await fetch(`${forge.origin}/__runs/recorded`);
+            const entries = (await res.json()) as {
+              request: string;
+              whole: boolean;
+              status: number | null;
+              response: string | null;
+            }[];
+            return (
+              entries.some((entry) => {
+                if (entry.status !== 200 || !entry.whole) return false;
+                const request = decodeUpdateLogRequest(Buffer.from(entry.request, "base64"), {
+                  truncated: false,
+                });
+                const k = request.rows.findIndex((row) => row.content === BACKFILL);
+                if (k < 0) return false;
+                const ack = decodeUpdateLogResponse(
+                  Buffer.from(entry.response ?? "", "base64"),
+                ).ackIndex;
+                return ack > request.index + k;
+              }) || undefined
+            );
+          });
+          const listed = await owner.api.call("actions.runs.jobs.list", {
+            owner: org,
+            repo: "app",
+            run_id: runId,
+          });
+          const job = listed.jobs.find((job) => job.name === "mask");
+          if (!job) throw new Error("The masking job was not listed.");
+          const ticket = await owner.api.call("actions.runs.jobs.live_ticket", {
+            owner: org,
+            repo: "app",
+            run_id: runId,
+            job_id: job.id,
+          });
+          viewer = await watchLog(ticket.url, owner.token);
+          await viewer.waitForRows((rows) => rows.some((row) => row.c === BACKFILL));
+          backfillCount = viewer.rows.length;
+          expect(viewer.rows.some((row) => row.c === LIVE)).toBe(false);
+          gate.release();
+          await viewer.waitForRows((rows) => rows.some((row) => row.c === LIVE));
+        },
+      );
+      expect(run.conclusion).toBe("success");
+      expect(jobs).toMatchObject([{ name: "mask", conclusion: "success", log_complete: true }]);
+      if (!viewer) throw new Error("The masking viewer did not open.");
+      const delivered = await viewer.completed();
+      expect(delivered.code).toBe(1000);
+      expect(delivered.end?.log).toBe("complete");
+      const db = await runDatabase(runId);
+      try {
+        const instance = db.prepare("SELECT task FROM run_instances WHERE name = 'mask'").get() as {
+          task: number;
+        };
+        const manifest = db
+          .prepare(
+            "SELECT start_index, end_index, r2_key FROM ci_log_chunks WHERE task = ? ORDER BY start_index",
+          )
+          .all(instance.task) as { start_index: number; end_index: number; r2_key: string }[];
+        const { rows } = await storedLines(runId, manifest);
+        expect(viewer.rows.map((row) => ({ i: row.i, c: row.c }))).toEqual(
+          rows.map((row) => ({ i: row.i, c: row.c })),
+        );
+        const contents = rows.map((row) => row.c ?? "");
+        expect(contents.includes("mask-plain:***")).toBe(true);
+        expect(contents.includes("mask-base64:***")).toBe(true);
+        expect(contents.includes("mask-split:***")).toBe(true);
+        expect(contents.includes("***:mask-split-end")).toBe(true);
+        expect(contents.includes("mask-runtime:***")).toBe(true);
+        expect(contents.some((content) => content.includes(runtimeMask))).toBe(false);
+        expect(delivered.end?.durable).toBe(rows.length);
+        expect(viewer.rows.findIndex((row) => row.c === LIVE)).toBeGreaterThanOrEqual(
+          backfillCount,
+        );
+        note(
+          `run ${runId}: stock masking, ${backfillCount} backfill rows, ${rows.length} identical stored/live rows, ${delivered.frames} frames`,
+        );
+      } finally {
+        db.close();
+      }
+    } finally {
+      viewer?.close();
+      await gate.close();
     }
   });
 });
