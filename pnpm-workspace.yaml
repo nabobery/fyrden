@@ -119,3 +119,13 @@ overrides:
   # Stryker's mutation-server-protocol resolves to it; every copy follows the catalog's patched
   # release of the same minor line.
   zod: "catalog:"
+# Reviewed 2026-11-18: repeated-star mitigation for exactly 4.0.7; see patches/README.md.
+patchedDependencies:
+  picomatch@4.0.7: patches/picomatch@4.0.7.patch
+
+audit:
+  # Registry audits cannot see the verified local patch. Keep this exception paired
+  # with that exact-version patch and its regression; remove both after a verified
+  # upstream fix, or reassess them if this GitHub advisory is withdrawn.
+  ignore:
+    - GHSA-fc5q-39xc-vjpf

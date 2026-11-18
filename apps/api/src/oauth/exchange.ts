@@ -66,13 +66,15 @@ export async function tokenExchange(
   const metrics = c.get("metrics");
   const store = tokenStore(c.env, { metrics });
   // On the primary: a revoked agent token exchanges for nothing. A git token is git's alone
-  // (and keeps a token's lineage to the two steps its revocation check follows).
+  // (and keeps a token's lineage to the two steps its revocation check follows); a CI job's
+  // token reads its repository over git and lives only as long as its task.
   const subject = await store.verify(subjectToken, "write");
   if (
     !subject.ok ||
     subject.record.principalType !== "agent" ||
     subject.record.act.length > 0 ||
-    subject.record.type === "git"
+    subject.record.type === "git" ||
+    subject.record.type === "job"
   )
     return refuse(c, "invalid_grant", "The subject token is not a valid token of an agent's own.");
   const agent = subject.record;

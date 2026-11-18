@@ -10,9 +10,12 @@
 /**
  * `oat`: an access token issued by the authorization server (a token
  * exchange's delegated token, an OAuth client's); `ort`: its refresh
- * token; `ses`: a human's session (a cookie).
+ * token; `ses`: a human's session (a cookie); `run`: a one-time runner
+ * registration token; `rnr`: a registered runner's credential. `run` and
+ * `rnr` are stored with their runners, never as a row of `tokens`, so no
+ * API or git request can authenticate with one.
  */
-export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job", "oat", "ort", "ses"] as const;
+export const TOKEN_TYPES = ["git", "pat", "ist", "run", "job", "oat", "ort", "ses", "rnr"] as const;
 export type TokenType = (typeof TOKEN_TYPES)[number];
 
 export type ParsedToken =

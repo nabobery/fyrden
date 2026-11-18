@@ -91,6 +91,8 @@ export interface Forge {
   client(token: string, dpop?: DpopKey): FyrdenClient;
   /** Runs the Worker's cron once, as the platform would on `schedule`. */
   cron(schedule: string): Promise<void>;
+  /** What the servers printed so far: the Workers' logs and wrangler's access log. */
+  output(): string;
   /** Stops the server; fails if its output (the Worker's logs, the access log) shows a token. */
   stop(): Promise<void>;
 }
@@ -100,34 +102,17 @@ export interface Forge {
  * secrets made for this run, and its cron run only when the test asks.
  * `primary`, a test Worker's config, serves the port in front of the API
  * (which it must forward to) when a test needs calls no public route makes.
+ * `vars` sets fyrden-api's variables (deployment switches), in a copy of
+ * its configuration: `--var` reaches only the first Worker of several.
  */
 export async function startForge(
   name: string,
-  options: { readonly primary?: string } = {},
+  options: { readonly primary?: string; readonly vars?: Readonly<Record<string, string>> } = {},
 ): Promise<Forge> {
   const scratch = await mkdtemp(join(tmpdir(), `fyrden-e2e-${name}-`));
-  await mkdir(join(scratch, "home"), { recursive: true });
   const persist = join(scratch, "state");
   const bootstrapSecret = `e2e-${crypto.randomUUID()}`;
   const envFile = join(scratch, "test.env");
-  await writeFile(
-    envFile,
-    [
-      `BOOTSTRAP_SECRET=${bootstrapSecret}`,
-      `SIGNING_KEY=${randomBytes(32).toString("base64")}`,
-      `WEBHOOKS_KEY=${randomBytes(32).toString("base64")}`,
-      `EMAIL_KEY=${randomBytes(32).toString("base64url")}`,
-      "",
-    ].join("\n"),
-  );
-  for (const db of ["DIRECTORY", "ORG_READ"]) {
-    const migrate = await run(
-      process.execPath,
-      [wranglerBin, "d1", "migrations", "apply", db, "--local", "--persist-to", persist],
-      { cwd: apiDir, env: { NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" } },
-    );
-    expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
-  }
   let output = "";
   let server: WranglerDev | undefined;
   const stop = async () => {
@@ -140,10 +125,31 @@ export async function startForge(
       await rm(scratch, { recursive: true, force: true });
     }
   };
+  // The env file, the config copy and the migrations too: a failure removes what they left.
   try {
-    const devConfig = options.primary
-      ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile)
-      : apiConfig;
+    await mkdir(join(scratch, "home"), { recursive: true });
+    await writeFile(
+      envFile,
+      [
+        `BOOTSTRAP_SECRET=${bootstrapSecret}`,
+        `SIGNING_KEY=${randomBytes(32).toString("base64")}`,
+        `WEBHOOKS_KEY=${randomBytes(32).toString("base64")}`,
+        `EMAIL_KEY=${randomBytes(32).toString("base64url")}`,
+        "",
+      ].join("\n"),
+    );
+    for (const db of ["DIRECTORY", "ORG_READ"]) {
+      const migrate = await run(
+        process.execPath,
+        [wranglerBin, "d1", "migrations", "apply", db, "--local", "--persist-to", persist],
+        { cwd: apiDir, env: { NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" } },
+      );
+      expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
+    }
+    const devConfig =
+      options.primary || options.vars
+        ? await auxiliaryApiConfig(apiConfig, join(scratch, "api"), envFile, options.vars)
+        : apiConfig;
     server = await startWranglerDev({
       args: [
         ...(options.primary ? ["-c", options.primary] : []),
@@ -203,6 +209,7 @@ export async function startForge(
         });
         expect(res.status).toBe(200);
       },
+      output: () => output,
       stop,
     };
   } catch (error) {

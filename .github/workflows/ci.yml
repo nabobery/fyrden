@@ -243,19 +243,63 @@ jobs:
 
   # The check the main branch's ruleset requires, by this name: passed only
   # when every job above passed (one cancelled or skipped fails it too).
+  # The runner job alone may be skipped, and only when `detect` left it out.
   check:
     name: Lint, typecheck, test, dry-run
-    needs: [static, packages, api, api-coverage, e2e, detect]
+    needs: [static, packages, api, api-coverage, e2e, detect, runner]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Every part passed
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          NEEDS: ${{ toJSON(needs) }}
+          RUNNER_SELECTED: ${{ needs.detect.outputs.runner }}
         run: |
-          echo "parts: $RESULTS"
-          for result in $RESULTS; do test "$result" = success; done
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "runner selected: $RUNNER_SELECTED"
+          echo "$NEEDS" | jq -e --arg selected "$RUNNER_SELECTED" '
+            to_entries | length > 0 and all(
+              .value.result == "success"
+              or (.key == "runner" and .value.result == "skipped" and $selected == "false")
+            )' > /dev/null
+
+  # The pinned gitea/runner releases against fyrden-api under wrangler dev, in
+  # Docker: a runner registers with a minted token, takes a job of a run
+  # started through the test Worker's run seam, runs it in a job container
+  # and reports it; the job must succeed with its output and its log be
+  # stored whole as R2 chunks: every row the runner sent (the test Worker
+  # records its UpdateLog calls), the final ack covering the final call.
+  # Selected by `detect` (tools/ci/src/select-runner.ts: the runner protocol,
+  # the run object, the domain's CI code, the harness, its setup, the
+  # workflows; every push). Both releases, one after the other: each took 20 to 30 s with
+  # wrangler's start on a laptop (measured), so the older one costs less than
+  # a second job's setup. The binaries are cached by their pins.
+  runner:
+    name: gitea/runner against wrangler dev (6.0.0, 5.4.1)
+    needs: [detect]
+    if: needs.detect.outputs.runner == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Cached runner binaries
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/fyrden-runner
+          key: gitea-runner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/ci/runner/binary.ts') }}
+      - name: gitea/runner 6.0.0
+        env:
+          RUNNER_VERSION: "6.0.0"
+        run: pnpm --filter @fyrden/ci-tools test:runner
+      - name: gitea/runner 5.4.1
+        if: success() || failure()
+        env:
+          RUNNER_VERSION: "5.4.1"
+        run: pnpm --filter @fyrden/ci-tools test:runner
 
   # The git interoperability matrix, pull request subset: the pinned current
   # git (built once from its checked tarball and cached) against fyrden-api
@@ -391,8 +435,8 @@ jobs:
 
   # Which mutation scopes this pull request changed (its source directory, or
   # the mutation setup), so the mutation matrix below allocates a runner only
-  # for those. Part of the required check: if it fails, no scope is skipped
-  # silently. It also reports which other jobs the change needs (from the
+  # for those, and whether the runner job runs. Part of the required check: if
+  # it fails, no scope and no runner job is skipped silently. It also reports which other jobs the change needs (from the
   # paths and Turbo's package graph), only reported while that selection is
   # checked against real pull requests: every job still runs.
   detect:
@@ -402,6 +446,7 @@ jobs:
     outputs:
       mutation-matrix: ${{ steps.mutation.outputs.matrix }}
       has-mutation: ${{ steps.mutation.outputs.any }}
+      runner: ${{ steps.runner.outputs.runner }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -416,6 +461,10 @@ jobs:
         id: mutation
         if: github.event_name == 'pull_request'
         run: node tools/ci/src/select-mutation.ts HEAD^1 HEAD
+      # Decides, unlike the report below: the runner job runs only when this says so.
+      - name: Whether the pinned runner runs
+        id: runner
+        run: node tools/ci/src/select-runner.ts HEAD^1 HEAD
       - name: Jobs this change needs (report only, in the job summary)
         continue-on-error: true
         run: node tools/ci/src/select-ci.ts HEAD^1 HEAD

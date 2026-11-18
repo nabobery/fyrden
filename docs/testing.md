@@ -13,6 +13,7 @@
 | Git interoperability | `tools/ci/interop`: real git (and JGit) against `fyrden-api` under `wrangler dev` | Node driving git and workerd | `pnpm --filter @fyrden/ci-tools test:interop` |
 | MCP conformance | `tools/ci/conformance`: the MCP conformance suite (pinned version, the 2026-07-28 requirement set) against `fyrden-api` under `wrangler dev`, with a per-check baseline of known failures, and the authorization server metadata scenario | Node driving the suite (needs network for `npx`) | `pnpm --filter @fyrden/ci-tools test:conformance` |
 | REST API fuzzing | `tools/ci/schemathesis`: Schemathesis (pinned version) generates requests for every operation in the OpenAPI document (coverage, fuzzing and stateful phases) against `fyrden-api` under `wrangler dev`, with seeded data to point at; any server error or undocumented response fails | Node driving Schemathesis through `uvx` (needs uv and network) | `pnpm --filter @fyrden/ci-tools test:schemathesis` |
+| Self-hosted runner | `tools/ci/runner`: a pinned gitea/runner release (`RUNNER_VERSION`, 6.0.0 or 5.4.1; the binary downloaded once to `~/.cache/fyrden-runner` and checked against the SHA-256 pinned in `binary.ts`) in Docker against `fyrden-api` under `wrangler dev`: it registers with a minted token, runs a job of a run started through the test Worker's run seam, and the job's result, output and whole log (R2 chunks named by the run object's manifest, contiguous from row 0, holding every row the runner sent as the test Worker recorded its UpdateLog calls, the final ack covering the final call) are checked | Node driving Docker (needs the daemon and `node:24-slim` pinned by its multi-platform digest in `runner.test.ts`, for the runner and the job container alike, pulled when missing) | `RUNNER_VERSION=6.0.0 pnpm --filter @fyrden/ci-tools test:runner` |
 | Parser fuzzing | `packages/git-core/fuzz` | Node (Vitest), time-boxed | `pnpm --filter @fyrden/git-core fuzz` |
 | Mutation testing | `packages/git-core`, one `src/` directory per run | Stryker | `FYRDEN_MUTATION_SCOPE=<scope> pnpm --filter @fyrden/git-core mutation` |
 
@@ -22,7 +23,11 @@ seeds, each seed's pass of the API's suite split across four jobs by Vitest's
 and end-to-end tiers, MCP conformance and REST API fuzzing (one job,
 `contract`, which deploys also wait for), and the interoperability subset with
 the current pinned git. Pull requests also run mutation testing
-(incremental) for the `git-core` scopes they change. The nightly workflow runs
+(incremental) for the `git-core` scopes they change, and the self-hosted runner
+tier (both releases) when they change the runner protocol, the run object, the
+domain's CI code, the harness, its setup or the workflows
+(`tools/ci/src/select-runner.ts`); pushes to `main`
+always run it. The nightly workflow runs both runner releases too, and
 every interoperability case on every pinned git, long fuzzing budgets, the
 shuffle guard with ten seeds per package (ten parallel jobs of one randomly
 seeded pass each), a full mutation run of every scope, and whole blames of

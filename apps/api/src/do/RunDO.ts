@@ -22,6 +22,12 @@ import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
 import {
+  type AssignTaskAnswer,
+  type DispatchHooks,
+  type ReportTaskAnswer,
+  RunDispatch,
+} from "./run/dispatch.js";
+import {
   type AttemptRow,
   type InstanceRow,
   MAX_RUN_ATTEMPTS,
@@ -33,6 +39,7 @@ import {
   type RunPolicy,
   type RunRow,
 } from "./run/engine.js";
+import { type AppendLogAnswer, type LogHooks, RunLogs } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -127,8 +134,8 @@ export type TaskAnswer<T> =
   | ({ readonly ok: true } & T)
   | { readonly ok: false; readonly code: "task_finished" | "unknown_task" | "run_not_found" };
 
-/** Pause or fail points around each call to the repository, for tests. */
-export interface RunHooks {
+/** Pause or fail points around each call to the repository and in the runner protocol's work, for tests. */
+export interface RunHooks extends DispatchHooks, LogHooks {
   beforeRepoCall?: (op: string) => Promise<void> | void;
   afterRepoCall?: (op: string) => Promise<void> | void;
 }
@@ -157,7 +164,10 @@ export class RunDO extends MigratingDO {
   readonly context: GitStorageContext;
   readonly jobs: JobQueue;
   readonly engine: RunEngine;
-  readonly #memory = createDoMemoryBudget(16 * 1024 * 1024);
+  readonly #dispatch: RunDispatch;
+  readonly #logs: RunLogs;
+  /** The object's memory pool (NetworkDO's size, proposed): job slices and log requests reserve from it. */
+  readonly memory = createDoMemoryBudget(16 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
   #model: { source: string; model: RunModel } | undefined;
 
@@ -185,6 +195,43 @@ export class RunDO extends MigratingDO {
       },
       now: () => host.context.now(),
       model: () => host.#loadModel(),
+    });
+    this.#dispatch = new RunDispatch({
+      env,
+      engine: this.engine,
+      get hooks() {
+        return host.hooks;
+      },
+      metrics: this.context.metrics,
+      log: this.#log,
+      now: () => host.context.now(),
+      erased: () => host.#erased(),
+      tx: (fn) => host.#tx(fn),
+      guarded: (job, fn) => host.#current(job, fn),
+      ensureDispatch: () => host.jobs.ensure("ci_dispatch", RUN_JOB.dispatch),
+      queued: (limit) => host.queued(limit),
+      assign: (jobId, key) => host.assign(jobId, key),
+      taskLive: (ref) => host.taskLive(ref),
+      updateTask: (ref) => host.updateTask(ref),
+      completeTask: (ref, report) => host.completeTask(ref, report),
+      logComplete: (task) => host.#logs.complete(task),
+      logEnded: (task) => host.#logs.taskEnded(task),
+    });
+    this.#logs = new RunLogs({
+      env,
+      engine: this.engine,
+      get hooks() {
+        return host.hooks;
+      },
+      metrics: this.context.metrics,
+      log: this.#log,
+      memory: this.memory,
+      now: () => host.context.now(),
+      erased: () => host.#erased(),
+      tx: (fn) => host.#tx(fn),
+      confirm: (wireId, runnerId) => host.#dispatch.confirm(wireId, runnerId),
+      updateTask: (ref) => host.updateTask(ref),
+      markLogComplete: (ref) => host.markLogComplete(ref),
     });
   }
 
@@ -520,6 +567,7 @@ export class RunDO extends MigratingDO {
 
   /** Read only: whether the task's instance is in progress or cancelling. */
   taskLive(ref: TaskRef): boolean {
+    this.hooks.onTaskLive?.();
     const found = this.#task(ref);
     return (
       "row" in found && (found.row.status === "in_progress" || found.row.status === "cancelling")
@@ -609,6 +657,41 @@ export class RunDO extends MigratingDO {
           found.row.job_id,
         );
     });
+  }
+
+  /**
+   * The runner protocol's assignment: job `jobId` as the directory's task
+   * `wireId`, offered to runner `runnerId` of account `accountId` (refused
+   * unless that account owns the run's repository now); the encoded `Task` with its job
+   * token, or why it was refused. The same wire id again (a lost answer)
+   * gets the same task and a new token.
+   */
+  assignTask(
+    wireId: number,
+    jobId: number,
+    runnerId: number,
+    accountId: string,
+  ): Promise<AssignTaskAnswer> {
+    return this.#dispatch.assignTask(wireId, jobId, runnerId, accountId);
+  }
+
+  /** A runner's UpdateTask for wire task `wireId`, as the Worker received it. */
+  reportTask(wireId: number, body: Uint8Array, runnerId: number): Promise<ReportTaskAnswer> {
+    return this.#dispatch.reportTask(wireId, body, runnerId);
+  }
+
+  /**
+   * A runner's UpdateLog for wire task `wireId`, as the Worker received it
+   * (`truncated`: the first 4 MiB of a longer body). New rows are stored
+   * before they are acked; the answer carries the stored ack.
+   */
+  appendLog(
+    wireId: number,
+    body: Uint8Array,
+    truncated: boolean,
+    runnerId: number,
+  ): Promise<AppendLogAnswer> {
+    return this.#logs.append(wireId, body, truncated, runnerId);
   }
 
   // ------------------------------------------------------------------ concurrency
@@ -903,6 +986,9 @@ export class RunDO extends MigratingDO {
         "run_checks",
         "run_owners",
         "run_faults",
+        "ci_tasks",
+        "ci_logs",
+        "ci_log_chunks",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1012,25 +1098,8 @@ export class RunDO extends MigratingDO {
       run_checks: { runSlice: (job) => this.#flushChecks(job) },
       run_sweep: { runSlice: async () => this.#sweep() },
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
-      // The runner protocol's slices; until they exist there is nothing to sync or revoke.
-      ci_dispatch: {
-        runSlice: async (job) => {
-          this.#tx(() => {
-            if (this.jobs.checkpoint(job, new Uint8Array()))
-              this.engine.exec("UPDATE runs SET queue_synced_rev = queue_rev WHERE id = 1");
-          });
-          return { done: true };
-        },
-      },
-      ci_task_end: {
-        runSlice: async (job) => {
-          this.#tx(() => {
-            if (this.jobs.checkpoint(job, new Uint8Array()))
-              this.engine.exec("UPDATE runs SET task_end_acked = task_end_seq WHERE id = 1");
-          });
-          return { done: true };
-        },
-      },
+      ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
+      ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
     };
     for (const [kind, handler] of Object.entries(handlers) as [JobKind, JobHandler][])
       handlers[kind] = this.#marked(kind, handler);
@@ -1266,7 +1335,7 @@ export class RunDO extends MigratingDO {
     await measureInvocation(
       this.context.metrics,
       { where: "do", op: "alarm", doClass: "RunDO" },
-      () => this.jobs.runDue(this.#handlers(), this.#memory, this.context.now() + ALARM_BUDGET_MS),
+      () => this.jobs.runDue(this.#handlers(), this.memory, this.context.now() + ALARM_BUDGET_MS),
     );
   }
 }

@@ -81,7 +81,8 @@
         "tools/ci/e2e/**",
         "tools/ci/interop/**",
         "tools/ci/conformance/**",
-        "tools/ci/schemathesis/**"
+        "tools/ci/schemathesis/**",
+        "tools/ci/runner/**"
       ],
       "linter": {
         "rules": {

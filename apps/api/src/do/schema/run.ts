@@ -24,6 +24,18 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `run_identity`: the immutable repository and spec reservation, made before registration.
  * - `jobs`: this object's background work (the same table the repository
  *   objects use, so the same job queue runs it).
+ *
+ * v3 (the runner protocol):
+ * - `ci_tasks`: the directory task id, local job and task numbers, offered runner,
+ *   and the time the runner first reported.
+ *
+ * v4 (job logs):
+ * - `ci_logs`: contiguous acknowledged positions, completion state and stored
+ *   row and byte counts per task, and `omitted_rows`: positions acknowledged
+ *   as omitted (a row too large for any request), never decreased; a log with
+ *   one is never `complete`.
+ * - `ci_log_chunks`: the stored ranges and their authoritative R2 objects (an
+ *   omission is a range of one position whose object holds its record).
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -199,6 +211,47 @@ export const runSchema: readonly DoMigration[] = [
       ) STRICT;
       INSERT INTO run_identity (id, repo_id, spec_digest)
         SELECT id, repo_id, spec_digest FROM runs;
+    `,
+  },
+  {
+    version: 3,
+    name: "ci_tasks",
+    sql: `
+      CREATE TABLE ci_tasks (
+        wire_id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL,
+        task INTEGER NOT NULL,
+        runner_id INTEGER NOT NULL,
+        confirmed_at INTEGER
+      ) STRICT;
+      CREATE INDEX ci_tasks_task ON ci_tasks (task);
+    `,
+  },
+  {
+    version: 4,
+    name: "ci_logs",
+    sql: `
+      CREATE TABLE ci_logs (
+        task INTEGER PRIMARY KEY,
+        ack_index INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL DEFAULT 'streaming'
+          CHECK (state IN ('streaming', 'complete', 'incomplete')),
+        rows INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        omitted_rows INTEGER NOT NULL DEFAULT 0 CHECK (omitted_rows >= 0),
+        updated_at INTEGER NOT NULL,
+        CHECK (state <> 'complete' OR omitted_rows = 0)
+      ) STRICT;
+
+      CREATE TABLE ci_log_chunks (
+        task INTEGER NOT NULL,
+        start_index INTEGER NOT NULL,
+        end_index INTEGER NOT NULL,
+        bytes INTEGER NOT NULL,
+        r2_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (task, start_index)
+      ) STRICT, WITHOUT ROWID;
     `,
   },
 ];

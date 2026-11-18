@@ -20,6 +20,7 @@ import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
 import { mountReleaseAssets } from "./rest/release-assets.js";
 import { bootstrap } from "./routes/admin/bootstrap.js";
+import { mountRunnerService } from "./runner/service.js";
 
 export type AppEnv = { Bindings: Env; Variables: AuthVariables };
 
@@ -57,6 +58,8 @@ export function createApp() {
   app.route("/auth", authRouter);
   app.route("/.well-known", wellKnownRouter);
   mountLive(app);
+  // Under /api/actions/, which no operation's path takes: before the REST routes.
+  mountRunnerService(app);
   mountRest(app);
   mountRaw(app);
   mountReleaseAssets(app);

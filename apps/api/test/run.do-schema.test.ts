@@ -15,8 +15,10 @@ import runV0 from "./fixtures/do-schemas/RunDO/v0.sql?raw";
 import runV1 from "./fixtures/do-schemas/RunDO/v1.sql?raw";
 
 import runV2 from "./fixtures/do-schemas/RunDO/v2.sql?raw";
+import runV3 from "./fixtures/do-schemas/RunDO/v3.sql?raw";
+import runV4 from "./fixtures/do-schemas/RunDO/v4.sql?raw";
 
-const versions: Record<number, string> = { 0: runV0, 1: runV1, 2: runV2 };
+const versions: Record<number, string> = { 0: runV0, 1: runV1, 2: runV2, 3: runV3, 4: runV4 };
 
 describe("RunDO schema", () => {
   it("binds an existing v1 run to its repository and original spec", async () => {
