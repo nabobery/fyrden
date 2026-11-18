@@ -12,13 +12,18 @@ import { startRun } from "../src/ci/runs.js";
 import type { AssignAnswer, RunDO } from "../src/do/RunDO.js";
 import { ACCESS_TOKEN_TYPE, TOKEN_EXCHANGE } from "../src/oauth/exchange.js";
 import { dispatchHooks } from "../src/runner/dispatch.js";
-import { Result } from "../src/runner/proto/messages.js";
+import { Result, type Task } from "../src/runner/proto/messages.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user } from "./helpers/api.js";
 import { countingD1 } from "./helpers/d1.js";
 import { fetchBody } from "./helpers/fetch-repo.js";
 import { basic, ORIGIN } from "./helpers/git-http.js";
-import { encodeDeclareRequest, encodeFetchTaskRequest } from "./helpers/runner-proto.js";
+import {
+  decodeUpdateLogResponse,
+  encodeDeclareRequest,
+  encodeFetchTaskRequest,
+  encodeUpdateLogRequest,
+} from "./helpers/runner-proto.js";
 import {
   call,
   connectError,
@@ -522,6 +527,59 @@ describe("a lost answer", () => {
     const tokens = await jobTokensOf(first.id);
     expect(tokens).toHaveLength(1);
     expect(tokens[0]?.revoked_at).toBeNull();
+  });
+
+  it("keeps a fresh claim active when an overlapping poll assigns and confirms it first", async () => {
+    const f = await orgRepo();
+    const runner = await registerRunner(f.org.login, f.owner);
+    const version = await primed(f);
+    const runId = await started(f, one);
+    const held = gate();
+    dispatchHooks.afterClaim = () => held.hold();
+    const claiming = fetchTask(runner, version);
+    await held.started;
+    delete dispatchHooks.afterClaim;
+    let active: Task | undefined;
+    try {
+      active = (await fetchTask(runner, version)).task;
+      if (!active) throw new Error("no task");
+      await updateTask(runner, active.id);
+      expect((await taskRow(active.id))?.confirmed_at).not.toBeNull();
+    } finally {
+      held.release();
+    }
+    const claimAnswer = await claiming;
+    expect(claimAnswer.task).toBeUndefined();
+    if (!active) throw new Error("no task");
+    expect(await tasksOfRun(runId)).toHaveLength(1);
+    expect(await taskRow(active.id)).toMatchObject({ superseded_at: null, ended_at: null });
+    expect(claimAnswer.tasksVersion).toBe(version);
+    expect((await uploadPack(f, jobTokenOf(active))).status).toBe(200);
+    const logged = await runnerCall(
+      "UpdateLog",
+      encodeUpdateLogRequest({
+        taskId: active.id,
+        index: 0,
+        rows: [{ content: "after the overlapping poll" }],
+        noMore: true,
+      }),
+      { credentials: runner },
+    );
+    expect(logged.status).toBe(200);
+    expect(decodeUpdateLogResponse(new Uint8Array(await logged.arrayBuffer())).ackIndex).toBe(1);
+    const [chunk] = await inRun(runId, (r) =>
+      r.engine.rows<{ r2_key: string }>("SELECT r2_key FROM ci_log_chunks"),
+    );
+    expect(chunk).toBeDefined();
+    expect(await (await env.CI.get(chunk?.r2_key ?? ""))?.text()).toContain(
+      "after the overlapping poll",
+    );
+    expect((await updateTaskRaw(runner, active.id, Result.SUCCESS)).status).toBe(200);
+    expect(await jobNamed(runId, "a")).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+      logComplete: true,
+    });
   });
 
   it.each(["beforeTaskRecord", "beforeTokenRotation"] as const)(

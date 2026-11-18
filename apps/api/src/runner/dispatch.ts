@@ -136,6 +136,7 @@ export async function dispatchTask(
       });
       return answer(assigned.task, requestVersion);
     }
+    if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
     call.log.info("task refused by its run", {
       taskId: claimed.taskId,
       runId: claimed.runId,
