@@ -706,10 +706,10 @@ export class RepoDO extends MigratingDO {
         return this.acl.basis() !== "unknown";
       },
       prepareWrite: async (principal) => {
-        if (!(await this.#authority.principalActive(principal))) return () => false;
         const ceilings = await this.#authority.rolesPulled(principal, null);
         return () => atLeast(this.#authority.roleNow(principal, ceilings), "write");
       },
+      actorActive: (principal) => this.#authority.principalActive(principal),
       record: (key, actor, facts) => this.ciTriggers.recordSchedule(key, actor, facts),
       admission: () => this.scheduleAdmission,
       log: () => this.#log(),

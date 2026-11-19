@@ -336,6 +336,78 @@ describe("scheduled workflows", () => {
     expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
   });
 
+  it.each(["actor", "agent", "agent owner"] as const)(
+    "does not fire if the %s is disabled while roles are refreshed",
+    async (kind) => {
+      const f = await scheduleRepo({ "b.txt": "b\n" });
+      const writer = await user();
+      expect(
+        (
+          await api("PUT", `${f.path}/collaborators/${writer.handle}`, f.owner.token, {
+            permission: "push",
+          })
+        ).status,
+      ).toBe(200);
+      let actor = writer;
+      let disabled = writer.principalId;
+      if (kind !== "actor") {
+        const agent = await agentFor(writer, ["contents:write"]);
+        const account = await recordedAccount(env, {
+          id: f.owner.principalId,
+          handle: f.owner.handle,
+        });
+        const grant = await account.setCollaborator(
+          { principalId: f.owner.principalId },
+          f.repo.id,
+          { id: agent.id, handle: agent.handle },
+          "write",
+        );
+        if (!grant.ok) throw new Error(grant.error);
+        await f.stub.invalidateAcl(f.owner.principalId, grant.epochGen, grant.version);
+        actor = { principalId: agent.id, token: agent.own, handle: agent.handle };
+        if (kind === "agent") disabled = agent.id;
+      }
+      await commitLive(f, "main", { [CI]: scheduled(["*/5 * * * *"]) }, "add", actor);
+      await runTriggers(f.stub);
+      await inRepo(f.stub, (r: RepoDO) => {
+        const roleOf = r.acl.roleOf.bind(r.acl);
+        r.acl.roleOf = async (...args) => {
+          r.acl.roleOf = roleOf;
+          const role = await roleOf(...args);
+          await env.DIRECTORY.prepare(
+            "UPDATE principals SET disabled_at = ?, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END, lifecycle_gen = lifecycle_gen + 1 WHERE id = ?",
+          )
+            .bind(Date.now(), disabled)
+            .run();
+          return role;
+        };
+      });
+      await fireAt(f, f.base + 10_000);
+      expect((await eventsOf(f.stub)).filter((e) => e.kind === "schedule")).toEqual([]);
+      expect(await scheduleRuns(f)).toEqual([]);
+      expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
+    },
+  );
+
+  it("rechecks activity after the post-role boundary before recording a tick", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciSchedules.hooks = {
+        afterRoleCheck: async () => {
+          await env.DIRECTORY.prepare(
+            "UPDATE principals SET disabled_at = ?, lifecycle = CASE WHEN type = 'user' THEN 'suspended' ELSE lifecycle END, lifecycle_gen = lifecycle_gen + 1 WHERE id = ?",
+          )
+            .bind(Date.now(), f.owner.principalId)
+            .run();
+        },
+      };
+    });
+    await fireAt(f, f.base + 10_000);
+    expect((await eventsOf(f.stub)).filter((e) => e.kind === "schedule")).toEqual([]);
+    expect(await scheduleRuns(f)).toEqual([]);
+    expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
+  });
+
   it("start nothing for a tick whose cron left the file before the trigger read it", async () => {
     const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
     f.clock.now = f.base + 10_000;

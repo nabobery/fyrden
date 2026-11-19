@@ -75,11 +75,12 @@ export interface CiSchedulesDeps {
   /** Pulls the ACL unless one within the write window is stored; whether one can be read now. */
   readonly aclKnown: () => Promise<boolean>;
   /**
-   * Checks that the principal and its owner are active, then pulls their
-   * roles. The returned check reads current local authority synchronously
-   * in the transaction recording the tick.
+   * Pulls role ceilings. The returned check reads current local authority
+   * synchronously in the transaction recording the tick.
    */
   readonly prepareWrite: (principal: string) => Promise<() => boolean>;
+  /** The final remote read before recording: principal and owner activity from the primary. */
+  readonly actorActive: (principal: string) => Promise<boolean>;
   /** In the caller's transaction: records a `schedule` event in the trigger inbox. */
   readonly record: (key: string, actor: string, facts: object) => void;
   readonly admission: () => ScheduleAdmission;
@@ -279,14 +280,14 @@ export class CiSchedules {
             await this.hooks.beforeRoleCheck?.(row.workflow_path);
             mayWrite = await this.deps.prepareWrite(row.actor_id);
             await this.hooks.afterRoleCheck?.(row.workflow_path);
+            if (!mayWrite() && !(await this.deps.aclKnown()))
+              return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
+            if (!(await this.deps.actorActive(row.actor_id))) disable = "actor_lost";
           } catch (error) {
             // The directory or the account unreachable: neither fired nor disabled, retried.
             this.deps.log().warn("checking a schedule's actor failed", { error });
             return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
           }
-          // A denial is believed only from an ACL that could be read (it may have lapsed since).
-          if (!mayWrite() && !(await this.deps.aclKnown()))
-            return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
         }
         this.deps.git.context.storage.transactionSync(() => {
           // Read again with no await before the write: another fire (the alarm and the test
