@@ -78,7 +78,6 @@ export class PackIdx {
     return new PackIdx(bytes, fanout, layoutForLength(fanout, bytes.length));
   }
 
-  /** The length of the `.idx` it holds (the memory it keeps). */
   get byteLength(): number {
     return this.#bytes.byteLength;
   }

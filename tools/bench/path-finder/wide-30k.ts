@@ -13,9 +13,7 @@ const FILES_PER_DIRECTORY = 50;
 export interface Wide30kDirectory {
   /** From the root, with no trailing slash. */
   readonly path: string;
-  /** Its files' names. */
   readonly files: readonly string[];
-  /** Its directories' names. */
   readonly directories: readonly string[];
 }
 
@@ -47,5 +45,4 @@ export function wide30kDirectories(): Wide30kDirectory[] {
   return out;
 }
 
-/** The root's directories. */
 export const WIDE_30K_ROOT: readonly string[] = range(TOP).map((g) => `group-${g}`);

@@ -44,7 +44,6 @@ describe("ResumablePackUpload", () => {
         if (cut === bytes.length) break;
         const saved = upload.save();
         tails.push(saved.tail.length);
-        // A new instance, as after an eviction.
         upload = ResumablePackUpload.resume(git, saved.state, saved.tail);
       }
       const info = await upload.finish();
@@ -53,7 +52,6 @@ describe("ResumablePackUpload", () => {
     });
     expect(result.info.bytes).toBe(bytes.length);
     expect(result.row).toMatchObject({ state: "indexing", bytes: bytes.length, kind: "compact" });
-    // Only the bytes after the last whole part are carried between instances.
     expect(result.tails.every((t) => t < MIN_PART_BYTES)).toBe(true);
     expect(equal(await storedBytes(result.row?.r2Key as string), bytes)).toBe(true);
   });

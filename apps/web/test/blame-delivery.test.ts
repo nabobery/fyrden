@@ -19,7 +19,6 @@ import {
 const COMMIT = "c".repeat(40);
 const A = "a".repeat(40);
 
-/** A deferred value, settled by the test. */
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -95,7 +94,6 @@ function harness(
     },
   });
   delivery.subscribe(() => states.push(delivery.snapshot()));
-  /** Resolves once the delivery reaches a state `test` accepts. */
   async function until(test: (state: DeliveryState) => boolean): Promise<DeliveryState> {
     if (test(delivery.snapshot())) return delivery.snapshot();
     for (;;) {
@@ -188,11 +186,9 @@ describe("whole-file delivery", () => {
     (await h.calls.next()).answer(
       ok({ ranges: [range(1, 2)], resolved_lines: 6, next_continuation: "t1" }),
     );
-    // 2 lines delivered of 6 settled: the next request only pages.
     (await h.calls.next()).answer(
       ok({ ranges: [range(3, 4)], resolved_lines: 6, next_continuation: "t2" }),
     );
-    // All 6 delivered: the next one walks.
     await h.calls.next();
     expect(h.budget.used).toBe(2);
   });
@@ -289,7 +285,6 @@ describe("whole-file delivery", () => {
     expect(h.calls.pending).toBe(0);
     expect(h.sleeps.pending).toBe(0);
     h.delivery.resume();
-    // The wait the last busy answer asked for comes first.
     const owed = await h.sleeps.next();
     expect(owed.seconds).toBe(2);
     expect(h.calls.pending).toBe(0);

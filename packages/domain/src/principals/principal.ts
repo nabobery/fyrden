@@ -1,6 +1,5 @@
 import type { IdPrefix } from "../ids.js";
 
-/** Principal types. */
 export const PRINCIPAL_TYPES = ["user", "org", "agent", "installation"] as const;
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 
@@ -28,7 +27,6 @@ export interface Principal {
 /** GitHub-style handle: 1-39 chars, alphanumerics and single inner hyphens. */
 export const HANDLE_PATTERN = /^(?=.{1,39}$)[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*$/;
 
-/** The longest handle. */
 export const MAX_HANDLE_LENGTH = 39;
 
 /**

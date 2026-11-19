@@ -27,7 +27,6 @@ const SCHEMES: readonly (readonly [string, Scheme])[] = [
   ["dark", FJORD.dark],
 ];
 
-/** The block of `css` that holds the tokens of the light (`:root {`) or dark scheme. */
 function tokensIn(css: string, opening: string): Record<string, string> {
   const start = css.indexOf(opening);
   expect(start, opening).toBeGreaterThanOrEqual(0);
@@ -98,7 +97,6 @@ describe("Fjord", () => {
       "--diff-selected": scheme.diff.selected,
     });
     expect(tokensIn(css, ":root {")).toEqual(expected(FJORD.light));
-    // Followed from the operating system, and picked in the site header.
     expect(tokensIn(css, ':root:not([data-theme="light"]) {')).toEqual(expected(FJORD.dark));
     expect(tokensIn(css, ':root[data-theme="dark"] {')).toEqual(expected(FJORD.dark));
   });

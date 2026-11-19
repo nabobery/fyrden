@@ -16,7 +16,6 @@ import {
 import { admitted } from "./helpers/read-model.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
-// Written as production writes it: through the read model's executor.
 const db = admitted();
 
 const event = (sourceId: string, seq: number, type = "repo.updated"): DomainEvent => ({

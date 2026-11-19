@@ -107,7 +107,6 @@ export async function runJob(
   return { slices, state };
 }
 
-/** Pack rows by state, for assertions. */
 export const packStates = (stub: Stub) =>
   inRepo(stub, ({ git }) =>
     git.context.storage.sql

@@ -219,7 +219,6 @@ describe("code owners of a pull request", () => {
       rules: [{ owners: ["@root"] }],
     });
     expect(await rows("code_owner_evaluations")).toBe(evaluations);
-    // Changed rules on the base: worked out again.
     await commit("main", { ".github/CODEOWNERS": "* @changed\n" });
     await runJobs();
     expect((await ownersOf()).rules).toMatchObject([{ owners: ["@changed"] }]);
@@ -244,7 +243,6 @@ describe("code owners of a pull request", () => {
     await open();
     const before = (await ok<{ head: { sha: string } }>(api("GET", `${path}/pulls/1`, owner.token)))
       .head.sha;
-    // Every pointer written, as it is written.
     await inRepo(stub(), (r: RepoDO) => {
       const sql = r.git.context.storage.sql;
       sql.exec("CREATE TABLE pointer_log (head TEXT NOT NULL)");
@@ -268,7 +266,6 @@ describe("code owners of a pull request", () => {
         .toArray()
         .map((row) => row.head),
     );
-    // The run for the old head published nothing; the new head's did.
     expect(written).not.toContain(before);
     expect(written).toContain(after);
     expect((await ownersOf()).rules.map((r) => r.owners)).toEqual([["@me"], ["@docs"]]);

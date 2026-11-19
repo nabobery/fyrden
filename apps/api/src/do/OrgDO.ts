@@ -27,7 +27,6 @@ import {
 } from "./org/quotas.js";
 import { orgSchema } from "./schema/org.js";
 
-/** An account as its object records it. */
 export interface AccountInit {
   readonly accountId: string;
   readonly kind: "org" | "user";
@@ -43,7 +42,6 @@ export interface ChangeActor {
   readonly requestId?: string;
 }
 
-/** Hooks into an account object. For tests. */
 export const accountHooks: {
   /** After an addition read its principals' lifecycle, before its transaction. */
   afterLifecycleRead?: (account: OrgDO) => Promise<void>;
@@ -75,7 +73,6 @@ export type RetireAnswer =
   /** One of them is the organization's only owner: nothing was removed. */
   | { readonly state: "sole_owner" };
 
-/** The outcome of an access change. */
 export type AclChange =
   | {
       readonly ok: true;
@@ -101,7 +98,6 @@ export type AclChange =
       readonly error: string;
     };
 
-/** A principal with a role on one repository, as listed. */
 export interface CollaboratorRow {
   readonly id: string;
   readonly handle: string;
@@ -302,7 +298,6 @@ const LIFECYCLE_BATCH = 90;
 /** Repositories one `access.revoked` event names at most (a removal can name thousands). */
 const REVOKED_REPOS = 100;
 
-/** Audit rows one delivery sends at most. */
 const AUDIT_BATCH = 50;
 /** Wait before the alarm retries a delivery that failed. Proposed. */
 const AUDIT_RETRY_MS = 60_000;
@@ -703,7 +698,6 @@ export class OrgDO extends MigratingDO {
       throw new Error(`more than ${MAX_TEAM_FACTS_SLUGS} teams to read`);
     await this.#checkEpoch();
     const meta = this.#meta();
-    // No teams: none of their members approved.
     const none = probe.groups.map(() => ({ outcome: "none" as const }));
     if (!meta) return { accountId: "", epochGen: 0, version: 0, teams: {}, groups: none };
     const basis = {
@@ -1036,7 +1030,6 @@ export class OrgDO extends MigratingDO {
       if (current === null) return this.#unchanged(meta);
       if (current === "owner" && this.#owners() === 1) return LAST_OWNER;
       this.ctx.storage.sql.exec("DELETE FROM members WHERE principal_id = ?", memberId);
-      // Teams are the organization's: leaving it leaves them.
       this.ctx.storage.sql.exec("DELETE FROM team_members WHERE principal_id = ?", memberId);
       const changed = this.#changed(actor, "org.member.remove", { user: memberId });
       const kept = new Set(this.collaboratorRepos(memberId, "read"));
@@ -1184,7 +1177,6 @@ export class OrgDO extends MigratingDO {
       }
       return { state: left ? "more" : "done", removed, epochGen: meta.epoch_gen, version };
     });
-    // Its audit row is delivered soon, as a change's is.
     if (answer.state !== "sole_owner" && answer.removed > 0) this.#scheduleAudit();
     return answer;
   }
@@ -2176,7 +2168,6 @@ export class OrgDO extends MigratingDO {
     this.#epochChecked = true;
   }
 
-  /** Why `actor` may not change the account's access now, if it may not. */
   #refuse(actor: ChangeActor): AclChange | undefined {
     const meta = this.#meta();
     if (meta?.kind !== "org") return NOT_AN_ORG;

@@ -50,7 +50,6 @@ beforeAll(async () => {
     "contents:write",
     "pull_requests:write",
   ]);
-  // The agent follows its user's feed from now on.
   feed = new FeedFollower(agent.api, (await agent.api.call("feed.sync", {})).head_cursor);
 }, 180_000);
 
@@ -129,7 +128,6 @@ describe("conflicts resolved on the server (wrangler dev)", () => {
     expect(conflicts.files).toEqual([
       expect.objectContaining({ path: "notes.txt", kind: "content", editable: true, conflicts: 1 }),
     ]);
-    // git's markers, the head's side first, each named by its branch.
     expect(conflicts.files[0]?.content).toBe(
       "one\n<<<<<<< rest-fix\ntwo (head)\n=======\ntwo (base, rest)\n>>>>>>> main\nthree\n",
     );
@@ -142,7 +140,6 @@ describe("conflicts resolved on the server (wrangler dev)", () => {
     expect(resolved.markers).toEqual([]);
     await expectBaseMerged("rest-fix", resolved.sha, head, base);
 
-    // The pull request follows its head branch, now clean, and merges.
     const clean = await mergeability(opened.number, "clean");
     expect(clean.head.sha).toBe(resolved.sha);
     const merged = await maintainer.api.call("pulls.merge", {
@@ -165,7 +162,6 @@ describe("conflicts resolved on the server (wrangler dev)", () => {
     });
     const { number } = opened;
     const base = await conflictingBase("two (base, mcp)");
-    // The agent hears of the conflict on its user's pull request.
     const reported = await feed.until(forge, number, "merge_conflict", "open");
     expect(reported).toMatchObject({ priority: "P0", action: "merge_conflict" });
     expect(reported.reasons).toContain("author");
@@ -186,12 +182,10 @@ describe("conflicts resolved on the server (wrangler dev)", () => {
     });
     expect(resolved.markers).toEqual([]);
     await expectBaseMerged("mcp-fix", resolved.sha, head, base);
-    // The agent made it for its user: the user is named as co-author.
     expect(await authorGit.ok(["log", "-1", "--format=%B", resolved.sha], authorWork)).toMatch(
       new RegExp(`^Co-authored-by: ${author.handle} <`, "m"),
     );
 
-    // The conflict item resolves in place: one item, its latest state.
     const settled = await feed.until(forge, number, "merge_conflict", "resolved");
     expect(settled.item_key).toBe(reported.item_key);
     expect(settled.version).toBeGreaterThan(reported.version);

@@ -129,7 +129,6 @@ async function committedUpload(git: RepoGitStorage, n: number) {
     uploadId: upload.uploadId,
   });
   if (!result.ok) throw new Error(`commit failed: ${JSON.stringify(result)}`);
-  // The commit path deletes its scratch objects.
   const networkId = git.networkId();
   await env.GIT.delete([0, 1].map((n) => scratchKey(networkId, upload.uploadId, n)));
   return upload;
@@ -277,11 +276,8 @@ describe("orphaned-upload reaper", () => {
         "UPDATE packs SET state = 'condemned' WHERE pack_id = ?",
         condemned.packId,
       );
-      // A reader holds a lease on an expired upload's pack.
       const leased = await orphanUpload(git, { commit: 4 });
-      // An expired upload whose indexer keeps renewing its index lease.
       const renewing = await orphanUpload(git, { commit: 5 });
-      // An expired upload whose resumable index job is still queued.
       const queued = await orphanUpload(git, { commit: 6 });
       git.jobs.ensure("index", indexJobId(queued.uploadId), { runAt: clock.now + 10 * TTL });
       const dead = await orphanUpload(git, { commit: 7 });
@@ -326,7 +322,6 @@ describe("orphaned-upload reaper", () => {
           .map((r) => r.state)
           .sort(),
       };
-      // Once the lease ends and the indexer stops, they are reaped too.
       git.context.storage.sql.exec(
         "UPDATE jobs SET state = 'failed' WHERE job_id = ?",
         indexJobId(queued.uploadId),
@@ -371,7 +366,6 @@ describe("orphaned-upload reaper", () => {
     const result = await inProbe(stub, async (probe) => {
       const git = clocked(probe, clock);
       const committed = await committedUpload(git, 1);
-      // Objects with no registry row: a pack and index from a lost row, and a stray key.
       const lost = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
       await env.GIT.put(`${prefix}${lost}.pack`, enc("lost"));
       await env.GIT.put(`${prefix}${lost}.idx`, enc("lost"));
@@ -454,7 +448,6 @@ describe("orphaned-upload reaper", () => {
         registry: git.registry,
         networkId: () => networkId,
       });
-      // A writer the object abandoned (pending, no upload) and one it aborted (discarded).
       const abandoned = store.beginPack();
       await env.GIT.put(packObjectKey(networkId, abandoned.packId, "pack"), enc("abandoned"));
       const aborted = store.beginPack();
@@ -546,11 +539,9 @@ describe("orphaned-upload reaper", () => {
         packObjectKey(networkId, setup.committed.packId, "idx"),
       ].sort(),
     );
-    // Each upload counted once, each unregistered object once.
     expect(reaped(metrics, "upload")).toBe(6);
     expect(reaped(metrics, "object")).toBe(7);
 
-    // A second pass finds nothing to do.
     const deletesBefore = deleted.length;
     const metricsBefore = metrics.filter((m) => m.name === "git.reaped").length;
     await inProbe(stub, async (probe) => {

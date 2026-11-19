@@ -35,9 +35,7 @@ export const IDX_MIN_BYTES = IDX_OIDS_START + 2 * IDX_CHECKSUM_BYTES;
 export type IdxErrorCode =
   /** Not the v2 magic, or a version other than 2. */
   | "bad-header"
-  /** Fanout counts that decrease. */
   | "bad-fanout"
-  /** The file length does not fit the entry count. */
   | "bad-size"
   /** Shorter than its header, fanout or tables say, or a short range read. */
   | "truncated"

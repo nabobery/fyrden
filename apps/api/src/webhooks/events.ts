@@ -14,7 +14,6 @@ export interface WebhookEventName {
   readonly action: string | null;
 }
 
-/** The actions of each entity's events that make deliveries. */
 const ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   pull_request: new Set([
     "opened",
@@ -95,7 +94,6 @@ function metaOf(row: Row): Row {
   };
 }
 
-/** A pull request as its event's snapshot has it. */
 function pullOf(row: Row): Row {
   return {
     number: row.number,
@@ -121,7 +119,6 @@ function pullOf(row: Row): Row {
   };
 }
 
-/** An issue as its event's snapshot has it. */
 function issueOf(row: Row): Row {
   return {
     number: row.number,
@@ -197,7 +194,6 @@ function reviewOf(row: Row): Row {
     id: row.id,
     user: { id: row.reviewerId },
     performed_via_agents: row.actChain,
-    // As the REST API shows it: a dismissed review's state is `DISMISSED`.
     state: row.dismissedAt === null ? row.state : "DISMISSED",
     commit_id: row.commitSha,
     body: row.body,

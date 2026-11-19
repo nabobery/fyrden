@@ -90,12 +90,10 @@ async function firstScreenOnce(text: string, lang: string, lines: number) {
     themes: { light: light.default, dark: dark.default },
   };
 
-  // The whole file tokenized, as `codeToTokens` (and the file renderer) do.
   let start = now();
   const all = hl.codeToTokens(text, options);
   const wholeMs = now() - start;
 
-  // StreamTokenizer: push the file in 16 KiB chunks until the first screen is complete.
   start = now();
   const stream = new hl.StreamTokenizer(options);
   const streamScreen: Token[][] = [];
@@ -123,7 +121,6 @@ async function firstScreenOnce(text: string, lang: string, lines: number) {
   for (let line = 0; line < lines; line++) liveScreen.push(live.getLineTokens(line).tokens);
   const liveMs = now() - start;
   checkScreen("LiveTokenizer", liveScreen, all.tokens);
-  // What finishing the rest synchronously costs (the background batches' total work).
   start = now();
   live.flush();
   const liveFlushMs = now() - start;

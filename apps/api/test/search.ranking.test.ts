@@ -113,7 +113,6 @@ describe("a ranked search's admission", () => {
       total: 8,
       narrowest: 8,
     });
-    // In either order alike.
     expect((await rank(`${b} ${a}`))?.charge).toEqual((await rank(`${a} ${b}`))?.charge);
     // A clause an `in:` column each.
     expect((await rank(`${a} in:title in:body`))?.charge).toEqual({

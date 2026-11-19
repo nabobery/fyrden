@@ -197,7 +197,6 @@ describe("object reader against git cat-file", () => {
     }
     const last = chain[chain.length - 1] as RangeCall;
     expect(last.offset + last.length).toBe(packBytes.length);
-    // An entry larger than the range is read whole, so some reads are longer.
     expect(chain.length).toBeGreaterThan(1);
     expect(chain.length).toBeLessThanOrEqual(Math.ceil((packBytes.length - 12) / rangeBytes));
     for (const call of chain.slice(0, -1)) expect(call.length).toBeGreaterThanOrEqual(rangeBytes);

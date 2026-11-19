@@ -135,7 +135,6 @@ describe("refnameConflicts", () => {
   });
 
   it("between two creations, refuses the upper one and lets the lower one go ahead", () => {
-    // Given in reverse order: the request's order does not matter.
     expect(conflicts([create("refs/heads/q/y"), create("refs/heads/q")])).toEqual([
       { ref: "refs/heads/q", conflictsWith: "refs/heads/q/y", inRequest: true },
     ]);

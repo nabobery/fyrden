@@ -44,7 +44,6 @@ export class ScrollTarget {
     this.#deps = deps;
   }
 
-  /** The line still being brought into view, if any. */
   pending(): number | null {
     return this.#line;
   }
@@ -57,7 +56,6 @@ export class ScrollTarget {
     this.#next();
   }
 
-  /** The viewer scrolled or selected, a new target came, or the view went: nothing more moves. */
   cancel(): void {
     if (this.#frame !== null) this.#deps.cancelFrame(this.#frame);
     this.#frame = null;

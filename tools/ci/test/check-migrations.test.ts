@@ -28,7 +28,6 @@ describe("check-migrations", () => {
     await git([...author, "commit", "-q", "-m", message]);
   }
 
-  /** A main branch with released migrations, and a pull request branch off it. */
   async function repo() {
     sandbox = await createGitSandbox();
     await sandbox.git(["init", "-q", "-b", "main"]);

@@ -1,6 +1,5 @@
 import { GitObjectError, type Oid, oidToHex, parseTag } from "@fyrden/git-core";
 
-/** What peeling needs from the object reader. */
 export interface PeelReader {
   readHeader(oid: Oid): Promise<{ readonly type: string } | undefined>;
   readObject(oid: Oid): Promise<{ readonly type: string; readonly bytes: Uint8Array } | undefined>;

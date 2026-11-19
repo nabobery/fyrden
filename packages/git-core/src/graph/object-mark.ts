@@ -36,14 +36,12 @@ import { OidTable } from "./oid-table.js";
  *   in the marked packs reached only through other packs are found too.
  */
 
-/** What an object on the stack is known to be ("any" for a root). */
 type Kind = ObjectType | "any";
 const KIND_CODES: readonly Kind[] = ["any", ...OBJECT_TYPES];
 const ENTRY_BYTES = OID_BYTES + 1;
 
 export type MarkOutside = "error" | "stop" | "descend";
 
-/** A pack whose objects are marked: its id and its `.idx`. */
 export interface MarkSource {
   readonly packId: PackId;
   readonly idx: { readonly count: number; find(oid: Uint8Array, at?: number): number };
@@ -73,7 +71,6 @@ export class ObjectMark {
   readonly #walkedOutside: OidTable;
   #stack: Uint8Array;
   #depth = 0;
-  /** Distinct objects marked so far. */
   marked: number;
 
   private constructor(
@@ -95,7 +92,6 @@ export class ObjectMark {
     this.marked = state.marked;
   }
 
-  /** A mark with nothing marked and no roots yet. */
   static start(options: ObjectMarkOptions): ObjectMark {
     checkSources(options.sources);
     return new ObjectMark(options, {
@@ -161,7 +157,6 @@ export class ObjectMark {
     return new ObjectMark(options, { bits, walkedOutside, stack, depth, marked });
   }
 
-  /** Objects waiting to be walked. */
   get pending(): number {
     return this.#depth;
   }
@@ -183,7 +178,6 @@ export class ObjectMark {
     return this.#depth === 0;
   }
 
-  /** The mark's state, for `resume`. */
   checkpoint(): Uint8Array {
     const sources = this.#options.sources;
     const bitBytes = this.bits.map((b) => b.toBytes());

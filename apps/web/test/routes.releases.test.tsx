@@ -43,7 +43,6 @@ function release(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** What a change sent, as JSON. */
 const bodyOfChange = (calls: Request[]) => {
   const sent = calls.find((c) => c.method !== "GET" && !c.url.includes("/auth/"));
   return sent?.clone().json() as Promise<Record<string, unknown>>;

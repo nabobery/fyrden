@@ -103,7 +103,6 @@ export class RepoLocks {
       if (remaining <= 0) return undefined;
       const holderExpiry = this.#expiresAt(name);
       if (holderExpiry === undefined || holderExpiry <= now) {
-        // Free (released or expired): take it now rather than sleep.
         const handle = this.tryAcquire(name, holder, options.ttlMs);
         if (handle) return handle;
         continue;

@@ -64,7 +64,6 @@ describe("upload-pack.shallow-boundary", () => {
     expect(response.shallowInfo).toEqual([`shallow ${tip}`]);
     expect(plan.pack?.kind).toBe("regenerated");
     const client = await checkShallowPacks([[response.pack as Uint8Array, tip]], tip);
-    // tip commit, root tree, a/, b/, three blobs
     expect(plan.pack?.objectCount).toBe(7);
     const { stdout } = await source.git(["rev-list", "--objects", "--no-walk", tip]);
     const closure = stdout

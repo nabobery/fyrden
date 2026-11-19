@@ -543,7 +543,6 @@ export class PullSource {
   }
 }
 
-/** The one job telling bases of revisions. */
 export const PULL_NOTICES_JOB = "pull-notices";
 
 /** The one job asking the network's members to follow again after a restore. */

@@ -168,7 +168,6 @@ export async function expiredReceipts(at: number, n: number): Promise<void> {
   );
 }
 
-/** The ledger's incarnation now. */
 export async function incarnation(): Promise<string> {
   const row = await env.DIRECTORY.prepare(
     "SELECT incarnation FROM live_budget_state WHERE id = 1",
@@ -230,7 +229,6 @@ export function dayRow(day: number) {
     .first<Record<string, number | string>>();
 }
 
-/** The ledger singleton's debt and sequence. */
 export function ledger() {
   return env.DIRECTORY.prepare("SELECT * FROM live_budget_state WHERE id = 1").first<
     Record<string, number | string | null>

@@ -146,7 +146,6 @@ describe("one file", () => {
     );
     expect(deleted.body.content).toBeNull();
     expect(await readFile("docs/hello.md")).toBe(404);
-    // The empty directory went with it.
     expect((await json(call("GET", `${base}/contents/docs`))).status).toBe(404);
   });
 
@@ -210,7 +209,6 @@ describe("one file", () => {
         )
       ).body,
     ).toMatchObject({ code: "branch_not_found" });
-    // A path through a file.
     expect(
       (await json(call("PUT", `${base}/contents/a.txt/b`, { message: "x", content: b64("b") })))
         .status,
@@ -291,7 +289,6 @@ describe("several files", () => {
   it("commits on the head it was built on: a branch moved meanwhile answers head_moved", async () => {
     await json(call("PUT", `${base}/contents/a.txt`, { message: "first", content: b64("a") }));
     expect(await raceWrites()).toMatchObject({ ok: false, status: 409, code: "head_moved" });
-    // The competing write landed; the late one did not.
     expect(await readFile("y.txt")).toMatchObject({ text: "y.txt" });
     expect(await readFile("x.txt")).toBe(404);
   });
@@ -566,7 +563,6 @@ describe("access", () => {
     );
     await waitOnExecutionContext(ctx);
     expect(await json(res)).toMatchObject({ status: 403, body: { code: "token_revoked" } });
-    // The branch did not move.
     const after = await env.REPO.getByName(repo.id).browseBranch("main");
     expect(after.ok && after.value.commit.sha).toBe(before.body.commit.sha);
   });

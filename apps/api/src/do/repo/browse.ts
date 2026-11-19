@@ -245,7 +245,6 @@ export class RepoBrowse {
     return { ok: true, value: { tags, next } };
   }
 
-  /** The commit `ref` names (see `#resolve`). */
   commit(ref: string | undefined): Promise<Browsed<CommitView>> {
     return guarded(async () => {
       const resolved = await this.#resolve(ref);
@@ -374,7 +373,6 @@ export class RepoBrowse {
     });
   }
 
-  /** The commit `ref` names (see `#resolve`) and its tree. */
   async resolveTree(ref: string | undefined): Promise<Browsed<{ commit: Oid; tree: Oid }>> {
     const resolved = await this.#resolve(ref);
     if (!resolved.ok) return resolved;
@@ -383,7 +381,6 @@ export class RepoBrowse {
     return { ok: true, value: { commit: resolved.value, tree: row.tree } };
   }
 
-  /** Whether `commit` is the default branch's tip right now. */
   isDefaultTip(commit: Oid): boolean {
     const snapshot = this.deps.git.refStore.readRefsSync();
     const head = snapshot.head ? snapshot.refs.get(snapshot.head) : undefined;
@@ -543,7 +540,6 @@ export class RepoBrowse {
 
 const INVALID_CURSOR = fail(422, "invalid_cursor", "The cursor is not one this API returned.");
 
-/** The answer would carry more commit text than one response may. */
 class ResponseTooLargeError extends Error {
   override name = "ResponseTooLargeError";
 }

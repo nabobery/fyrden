@@ -189,7 +189,6 @@ async function objectsIn(git: RepoGitStorage, key: string, offset = 0, length?: 
   return { oids, idx: idx.bytes };
 }
 
-/** The objects a stored `.idx` lists. */
 async function idxObjects(git: RepoGitStorage, packId: string): Promise<string[]> {
   const object = await git.bucket.get(packObjectKey(git.networkId(), packId, "idx"));
   if (!object) throw new Error(`the index of ${packId} is missing`);
@@ -285,7 +284,6 @@ describe("push: pack-count cap", () => {
     expect(after.main).toBe(oidToHex(parent as Oid));
     expect(after.live).toBeLessThanOrEqual(cap);
     expect(after.idxReads).toBeLessThanOrEqual(cap);
-    // The clone holds every object ever pushed, each once.
     expect(after.cloned).toEqual([...pushed].sort());
   }, 900_000);
 

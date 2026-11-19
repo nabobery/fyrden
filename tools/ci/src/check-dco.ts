@@ -43,7 +43,6 @@ export function readCommits(range: string, cwd = process.cwd()): Commit[] {
     });
 }
 
-/** True when the message has `Signed-off-by: <name> <email>` with the author's email. */
 export function isSignedOffByAuthor(commit: Commit): boolean {
   const email = commit.authorEmail.toLowerCase();
   return commit.message

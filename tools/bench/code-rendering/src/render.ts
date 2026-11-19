@@ -17,7 +17,6 @@
 export type Mode = "highlights" | "file";
 export type Render = (name: string, lang: string, text: string) => Promise<string>;
 
-/** The web app's diff renderer themes and line limit (file-diff.client.tsx). */
 const FILE_THEMES = { dark: "github-dark-high-contrast", light: "github-light-high-contrast" };
 const MAX_TOKENIZED_LINE = 1000;
 
@@ -53,7 +52,6 @@ export async function loadRenderer(mode: Mode): Promise<Render> {
   };
 }
 
-/** Spans carrying a colour: a check that the output was highlighted, not plain. */
 export function styledSpans(html: string): number {
   let count = 0;
   let at = html.indexOf("<span");

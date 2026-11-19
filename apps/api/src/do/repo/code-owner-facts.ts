@@ -20,7 +20,6 @@ import type { PullRecord } from "./pulls.js";
 export const CODE_OWNER_MERGE_POLICY = {
   /** Users' and agents' handles one merge resolves at most (one directory query a hundred). */
   maxHandles: 1_000,
-  /** Teams one merge resolves at most. */
   maxTeams: 128,
   /** Team memberships one merge reads at most (teams × reviewers who may satisfy them). */
   maxPairs: 4_096,

@@ -56,7 +56,6 @@ describe("push.resumable-indexing", () => {
     let cursor = PushIndexer.start({ uploadId: "u1", packOffset, plan }).checkpoint();
     const phases: string[] = [];
     for (;;) {
-      // Every step runs in a fresh job, as after an eviction.
       const job = PushIndexer.resume(cursor);
       if (job.phase === "done") break;
       phases.push(job.phase);
@@ -81,7 +80,6 @@ describe("push.resumable-indexing", () => {
     const { request: req, packOffset } = await readPushBody(body, { pushOptionsAdvertised: true });
     const plan = planPush(req, await server.refStore.readRefs());
     const env = await server.indexEnv();
-    // The first received-pack writer dies after one write: an eviction mid-parse.
     let writers = 0;
     const crashing = {
       ...env,
@@ -101,11 +99,10 @@ describe("push.resumable-indexing", () => {
     const job = PushIndexer.start({ uploadId: "u2", packOffset, plan });
     const before = job.checkpoint();
     await expect(job.step(crashing, body)).rejects.toThrow("evicted");
-    // A new instance continues from the last checkpoint.
     const resumed = PushIndexer.resume(before);
     const outcome = await resumed.run(crashing, body);
     expect(outcome.ok).toBe(true);
-    expect(writers).toBe(3); // crashed received, received again, completion
+    expect(writers).toBe(3);
     const result = await finalizePush(plan, outcome, "u2", server.finalizeEnv());
     expect(result.uploadCommitted).toBe(true);
     expect(hex((await server.refStore.readRefs()).refs.get("refs/heads/main"))).toBe(tips.tip);

@@ -4,10 +4,8 @@ import type { Oid } from "../../src/object/oid.js";
 import { oidFromHex, oidToHex } from "../../src/object/oid.js";
 import { encodeTree, FILE_MODES, type TreeEntry } from "../../src/object/tree.js";
 
-/** One commit of a made-up history: its parents by name, and the file at the path, or none. */
 export interface FakeCommit {
   readonly parents?: readonly string[];
-  /** The file's text, or absent. */
   readonly file?: string;
   readonly kind?: "file" | "symlink";
   /** Parents past the limit, none materialized. */
@@ -36,7 +34,6 @@ export class FakeSource implements BlameSource {
   readonly #commits = new Map<string, FakeCommit & { generation: number; tree: Oid }>();
   readonly #blobs = new Map<string, string>();
   readonly #trees = new Map<string, FakeCommit>();
-  /** Every tree object's body, by hex id: roots and directories. */
   readonly #treeBodies = new Map<string, Uint8Array>();
   /** Tree bodies read through `tree`, in order, by size. */
   readonly treeReads: number[] = [];
@@ -129,7 +126,6 @@ export class FakeSource implements BlameSource {
     return write("");
   }
 
-  /** The tree of the commit by this name. */
   treeOf(name: string): Oid {
     return this.#commits.get(oidToHex(oidOfName(name)))?.tree as Oid;
   }

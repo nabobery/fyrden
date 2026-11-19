@@ -103,7 +103,6 @@ export interface WalkedObject extends StoredObject {
   readonly oid: Oid;
 }
 
-/** An entry's place in the view: which pack, and where in it. */
 interface Location {
   readonly pack: number;
   readonly offset: number;

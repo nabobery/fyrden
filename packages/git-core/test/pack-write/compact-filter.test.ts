@@ -92,7 +92,6 @@ describe("compaction with keep sets", () => {
     repo = await sandbox();
     await buildRepo(repo, { seed: 21, commits: 30, files: 5, binaryBytes: 1500 });
     ({ byOid: objects } = await objectsOf(await packObjects(repo, { ofsDelta: true })));
-    // Every object the three packs below hold (the tag on main is in none of them).
     all = await objectsReachable(repo, "main");
     p1 = await packObjects(repo, { ofsDelta: true, revs: ["main~20"] });
     p2 = await packObjects(repo, { ofsDelta: true, thin: true, revs: ["main~10", "^main~20"] });
@@ -163,7 +162,6 @@ describe("compaction with keep sets", () => {
     const pb = await packObjects(repo, { ofsDelta: true, revs: ["main"] });
     const stored = await storePacks([pa, pb], objects);
     const old = await objectsReachable(repo, "main~5");
-    // The first source keeps nothing; the second keeps everything.
     const sources = stored.sources.map((s, i) => {
       const bits = new BitSet(s.idx.count);
       if (i === 1) for (let p = 0; p < s.idx.count; p++) bits.set(p);

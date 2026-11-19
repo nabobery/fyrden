@@ -111,7 +111,6 @@ describe("SSH commit signatures", () => {
       publicKey: parseSshPublicKey(readFileSync(`${keyFile}.pub`, "utf8")).blob,
       fingerprint: shown,
     });
-    // The signed payload is the commit without its signature header.
     const split = splitSignedCommit(body);
     if (split.kind !== "signed") throw new Error(split.kind);
     expect(new TextDecoder().decode(split.payload)).not.toContain("gpgsig");
@@ -161,19 +160,14 @@ describe("SSH commit signatures", () => {
     const signed = new TextDecoder().decode(await sandbox.gitBytes(["cat-file", "commit", "HEAD"]));
     const at = signed.indexOf("gpgsig ");
     const variants = [
-      // Another algorithm's signature header, before and after ours.
       `${signed.slice(0, at)}gpgsig-sha256 other\n more\n${signed.slice(at)}`,
       signed.replace("\n\nx\n", "\ngpgsig-sha256 other\n more\n\nx\n"),
       // A second signature header: git appends it to the signature.
       signed.replace("\n\nx\n", "\ngpgsig extra\n\nx\n"),
-      // Leading junk before the armor.
       signed.replace("gpgsig -----BEGIN", "gpgsig junk\n -----BEGIN"),
-      // Other `gpgsig*` headers, with and without a value.
       signed.replace("\n\nx\n", "\ngpgsig-extra opaque\n more\n\nx\n"),
       signed.replace("\n\nx\n", "\ngpgsig-sha256\n\nx\n"),
-      // The footer without a line break before it.
       signed.replace(/\n -----END SSH SIGNATURE-----/, "-----END SSH SIGNATURE-----"),
-      // Base64 without its padding.
       signed.replace(/=+\n -----END/, "\n -----END"),
       // Whitespace inside the base64, which OpenSSH skips.
       signed.replace(/\n (\S{10})(\S)/, "\n $1 \t$2"),

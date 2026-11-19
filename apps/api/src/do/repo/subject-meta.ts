@@ -146,7 +146,6 @@ export interface MetaPlan {
   readonly kind: SubjectKind;
   /** Writes it; `emit` false for a subject being created (its opening event carries it all). */
   apply(emit: boolean): void;
-  /** Whether it changes anything. */
   readonly changes: boolean;
 }
 
@@ -217,8 +216,6 @@ export class RepoSubjectMeta {
     },
   ) {}
 
-  // --- Labels -------------------------------------------------------------
-
   /** A page of the repository's labels by name (ignoring case), after `after`; with `prefix`, only names starting with it. */
   labels(after: string | null, limit: number, prefix: string | null = null): LabelRecord[] {
     // Names starting with `prefix` (as names compare) are exactly those from it up to it followed
@@ -243,7 +240,6 @@ export class RepoSubjectMeta {
     return row && labelRecord(row);
   }
 
-  /** Creates a label (write). */
   createLabel(
     spec: LabelSpec,
     caller: PullCaller,
@@ -287,7 +283,6 @@ export class RepoSubjectMeta {
     });
   }
 
-  /** Renames or recolors a label, or changes its description (write). */
   updateLabel(
     name: string,
     patch: {
@@ -369,8 +364,6 @@ export class RepoSubjectMeta {
     });
     return { ok: true };
   }
-
-  // --- Milestones ---------------------------------------------------------
 
   /**
    * A page of milestones by due date (none last), then number: each state
@@ -503,7 +496,6 @@ export class RepoSubjectMeta {
     return { ok: true, milestone };
   }
 
-  /** Changes a milestone (write): its title, description, due date or state. */
   updateMilestone(
     number: number,
     patch: {
@@ -587,8 +579,6 @@ export class RepoSubjectMeta {
     });
     return { ok: true };
   }
-
-  // --- Issues and pull requests -------------------------------------------
 
   /** What `number` is sorted by (labels, assignees, milestone), as it stands; nothing for none. */
   of(number: number, withReactions = true): SubjectMeta {
@@ -984,9 +974,7 @@ function byName(a: LabelRecord, b: LabelRecord): number {
   return x < y ? -1 : x > y ? 1 : 0;
 }
 
-/** What an event names of a label. */
 const labelRef = (label: LabelRecord) => ({ id: label.id, name: label.name, color: label.color });
-/** What an event names of a milestone. */
 const milestoneRef = (milestone: MilestoneRecord) => ({
   number: milestone.number,
   title: milestone.title,

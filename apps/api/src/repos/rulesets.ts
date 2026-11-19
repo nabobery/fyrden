@@ -126,7 +126,6 @@ async function change(
   }
 }
 
-/** The `repos.rulesets.list` operation. */
 export async function listRulesetsOperation(
   ctx: OpContext,
   input: Input<typeof listRulesets>,
@@ -137,7 +136,6 @@ export async function listRulesetsOperation(
   return { rulesets: rulesets.map(output) };
 }
 
-/** The `repos.rulesets.rule_suites.list` operation. */
 export async function listRuleSuitesOperation(
   ctx: OpContext,
   input: Input<typeof listRuleSuites>,
@@ -174,7 +172,6 @@ export async function listRuleSuitesOperation(
   };
 }
 
-/** The `repos.rulesets.get` operation. */
 export async function getRulesetOperation(
   ctx: OpContext,
   input: Input<typeof getRuleset>,
@@ -187,7 +184,6 @@ export async function getRulesetOperation(
   return output(record);
 }
 
-/** The `repos.rulesets.create` operation. */
 export async function createRulesetOperation(
   ctx: OpContext,
   input: Input<typeof createRuleset>,
@@ -198,7 +194,6 @@ export async function createRulesetOperation(
   );
 }
 
-/** The `repos.rulesets.update` operation. */
 export async function updateRulesetOperation(
   ctx: OpContext,
   input: Input<typeof updateRuleset>,
@@ -213,7 +208,6 @@ export async function updateRulesetOperation(
   return output(record as RulesetRecord);
 }
 
-/** The `repos.rulesets.delete` operation. */
 export async function deleteRulesetOperation(
   ctx: OpContext,
   input: Input<typeof deleteRuleset>,

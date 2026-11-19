@@ -13,7 +13,6 @@ import {
 const given = (size: number, totalLines: number) =>
   rendererFile({ path: "a.ts", contents: "const a = 1;", cacheKey: "k", size, totalLines });
 
-/** How many times the renderer asks a working pool to highlight `file`. */
 function highlightRequests(file: ReturnType<typeof rendererFile>): number {
   const highlightFileAST = vi.fn();
   const pool = {

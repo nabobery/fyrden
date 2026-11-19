@@ -292,7 +292,6 @@ describe("compaction with objects stored twice never makes a delta cycle", () =>
     { kind: "ofs", base: 0, delta: d(Z, X) },
     { kind: "ofs", base: 1, delta: d(X, Y) },
   ]);
-  // The same through a REF_DELTA: PZR's Y names X by id.
   const PZR = pack([
     { kind: "blob", data: Z },
     { kind: "ofs", base: 0, delta: d(Z, X) },

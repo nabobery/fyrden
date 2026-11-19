@@ -105,7 +105,6 @@ export default function FileDiffView({
       } | null,
     ) => {
       if (!range) return;
-      // A range stays on one side: across sides, the last line alone.
       const side = range.endSide ?? range.side;
       const across =
         range.side !== undefined && range.endSide !== undefined && range.side !== range.endSide;

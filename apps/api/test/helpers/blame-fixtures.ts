@@ -38,7 +38,6 @@ declare module "vitest" {
   }
 }
 
-/** The paths the fixtures record blames for. */
 export const BLAME_PATHS = [
   "f.txt",
   "link",

@@ -31,12 +31,9 @@ export const SEARCH_LIMITS = {
   depth: 1_000,
 } as const;
 
-/** What the page's URL asks for, as its controls show it. */
 export interface SearchForm {
-  /** The query as written. */
   readonly q: string;
   readonly type: SearchType;
-  /** The scope chosen beside the query, if any. */
   readonly scope: ScopeKind | "";
   readonly scopeValue: string;
   /** Results a page and the page, as written (checked by `searchRequestOf`). */
@@ -68,7 +65,6 @@ export function searchFormOf(url: URL): SearchForm {
   };
 }
 
-/** A search ready to send: its endpoint's type, the query with its scope, and its page. */
 export interface SearchRequest {
   readonly type: SearchType;
   readonly q: string;
@@ -78,7 +74,6 @@ export interface SearchRequest {
   readonly order: SearchOrder;
 }
 
-/** What the page does with its form: nothing yet, ask for a scope, say what is wrong, or search. */
 export type SearchPlan =
   | { readonly state: "idle" }
   | { readonly state: "scope" }
@@ -199,7 +194,6 @@ export interface SearchPages {
   readonly page: number;
 }
 
-/** Pages either side of the current one that are numbered. */
 const NEARBY = 2;
 
 /**
@@ -231,7 +225,6 @@ export function searchPages(
   };
 }
 
-/** Characters of a body an excerpt shows at most. */
 export const EXCERPT_LENGTH = 200;
 
 /** The start of `body` as plain text on one line: white space collapsed, cut at `max` characters. */
@@ -256,7 +249,6 @@ export function excerpt(body: string | null, max = EXCERPT_LENGTH): string {
   return out;
 }
 
-/** An issue or pull request found, as the page lists it. */
 export interface IssueHit {
   readonly key: string;
   readonly href: string;
@@ -275,7 +267,6 @@ export interface IssueHit {
   readonly excerpt: string;
 }
 
-/** A repository found, as the page lists it. */
 export interface RepositoryHit {
   readonly key: string;
   readonly href: string;
@@ -307,7 +298,6 @@ export function issueHit(item: IssueResults["items"][number]): IssueHit {
   };
 }
 
-/** A repository search's item. */
 export function repositoryHit(item: RepositoryResults["items"][number]): RepositoryHit {
   return {
     key: item.id,

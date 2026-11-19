@@ -123,7 +123,6 @@ describe("clone over the ext transport", () => {
     const fetches = (await readRequestLog(dir)).filter((entry) => entry.command === "fetch");
     const last = fetches.at(-1);
     expect(last?.plan).toBe("regenerated");
-    // Exactly the objects git itself would send: no history the client has.
     expect(last?.objectCount).toBe(lacking.trim().split("\n").length);
   });
 

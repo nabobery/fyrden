@@ -71,7 +71,6 @@ describe("push.pending-commits-quarantine", () => {
         uploadId: "push-c",
         finalize: {
           reauthorize: async () => {
-            // Indexed: the row is pending for this upload only.
             seenDuringCommit = [
               (await server.graph.read([oidFromHex(c)], { uploadId: "push-c" }))[0]?.state,
               (await server.graph.read([oidFromHex(c)], "verified"))[0],
@@ -86,7 +85,6 @@ describe("push.pending-commits-quarantine", () => {
     expect(a.lines).toEqual(["unpack ok", "ng refs/heads/main token revoked"]);
     expect(await server.graph.read([oidFromHex(c)], { uploadId: "push-c" })).toEqual([undefined]);
 
-    // A later push of a child, without the refused commit, is refused.
     const d = await writeObject(sandbox, "commit", commitBody(tree, [c], "child"));
     const b = await server.push(
       request([{ old: base, new: d, ref: "refs/heads/main" }], await packOf(sandbox, [d])),

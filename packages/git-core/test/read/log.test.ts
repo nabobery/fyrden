@@ -254,7 +254,6 @@ describe("logPage", () => {
       limit: 10,
       maxFrontier: 2,
     });
-    // A caller showing none of the page's commits hands back both: still two.
     expect(page.commits.length + page.frontier.length).toBe(2);
     expect(page.commits).toEqual([built.oids[3]]);
   });
@@ -265,7 +264,6 @@ describe("logPage", () => {
     await expect(
       logPage(graph, "verified", { from: [built.oids[3] as Oid], limit: 1, maxFrontier: 2 }),
     ).rejects.toThrow(WalkLimitError);
-    // A cursor handed back wider than any page could have made it.
     await expect(
       logPage(graph, "verified", { from: built.oids.slice(0, 3), limit: 1, maxFrontier: 2 }),
     ).rejects.toThrow(WalkLimitError);

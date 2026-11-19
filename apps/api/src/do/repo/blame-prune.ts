@@ -19,7 +19,6 @@ const HOUR = 60 * 60 * 1000;
 export const PRUNE_GRACE_MS = HOUR;
 const EXPIRED_PER_SLICE = 64;
 const LISTED_PER_SLICE = 100;
-/** How soon to look again while a slice is writing. */
 const WRITING_RECHECK_MS = 60_000;
 const FIRST_BACKOFF_MS = 60_000;
 const MAX_BACKOFF_MS = HOUR;
@@ -140,7 +139,6 @@ export function blamePruneHandler(deps: {
           runAfterMs: 0,
         };
 
-      // A whole pass is done.
       const waiting = runs.nextExpiry(active);
       // A checkpoint a run names goes with its run, so only runs, removals, young objects
       // and writers keep the job going.

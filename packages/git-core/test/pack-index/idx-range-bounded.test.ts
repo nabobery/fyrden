@@ -18,7 +18,6 @@ import {
 const OID = 20;
 const BUCKET = 0x42;
 
-/** A fanout with `count` ids in the one bucket `BUCKET`. */
 function fanoutOf(count: number): Uint32Array {
   const fanout = new Uint32Array(IDX_FANOUT_ENTRIES);
   fanout.fill(count, BUCKET);
@@ -82,7 +81,6 @@ describe("RangedPackIdx with a limit on one read", () => {
   });
 
   it("finds the first copy when its copies cross a page's start and fill whole pages", async () => {
-    // Pages of 3: every position of a run of each length below.
     for (const run of [2, 3, 4, 7, 10]) {
       for (let start = 0; start <= 24 - run; start++) {
         const keys = Array.from({ length: 24 }, (_, i) =>

@@ -96,7 +96,6 @@ describe("reactions", () => {
       status: 201,
       body: { content: "+1", user: { id: reader.principalId } },
     });
-    // The same again answers the one it has.
     expect((await react(reader, `issues/${issue}`, "+1")).body.id).toBe(first.body.id);
     await react(owner, `issues/${issue}`, "+1");
     await react(owner, `issues/${issue}`, "heart");

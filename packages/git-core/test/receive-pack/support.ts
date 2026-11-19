@@ -80,8 +80,6 @@ export async function oracleRepo(sandbox: GitSandbox): Promise<string> {
   return dir;
 }
 
-/* In-process pushes against the in-memory port fakes. */
-
 export interface MemoryServer {
   readonly packStore: PackStore;
   readonly refStore: RefStore;
@@ -222,7 +220,6 @@ export async function gitReceivePack(
 ): Promise<string[]> {
   const out = await sandbox.gitBytes(["receive-pack", bareDir], { input: body });
   const reader = new PktLineReader(out);
-  // Skip the advertisement.
   for (let pkt = reader.read(); pkt && pkt.kind !== "flush"; pkt = reader.read()) {}
   return reportLines(reader.rest());
 }

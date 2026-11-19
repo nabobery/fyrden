@@ -3,7 +3,6 @@ import { assertSameOrigin } from "../lib/api.server.js";
 import { cloudflareContext } from "../lib/cloudflare.server.js";
 import type { Route } from "./+types/sign-out";
 
-/** `POST /sign-out`: ends the session and clears its cookie. */
 export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
   const origin = new URL(request.url).origin;

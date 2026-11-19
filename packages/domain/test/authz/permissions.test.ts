@@ -25,7 +25,6 @@ describe("the permission table", () => {
     expect(isPermission(AUTHENTICATED)).toBe(false);
     expect(isPermission("contents:read")).toBe(true);
     expect(isPermission("repo")).toBe(false);
-    // Not inherited object keys.
     expect(isPermission("toString")).toBe(false);
     expect(isPermission("__proto__")).toBe(false);
   });
@@ -39,7 +38,6 @@ describe("the permission table", () => {
         expect(other.resource, `${name} implies ${implied}`).toBe(def.resource);
         if (def.resource === "repo" && other.resource === "repo")
           expect(atLeast(def.minRole, other.minRole), `${name} implies ${implied}`).toBe(true);
-        // Whoever may hold the permission may hold what it implies.
         expect(def.principals.every((p: PrincipalType) => other.principals.includes(p))).toBe(true);
       }
     }

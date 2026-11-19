@@ -119,13 +119,11 @@ describe("pack retire job", () => {
     });
     await inProbe(stub, async (probe) => {
       const git = clocked(probe, clock);
-      // Leased by a clone that keeps it for two hours.
       const lease = git.leases.grant("read", [packId], "clone", 2 * HOUR);
       if (!lease.ok) throw new Error("not leased");
       clock.now += 90 * 60_000;
       await retire(git);
       expect(state(git, packId)).toBe("indexing");
-      // The clone ends: its release is the last touch.
       clock.now += 20 * 60_000;
       git.leases.release(lease.leaseId);
       clock.now += 50 * 60_000;
@@ -224,7 +222,6 @@ describe("pack retire job", () => {
         attempts: 0,
         claim: 0,
       };
-      // Not told: looked at again later.
       expect(await handler.runSlice(job)).toEqual({
         done: false,
         cursor: null,
@@ -232,7 +229,6 @@ describe("pack retire job", () => {
       });
       expect(recorded).toEqual([{ packId: borrowed, rowLeft: false }]);
       expect(state(git, borrowed)).toBeUndefined();
-      // Told in part: the rest soon.
       expect(await handler.runSlice(job)).toEqual({
         done: false,
         cursor: null,

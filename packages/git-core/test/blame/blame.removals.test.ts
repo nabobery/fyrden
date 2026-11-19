@@ -159,7 +159,6 @@ describe("an identical copy removed, anywhere", () => {
 
   it("found past removals that aren't identical, in the same tree", async () => {
     expect((await check({ h: "B", k: "A" }, { f: "A" }, "A")).result).toBe("identical");
-    // A type change that isn't identical, then the identical copy.
     expect((await check({ g: "t", k: "A" }, { g: "120000 t", f: "A" }, "A")).result).toBe(
       "identical",
     );
@@ -211,7 +210,6 @@ describe("the budget", () => {
     expect(fits.trees.calls).toHaveLength(MAX_RENAME_CHECK_TREES);
     const over = await check(wide(128, "a"), wide(128, "b"));
     expect(over.result).toBe("unknown");
-    // Only the root pair was read: the children were queued until one didn't fit.
     expect(over.trees.calls).toHaveLength(2);
   });
 

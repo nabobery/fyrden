@@ -85,7 +85,6 @@ const references = (repo: Repo, number: number, who = owner, query = "") =>
 const named = (listed: Listed) =>
   listed.references.map((r) => [r.source.repository, r.source.number, r.source.comment_id]);
 
-/** The outbox's events of `type` in `repo`. */
 const events = async (repo: Repo, type: string) =>
   (
     await inRepo(env.REPO.getByName(repo.id), (r: RepoDO) =>

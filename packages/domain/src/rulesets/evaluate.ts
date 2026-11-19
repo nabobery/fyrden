@@ -19,13 +19,11 @@ import {
   type StatusCheckFacts,
 } from "./status-checks.js";
 
-/** Who is pushing: their principal type and their role on the repository. */
 export interface RuleActor {
   readonly principalType: PrincipalType;
   readonly role: RepoRole | null;
 }
 
-/** One ref update, as far as it is known at the point of the check. */
 export interface RefChange {
   readonly ref: string;
   readonly kind: "create" | "update" | "delete";
@@ -47,7 +45,6 @@ export interface RefChange {
   readonly statusChecks?: StatusCheckFacts;
 }
 
-/** What a merge's rules read about the pull request being merged. */
 export interface MergeContext {
   readonly number: number;
   readonly method: MergeMethod;
@@ -68,7 +65,6 @@ export interface RuleViolation {
   readonly rulesetId: number;
   readonly ruleset: string;
   readonly rule: Rule["type"];
-  /** For the client, naming the ruleset. */
   readonly message: string;
   /** False for an `evaluate` ruleset: reported, not enforced. */
   readonly blocking: boolean;

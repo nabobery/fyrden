@@ -96,7 +96,6 @@ export async function removals(
   return found;
 }
 
-/** Walks a removed tree: every entry is a removal. */
 function walkRemoved(
   body: Uint8Array,
   removed: (entry: TreeEntry) => Removals | undefined,
@@ -126,7 +125,6 @@ function comparePair(
     entries++;
     const order = b.done ? -1 : compareTreeEntries(a.value, b.value);
     if (order > 0) {
-      // Only in the newer tree: an addition, nothing removed.
       b = news.next();
       continue;
     }

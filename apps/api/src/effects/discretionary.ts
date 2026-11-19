@@ -21,7 +21,6 @@ export const DISCRETIONARY_RESOURCES = [
 ] as const;
 export type DiscretionaryResource = (typeof DISCRETIONARY_RESOURCES)[number];
 
-/** An amount of each resource. */
 export type ResourceVector = Readonly<Record<DiscretionaryResource, number>>;
 
 /**
@@ -91,7 +90,6 @@ export function discretionaryAllowance(env: object): Allowance | null {
 /** How long an admitted effect may be delivered after it is journaled: its window. Proposed. */
 export const DISCRETIONARY_WINDOW_MS = 60 * 60 * 1000;
 
-/** What a discretionary effect is admitted with. */
 export interface Admission {
   /** Its whole life's cost at its worst, in each resource. */
   readonly price: ResourceVector;

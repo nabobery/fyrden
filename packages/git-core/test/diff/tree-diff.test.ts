@@ -14,7 +14,6 @@ const entry = (name: string, mode: number, id: number): TreeEntry => ({
   oid: oid(id),
 });
 
-/** Trees by id, for a reader that counts its reads. */
 function store(trees: Record<number, TreeEntry[]>) {
   const reads: number[] = [];
   return {

@@ -107,7 +107,6 @@ describe("alignment against the oracle's vectors", () => {
       }
     });
     expect(lines).toBeGreaterThan(50_000);
-    // A close call is the only refusal here, and costs little.
     expect(refusedLines / lines).toBeLessThan(0.05);
   });
 });

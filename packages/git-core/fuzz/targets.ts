@@ -70,7 +70,6 @@ function packCorpus(): Promise<Uint8Array[]> {
 }
 
 let objects: Promise<Map<string, Uint8Array[]>> | undefined;
-/** Every object in the valid corpus packs, by type, plus hand-made edge cases. */
 function objectCorpus(): Promise<Map<string, Uint8Array[]>> {
   objects ??= (async () => {
     const byType = new Map<string, Uint8Array[]>([
@@ -101,9 +100,7 @@ function objectCorpus(): Promise<Map<string, Uint8Array[]>> {
         const { pack: parsed, objects: found } = await parseBytes(pack);
         parsed.release();
         for (const { type, data } of found.values()) byType.get(type)?.push(data);
-      } catch {
-        // Bad packs give no objects.
-      }
+      } catch {}
     }
     return byType;
   })();

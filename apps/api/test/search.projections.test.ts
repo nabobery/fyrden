@@ -28,7 +28,6 @@ import {
 } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 const SHA = "a".repeat(40);
 
@@ -148,7 +147,6 @@ async function doc(repoId: string, number: number) {
     .first<Record<string, unknown>>();
 }
 
-/** Where an entity's row is: its table and key. */
 function rowOf(position: SearchPosition, snapshot: EntitySnapshot) {
   const key = Number(
     snapshot.id.slice(Math.max(snapshot.id.lastIndexOf("#"), snapshot.id.lastIndexOf("/")) + 1),

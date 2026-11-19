@@ -8,6 +8,7 @@
   "main": "worker.js",
   "compatibility_date": "2026-10-01",
   "services": [{ "binding": "API", "service": "fyrden-api" }],
+  "d1_databases": [{ "binding": "DIRECTORY", "database_name": "fyrden-directory" }],
   // fyrden-api's CI bucket: under wrangler dev both Workers see one local bucket of this name (measured).
   "r2_buckets": [{ "binding": "CI", "bucket_name": "fyrden-ci" }],
   "durable_objects": {

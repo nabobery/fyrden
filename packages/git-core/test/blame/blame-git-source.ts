@@ -21,7 +21,6 @@ class CatFile {
   #wake: (() => void) | undefined;
   #closed = false;
   #tail: Promise<unknown> = Promise.resolve();
-  /** Bodies read so far. */
   bodies = 0;
 
   constructor(dir: string, env: NodeJS.ProcessEnv, headersOnly = false) {

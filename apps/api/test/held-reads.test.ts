@@ -29,7 +29,6 @@ function flatTree(count: number): Uint8Array {
   );
 }
 
-/** A reader of one tree object. */
 const readerOf = (bytes: Uint8Array) => ({
   readHeader: async () => ({ type: "tree" as const, size: bytes.length }),
   readObject: async () => ({ type: "tree" as const, bytes }),

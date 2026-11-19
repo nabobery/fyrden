@@ -134,7 +134,6 @@ export function counted(stub: DurableObjectStub<RepoDO>) {
   });
 }
 
-/** Upload sessions' states, by id. */
 export function sessions(stub: DurableObjectStub<RepoDO>) {
   return inRepo(stub, (repo) =>
     repo.git.context.storage.sql

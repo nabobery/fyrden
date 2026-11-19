@@ -108,7 +108,6 @@ export function applySuggestions(
   file: Uint8Array,
   edits: readonly SuggestionEdit[],
 ): Uint8Array | SuggestionRefusal {
-  // Line starts and ends, each end past its break.
   const lines: { start: number; end: number }[] = [];
   for (let start = 0; start < file.length; ) {
     const lf = file.indexOf(LF, start);

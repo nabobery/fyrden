@@ -146,7 +146,6 @@ describe("reader: work port", () => {
     const inflates = events.flatMap((e) =>
       "charge" in e && e.charge === "inflate" ? [e.units] : [],
     );
-    // The whole object in one attempt: what's given is at least the stream, and at most the first read.
     expect(inflates).toHaveLength(1);
     const stream = deflateSync(data).length;
     expect(inflates[0]).toBeGreaterThanOrEqual(stream + 1000);
@@ -172,7 +171,6 @@ describe("reader: work port", () => {
     );
     const ran = events.filter((e) => "ran" in e && e.ran === "inflate");
     expect(inflates.length).toBe(ran.length);
-    // 1 MiB, then 2, then the 3 MiB it takes: attempts that stopped are paid for.
     expect(inflates.length).toBeGreaterThanOrEqual(3);
     reader.release();
     // Under coverage in CI this took 29 s, against the 30 s default.
@@ -204,7 +202,6 @@ describe("reader: work port", () => {
     expect(blocks.length).toBeGreaterThan(0);
     for (const units of blocks) expect(units % BLOCK).toBe(0);
 
-    // The cache has it now: a second read inflates nothing, and still pays.
     events.length = 0;
     await reader.readObject(tipOid);
     expect(charged(events)).toEqual(["lookup:1024", `returned-copy:${tip.length}`]);
@@ -226,7 +223,6 @@ describe("reader: work port", () => {
     const blocks = events.flatMap((e) =>
       "charge" in e && e.charge === "block-run" ? [e.units] : [],
     );
-    // A short header read, then the whole body from its start, at least 200 KiB: four blocks.
     expect(blocks).toEqual([BLOCK, 4 * BLOCK]);
     reader.release();
   });
@@ -250,7 +246,6 @@ describe("reader: work port", () => {
     const blocks = events.flatMap((e) =>
       "charge" in e && e.charge === "block-run" ? [e.units] : [],
     );
-    // The second entry lies wholly in the second block: one block a read.
     expect(blocks.length).toBeGreaterThan(0);
     expect(blocks.every((units) => units === BLOCK)).toBe(true);
     reader.release();

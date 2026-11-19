@@ -12,7 +12,6 @@ import { t5702 } from "./t5702-protocol-v2.ts";
 import { t5704 } from "./t5704-protocol-violations.ts";
 import type { CaseFile } from "./types.ts";
 
-/** The catalogue, one entry per git test script. */
 export const CATALOGUE: readonly CaseFile[] = [
   t5500,
   t5516,

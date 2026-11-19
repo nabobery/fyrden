@@ -60,7 +60,6 @@ export class SliceCalls {
     private readonly metrics: Metrics,
   ) {}
 
-  /** Whether `n` more calls fit in the slice. */
   fits(n: number): boolean {
     return this.#made + n <= this.limit;
   }
@@ -72,7 +71,6 @@ export class SliceCalls {
   }
 }
 
-/** Pause points for tests (the network's ordering under concurrency). */
 export interface NetworkHooks {
   /** Before the collection snapshots member `repoId` in its mark phase. */
   readonly onMarkMember?: (epoch: number, repoId: string) => Promise<void> | void;
@@ -86,7 +84,6 @@ export interface NetworkHooks {
   readonly whileDeleting?: (packId: string) => Promise<void> | void;
 }
 
-/** What the network's jobs work with. */
 export interface NetworkRuntime {
   readonly env: Env;
   readonly context: GitStorageContext;

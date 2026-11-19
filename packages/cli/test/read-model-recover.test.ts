@@ -9,7 +9,6 @@ import { parseReadModelArgs, recoverReadModel } from "../src/commands/read-model
 
 const URL_ = "https://api.fyrden.test";
 
-/** A deployment's recovery API, as far as the command sees it. */
 function deployment(start?: { id: string; stage: string }) {
   let recovery: { recovery_id: string; generation: number; stage: string } | null = start
     ? { recovery_id: start.id, generation: 7, stage: start.stage }
@@ -123,7 +122,6 @@ describe("read-model recover", () => {
       /wrangler d1 migrations apply fyrden-org --remote --config apps\/api\/wrangler\.deploy\.jsonc/,
     );
     expect(lines.join("\n")).toMatch(/--restore-bookmark <bookmark> --undo-bookmark/);
-    // A rate-limited step waited for and asked again.
     expect(slept).toHaveLength(1);
     expect(api.calls.some((c) => c.includes("(restore)"))).toBe(false);
   });

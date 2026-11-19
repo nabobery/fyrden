@@ -78,7 +78,6 @@ export function reflogPruneHandler(
       );
       deleted.toArray();
       countRowsWritten(context, "reflog.prune", deleted.rowsWritten);
-      // Done once a slice finds nothing left to delete.
       return deleted.rowsWritten === 0 ? { done: true } : { done: false, cursor };
     },
   };

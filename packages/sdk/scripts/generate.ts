@@ -22,7 +22,6 @@ const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 /** Text safe inside a doc comment. */
 const comment = (text: string) => text.replace(/\*\//g, "* /");
 
-/** A TypeScript type for a JSON Schema (the subset zod writes). */
 function tsType(schema: Schema, indent: string): string {
   if (schema.const !== undefined) return JSON.stringify(schema.const);
   if (Array.isArray(schema.enum)) return schema.enum.map((v) => JSON.stringify(v)).join(" | ");

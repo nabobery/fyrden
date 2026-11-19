@@ -22,7 +22,6 @@ describe("expected D1 schemas", () => {
       expect(objects.length).toBeGreaterThan(10);
       // The format apps/api/test/d1-schema.test.ts writes.
       expect(objects.map((o) => `-- ${o.type} ${o.name}\n${o.sql};\n`).join("\n")).toBe(text);
-      // As a checkout with CRLF line endings has it.
       const crlf = parseExpectedSchema(text.replaceAll("\n", "\r\n"));
       expect(crlf.map((o) => [o.name, normaliseSql(o.sql)])).toEqual(
         objects.map((o) => [o.name, normaliseSql(o.sql)]),
@@ -110,10 +109,8 @@ describe("normaliseSql", () => {
   });
 
   it("does not split or join a token at a space", () => {
-    // A blob literal against a column aliased by a string.
     differ("CREATE VIEW v AS SELECT x'41' FROM t", "CREATE VIEW v AS SELECT x '41' FROM t");
     differ("CREATE VIEW v AS SELECT X'41' FROM t", "CREATE VIEW v AS SELECT X '41' FROM t");
-    // 10 against 1 aliased as _0, and the like.
     differ("CREATE VIEW v AS SELECT 1_0 FROM t", "CREATE VIEW v AS SELECT 1 _0 FROM t");
     differ("CREATE VIEW v AS SELECT 0x1_F FROM t", "CREATE VIEW v AS SELECT 0x1 _F FROM t");
     differ("CREATE VIEW v AS SELECT 1e5 FROM t", "CREATE VIEW v AS SELECT 1 e5 FROM t");
@@ -234,7 +231,6 @@ describe("diffSchema", () => {
       "INSERT INTO effects (effect_id, sink, target, payload, next_attempt_at, created_at) VALUES ('e1', 's', 't', '{}', 1, 1)",
     );
     db.exec(definition.replace(/^CREATE TABLE effects /, "CREATE TABLE effects_new "));
-    // Copy the columns both versions have.
     const columns = db
       .prepare("SELECT group_concat(name, ', ') AS list FROM pragma_table_info('effects_new')")
       .get()?.list;
@@ -355,7 +351,6 @@ describe("diffSchema", () => {
       "DROP TABLE principals_copy",
     ];
     expect(() => migrate(db, losing)).toThrow(/FOREIGN KEY constraint failed/);
-    // Both rolled back: the drifted table and its rows are as they were.
     expect(diffSchema(directory, schemaOf(db))).toEqual(["principals (table) differs"]);
     expect(db.prepare("SELECT count(*) AS n FROM principals").get()).toEqual({ n: 2 });
   });

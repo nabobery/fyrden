@@ -26,7 +26,6 @@ export interface WebStack {
   /** `http://localhost:<port>`: a secure context, so the browser keeps the `__Host-` cookie. */
   readonly origin: string;
   readonly port: number;
-  /** The first user's personal access token. */
   readonly token: string;
   readonly handle: string;
   readonly page: Page;
@@ -36,7 +35,6 @@ export interface WebStack {
   readonly emailKey: string;
   /** What the browser refused under the pages' Content Security Policy, on any page. */
   readonly refused: string[];
-  /** Everything both Workers wrote. */
   output(): string;
   /**
    * The lines the Workers wrote after `from` (an offset into `output()`),
@@ -80,7 +78,6 @@ function wrangler(args: string[], cwd: string): Promise<{ code: number | null; o
 export interface WebStackOptions {
   /** Sign the user in through the sign-in page before returning (default true). */
   readonly signIn?: boolean;
-  /** Browser permissions for the page's context (the clipboard, say). */
   readonly permissions?: string[];
   /** fyrden-api's variables (`FYRDEN_LIVE`, say), set in a copy of its configuration. */
   readonly vars?: Readonly<Record<string, string>>;
@@ -116,7 +113,6 @@ export async function startWebStack(
   ) =>
     new Promise<void>((done, fail) => {
       const lines = () => (options.accessLog ? output.slice(from).split("\n") : workerLines(from));
-      // A deadline for failing, not a wait: the line itself resolves the promise.
       // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: the line itself resolves the promise.
       const deadline = setTimeout(() => {
         waiters.delete(check);
@@ -154,7 +150,6 @@ export async function startWebStack(
     );
     if (config !== apiConfig) {
       const original = await readFile(apiConfig, "utf8");
-      // The configuration opens with its object and has no variables of its own to merge.
       expect(original.startsWith("{") && !original.includes('"vars"')).toBe(true);
       await writeFile(config, `{\n  "vars": ${JSON.stringify(options.vars)},${original.slice(1)}`);
     }
@@ -252,18 +247,15 @@ export async function accessible(page: Page, name: string): Promise<void> {
   await page.emulateMedia({ colorScheme: "light" });
 }
 
-/** The colour schemes the site header offers, by its buttons' values. */
 const PICKS = ["system", "light", "dark"] as const;
 type Pick = (typeof PICKS)[number];
 const OS_SCHEMES = ["light", "dark"] as const;
 type OsScheme = (typeof OS_SCHEMES)[number];
 
-/** The site header's colour scheme control, by what it posts. */
 const CONTROL = 'form[action="/appearance"]';
 const pickButton = (page: Page, pick: Pick) =>
   page.locator(`${CONTROL} button[name="mode"][value="${pick}"]`);
 
-/** `#rrggbb` as `getComputedStyle` reports it. */
 function rgbOf(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
@@ -318,7 +310,6 @@ async function pickScheme(page: Page, pick: Pick): Promise<void> {
   if (answer !== null)
     expect(answer.status(), `the server answered ${pick}'s post`).toBeLessThan(400);
   const cookie = (await page.context().cookies()).find((c) => c.name === "fyrden_theme");
-  // System keeps no cookie.
   expect(cookie?.value ?? "system", `the server kept ${pick}`).toBe(pick);
 }
 

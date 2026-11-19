@@ -36,7 +36,6 @@ beforeAll(async () => {
 });
 afterAll(() => sandbox.dispose());
 
-/** Looks objects up in the sandbox repo, counting calls. */
 function repoLookup(
   skip: ReadonlySet<string> = new Set(),
 ): ExternalBaseLookup & { asked: string[] } {
@@ -68,10 +67,8 @@ describe("receive-pack: thin pack resolution (parser half)", () => {
     const lookup = repoLookup();
     const { pack, objects } = await parseBytes(thin, { externalBase: lookup, chunkSize: 1000 });
     expect(pack.thinBases.map(oidToHex).sort()).toEqual(appended.map((r) => r.oid).sort());
-    // Entries keep git's oids, types, sizes, offsets and CRC32s.
     expect(rowsOf(pack, true)).toEqual(original);
     expect([...objects.keys()].sort()).toEqual(original.map((r) => r.oid).sort());
-    // Each base is asked for once.
     expect(new Set(lookup.asked).size).toBe(lookup.asked.length);
     pack.release();
   });
@@ -121,7 +118,6 @@ describe("receive-pack: thin pack resolution (parser half)", () => {
     const { pack } = await parseBytes(bytes, { externalBase: lookup, limits: tight });
     expect(pack.thinBases.map(oidToHex)).toEqual([gitOid("blob", x)]);
     expect(rowsOf(pack).map((r) => r.oid)).toEqual([d1, d2, d3].map((d) => gitOid("blob", d)));
-    // Dropped while d1's subtree was resolved, x was asked for again for d3.
     expect(calls).toBe(2);
     calls = 0;
     const roomy = await parseBytes(bytes, { externalBase: lookup });
@@ -192,7 +188,6 @@ describe("receive-pack: compaction of a thin pack unit", () => {
       return found && { type: found.type as ObjectType, data: found.data };
     };
 
-    // Each stored with its `.idx`, as indexing stores them.
     const repo = createMemoryRepoStore();
     const sources = [];
     const unitOids = new Set<string>();

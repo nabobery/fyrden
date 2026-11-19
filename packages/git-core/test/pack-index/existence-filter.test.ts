@@ -84,7 +84,6 @@ describe("OidBloomFilter", () => {
     const restored = OidBloomFilter.fromChunks(chunks);
     expect(Buffer.compare(restored.serialize(), bytes)).toBe(0);
     expect(restored.count).toBe(1000);
-    // Small filters are one row.
     expect(OidBloomFilter.create(1000).toChunks().length).toBe(1);
     expect(() => filter.toChunks(0)).toThrow(RangeError);
   });
@@ -128,7 +127,6 @@ describe("OidBloomFilter", () => {
     const noHashes = bytes.slice();
     noHashes[1] = 0;
     expect(code(noHashes)).toBe("bad-header");
-    // A lost row is caught by the length check.
     const chunks = OidBloomFilter.create(2_000_000).toChunks();
     expect(() => OidBloomFilter.fromChunks(chunks.slice(0, 1))).toThrow(ExistenceFilterError);
     expect(() => OidBloomFilter.fromChunks([])).toThrow(ExistenceFilterError);

@@ -81,7 +81,6 @@ export const WEBHOOKS_QUEUE = "fyrden-webhooks";
 const attemptCap = (maxAttempts: string, maxTotal: string) =>
   `min(coalesce(attempt_limit, ${maxAttempts}), ${maxTotal})`;
 
-/** `attemptCap` for a row already read. */
 const capOf = (attemptLimit: number | null, policy: AttemptPolicy) =>
   Math.min(attemptLimit ?? policy.maxAttempts, policy.maxTotalAttempts);
 
@@ -103,7 +102,6 @@ export type Claimed = {
   owned: number;
 };
 
-/** How an attempt ended. */
 type Outcome =
   | { readonly kind: "done"; readonly status: number }
   /** Tried again later (`afterMs`), unless the attempts are spent. */
@@ -131,7 +129,6 @@ export async function consumeWebhooks(
   env: Env,
   options: { readonly metrics?: Metrics } = {},
 ): Promise<void> {
-  // One writer for the invocation's writes.
   await withReadModel(env, DEFAULT_ORG_SHARD, async (db) => {
     const deps: DeliveryDeps = {
       env,
@@ -511,7 +508,6 @@ async function record(
   }
 }
 
-/** What one cron run of reconciliation did, step by step. */
 export interface Reconciled {
   /** Late deliveries whose message was sent again. */
   readonly sent: number;
@@ -779,7 +775,6 @@ async function disableFor(deps: DeliveryDeps, deliveryId: string): Promise<void>
     .run();
 }
 
-/** Whether a hook URL is https (as its parser reads it). */
 function isHttps(url: string): boolean {
   try {
     return new URL(url).protocol === "https:";

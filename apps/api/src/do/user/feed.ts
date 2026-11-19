@@ -69,7 +69,6 @@ export const FEED_POLICY = {
   streamFences: 100,
   /** Ids an activity item keeps at most (the greatest). */
   maxMembers: 100,
-  /** Items a sync returns at most. */
   syncItems: 500,
   /**
    * Rows one step of retention or retirement deletes at most: items (with
@@ -129,7 +128,6 @@ export interface StreamKey {
 export const subjectOfThread = (threadKey: string) =>
   parseThreadKey(threadKey)?.subject ?? threadKey.slice(0, Math.max(0, threadKey.indexOf("/")));
 
-/** A stream's position: `[repository, subject, sequence number]`. */
 export type StreamPosition = readonly [repoId: string, subject: string, seq: number];
 
 /**
@@ -178,7 +176,6 @@ export type StreamPage =
        */
       readonly watermarks: readonly StreamPosition[];
       readonly items: readonly FeedItem[];
-      /** More items follow the page's last one. */
       readonly more: boolean;
     };
 
@@ -399,7 +396,6 @@ function byIdDescending(a: string, b: string): number {
   return a < b ? 1 : a > b ? -1 : 0;
 }
 
-/** A member of an activity item: its id, and when and by whom it was made. */
 interface Member {
   readonly id: string;
   readonly at: number;
@@ -484,7 +480,6 @@ function stateOf(row: Row): State {
   return state;
 }
 
-/** Rows deleted, as their streams count them. */
 type Deleted = Pick<Row, "repo_id" | "subject" | "feed_seq">;
 
 const sameState = (a: State, b: State) => JSON.stringify(a) === JSON.stringify(b);

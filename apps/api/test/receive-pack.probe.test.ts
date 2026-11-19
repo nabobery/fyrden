@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import { postPush, pushTarget } from "./helpers/push.js";
 import { logs } from "./setup/log-capture.js";
 
-/** A `REPO` binding that records every stub created through it. */
 function countingRepo(): { REPO: Env["REPO"]; stubs: string[] } {
   const stubs: string[] = [];
   const REPO = new Proxy(env.REPO, {

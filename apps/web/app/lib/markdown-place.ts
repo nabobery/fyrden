@@ -8,7 +8,6 @@ export interface MarkdownPlace {
   readonly dir: string;
 }
 
-/** The directory of a file's path ("" at the top). */
 export function dirOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash < 0 ? "" : path.slice(0, slash);

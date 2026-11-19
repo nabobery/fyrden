@@ -28,7 +28,6 @@ async function recorded(input: IdxWriteInput) {
     { fanout: written.fanout, byteLength: written.bytes.length },
   );
   const layout = idxLayout(input.count, written.largeOffsetCount);
-  /** Whether a read lies wholly inside the oid table. */
   const inOidTable = ([offset, length]: [number, number]) =>
     offset >= layout.oidsAt && offset + length <= layout.crc32sAt;
   return { written, idx: PackIdx.parse(written.bytes), ranged, reads, inOidTable };
@@ -94,7 +93,6 @@ describe("RangedPackIdx.hasMany", () => {
         async (input, probes, span) => {
           const { idx, ranged, reads, inOidTable } = await recorded(input);
           const present = Array.from({ length: input.count }, (_, i) => oidAt(input, i));
-          // Present ids, absent ones, and repeats of both.
           const oids = [...present, ...probes, ...present.slice(0, 5), ...probes.slice(0, 5)];
           const want = oids.map((oid) => idx.find(oid) >= 0);
           expect(await ranged.hasMany(oids, span)).toEqual(want);
@@ -133,7 +131,6 @@ describe("RangedPackIdx.hasMany", () => {
 
     const presence = await recorded(input);
     expect(await presence.ranged.hasMany(oids)).toEqual(new Array<boolean>(200).fill(true));
-    // Buckets 56 to 255: one span of their 200 ids.
     expect(presence.reads).toEqual([[IDX_OIDS_START + 56 * OID_BYTES, 200 * OID_BYTES]]);
     expect(presence.reads.every(presence.inOidTable)).toBe(true);
 

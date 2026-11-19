@@ -48,7 +48,6 @@ import type { WriteContext } from "./write-context.js";
 const SUGGESTIONS_CHANGED =
   "the pull request or its comments changed while the suggestions were applied";
 
-/** Suggestions to apply to a pull request's head, as the Worker asks for it. */
 export interface ApplySuggestionsInput {
   readonly number: number;
   readonly commentIds: readonly number[];
@@ -66,7 +65,6 @@ export interface BaseMergeInput {
   readonly message?: string;
 }
 
-/** Conflicts resolved, as the Worker asks for it. */
 export interface ResolveConflictsInput extends BaseMergeInput {
   /** The base tip and head the conflicts were read at (`ConflictsView.snapshot`). */
   readonly snapshot: string;
@@ -85,7 +83,6 @@ const BASE_MOVED_WHILE_MERGING = "the base branch moved while the merge was bein
 /** Why a merge into the head was refused at its commit: the pull request closed or was retargeted. */
 const PULL_CHANGED_WHILE_MERGING = "the pull request changed while the merge was being made";
 
-/** An open pull request's head and base tip, as a write of its head branch starts from them. */
 type HeadAt = { readonly pull: PullRecord; readonly head: Oid; readonly baseTip: Oid };
 
 export interface HeadWriteDeps extends WriteContext {

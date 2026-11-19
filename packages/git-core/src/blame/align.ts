@@ -498,7 +498,6 @@ function slideSide(
   let nextSpoiled = 0;
   let joined: Set<number> | undefined;
   let at = 0;
-  // Unchanged lines above `at`.
   let unchanged = 0;
   while (at < count) {
     if (!changed[at]) {
@@ -585,7 +584,6 @@ function slideSide(
       refused.push(here);
       joined = undefined;
     }
-    // Back up from the bottom to the pick.
     while (e > pick) {
       changed[--s] = 1;
       changed[--e] = 0;
@@ -646,7 +644,6 @@ function scanCandidates(
   return { pick: best, close };
 }
 
-/** Unchanged lines above each group of a side. */
 function groupsAbove(side: Side): Set<number> {
   const out = new Set<number>();
   let unchanged = 0;

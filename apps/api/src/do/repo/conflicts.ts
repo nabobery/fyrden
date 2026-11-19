@@ -59,7 +59,6 @@ export interface ConflictFile {
   readonly editable: boolean;
   /** The merged file, each conflict between git's markers (the head's side first). */
   readonly content: string | null;
-  /** Conflicts in the file. */
   readonly conflicts: number;
 }
 

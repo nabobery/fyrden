@@ -15,7 +15,6 @@ export const REACTIONS: readonly { content: ReactionContent; emoji: string; name
   { content: "eyes", emoji: "👀", name: "Eyes" },
 ];
 
-/** A subject's or comment's reactions as the API rolls them up (its contract's shape). */
 export type Rollup = Output<typeof getIssue>["reactions"];
 
 /**

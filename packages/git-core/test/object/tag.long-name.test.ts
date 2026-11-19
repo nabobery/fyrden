@@ -54,7 +54,7 @@ describe("parseTag with a long name", () => {
 
   it("quotes a short excerpt of an invalid long name in the push warning", () => {
     const name = new Uint8Array(2 * MiB).fill(0x61);
-    name[name.length - 1] = 0x2e; // a trailing '.' is not allowed
+    name[name.length - 1] = 0x2e;
     const fsck = new PushFsck();
     const large = spyLargeIterations(64 * 1024);
     fsck.check(oidFromHex("5".repeat(40)), "tag", tagWithName(name));

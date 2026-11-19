@@ -32,13 +32,6 @@ export function forgetLineEntry(): void {
 }
 
 /**
- * The URL's lines, read once the page is hydrated and on each `hashchange`: the server has
- * marked what the query says, and only this can see a fragment. What it selects is kept
- * apart from where it opens (`?from=2001&line=1999-2002` opens at 2001). A selection made on
- * the page writes the canonical link in place. A history entry moves the view the first time it
- * is seen; coming back to it selects its lines and leaves the place the router restored.
- */
-/**
  * An id for a history entry: it only tells entries apart, so any unique-enough value will do.
  * `crypto.randomUUID` exists only in secure contexts, and a self-hosted page may be plain HTTP.
  */
@@ -46,6 +39,13 @@ function newEntryId(): string {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
+/**
+ * The URL's lines, read once the page is hydrated and on each `hashchange`: the server has
+ * marked what the query says, and only this can see a fragment. What it selects is kept
+ * apart from where it opens (`?from=2001&line=1999-2002` opens at 2001). A selection made on
+ * the page writes the canonical link in place. A history entry moves the view the first time it
+ * is seen; coming back to it selects its lines and leaves the place the router restored.
+ */
 export function useLineLinks({
   total,
   plain,

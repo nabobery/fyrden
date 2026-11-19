@@ -32,7 +32,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server?.stop();
-  // Neither the Worker nor wrangler's access log may print a token.
   expect(server?.tokenLines() ?? []).toEqual([]);
   if (scratch) await rm(scratch, { recursive: true, force: true });
 });

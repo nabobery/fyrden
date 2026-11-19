@@ -82,7 +82,6 @@ export interface ImportState {
   readonly staged?: number;
 }
 
-/** One import's progress. */
 export interface ImportWork {
   /** Its staged commit rows' key: one per revision. */
   readonly importId: string;
@@ -304,7 +303,6 @@ export async function importInForeground<T>(
   }
 }
 
-/** The rows staged for an import. */
 function stagedCount(git: RepoGitStorage, importId: string): number {
   return git.context.storage.sql
     .exec<{ n: number }>("SELECT count(*) AS n FROM import_commits WHERE import_id = ?", importId)
@@ -400,7 +398,6 @@ export function waitOn(git: RepoGitStorage, error: unknown): void {
   if (error instanceof ViewCompacting) scheduleViewCompaction(git);
 }
 
-/** Registry states of a pack not finished yet: waited out. */
 const SETTLING = new Set(["pending", "indexing", "indexed"]);
 /**
  * Registry states of a pack the base no longer reads but still holds:
@@ -971,7 +968,6 @@ export class PullImports {
   }
 }
 
-/** The one job running imports. */
 export const REVISION_IMPORT_JOB = "revision-import";
 
 /** The staged rows' key of an import: one per revision of a pull request. */

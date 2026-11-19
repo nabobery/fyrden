@@ -37,7 +37,6 @@ const CASES: Record<
   "repos.collaborators.set": { input: { permission: "pull" }, expected: { status: 200 } },
   "repos.collaborators.remove": { input: {}, expected: { status: 200 } },
   "repos.collaborators.list": { input: {}, expected: { status: 200 } },
-  // Deletes a repository of its own, not the one the other cases use.
   "repos.delete": { input: {}, expected: { status: 200 }, ownRepo: true },
   // The repository is empty: listings answer, a named ref is not found.
   "repos.branches.list": { input: {}, expected: { status: 200 } },

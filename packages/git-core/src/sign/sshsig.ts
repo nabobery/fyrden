@@ -199,7 +199,6 @@ export async function verifySshSignature(
     : { ok: false, reason: "invalid", fingerprint };
 }
 
-/** A Web Crypto key, as this package's libraries type it. */
 type PrivateKey = Awaited<ReturnType<typeof crypto.subtle.importKey>>;
 
 /** PKCS #8 wrapping of a 32-byte Ed25519 seed (RFC 8410). */

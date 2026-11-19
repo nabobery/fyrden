@@ -43,7 +43,6 @@ export const REBASE_POLICY = {
   maxStagedObjects: 2_000,
   /** The largest object kept (SQLite rows hold at most 2 MB). */
   maxObjectBytes: 1024 * 1024,
-  /** Commits one slice replays. */
   commitsPerSlice: 25,
   /**
    * R2 reads one slice makes; a commit that needs more alone is
@@ -83,7 +82,6 @@ const TOO_MANY_OBJECTS = fail(
   "The rebase makes more new objects than one may make here; rebase locally and push.",
 );
 
-/** A new object a step keeps. */
 export type Kept =
   | NewObject
   | { readonly type: "commit"; readonly oid: Oid; readonly bytes: Uint8Array };
@@ -91,7 +89,6 @@ export type Kept =
 /** One commit replayed: its new tip and tree and the objects it made, or dropped as empty. */
 export type Replayed = { tip: Oid; tree: Oid; objects: readonly Kept[] } | "dropped";
 
-/** Where a saga's replay stands: the next commit, the tip and its tree, and what it keeps. */
 export interface ReplayCursor {
   next: number;
   tip: Oid;
@@ -105,7 +102,6 @@ type ReplayEnd =
   | { readonly kind: "later"; readonly runAfterMs: number }
   | { readonly kind: "refused"; readonly failure: BrowseFailure };
 
-/** A commit that stops the rebase (it conflicts, or is too large): the saga fails with it. */
 class ReplayRefusal extends Error {
   override name = "ReplayRefusal";
   constructor(readonly failure: BrowseFailure) {

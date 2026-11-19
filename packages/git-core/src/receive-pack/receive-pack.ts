@@ -9,7 +9,6 @@ import { type IndexOutcome, type PushIndexEnv, PushIndexer } from "./indexer.js"
 import { encodeFatalError, encodePushResponse } from "./report.js";
 
 export interface ReceivePackOptions {
-  /** The stored request body. */
   readonly body: StoredBody;
   /** The refs the client was shown (the advertisement's snapshot), for the early checks. */
   readonly refs: RefSnapshot;

@@ -39,7 +39,6 @@ import type {
  * when they show the issue's items).
  */
 
-/** What a subject's number names: an issue or a pull request. */
 export type SubjectKind = FeedSubjectKind;
 
 /** An issue as the repository keeps it (its labels, assignees and milestone are read apart). */
@@ -91,9 +90,7 @@ export interface SubjectFilter {
   readonly labelNames?: readonly string[] | undefined;
   /** Label ids: all of them. */
   readonly labelIds?: readonly number[] | undefined;
-  /** An assignee's principal id, or none or any. */
   readonly assignee?: { readonly principal: string } | "none" | "any" | undefined;
-  /** A milestone's number, or none or any. */
   readonly milestone?: number | "none" | "any" | undefined;
   /** The principal that opened it (the user an agent opened it for, or the agent). */
   readonly creator?: string | undefined;
@@ -208,7 +205,6 @@ export class RepoIssues {
     }));
   }
 
-  /** A live issue as its events carry it. */
   #exportIssue(number: number): ExportedEntity {
     const issue = this.get(number);
     if (!issue) throw new Error(`no issue ${number}`);

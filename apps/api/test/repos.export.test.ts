@@ -37,7 +37,6 @@ let path: string;
 
 const stub = () => env.REPO.getByName(repo.id);
 
-/** One export page, as the repository's object answers it. */
 const exportPage = async (request: ExportPageRequest) =>
   (await stub().exportPage(request)) as ExportPage | "stale" | null;
 

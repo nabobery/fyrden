@@ -129,7 +129,6 @@ export async function recoveryStep(
         .bind(recoveryId, charge.rows, charge.reads)
         .run();
   };
-  /** The stage moved on from this one. */
   const advanced = (to: RecoveryStage, extra = "", ...params: (string | number)[]) =>
     env.DIRECTORY.prepare(
       `UPDATE read_model_recoveries SET stage = ?3, cursor = NULL, updated_at = ?4 ${extra}

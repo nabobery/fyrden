@@ -2,7 +2,6 @@ import { HANDLE_SHAPE, LOCK_REASONS, type LockReason, MAX_HANDLE_LENGTH } from "
 import { labelApiPath } from "./labels.js";
 import type { MetaIntent } from "./subject-meta.js";
 
-/** What a sidebar or picker form asks the API: where, how, and with what. */
 export type MetaCall = {
   readonly method: "POST" | "PATCH" | "PUT" | "DELETE";
   readonly path: string;

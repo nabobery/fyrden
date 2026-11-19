@@ -51,7 +51,7 @@ export function parseIPv6(text: string): number[] | undefined {
     const ip4 = parseIPv4(text.slice(lastColon + 1));
     if (ip4 === undefined) return undefined;
     tail = [ip4 >>> 16, ip4 & 0xffff];
-    body = `${text.slice(0, lastColon + 1)}0`; // placeholder group, dropped below
+    body = `${text.slice(0, lastColon + 1)}0`;
   }
   const halves = body.split("::");
   if (halves.length > 2) return undefined;

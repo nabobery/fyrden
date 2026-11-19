@@ -279,7 +279,6 @@ export function failAtomically(plan: PushPlan): void {
   for (const cmd of plan.commands) cmd.error ??= "atomic push failure";
 }
 
-/** Commands still going ahead. */
 export function liveCommands(plan: PushPlan): PushCommandState[] {
   return plan.commands.filter((c) => c.error === undefined);
 }

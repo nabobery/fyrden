@@ -216,7 +216,6 @@ export function failure(entry: RepoEntry, code: string, number?: number): Operat
   }
 }
 
-/** The `pulls.list` operation. */
 export async function listPullsOperation(
   ctx: OpContext,
   input: Input<typeof listPulls>,
@@ -238,7 +237,6 @@ export async function listPullsOperation(
   };
 }
 
-/** The `pulls.get` operation. */
 export async function getPullOperation(
   ctx: OpContext,
   input: Input<typeof getPull>,
@@ -292,7 +290,6 @@ export async function getPullRequiredChecksOperation(
   };
 }
 
-/** The `pulls.create` operation. */
 export async function createPullOperation(
   ctx: OpContext,
   input: Input<typeof createPull>,
@@ -369,7 +366,6 @@ async function headRepoOf(
   return { repo: found.id === base.id ? null : found, branch };
 }
 
-/** The `pulls.update` operation. */
 export async function updatePullOperation(
   ctx: OpContext,
   input: Input<typeof updatePull>,
@@ -401,7 +397,6 @@ export async function updatePullOperation(
   return pullOutput(result.record, readable(ctx, entry));
 }
 
-/** The `pulls.merge` operation. */
 export async function mergePullOperation(
   ctx: OpContext,
   input: Input<typeof mergePull>,
@@ -457,7 +452,6 @@ const encodeListingCursor = (listing: string | null, next: number | null) =>
     ? null
     : encodeBytesCursor(new TextEncoder().encode(`${listing} ${next}`));
 
-/** The `pulls.files.list` operation. */
 export async function listPullFilesOperation(
   ctx: OpContext,
   input: Input<typeof listPullFiles>,
@@ -492,7 +486,6 @@ export async function listPullFilesOperation(
   };
 }
 
-/** The `pulls.commits.list` operation. */
 export async function listPullCommitsOperation(
   ctx: OpContext,
   input: Input<typeof listPullCommits>,
@@ -512,7 +505,6 @@ export async function listPullCommitsOperation(
   };
 }
 
-/** The `pulls.conflicts.get` operation. */
 export async function getPullConflictsOperation(
   ctx: OpContext,
   input: Input<typeof getPullConflicts>,
@@ -536,7 +528,6 @@ export async function getPullConflictsOperation(
   };
 }
 
-/** The `pulls.conflicts.resolve` operation. */
 export async function resolvePullConflictsOperation(
   ctx: OpContext,
   input: Input<typeof resolvePullConflicts>,
@@ -560,7 +551,6 @@ export async function resolvePullConflictsOperation(
   return { sha: result.value.sha, markers: [...result.value.markers] };
 }
 
-/** The `pulls.branch.update` operation. */
 export async function updatePullBranchOperation(
   ctx: OpContext,
   input: Input<typeof updatePullBranch>,

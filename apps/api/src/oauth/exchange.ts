@@ -25,7 +25,6 @@ export const EXCHANGE_POLICY = {
   accessTokenTtlMs: 60 * 60 * 1000,
 };
 
-/** Hooks into the exchange. For tests. */
 export const exchangeHooks: { beforeMint?: () => Promise<void> } = {};
 
 /** An enabled principal's lifecycle generation; undefined when it is disabled. */

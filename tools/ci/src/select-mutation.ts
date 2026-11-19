@@ -19,7 +19,6 @@ const NAME = /^[a-z][a-z-]*$/;
 
 export interface MutationScope {
   readonly scope: string;
-  /** The directory under packages/git-core/src the scope mutates. */
   readonly dir: string;
 }
 
@@ -36,14 +35,12 @@ export function parseScopes(table: unknown): MutationScope[] {
   return scopes;
 }
 
-/** The scopes of this checkout's packages/git-core/stryker/scopes.mjs. */
 export async function loadScopes(): Promise<MutationScope[]> {
   const path = resolve(import.meta.dirname, "../../../packages/git-core/stryker/scopes.mjs");
   const module: { SCOPES?: unknown } = await import(path);
   return parseScopes(module.SCOPES);
 }
 
-/** Whether a changed path is part of the mutation setup, which every scope's result depends on. */
 export function mutationSetupChanged(changedPaths: readonly string[]): boolean {
   return changedPaths.some((path) =>
     SETUP.some((setup) => (setup.endsWith("/") ? path.startsWith(setup) : path === setup)),

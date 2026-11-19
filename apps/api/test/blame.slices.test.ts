@@ -36,7 +36,6 @@ async function pushed(): Promise<{ stub: DurableObjectStub<RepoDO>; repoId: stri
   return { stub: target.repo.stub, repoId: target.repo.id };
 }
 
-/** A promise and the function that settles it. */
 function gate(): { promise: Promise<void>; open: () => void } {
   let open!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -75,7 +74,6 @@ const ok = (result: BlameResult): BlameAnswer => {
   return result.value;
 };
 
-/** Every line's commit or reason, following continuations to the end. */
 async function wholeFile(
   blame: Blamer,
   path: string,

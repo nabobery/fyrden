@@ -213,7 +213,6 @@ describe("audience pages", () => {
     ]);
     for (const name of [names[0], names[150], names[249]] as string[])
       expect(await items(name)).toEqual(["issue/1"]);
-    // The envelope delivered again: no effect more, nothing told twice.
     await deliver(event);
     expect(await effects()).toHaveLength(3);
     expect(await items(names[249] as string)).toEqual(["issue/1"]);
@@ -303,7 +302,6 @@ describe("audience pages", () => {
       explicitAcks: ["m0", "m1", "m2", "m3"],
       retryMessages: [],
     });
-    // Nothing went back to the queue: all four in the one invocation.
     expect(back.sent).toEqual([]);
     expect((await effects()).map((e) => e.state)).toEqual(["done", "done", "done", "done"]);
     for (const name of [names[0], names[200], names[349]] as string[])

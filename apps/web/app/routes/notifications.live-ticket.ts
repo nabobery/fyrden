@@ -19,7 +19,6 @@ export async function action({ request, context }: Route.ActionArgs) {
   assertSameOrigin(request);
   const form = await readForm(request, 1024);
   const session = await checkSession(context, request);
-  // Not known (the check failed): asked again later; signed out or another viewer: never.
   if (session.state === "unknown") return answer({ kind: "retry" });
   if (session.state === "signed-out" || session.user.id !== String(form.get("viewer") ?? ""))
     return answer({ kind: "stop" });
@@ -53,7 +52,6 @@ export async function action({ request, context }: Route.ActionArgs) {
   if (issued.status === 503 && problem?.code === "live_unavailable") return answer({ kind: "off" });
   if (issued.status === 503 && problem?.code === "live_temporary")
     return answer({ kind: "retry", temporary: true });
-  // Signed out, a credential that may not, or not a user's: asking again changes nothing.
   if (issued.status === 401 || issued.status === 403) return answer({ kind: "stop" });
   return answer({ kind: "retry" });
 }

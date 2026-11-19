@@ -50,7 +50,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** A milestone picker's answer is about its viewer and issue. */
 type PickerScope = Scope & { owner: string; repo: string; number: number; page: "milestone" };
 
 export async function action({
@@ -84,7 +83,6 @@ export async function action({
   return send(call.method, call.path, call.body, intent, "Nothing was changed.");
 }
 
-/** The milestone of an issue or pull request, chosen from the open ones a page at a time. */
 export default function IssueMilestone({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";

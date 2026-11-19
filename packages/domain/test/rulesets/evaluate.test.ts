@@ -59,14 +59,12 @@ describe("branch protection", () => {
     const on = (over: Partial<Ruleset>) =>
       protectsBranch([ruleset({ rules: [deletion], ...over })], "main", "main");
     expect(on({})).toBe(true);
-    // A bypass or an actor type changes who it stops, not that the branch is protected.
     expect(
       on({
         bypass_actors: [{ actor_type: "RepositoryRole", actor_id: "admin", bypass_mode: "always" }],
       }),
     ).toBe(true);
     expect(on({ actor_types: ["agent"] })).toBe(true);
-    // Not enforced, or nothing to enforce, or another branch or a tag ruleset: not protected.
     expect(on({ enforcement: "evaluate" })).toBe(false);
     expect(on({ enforcement: "disabled" })).toBe(false);
     expect(protectsBranch([ruleset({ rules: [] })], "main", "main")).toBe(false);
@@ -84,7 +82,6 @@ describe("branch protection", () => {
         "main",
       ),
     ).toBe(false);
-    // Excluded by name.
     expect(
       protectsBranch(
         [
@@ -163,7 +160,6 @@ describe("glob matching", () => {
     // A matching wildcard walks at most the pattern's length times the ref's.
     const ref = `refs/heads/${"b".repeat(240)}`;
     expect(globWalk("refs/heads/b*", ref).steps).toBeLessThanOrEqual(13 * (ref.length + 1));
-    // Still exact where it matters.
     expect(globMatches(`refs/heads/${"b".repeat(5)}`, `refs/heads/${"b".repeat(5)}`)).toBe(true);
     expect(globMatches("refs/heads/b*", `refs/heads/${"b".repeat(240)}`)).toBe(true);
     expect(globMatches("refs/heads/*/x", "refs/heads/a/x")).toBe(true);
@@ -382,7 +378,6 @@ describe("pull request merges", () => {
     expect(violations(upToDate, merge({ upToDate: false }))).toEqual([
       'pull request #7 must include the latest commit of the branch it merges into (ruleset "protect main")',
     ]);
-    // Not a merge: the rule has nothing to check.
     expect(violations(upToDate)).toEqual([]);
   });
 

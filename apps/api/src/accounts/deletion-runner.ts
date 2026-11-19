@@ -30,19 +30,13 @@ import { clock } from "../services.js";
 
 /** Proposed values. */
 export const DELETION_RUN_POLICY = {
-  /** How long a run holds the job. */
   leaseMs: 5 * 60_000,
   /** Repositories a run hands to repository deletion. */
   reposPerRun: 50,
-  /** Account-object calls a run makes. */
   accountCallsPerRun: 50,
-  /** Principals of the set one account-object call retires. */
   principalsPerCall: 100,
-  /** Rows one account-object call removes at most. */
   rowsPerCall: 500,
-  /** Stars a run deletes. */
   starsPerRun: 500,
-  /** Feeds a run retires. */
   feedsPerRun: 25,
   /** When a job waiting on repositories or transfers runs again. */
   waitMs: 5 * 60_000,
@@ -70,7 +64,6 @@ type Job = {
   released_handles: string;
 };
 
-/** Where a slice leaves the job: its new step and cursors, and when it runs again. */
 type Progress = {
   readonly step: Step;
   readonly accountCursor?: number;
@@ -84,7 +77,6 @@ type Progress = {
 /** What a run did: the job's time to run again (null: done, or not this run's to do). */
 export type SliceOutcome = { readonly next: number | null };
 
-/** Hooks into a run. For tests. */
 export const deletionRunHooks: { beforeCheckpoint?: () => Promise<void> } = {};
 
 /**
@@ -200,7 +192,6 @@ async function slice(env: Env, job: Job, metrics: Metrics | undefined): Promise<
 
 const SET = "(SELECT principal_id FROM user_retirements WHERE user_id = ?1)";
 
-/** The set, in order. */
 async function retirementSet(env: Env, userId: string): Promise<string[]> {
   const { results } = await env.DIRECTORY.withSession("first-primary")
     .prepare(

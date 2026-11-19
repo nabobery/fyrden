@@ -57,7 +57,6 @@ const KEYWORDS = [
   "resolves",
   "resolved",
 ];
-/** A keyword in any case. */
 const keyword = fc
   .tuple(fc.constantFrom(...KEYWORDS), fc.array(fc.boolean(), { minLength: 8, maxLength: 8 }))
   .map(([word, upper]) =>
@@ -77,7 +76,6 @@ describe("referencesIn, of a text longer than it reads", () => {
     expect(referencesIn(`intro \` fixes #1 ${"z ".repeat(9_000)}\``)).toEqual([]);
     // One CRLF in code the limit cuts is no blank line: nothing is read.
     expect(referencesIn(`intro \` fixes #1\r\n${"x".repeat(MENTION_SOURCE_LENGTH)}\``)).toEqual([]);
-    // Blank lines with LF, CR and CRLF endings: what comes before each is read.
     for (const blank of ["\n\n", "\r\r", "\r\n\r\n", "\r\n \t\r\n"])
       expect(
         referencesIn(`fixes #7${blank}${"x".repeat(MENTION_SOURCE_LENGTH)}`),
@@ -87,10 +85,8 @@ describe("referencesIn, of a text longer than it reads", () => {
     expect(
       referencesIn(`![fixes #1][p]\n\n[p]: /image.png\n${"x".repeat(MENTION_SOURCE_LENGTH)}`),
     ).toEqual([]);
-    // Before a blank line: read whole.
     const kept = `fixes #7\n\n${"x".repeat(MENTION_SOURCE_LENGTH)} fixes #123`;
     expect(referencesIn(kept)).toEqual([{ number: 7, closes: true }]);
-    // Within the limit: read as it is.
     expect(referencesIn(`${"x ".repeat(100)}fixes #123`)).toEqual([{ number: 123, closes: true }]);
   });
 

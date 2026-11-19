@@ -278,7 +278,6 @@ function toRecord(
     principalId: row.principal_id,
     principalType: delegation ? "agent" : row.principal_type,
     principalHandle: row.handle,
-    // Never delegated.
     isInstanceAdmin: !delegation && row.is_instance_admin === 1,
     lifecycleGen: row.lifecycle_gen,
     ...restrictions,
@@ -438,7 +437,6 @@ export class D1TokenStore {
     return { token, id, expiresAt };
   }
 
-  /** Which of a refused mint's conditions failed: the issuer's, else the principal's. */
   private async refusedBy(issuer: Issuer | undefined): Promise<"issuer" | "principal"> {
     if (!issuer) return "principal";
     this.countQuery("token_issuer");

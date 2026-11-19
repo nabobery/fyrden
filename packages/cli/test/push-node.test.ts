@@ -58,7 +58,6 @@ describe("node git runner", () => {
   });
 
   it("answers git's credential requests for the push URL's origin only, ahead of configured helpers", async () => {
-    // A configured helper that would answer with the wrong password.
     writeFileSync(
       join(root, "gitconfig"),
       '[credential]\n\thelper = "!f() { echo username=other; echo password=WRONG; }; f"\n',
@@ -82,7 +81,6 @@ describe("node git runner", () => {
       expect(ours.ok).toBe(true);
       expect(ours.stdout).toContain("username=fyrden\n");
       expect(ours.stdout).toContain(`password=${token}\n`);
-      // Another host (a redirect, say) gets nothing: no helper answers it.
       expect((await fill("elsewhere.example")).ok).toBe(false);
     } finally {
       for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];

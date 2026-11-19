@@ -348,7 +348,6 @@ describe("the feed sink", () => {
       DIRECTORY: counting(env.DIRECTORY, count),
       ORG_READ: counting(env.ORG_READ, count),
     } as Env;
-    // Five messages of three events, each for 100 recipients.
     const audience = Array.from({ length: 100 }, (_, i) => `usr_${i}`);
     const batch = createMessageBatch(
       EVENTS_QUEUE,

@@ -1247,7 +1247,6 @@ describe("an invocation's budget", () => {
     };
     const { publish, sent } = recordingPublish();
     const small = { ...EFFECT_POLICY, invocation: { ...EFFECT_POLICY.invocation, calls: 100 } };
-    // 100 calls: the message's own, then two effects of 40.
     expect(MESSAGE_CALLS + 2 * 40).toBeLessThanOrEqual(100);
     expect(
       await deliverEffects(depsOf([sink], T0, publish, small), "test_hook", ids, budget(T0, small)),
@@ -1399,7 +1398,6 @@ describe("effects queue messages", () => {
       [pages[0]],
       [pages[1]],
       [pages[2]],
-      // Nine in a row: eight, then one.
       small.slice(2, 10),
       small.slice(10),
     ]);
@@ -1545,7 +1543,6 @@ describe("recovering overdue effects", () => {
     expect(sentOf(sent, repoId)).toEqual(ids);
     expect(await recoverEffects(deps)).toEqual({ sent: 0, ended: 0 });
     expect(sent.flatMap((s) => s.ids)).not.toContain(notYet[0]);
-    // It delivers nothing itself.
     expect(calls).toEqual([]);
     expect(await effectRow(ids[0] ?? "")).toMatchObject({
       state: "pending",

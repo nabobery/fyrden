@@ -22,7 +22,6 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 /** A repository with an issue and its branches pushed: its id. */
@@ -129,7 +128,6 @@ function racing(before: () => Promise<void>): Env {
   });
 }
 
-/** Rows search's spending holds today. */
 const spentRows = async () =>
   (
     await db
@@ -247,7 +245,6 @@ describe("search repair needs", () => {
       since: 10,
       next_at: 10,
     });
-    // Pending: nothing written.
     expect((await repairStatement(db, repoId, "again", 20).run()).meta.changes).toBe(0);
     // A pass covers revision 1; a need meanwhile asks for revision 2, once.
     await db

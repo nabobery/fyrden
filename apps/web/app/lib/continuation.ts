@@ -29,7 +29,6 @@ export function writeContinuation(c: Continuation): string {
   return `${c.after ?? ""}:${c.cursor ?? ""}`;
 }
 
-/** A string's length in UTF-8 bytes, without encoding it. */
 export function utf8Length(text: string): number {
   let bytes = 0;
   for (let i = 0; i < text.length; i++) {

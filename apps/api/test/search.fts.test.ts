@@ -26,7 +26,6 @@ import { ADMISSION } from "../src/search/admission.js";
 import { docStatements, type SearchPosition } from "../src/search/statements.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 const issue = (number: number, overrides: Partial<IssueRow> = {}): IssueRow => ({

@@ -13,11 +13,10 @@ const open = { state: "open", headRefDeleted: false } as const;
 
 describe("decidePullAction", () => {
   it.each([
-    // [action, isAuthor, role, allowed]
     ["close", true, "read", true],
     ["close", false, "read", false],
     ["close", false, "triage", true],
-    ["reopen", false, "triage", false], // open already
+    ["reopen", false, "triage", false],
     ["edit", true, "read", true],
     ["edit", false, "triage", false],
     ["edit", false, "write", true],
@@ -78,7 +77,6 @@ describe("decidePullAction", () => {
             !(action === "reopen" && headRefDeleted);
           const decision = decidePullAction(action, { state, headRefDeleted, isAuthor, role });
           expect(decision.ok).toBe(expected);
-          // Stronger roles never lose a permission a weaker one has.
           if (decision.ok && role !== null)
             for (const stronger of REPO_ROLES.slice(REPO_ROLES.indexOf(role)))
               expect(

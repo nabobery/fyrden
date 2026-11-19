@@ -27,7 +27,6 @@ async function sandbox(): Promise<GitSandbox> {
   return s;
 }
 
-/** Parses the pack with our parser and writes its `.idx`. */
 async function ourIdx(pack: Uint8Array, strict = false): Promise<Uint8Array> {
   const { pack: parsed } = await parseBytes(pack);
   try {
@@ -123,7 +122,6 @@ describe("idx v2 writer matches git index-pack byte for byte", () => {
       const [a, b] = [listed[p - 1], listed[p]] as [IdxEntry, IdxEntry];
       if (hex(a.oid) === hex(b.oid)) expect(a.offset).toBeLessThan(b.offset);
     }
-    // Lookups find the copy that comes first in the pack.
     expect(idx.find(idx.oidAt(0))).toBe(0);
     expect(idx.lookup(idx.oidAt(39))?.offset).toBe(
       Math.min(...listed.filter((e) => hex(e.oid) === hex(idx.oidAt(39))).map((e) => e.offset)),
@@ -144,7 +142,6 @@ describe("idx v2 writer matches git index-pack byte for byte", () => {
     await expect(ourIdx(pack, true)).rejects.toSatisfy(
       (e) => e instanceof IdxError && e.code === "duplicate-object",
     );
-    // Without --strict both git and we accept it.
     expect(await gitIndexPack(oracle, pack)).toBeDefined();
     expect((await ourIdx(pack)).length).toBeGreaterThan(0);
   });

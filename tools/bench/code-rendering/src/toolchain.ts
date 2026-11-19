@@ -12,7 +12,6 @@ import type * as Esbuild from "esbuild";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 export const WEB = join(ROOT, "apps/web");
-/** apps/web's node_modules: esbuild resolves the renderer packages from here. */
 export const WEB_MODULES = join(WEB, "node_modules");
 export const WRANGLER_BIN = join(WEB_MODULES, ".bin/wrangler");
 
@@ -22,7 +21,6 @@ export function loadEsbuild(): typeof Esbuild {
   return wranglerRequire("esbuild") as typeof Esbuild;
 }
 
-/** The workerd binary wrangler runs (`workerd` exports its path). */
 export function workerdBinary(): string {
   const miniflareRequire = createRequire(wranglerRequire.resolve("miniflare"));
   const workerd = miniflareRequire("workerd") as { default: string } | string;

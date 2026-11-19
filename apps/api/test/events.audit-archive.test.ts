@@ -14,10 +14,8 @@ import { inRepo, newNetworkId, oid } from "./helpers/repo-git.js";
 
 const newId = createIdFactory(Date.now, secureRandomBytes);
 
-/** An archive key with its content digest removed, for comparing names. */
 const withoutDigest = (key: string) => key.replace(/-[0-9a-f]{16}\.ndjson$/, ".ndjson");
 const DAY = 24 * 60 * 60 * 1000;
-// 2026-10-13T10:00:00Z
 const T0 = Date.UTC(2026, 9, 13, 10);
 
 /** A fresh repository object with no audit rows, and an archiver on a test clock and bucket. */
@@ -87,7 +85,6 @@ describe("audit archiver", () => {
         { at: T0 + 1 },
         // Same day, after a restore: a new epoch, a new object.
         { at: T0 + 2, epoch: 2 },
-        // The next day.
         { at: T0 + DAY, epoch: 2 },
       ]);
       const slices = [];
@@ -220,7 +217,6 @@ describe("repository audit archive", () => {
       });
       const job = repo.git.jobs.get(AUDIT_ARCHIVE_JOB);
       expect(job?.state).toBe("queued");
-      // Due now.
       repo.git.context.storage.sql.exec(
         "UPDATE jobs SET next_run_at = 1 WHERE job_id = ?",
         AUDIT_ARCHIVE_JOB,

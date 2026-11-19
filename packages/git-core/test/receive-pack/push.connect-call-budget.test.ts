@@ -116,7 +116,6 @@ describe("push.connect-call-budget", () => {
       },
     });
     expect(pushed.lines).toEqual(["unpack ok", "ok refs/heads/main"]);
-    // Every slice's index reads are counted as they happen, and none passes the budget.
     expect(slices.length).toBeGreaterThan(2);
     for (const slice of slices) expect(slice).toBeLessThanOrEqual(connectCalls);
   });

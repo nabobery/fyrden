@@ -22,7 +22,6 @@ export function fakeWrangler() {
     d1Schema: new Map<string, SchemaObject[]>(),
     /** The migration files each D1 database has applied, by name (its d1_migrations table). */
     d1Migrations: new Map<string, string[]>(),
-    /** What fyrden-org answers to the effects summary, one row per state. */
     effects: [] as { state: string; count: number; oldest: number }[],
     /** Answers other queries of a database (a test's own SQLite), before the cases above. */
     d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
@@ -30,7 +29,6 @@ export function fakeWrangler() {
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
     /** The read model protocol a deploy recorded as served (fyrden-directory). */
     executorVersion: 0,
-    /** Whether fyrden-org's read model holds data (rows in any of its tables). */
     orgInUse: false,
     /** fyrden-org's read model protocol and whether its admission is open, once migrated. */
     readModel: { protocol: 2, open: 0 },
@@ -39,16 +37,12 @@ export function fakeWrangler() {
     /** fyrden-org's current Time Travel bookmark. */
     bookmark: "00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683",
     r2: new Set<string>(),
-    /** Object counts of buckets that are not empty. */
     r2Objects: new Map<string, number>(),
     /** Incomplete multipart uploads per bucket: invisible to listings, but they keep it from being deleted. */
     r2Uploads: new Map<string, number>(),
-    /** Lifecycle rules per bucket: name to its flags. */
     r2Lifecycle: new Map<string, Map<string, string[]>>(),
     queues: new Set<string>(),
-    /** Queues whose delivery is paused. */
     paused: new Set<string>(),
-    /** Queue name to the Workers consuming it. */
     consumers: new Map<string, Set<string>>(),
     /**
      * KV namespace id to title. Keyed by id so a test can give two namespaces
@@ -312,7 +306,6 @@ export function fakeWrangler() {
   return { runner, state, calls };
 }
 
-/** The generated (plain JSON) config a command names with `-c`. */
 function readConfig(args: string[], cwd: string | undefined): Record<string, unknown> {
   const file = args[args.indexOf("-c") + 1] as string;
   return JSON.parse(readFileSync(join(cwd as string, file), "utf8")) as Record<string, unknown>;

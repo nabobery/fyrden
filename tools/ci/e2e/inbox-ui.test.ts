@@ -12,7 +12,6 @@ let stack: WebStack;
 let page: Page;
 const handle = "ada";
 const name = "inbox";
-/** A title that is markup wherever it lands unescaped. */
 const HOSTILE = "<img src=x onerror=window.pwned=1> crash";
 
 const accessible = (what: string) => axe(page, what);

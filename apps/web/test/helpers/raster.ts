@@ -69,7 +69,6 @@ export const webpLossless = (width: number, height: number) => {
 export const webpExtended = (width: number, height: number) =>
   riff("VP8X", [0, 0, 0, 0, ...le24(width - 1), ...le24(height - 1)]);
 
-/** Every format's header, one of each kind of WebP and of JPEG's frames. */
 export const HEADERS = [
   { name: "PNG", type: "image/png", make: png, max: 0x7fffffff },
   { name: "GIF", type: "image/gif", make: gif, max: 0xffff },
@@ -85,7 +84,6 @@ export const HEADERS = [
   { name: "extended WebP", type: "image/webp", make: webpExtended, max: 0x1000000 },
 ] as const;
 
-/** Base64 of bytes. */
 export const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
 /** Bytes as a stream of the given chunk sizes (the last chunk holds what remains). */

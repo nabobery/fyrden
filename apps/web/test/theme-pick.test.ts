@@ -7,7 +7,6 @@ import type { ThemeMode } from "../app/lib/theme.js";
 type Store = typeof import("../app/lib/use-theme-mode.js");
 let store: Store;
 
-/** A post the test settles, in the order it wants. */
 function deferredPosts() {
   const posts: { mode: ThemeMode; ok(): void; fail(): void }[] = [];
   const post = (mode: ThemeMode) =>
@@ -105,11 +104,9 @@ describe("a colour scheme picked in the header", () => {
     await untilStarted(posts, 1);
     posts[0]?.ok();
     await done;
-    // Another tab saved Light, then System, each seen by a navigation in this tab.
     store.noteServerThemeMode("light");
     store.noteServerThemeMode("system");
     expect(store.themeModeShown("system")).toBe("system");
-    // And a pick that then fails goes back to what the server says, not the old one.
     const failing = store.pickThemeMode("light", "system", post);
     await untilStarted(posts, 2);
     posts[1]?.fail();
@@ -124,13 +121,11 @@ describe("a colour scheme picked in the header", () => {
     posts[0]?.ok();
     await saved;
     const failing = store.pickThemeMode("light", "system", post);
-    // A navigation while it is being kept: the server now says Dark.
     store.noteServerThemeMode("dark");
     expect(store.themeModeShown("system")).toBe("light");
     await untilStarted(posts, 2);
     posts[1]?.fail();
     await failing;
-    // Another tab saves System, and this tab navigates again: the old pick stays gone.
     store.noteServerThemeMode("system");
     expect(store.themeModeShown("system")).toBe("system");
   });
@@ -141,9 +136,7 @@ describe("a colour scheme picked in the header", () => {
     await untilStarted(posts, 1);
     posts[0]?.ok();
     await done;
-    // This page's root data is still the old word, so the pick shows.
     expect(store.themeModeShown("system")).toBe("dark");
-    // A navigation reads the cookie again: another tab has saved Light since.
     expect(store.themeModeShown("light")).toBe("light");
   });
 });

@@ -9,7 +9,6 @@ import { base64, gif, HEADERS, jpeg, png, webpExtended, webpLossy } from "./help
 const ascii = (text: string) => new TextEncoder().encode(text);
 const COMMIT = "c".repeat(40);
 
-/** A file as the contents API answers it. */
 function file(path: string, bytes: Uint8Array | null, size = bytes?.length ?? 0) {
   return {
     type: "file" as const,
@@ -90,7 +89,6 @@ describe("reading a raster header", () => {
         });
       }),
     );
-    // The size in what a scan's data holds is not the image's.
     expect(sniffRaster(jpeg(640, 480, 0xc0, [[0xda, [1, 2, 3]]]))).toBeNull();
   });
 
@@ -107,7 +105,6 @@ describe("reading a raster header", () => {
       height: 480,
     });
     expect(sniffRaster(Uint8Array.from([0xff, 0xd8, 0x00, ...whole.subarray(2)]))).toBeNull();
-    // A segment that says it holds less than its own length field.
     expect(
       sniffRaster(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 1, ...whole.subarray(2)])),
     ).toBeNull();

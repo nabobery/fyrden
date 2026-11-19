@@ -40,7 +40,6 @@ export interface ReviewFact {
 
 export interface ApprovalInput {
   readonly reviews: readonly ReviewFact[];
-  /** The head commit that would be merged. */
   readonly headSha: string;
   readonly authorRoot: string;
   /**

@@ -76,7 +76,6 @@ describe("evaluateApprovals", () => {
       ),
       settings({ dismissStale: true }),
     );
-    // Not the author's, a stale one, one without write access, an agent's, nor one replaced.
     expect(outcome.approvers).toEqual(["alice", "frank"]);
     expect(outcome.approvals).toBe(2);
   });
@@ -85,14 +84,12 @@ describe("evaluateApprovals", () => {
     const outcome = evaluateApprovals(
       input([
         review("alice", "APPROVED"),
-        // Alice's agent approves later, then is disabled: her earlier approval does not stand in.
         review("alice", "APPROVED", { reviewerId: "agt_a", byAgent: true, active: false }),
         review("bob", "APPROVED"),
       ]),
       settings({ allowAgentApprovals: true }),
     );
     expect(outcome.approvers).toEqual(["bob"]);
-    // Agents' approvals not counted: the agent's review is passed over, alice's own stands.
     const people = evaluateApprovals(
       input([
         review("alice", "APPROVED"),
@@ -159,7 +156,6 @@ describe("evaluateApprovals", () => {
     expect(
       evaluateApprovals(input(reviews), settings({ required: 2, allowAgentApprovals: true })),
     ).toMatchObject({ approvals: 2, satisfied: true });
-    // The author's own agent approving is still the author.
     const own = [review("author", "APPROVED", { byAgent: true })];
     expect(evaluateApprovals(input(own), settings({ allowAgentApprovals: true })).approvals).toBe(
       0,
@@ -182,7 +178,6 @@ describe("evaluateApprovals", () => {
       evaluateApprovals(input([before, byPusher, review("carol", "APPROVED")], { lastPush }), on)
         .satisfied,
     ).toBe(true);
-    // Separate from the count: with none required, it still needs that approval.
     expect(
       evaluateApprovals(
         input([], { lastPush }),
@@ -196,7 +191,6 @@ describe("evaluateApprovals", () => {
 
   it("never takes an approval of an earlier head as approving the last push, though it still counts", () => {
     const lastPush = { pusherRoot: "bob", at: ++clock };
-    // Submitted after the push, from a page that still showed the earlier head.
     const ofEarlier = review("alice", "APPROVED", { commitSha: OLD });
     for (const required of [0, 1])
       expect(
@@ -250,14 +244,12 @@ describe("evaluateApprovals", () => {
       review("alice", "APPROVED", { submittedAt: at, commitSha: OLD }),
     ];
     expect(judged(headThenEarlier, on())).toEqual([false, false]);
-    // Stale reviews dismissed: the earlier head's is not hers any more.
     expect(judged(headThenEarlier, on({ dismissStale: true }))).toEqual([true, true]);
     const earlierThenHead = [
       review("alice", "APPROVED", { submittedAt: at, commitSha: OLD }),
       review("alice", "APPROVED", { submittedAt: at }),
     ];
     expect(judged(earlierThenHead, on())).toEqual([true, true]);
-    // Her agent approving the earlier head after her counts only where agents do.
     const agentAfter = [
       review("alice", "APPROVED", { submittedAt: at }),
       review("alice", "APPROVED", { submittedAt: at, commitSha: OLD, byAgent: true }),
@@ -317,7 +309,6 @@ describe("evaluateApprovals", () => {
           const outcome = evaluateApprovals(input(reviews), s);
           expect(outcome.approvals).toBeLessThanOrEqual(3);
           expect(outcome.satisfied).toBe(outcome.reasons.length === 0);
-          // A person approving the head last, as themselves, never lowers the count.
           const later = review("carol", "APPROVED", { submittedAt: 2_000, seq: 2_000 });
           expect(evaluateApprovals(input([...reviews, later]), s).approvals).toBeGreaterThanOrEqual(
             outcome.approvals,

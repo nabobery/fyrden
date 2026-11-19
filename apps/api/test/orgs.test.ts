@@ -131,7 +131,6 @@ describe("memberships", () => {
     expect(await env.ORG.getByName(org.id).accountRole(alice.principalId)).toBeNull();
     expect(await env.ORG.getByName(org.id).aclVersion()).toBe(versionBefore + 1);
     expect(await members(org.login, alice.token)).toEqual({ status: 404, code: "org_not_found" });
-    // Removing again changes nothing and still answers.
     const again = await api(
       "DELETE",
       `/orgs/${org.login}/memberships/${alice.handle}`,

@@ -10,7 +10,6 @@ import { changedPaths } from "./select-mutation.ts";
 
 export interface CiSelection {
   readonly api: boolean;
-  /** Packages other than the API whose coverage job must run. */
   readonly coveragePackages: readonly string[];
   readonly e2e: boolean;
   readonly contract: boolean;
@@ -25,7 +24,6 @@ export interface SelectionInput {
   readonly paths: readonly string[];
   /** Packages Turbo reports affected (changed, or depending on a changed one), with a coverage task. */
   readonly affected: readonly string[];
-  /** Every workspace package with a coverage task. */
   readonly workspace: readonly string[];
 }
 
@@ -34,9 +32,7 @@ const WEB = "@fyrden/web";
 const ADAPTERS = "@fyrden/adapters-cloudflare";
 const CI_TOOLS = "@fyrden/ci-tools";
 
-/** Paths that change no test's outcome: CI checks them with lint alone. */
 const DOCUMENTATION = /^docs\/.+\.md$/;
-/** Paths inside a workspace package, where Turbo's graph knows the consumers. */
 const PACKAGE_SOURCE = /^(?:apps|packages)\/[^/]+\/|^tools\/ci\//;
 
 /**

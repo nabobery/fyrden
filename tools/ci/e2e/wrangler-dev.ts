@@ -14,7 +14,6 @@ const wranglerBin = join(
   "wrangler.js",
 );
 
-/** Starts tried at most, a port taken meanwhile each time. */
 const ATTEMPTS = 3;
 const PORT_TAKEN = /Address already in use|EADDRINUSE/;
 /**
@@ -39,9 +38,7 @@ export interface WranglerDev {
   stop(): Promise<void>;
 }
 
-/** Signals whose default action ends this process. */
 const ENDING_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-/** The groups `spawnOwned` started and has not stopped yet, by their leader's pid. */
 const owned = new Set<number>();
 
 /**
@@ -53,13 +50,10 @@ function killOwned(): void {
   for (const pid of owned) {
     try {
       process.kill(-pid, "SIGKILL");
-    } catch {
-      // Gone already.
-    }
+    } catch {}
   }
 }
 
-/** Kills the owned groups, then lets `signal` end this process as it would have. */
 function onEndingSignal(signal: NodeJS.Signals): void {
   killOwned();
   owned.clear();
@@ -95,7 +89,7 @@ export function groupRunning(pgid: number): boolean {
       try {
         stat = readFileSync(`/proc/${entry}/stat`, "utf8");
       } catch {
-        continue; // Gone meanwhile.
+        continue;
       }
       // "pid (comm) state ppid pgrp ...": the command may hold spaces and parentheses.
       const [state, , pgrp] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");

@@ -192,7 +192,6 @@ interface Target {
 export type Located = { readonly path: string; readonly blob: Oid } | null;
 
 export class RepoCodeOwners {
-  /** Test seams. */
   readonly hooks: { beforePublish?: () => Promise<void>; afterCheckpoint?: () => void } = {};
   /** An evaluation's budgets (see `CODE_OWNER_LIMITS`), and a slice's reads (`CODE_OWNERS_POLICY`). */
   limits: CodeOwnerLimits = CODE_OWNER_LIMITS;
@@ -396,7 +395,6 @@ export class RepoCodeOwners {
   handler(): JobHandler {
     return {
       runSlice: async () => {
-        // Results are written: not while the repository takes no changes.
         if (!this.deps.writable()) return { done: false, cursor: null, runAfterMs: 60_000 };
         try {
           const { more, evaluated } = await this.#slice();
@@ -424,7 +422,6 @@ export class RepoCodeOwners {
     };
   }
 
-  /** One slice of the job's work: whether more is to do at once, and whether it evaluated. */
   async #slice(): Promise<{ more: boolean; evaluated: boolean }> {
     this.#heavy = false;
     const restore = this.#rows<{ after: number }>(
@@ -1022,7 +1019,6 @@ export async function locateCodeOwners(
   limits: HeldReadLimits,
 ): Promise<Located> {
   const within = { ...limits, spent: limits.spent ?? { readBytes: 0 } };
-  /** Of tree `tree`, the entries named `names`, by name. */
   const entriesOf = (tree: Oid, names: readonly string[]) =>
     withHeldReads(reader, memory, within, async (reads) => {
       const kept = new Map<string, { mode: number; oid: Oid }>();

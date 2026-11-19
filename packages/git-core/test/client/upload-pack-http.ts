@@ -23,7 +23,6 @@ export interface UploadPackServer {
 export interface UploadPackServerOptions {
   /** Ignore `Git-Protocol` (an old server that only speaks v0). */
   readonly v0Only?: boolean;
-  /** Answer every request with this status instead. */
   readonly status?: number;
 }
 
@@ -90,7 +89,6 @@ export async function startUploadPackServer(
       if (req.method === "POST" && path === "/repo.git/git-upload-pack") {
         const out = await runUploadPack(repoDir, ["--stateless-rpc"], protocol, body);
         res.writeHead(200, { "Content-Type": "application/x-git-upload-pack-result" });
-        // Several writes, so the client sees a chunked body.
         for (let at = 0; at < out.length; at += 7_000) res.write(out.subarray(at, at + 7_000));
         res.end();
         return;

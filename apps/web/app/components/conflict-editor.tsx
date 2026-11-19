@@ -74,7 +74,6 @@ export function ConflictEditor({
         : ([...starts].reverse().find((s) => s < caret) ?? starts[starts.length - 1]);
     if (target === undefined) return;
     el.focus();
-    // The marker line selected, so the editor scrolls to it.
     const lineEnd = el.value.indexOf("\n", target);
     el.setSelectionRange(target, lineEnd < 0 ? el.value.length : lineEnd);
     setSaid(`Conflict ${starts.indexOf(target) + 1} of ${starts.length}.`);

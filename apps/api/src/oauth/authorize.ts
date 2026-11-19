@@ -25,7 +25,6 @@ export const AUTHORIZE_POLICY = {
   requestTtlMs: 10 * 60 * 1000,
   /** How long a code may be redeemed after it is issued. */
   codeTtlMs: 60 * 1000,
-  /** Requests one user may have waiting for an answer at once. */
   pendingPerUser: 20,
 };
 

@@ -120,7 +120,6 @@ describe("idx readers agree with a Map", () => {
           expect(gotRanged).toEqual({ position: got?.position, offset: want.offset });
           expect(hex(idx.oidAt(got?.position as number))).toBe(key);
           expect(hex(await ranged.oidAt(got?.position as number))).toBe(key);
-          // The position is the first of a run of equal oids.
           const p = got?.position as number;
           if (p > 0) expect(hex(idx.oidAt(p - 1))).not.toBe(key);
         }
@@ -196,7 +195,6 @@ describe("idx readers agree with a Map", () => {
     const oids = Array.from({ length: 200 }, (_, i) => new Uint8Array(OID_BYTES).fill(i));
     const found = await ranged.lookupMany(oids);
     expect(found.every((f) => f !== undefined)).toBe(true);
-    // The oid table and the offsets: two reads for 200 oids.
     expect(reader.calls).toBe(2);
   });
 
@@ -251,7 +249,6 @@ describe("idx readers agree with a Map", () => {
           const a = listed[p - 1] as IdxEntry;
           const b = listed[p] as IdxEntry;
           const order = compareOids(a.oid, b.oid);
-          // Sorted by oid; copies of one oid in pack (offset) order.
           expect(order < 0 || (order === 0 && a.offset < b.offset)).toBe(true);
           expect(b.position).toBe(p);
         }

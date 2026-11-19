@@ -4,7 +4,6 @@ import { MAX_ISSUE_BODY_LENGTH } from "../issues/issue.js";
 export const MAX_RELEASES = 1_000;
 /** A release's title at most. Proposed. */
 export const MAX_RELEASE_TITLE_LENGTH = 256;
-/** A release's notes at most, as an issue's body. */
 export const MAX_RELEASE_BODY_LENGTH = MAX_ISSUE_BODY_LENGTH;
 /** A tag name's characters at most. Proposed. */
 export const MAX_RELEASE_TAG_LENGTH = 1_024;

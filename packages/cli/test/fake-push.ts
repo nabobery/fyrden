@@ -24,18 +24,13 @@ export interface FakeGitScript {
   revs?: Record<string, string>;
   /** symbolic full names: rev -> refs/... */
   fullNames?: Record<string, string>;
-  /** Objects present locally. */
   local?: string[];
-  /** Pairs "old new" that are fast-forwards. */
   ancestors?: string[];
-  /** Length of the pack pack-objects writes. */
   packBytes?: number;
-  /** Credential helper password. */
   password?: string;
 }
 
 export interface FakeGit extends GitRunner {
-  /** Every call's arguments, `-c` options included. */
   readonly calls: string[][];
   /** The extra environment of each call in `calls`, or undefined. */
   readonly envs: (Readonly<Record<string, string>> | undefined)[];

@@ -13,7 +13,6 @@ import { inProbe, newProbe } from "./harness.js";
 const DAY = 24 * 60 * 60 * 1000;
 const policy = { leaseMs: 1_000, maxAttempts: 3, backoffMs: 100, memoryRetryMs: 500 };
 
-/** The probe's storage with a clock the test controls. */
 function withClock(context: GitStorageContext, clock: { now: number }): GitStorageContext {
   return { ...context, now: () => clock.now };
 }
@@ -74,14 +73,13 @@ describe("JobQueue and the reflog prune job", () => {
       const jobs = new JobQueue(context, () => {}, policy);
       const handlers = { reflog_prune: reflogPruneHandler(context, 100) };
       const memory = createDoMemoryBudget(1024);
-      // The dead slice's lease still holds the job.
       const blocked = await jobs.runDue(handlers, memory, clock.now + 10_000);
       clock.now += policy.leaseMs;
       const slices = await jobs.runDue(handlers, memory, clock.now + 10_000);
       return { blocked, slices, left: countReflog(context), job: jobs.get(first.jobId)?.state };
     });
     expect(second.blocked).toBe(0);
-    expect(second.slices).toBe(3); // 100 + 50 rows, then a slice that finds nothing
+    expect(second.slices).toBe(3);
     expect(second.left).toBe(7);
     expect(second.job).toBe("done");
   });
@@ -180,7 +178,6 @@ describe("JobQueue and the reflog prune job", () => {
       const afterFailure = jobs.get(jobId);
       clock.now += 10_000;
       await jobs.runDue({ archive: handler }, memory, clock.now + 10_000);
-      // A stale claim checkpoints nothing.
       const stale = jobs.checkpoint(
         { jobId, kind: "archive", cursor: null, attempts: 0, claim: 1 },
         new Uint8Array([9]),
@@ -221,7 +218,7 @@ describe("JobQueue and the reflog prune job", () => {
           jobId,
           {
             async runSlice() {
-              if (aSlices++ > 0) return { done: true }; // never reached with the claim check
+              if (aSlices++ > 0) return { done: true };
               started();
               await gate;
               if (ending === "throw") throw new Error("A's late failure");
@@ -233,7 +230,6 @@ describe("JobQueue and the reflog prune job", () => {
         );
         await running;
         clock.now += policy.leaseMs;
-        // B: takes the job over and finishes it.
         const b = await jobs.runJob(
           jobId,
           {
@@ -287,9 +283,7 @@ describe("JobQueue and the reflog prune job", () => {
       };
       const due = await jobs.runDue({ archive: handler }, memory, clock.now + 10_000);
       const afterDue = { calls: invocation.internal, job: jobs.get(jobId), alarm: alarms.at(-1) };
-      // Already past the budget: runJob starts nothing.
       const spent = await jobs.runJob(jobId, handler, memory, clock.now + 10_000);
-      // The alarm is a new invocation with a fresh budget.
       invocation.internal = 0;
       const next = await jobs.runJob(jobId, handler, memory, clock.now + 10_000);
       return { due, afterDue, spent, next, calls: invocation.internal };
@@ -332,7 +326,6 @@ describe("slices that end their invocation", () => {
       const handlers = { archive: step("heavy", true), compact: step("light", false) };
       const first = await jobs.runDue(handlers, memory, clock.now + 10_000);
       const firstRan = [...ran];
-      // runJob stops after an ending slice too: a fresh job, its first slice ending.
       const fresh = jobs.enqueue("archive", new Uint8Array([0]));
       const viaRunJob = await jobs.runJob(fresh, handlers.archive, memory, clock.now + 10_000);
       return {
@@ -343,7 +336,6 @@ describe("slices that end their invocation", () => {
         rearmed: alarms.at(-1),
       };
     });
-    // The first heavy slice ends the run, however much time is left; the alarm is set again at once.
     expect(result.first).toBe(1);
     expect(result.firstRan).toEqual(["heavy"]);
     expect(result.heavy).toBe("queued");
@@ -365,7 +357,6 @@ describe("slices that end their invocation", () => {
         archive: {
           async runSlice() {
             ran.push("ending");
-            // Another run takes the job over before this slice records anything.
             jobs.restart("archive", first);
             return { done: true as const, endInvocation: true };
           },
@@ -452,7 +443,6 @@ describe("memory admission and delays", () => {
       return { second, job: jobs.get(jobId) };
     });
     expect(result.second).toBe(0);
-    // The first run recorded its slice (its claim was still the job's) and went on to finish it.
     expect(result.job).toMatchObject({ state: "done", cursor: Uint8Array.of(7), attempts: 0 });
   });
 
@@ -484,7 +474,6 @@ describe("a claim that fails", () => {
   it("gives the slice's memory back, in runDue and in runJob", async () => {
     const { stub } = await newProbe();
     const reserved = await inProbe(stub, async ({ git }) => {
-      // Storage whose next transaction (the claim) throws once.
       let failNext = false;
       const storage = new Proxy(git.context.storage, {
         get(target, property) {
@@ -517,7 +506,6 @@ describe("a claim that fails", () => {
         jobs.runJob(jobId, handlers.compact, memory, Date.now() + 10_000),
       ).rejects.toThrow("the claim failed");
       const afterJob = memory.stats().reservedBytes;
-      // And the job still runs once claims work again.
       const ran = await jobs.runJob(jobId, handlers.compact, memory, Date.now() + 10_000);
       return { afterDue, afterJob, ran };
     });

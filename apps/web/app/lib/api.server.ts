@@ -134,7 +134,6 @@ export function apiFetch(
   );
 }
 
-/** Calls `method path` (under `/api`) with an optional JSON body. */
 export async function apiCall<T>(
   context: Readonly<RouterContextProvider>,
   request: Request,
@@ -224,7 +223,6 @@ export async function apiGet<T>(
 
 /** A call's body when it succeeded; signed out, a redirect to sign in; else its status. */
 export function bodyOf<T>(result: ApiResult<T>, request: Request): T {
-  // Signed out: sign in, then come back.
   if (result.status === 401) throw redirect(signInUrl(request));
   if (result.status >= 400) {
     const problem = result.body as unknown as Problem | null;
@@ -246,7 +244,6 @@ function sessionCookieHeader(request: Request): string | null {
   return names.includes(SESSION_COOKIE) ? cookie : null;
 }
 
-/** Asks the API who the session cookie `cookie` is. */
 function fetchSession(
   context: Readonly<RouterContextProvider>,
   request: Request,
@@ -257,7 +254,6 @@ function fetchSession(
   );
 }
 
-/** The signed-in user, if any. */
 export async function signedInUser(
   context: Readonly<RouterContextProvider>,
   request: Request,
@@ -315,7 +311,6 @@ export function assertSameOrigin(request: Request): void {
     throw data("This form did not come from Fyrden's own page.", { status: 403 });
 }
 
-/** Bytes of a form post read at most, unless a page allows more. */
 export const FORM_MAX_BYTES = 64 * 1024;
 
 /**

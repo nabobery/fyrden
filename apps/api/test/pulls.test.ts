@@ -55,7 +55,6 @@ const patch = (who: Who, number: number, body: Record<string, unknown>) =>
   json<Pull>(api("PATCH", `${path}/pulls/${number}`, who.token, body));
 const get = (number: number) => json<Pull>(api("GET", `${path}/pulls/${number}`, owner.token));
 
-/** The repository's refs, as the object holds them. */
 const refs = () =>
   inRepo(env.REPO.getByName(repo.id), (r) => {
     const snapshot = r.git.refStore.readRefsSync();

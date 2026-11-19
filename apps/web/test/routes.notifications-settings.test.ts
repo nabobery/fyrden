@@ -11,7 +11,6 @@ const ORIGIN = "https://fyrden.test";
 
 const session = () => json({ user: { id: "usr_1", handle: "ada" } });
 
-/** The API answering `answer`, and the session as usr_1's. */
 const api = (answer: (req: Request) => Response) =>
   fakeApi((req) => (new URL(req.url).pathname === "/auth/session" ? session() : answer(req)));
 const post = (path: string, fields: Record<string, string>) =>

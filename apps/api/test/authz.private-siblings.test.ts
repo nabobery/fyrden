@@ -48,7 +48,6 @@ let bob: { principalId: string; token: string };
 let repoA: TestRepo;
 let repoB: TestRepo;
 
-/** The commits `tip` reaches in the fixture. */
 function closure(fixture: FetchFixtureRepo, tip: string) {
   const byOid = new Map(fixture.commits.map((c) => [c.oid, c]));
   const seen = new Set<string>();
@@ -181,7 +180,6 @@ describe("two private siblings sharing a pack", () => {
     expect(
       await ask(repoA, { kind: "path", commit: forkPoint, path: "", expect: newRoot }),
     ).toEqual({ ok: false });
-    // A's own version of the file is served.
     const own = await ask(repoA, { kind: "path", commit: forkPoint, path: "a.txt" });
     expect(own.ok && own.kind === "blob" && own.oid !== newBlob).toBe(true);
     // Paths that name nothing are refused, never resolved loosely.
@@ -295,7 +293,6 @@ describe("two private siblings sharing a pack", () => {
       ),
     ).toBeUndefined();
 
-    // B caches its new blob, its commit and a diff.
     const newBlob = await onlyInB({ kind: "path", commit: main, path: "a.txt" });
     const bRequests: ObjectAccessRequest[] = [
       { kind: "path", commit: main, path: "a.txt" },

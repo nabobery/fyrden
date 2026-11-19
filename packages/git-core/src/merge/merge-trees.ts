@@ -178,9 +178,7 @@ export async function mergeTrees(
   const maxFileBytes = options.maxFileBytes ?? 1024 * 1024;
   const budget = options.budget ?? new MergeBudget();
   const conflicts: MergeConflict[] = [];
-  // New objects by id: content made twice is kept once.
   const objects = new Map<string, NewObject>();
-  /** The directories walked into, by name. */
   const dirs: Uint8Array[] = [];
   /** Their joined length with a `/` after each. */
   let dirBytes = 0;
@@ -254,7 +252,6 @@ export async function mergeTrees(
     const [bm, om, tm] = [byName(bs), byName(os), byName(ts)];
     const keys = [...new Set([...bm.keys(), ...om.keys(), ...tm.keys()])];
     const merged: TreeEntry[] = [];
-    /** Names a file, or a directory, stays at (or would, but for a conflict). */
     const fileNames = new Set<string>();
     const dirNames = new Set<string>();
     let clean = true;
@@ -344,7 +341,6 @@ export async function mergeTrees(
       const kept = (o ?? t) as TreeEntry;
       if (baseTree && kindOf(kept.mode) === "tree")
         return asDir(kept.name, baseTree, o ? o.oid : null, t ? t.oid : null);
-      // One side deleted what the other changed.
       conflict("modify_delete", name, b, o, t);
       return null;
     }
@@ -410,7 +406,6 @@ export async function mergeTrees(
 
   const tree = await mergeDir(base, ours, theirs);
   if (tree === null || conflicts.length > 0) return { kind: "conflicts", conflicts };
-  // Nothing left at all: the empty tree.
   const root = tree === "empty" ? await write("tree", encodeTree([])) : tree;
   return { kind: "clean", tree: root, objects: [...objects.values()] };
 }

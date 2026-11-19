@@ -12,7 +12,6 @@ import { diffSequences, type Edit } from "../diff/line-diff.js";
  */
 
 export type MergeChunk =
-  /** Lines that merge cleanly. */
   | { readonly kind: "clean"; readonly lines: readonly number[] }
   /** Lines the two sides changed differently, with the base they started from. */
   | {
@@ -63,11 +62,9 @@ export function merge3(
     }
     for (const line of lines) open.push(line);
   };
-  /** Equal sequences? */
   const same = (x: readonly number[], y: readonly number[]) =>
     x.length === y.length && x.every((v, i) => v === y[i]);
 
-  // Positions reached on each sequence: base, ours, theirs.
   let o = 0;
   let p = 0;
   let q = 0;
@@ -77,7 +74,6 @@ export function merge3(
     while (next < base.length && !((a[next] as number) >= p && (b[next] as number) >= q)) next++;
     const oursEnd = next < base.length ? (a[next] as number) : ours.length;
     const theirsEnd = next < base.length ? (b[next] as number) : theirs.length;
-    // The unstable chunk between the stable points.
     const baseChunk = slice(base, o, next);
     const oursChunk = slice(ours, p, oursEnd);
     const theirsChunk = slice(theirs, q, theirsEnd);
@@ -89,7 +85,6 @@ export function merge3(
       chunks.push({ kind: "conflict", base: baseChunk, ours: oursChunk, theirs: theirsChunk });
     }
     if (next >= base.length) break;
-    // The stable run: every following base line both sides keep in step.
     let run = 0;
     while (
       next + run < base.length &&

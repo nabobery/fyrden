@@ -56,7 +56,7 @@ describe("push.revoke-during-upload", () => {
       const server = memoryServer();
       const token: Token = { revoked: false, grantRevoked: false, expired: false };
       const body = await newPush(`upload-${what}`);
-      flip(token); // between the upload and indexing
+      flip(token);
       const result = await server.push(body, { finalize: { reauthorize: reauthorize(token) } });
       expect(result.lines).toEqual([
         "unpack ok",
@@ -73,7 +73,6 @@ describe("push.revoke-during-upload", () => {
       const result = await server.push(await newPush(`index-${what}`), {
         finalize: { reauthorize: reauthorize(token) },
         onCheckpoint: () => {
-          // Revoked after the parse phase, while the job still runs.
           if (++checkpoints === 1) flip(token);
         },
       });

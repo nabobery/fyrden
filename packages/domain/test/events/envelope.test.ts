@@ -168,12 +168,10 @@ describe("parseEnvelope", () => {
     };
     const parsed = safeParseEnvelope(crowded);
     expect(parsed.success).toBe(false);
-    // The second event's issues only, where they are.
     expect(parsed.error?.issues.length).toBeLessThan(1_000);
     expect(
       parsed.error?.issues.every((issue) => issue.path[0] === "events" && issue.path[1] === 1),
     ).toBe(true);
-    // As the schema judges an envelope otherwise.
     expect(safeParseEnvelope(envelope([event()])).success).toBe(true);
     expect(parseEnvelope(crowded)).toMatchObject({ ok: false });
   });

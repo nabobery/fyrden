@@ -34,18 +34,15 @@ export const CODEOWNERS_ERRORS_POLICY = {
   fileMemoryPerByte: 8,
   /** The answer's JSON, in UTF-8 bytes, at most (`truncated` past it). */
   maxAnswerBytes: 1024 * 1024,
-  /** Characters of a line an error quotes as its `source`. */
   maxSourceCharacters: 1_024,
 };
 
 export type CodeOwnersErrorsPolicy = typeof CODEOWNERS_ERRORS_POLICY;
 
-/** An error as the API answers it: the parser's, and the file it is in. */
 export type CodeOwnersErrorView = CodeOwnersError & { readonly path: string };
 
 export interface CodeOwnersErrors {
   readonly errors: readonly CodeOwnersErrorView[];
-  /** More errors than one answer carries (Fyrden's). */
   readonly truncated: boolean;
   /** The file read (the effective one, by GitHub's locations) and the commit it was read at. */
   readonly file: { readonly path: string; readonly sha: string };

@@ -37,7 +37,6 @@ const bench :Workerd.Worker = (
   return path;
 }
 
-/** Every workerd process started and not yet stopped, for `Workerd.killAll`. */
 const running = new Set<ChildProcess>();
 
 export class Workerd {
@@ -114,7 +113,6 @@ export class Workerd {
     }
   }
 
-  /** Kills every workerd still running, synchronously (for an interrupted run). */
   static killAll(): void {
     for (const child of running) child.kill("SIGKILL");
   }

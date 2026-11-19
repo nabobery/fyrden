@@ -29,7 +29,6 @@ async function readAllStream(source: AsyncIterable<Uint8Array>): Promise<PktLine
   return out;
 }
 
-/** Comparable form: data as a latin1 string. */
 const view = (pkts: PktLine[]) => pkts.map((p) => (p.kind === "data" ? str(p.data) : p.kind));
 
 describe("pkt-line encoding", () => {

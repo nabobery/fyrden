@@ -6,7 +6,6 @@ export default defineConfig({
       provider: "istanbul",
       include: ["src/**"],
       reporter: ["text-summary", "json", "lcov"],
-      // Floor, not target.
       thresholds: { lines: 80 },
     },
   },

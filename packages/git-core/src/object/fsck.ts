@@ -6,11 +6,9 @@
  * a push is the receive path's policy, not the parser's.
  */
 export const FSCK_SEVERITY = {
-  // Structure: the object cannot be read at all.
   badTree: "error",
   nulInHeader: "error",
   unterminatedHeader: "error",
-  // Commit and tag headers.
   badTreeSha1: "error",
   badParentSha1: "error",
   badObjectSha1: "error",
@@ -24,7 +22,6 @@ export const FSCK_SEVERITY = {
   missingType: "error",
   missingTagEntry: "error",
   missingTag: "error",
-  // Identity lines (author, committer, tagger).
   badDate: "error",
   badDateOverflow: "error",
   badEmail: "error",
@@ -35,7 +32,6 @@ export const FSCK_SEVERITY = {
   missingSpaceBeforeDate: "error",
   missingSpaceBeforeEmail: "error",
   zeroPaddedDate: "error",
-  // Trees.
   duplicateEntries: "error",
   treeNotSorted: "error",
   nullSha1: "warn",
@@ -46,7 +42,6 @@ export const FSCK_SEVERITY = {
   largePathname: "warn",
   zeroPaddedFilemode: "warn",
   badFilemode: "info",
-  // Commits and tags.
   nulInCommit: "warn",
   badTagName: "info",
   missingTaggerEntry: "info",

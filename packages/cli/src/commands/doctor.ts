@@ -27,10 +27,8 @@ export interface DoctorReport {
   schemaDrift: string[];
 }
 
-/** The binding of the database that holds the effects journal (the org read model, search's too). */
 const EFFECTS_BINDING = "ORG_READ";
 
-/** The binding of the directory database (the deployment's settings). */
 const DIRECTORY_BINDING = "DIRECTORY";
 
 const EFFECTS_SUMMARY =
@@ -179,7 +177,6 @@ async function searchSummary(
       "SELECT name, value FROM deployment_settings WHERE name IN ('search_indexing', 'search_indexing_generation')",
     );
     const value = (name: string) => settings.find((s) => s.name === name)?.value;
-    // 1 before any change (as the API reads it).
     const gen = Number.parseInt(value("search_indexing_generation") ?? "1", 10) || 1;
     if (value("search_indexing") !== "on")
       return `info search indexing is off (generation ${gen}): PUT /api/admin/search/indexing turns it on, then POST /api/admin/search/backfill`;

@@ -195,7 +195,6 @@ describe("an asset's upload", () => {
     const upload = newUpload(AT, file(), { replace: false });
     const first = await runUpload(upload, fake.deps);
     expect(first).toMatchObject({ ok: false, kind: "retryable" });
-    // Four tries of part 2: the first and three retries.
     expect(fake.partCalls().filter((p) => p.request.url.endsWith("/parts/2"))).toHaveLength(4);
     expect(fake.routeCalls().map((c) => c.intent)).toEqual(["begin"]);
 
@@ -370,7 +369,6 @@ describe("an asset's upload", () => {
       "complete",
     ]);
     const keys = calls.slice(1).map((c) => c.key);
-    // The same key until the API says the outcome is unknown, then a new one.
     expect(keys[0]).toBe(keys[1]);
     expect(keys[1]).toBe(keys[2]);
     expect(keys[3]).not.toBe(keys[2]);
@@ -384,14 +382,12 @@ describe("an asset's upload", () => {
     });
     const fake = server({
       parts: {
-        // Answered with no etag: that part stops the upload, retryable.
         1: [
           () => {
             failedFirst();
             return json({ part_number: 1 });
           },
         ],
-        // Still sending when Cancel comes.
         2: [
           (request) =>
             new Promise<Response>((_, fail) => {
@@ -572,7 +568,6 @@ describe("an asset's upload", () => {
     expect(await runUpload(upload, fake.deps)).toMatchObject({ ok: true });
     const calls = fake.routeCalls();
     expect(calls.map((c) => c.intent)).toEqual(["begin", "begin", "complete"]);
-    // The refusal was the first key's answer, which the API keeps: a new start, a new key.
     expect(calls[1]?.key).not.toBe(calls[0]?.key);
   });
 
@@ -588,7 +583,6 @@ describe("an asset's upload", () => {
       "complete",
     ]);
     expect(again?.key).toBe(first?.key);
-    // Learnt, the session's key is done with; a later start makes its own.
     expect(complete?.key).not.toBe(first?.key);
     expect(upload.beginKey).toBeNull();
   });
@@ -613,7 +607,6 @@ describe("an asset's upload", () => {
     const result = await runUpload(upload, fake.deps, { signal: stop.signal });
     expect(result.ok ? "" : result.message).toMatch(/may not have ended/);
     expect(upload.session?.id).toBe(ID);
-    // Asked again, online: ended, and let go.
     expect(await abandonUpload(upload, fake.deps)).toEqual({
       ok: false,
       kind: "cancelled",
@@ -704,7 +697,6 @@ describe("an asset's upload", () => {
       const result = await abandonUpload(upload, fake.deps);
       expect(result.ok ? "" : result.message, String(unsaid.status)).toMatch(/may not have ended/);
       expect(holdsSession(upload)).toBe(true);
-      // Asked again, the start answers its session, which is then ended.
       expect(await abandonUpload(upload, fake.deps)).toMatchObject({ kind: "cancelled" });
       const calls = fake.routeCalls();
       expect(calls.map((c) => c.intent)).toEqual(["begin", "begin", "begin", "abort"]);

@@ -30,7 +30,6 @@ import { ReadsTooLargeError } from "./held-reads.js";
  * stops it (`ReadDeferred`) or fails it.
  */
 
-/** Why an evaluation ended `too_large`. */
 export type TooLargeReason =
   | "file"
   | "tree"
@@ -42,13 +41,11 @@ export type TooLargeReason =
   | "path";
 
 export interface CodeOwnerLimits {
-  /** Changes one slice lists at most. */
   readonly sliceChanges: number;
   /** Tree entries one slice reads at most. */
   readonly sliceScanned: number;
   /** Matcher steps one slice spends at most. */
   readonly sliceSteps: number;
-  /** Directories a path may be deep. */
   readonly maxDepth: number;
   /** An evaluation's totals. */
   readonly totalTrees: number;

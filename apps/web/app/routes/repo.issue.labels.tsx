@@ -25,7 +25,6 @@ export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
   return [{ title: `Labels of #${params.number} · ${params.owner}/${params.repo} · Fyrden` }];
 }
 
-/** Characters of a name search at most (a label's name holds 50). */
 const MAX_QUERY = 50;
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
@@ -58,7 +57,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** A labels picker's answer is about its viewer and issue. */
 type PickerScope = Scope & { owner: string; repo: string; number: number; page: "labels" };
 
 export async function action({
@@ -92,7 +90,6 @@ export async function action({
   return send(call.method, call.path, call.body, intent, "Nothing was changed.");
 }
 
-/** The labels an issue or pull request carries, to add and take off: by name, a page at a time. */
 export default function IssueLabels({ loaderData }: Route.ComponentProps) {
   const result = useActionData<typeof action>();
   const busy = useNavigation().state !== "idle";

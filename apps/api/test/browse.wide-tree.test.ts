@@ -70,7 +70,6 @@ describe("a path's history through a wide tree", () => {
     expect(await history(name(ENTRIES - 1))).toEqual([second, first]);
     expect(await history(name(0))).toEqual([first]);
     expect(await history("missing")).toEqual([]);
-    // A file is not a directory.
     expect(await history(`${name(0)}/inside`)).toEqual([]);
   });
 });

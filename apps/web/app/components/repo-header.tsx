@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link } from "react-router";
 import type { Repo } from "../lib/types.js";
 
-/** A repository's name, its pages, and how to clone it. */
 export function RepoHeader({
   repo,
   origin,

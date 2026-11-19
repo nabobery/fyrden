@@ -10,7 +10,6 @@ import {
   type Rights,
 } from "@fyrden/domain";
 
-/** One kind of holder: no rights, one repository role, an account member or owner, an instance administrator. */
 export type Holder = "none" | RepoRole | "account-member" | "account-owner" | "instance-admin";
 
 export const HOLDERS: readonly Holder[] = [

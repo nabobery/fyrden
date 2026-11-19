@@ -46,7 +46,6 @@ const review = (
   dismissed: false,
   ...over,
 });
-/** An agent of alice's: rooted in her. */
 const alicesAgent = (id: string, state: ReviewFact["state"] = "APPROVED") =>
   review(id, state, { reviewerRoot: "alice", byAgent: true });
 
@@ -101,7 +100,6 @@ describe("ownershipCandidates", () => {
       ),
       settings({ dismissStale: true, allowAgentApprovals: true }),
     );
-    // The agent lacks write access of its own; the rest are dropped for their own reasons.
     expect(candidates.map((c) => c.principal)).toEqual(["alice"]);
   });
 
@@ -263,7 +261,6 @@ describe("codeOwnerClaims, for an agent and its user both in an owner team", () 
     expect([...claims.pairs].sort()).toEqual(
       [membershipKey("t_core", "agt_a"), membershipKey("t_core", "alice")].sort(),
     );
-    // Both lost (as a confirmation of both would find): nothing satisfies the rule.
     const lost = codeOwnersWithout(required, {
       principals: new Set(),
       teams: new Set(),
@@ -284,7 +281,6 @@ describe("codeOwnerRefusal, with memberships not read for every candidate", () =
     expect(codeOwnerRefusal(input([review("bob", "APPROVED")]), required, settings())).toBe(
       "code owners could not be worked out for this merge",
     );
-    // Every candidate's memberships read: judged.
     expect(codeOwnerRefusal(input([review("alice", "APPROVED")]), required, settings())).toBe(
       "code owners must approve: line 5 (path/5: @acme/t_core)",
     );

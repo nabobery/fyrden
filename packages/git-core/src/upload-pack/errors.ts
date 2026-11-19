@@ -22,7 +22,6 @@ export class UploadPackError extends Error {
   constructor(
     readonly code: UploadPackErrorCode,
     message: string,
-    /** The object the error is about, when there is one. */
     readonly oid?: Oid,
   ) {
     super(message);

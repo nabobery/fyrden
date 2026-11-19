@@ -11,13 +11,11 @@ import type { PullRequest } from "../lib/pulls.js";
 /** A merge's answer: done, still rebasing in the background, or refused (with the reason). */
 export type MergeAnswer = { ok?: string; pending?: boolean; error?: string } | undefined;
 
-/** Time between asks while a rebase goes on in the background (milliseconds). */
 const REBASE_RECHECK_MS = 3000;
 /** Time between looks while mergeability is worked out (milliseconds), and looks at most. */
 const MERGEABILITY_RECHECK_MS = 5000;
 const MERGEABILITY_LOOKS = 12;
 
-/** What the rulesets ask, in words. */
 function requirements(rules: MergeRules): string[] {
   const out: string[] = [];
   if (rules.approvals > 0)
@@ -102,7 +100,6 @@ function RequiredChecks({ checks }: { checks: RequiredChecksView | null | undefi
   );
 }
 
-/** The pull request's mergeability, in words, and what to do about it. */
 function Mergeability({ pull, conflicts }: { pull: PullRequest; conflicts: string }) {
   const revalidator = useRevalidator();
   const looks = useRef(0);
@@ -198,7 +195,6 @@ export function MergeBox({
   const pending = merge.state === "idle" && merge.data?.pending === true;
   const updating = update.state !== "idle";
   const submit = merge.submit;
-  // A rebase still going on in the background: ask again until it answers.
   useEffect(() => {
     if (!pending || stopped || !sent.current) return;
     const form = sent.current;

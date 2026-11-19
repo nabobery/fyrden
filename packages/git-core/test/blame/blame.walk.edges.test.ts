@@ -68,7 +68,6 @@ function answer(source: FakeSource, state: BlameState): string[] {
 
 const settled = (state: BlameState) => [...state.ranges.subarray(0, 4 * state.rangeCount)];
 
-/** A source whose answers can be changed between reads. */
 class ChangingSource extends FakeSource {
   commitGone = new Set<string>();
   fileGone = new Set<string>();
@@ -115,7 +114,6 @@ describe("a whole step refused", () => {
     expect(got[0]).toBe("p@1");
     expect(got.at(-1)).toBe("p@42");
     expect(got.slice(1, 41)).toEqual(new Array(40).fill("diff_budget"));
-    // The two ends, each its own range, and the refused middle.
     expect(state.rangeCount).toBe(3);
   });
 });
@@ -229,14 +227,12 @@ describe("one advance at a time", () => {
     );
     expect((await first).stop).toBe("done");
     expect(answer(source, decodeBlameState(encodeBlameState(state)))).toEqual(["a@1", "b@2"]);
-    // Once it's done, the state can be advanced again.
     expect((await advanceBlame(state, source, SLICE)).stop).toBe("done");
   });
 });
 
 describe("the queue's order", () => {
   it("tells apart commits whose object ids share a first byte", async () => {
-    // oidOfName("p14") and oidOfName("p32") both start 0x94.
     expect(oidToHex(oidOfName("p14")).slice(0, 2)).toBe(oidToHex(oidOfName("p32")).slice(0, 2));
     const history: History = {
       p14: { file: f("from14") },
@@ -401,7 +397,6 @@ describe("the state's limits, met exactly", () => {
     });
     const state = await start(source, "b");
     await advanceBlame(state, source, { ...SLICE, maxSteps: 1 });
-    // b's own lines settled; a's pending. Now a step that can't fit.
     expect(answer(source, state)).toEqual(["?", "b@2", "?", "b@4"]);
     state.stateLimit = true;
     state.queue = [];
@@ -417,7 +412,6 @@ describe("the state's limits, met exactly", () => {
   });
 });
 
-/** A source whose commit facts carry one long field for one commit. */
 class LongFieldSource extends FakeSource {
   constructor(
     history: History,
@@ -762,7 +756,6 @@ describe("where git might follow a rename", () => {
     expect(answer(source, await finished(source, "b"))).toEqual(
       new Array(3).fill("rename_possible"),
     );
-    // Only the two roots: the removed directory and the differing one go unread.
     expect(source.treeReads).toHaveLength(2);
   });
 
@@ -807,7 +800,6 @@ describe("where git might follow a rename", () => {
       };
     };
     expect(await blameOf(history(128), "m")).toEqual(new Array(3).fill("rename_possible"));
-    // With room to finish, it finds the identical copy: refused all the same.
     expect(await blameOf(history(100), "m")).toEqual(new Array(3).fill("rename_possible"));
   });
 
@@ -839,7 +831,6 @@ describe("where git might follow a rename", () => {
         "b",
       ),
     ).toEqual(new Array(3).fill("rename_possible"));
-    // The same history with fewer differing directories is checked to the end.
     const few = (side: string) =>
       Object.fromEntries(Array.from({ length: 100 }, (_, k) => [`d${k}/x`, `${side}${k}\n`]));
     expect(

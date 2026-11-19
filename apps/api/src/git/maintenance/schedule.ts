@@ -8,7 +8,6 @@ const DAY = 24 * 60 * 60 * 1000;
 
 import type { MaintenancePolicy } from "./policy.js";
 
-/** The maintenance jobs of a repository, one of each (job ids). */
 export const REPACK_JOB_ID = "repack";
 export const GC_JOB_ID = "gc";
 export const REACHABILITY_JOB_ID = "reachability";

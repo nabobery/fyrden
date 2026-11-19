@@ -12,13 +12,11 @@ import type { OperationDef, Problem } from "@fyrden/api-contract";
 
 /** Proposed. */
 export const IDEMPOTENCY_POLICY = {
-  /** How long a key's answer is kept. */
   ttlMs: 24 * 60 * 60 * 1000,
   /** A request marked running longer than this has an unknown outcome. */
   runningMaxMs: 10 * 60 * 1000,
   /** Largest answer kept; a larger one is not replayed (the retry is refused). */
   maxResponseBytes: 256 * 1024,
-  /** Rows the cron deletes per run. */
   reapPerRun: 1_000,
 } as const;
 

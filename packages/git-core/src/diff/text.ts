@@ -36,7 +36,6 @@ export function splitLines(bytes: Uint8Array, maxLines = DEFAULT_MAX_LINES): Lin
   return { bytes, starts, count };
 }
 
-/** Line `i`'s bytes. */
 export function lineAt(lines: Lines, i: number): Uint8Array {
   return lines.bytes.subarray(lines.starts[i], lines.starts[i + 1]);
 }

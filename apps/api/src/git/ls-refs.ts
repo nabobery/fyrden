@@ -25,7 +25,6 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
   return a.length - b.length;
 }
 
-/** A ref selected for an ls-refs response. */
 export interface ListedRef {
   readonly name: string;
   readonly oid: Oid;

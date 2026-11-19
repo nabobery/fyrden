@@ -55,7 +55,6 @@ let drawn = 0;
 
 const DARK_SCHEME = "(prefers-color-scheme: dark)";
 
-/** A forced scheme from the site header's choice, else the operating system's. */
 function isDark(): boolean {
   const forced = document.documentElement.dataset.theme;
   return forced ? forced === "dark" : window.matchMedia(DARK_SCHEME).matches;
@@ -104,7 +103,6 @@ function renderInScheme(
 /** An SVG as an image's `src`: an image runs and loads nothing. */
 const imageSource = (svg: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 
-/** Each figure's image and source, gone with the figure. */
 const drawings = new WeakMap<object, { image: HTMLImageElement; source: string }>();
 
 /** Draws the page's diagrams again in the scheme now in force, each keeping its drawing on failure. */
@@ -116,9 +114,7 @@ export async function redrawDiagrams(): Promise<void> {
     try {
       const svg = await renderInScheme(mermaid, drawing.source, () => !figure.isConnected);
       if (svg !== null) drawing.image.src = imageSource(svg);
-    } catch {
-      // It keeps the drawing it has.
-    }
+    } catch {}
   }
 }
 
@@ -143,7 +139,6 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
     try {
       const source = code.textContent ?? "";
       const svg = await renderInScheme(mermaid, source, isCancelled);
-      // The component may have gone (or rendered again) while this one was drawn.
       if (svg === null || isCancelled()) return;
       const image = document.createElement("img");
       image.alt = "Diagram";
@@ -153,8 +148,6 @@ export async function drawDiagrams(blocks: Element[], isCancelled: () => boolean
       figure.appendChild(image);
       code.parentElement?.replaceWith(figure);
       drawings.set(figure, { image, source });
-    } catch {
-      // A diagram Mermaid cannot draw stays as its source.
-    }
+    } catch {}
   }
 }

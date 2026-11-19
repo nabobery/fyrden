@@ -25,7 +25,6 @@ export function fakeApi(answer: (request: Request) => Response | Promise<Respons
   return { context, calls };
 }
 
-/** A JSON reply. */
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
     status,

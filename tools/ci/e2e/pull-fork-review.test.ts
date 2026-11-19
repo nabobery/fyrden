@@ -22,11 +22,8 @@ import {
 const REPO = "reviewed";
 
 let forge: Forge;
-/** Owns the base; bypasses its ruleset (pushes to main directly). */
 let maintainer: Account;
-/** Writes the base: reviews, updates branches and merges, held to the ruleset. */
 let reviewer: Account;
-/** Reads the base; owns the fork the pull requests come from. */
 let contributor: Account;
 let maintainerGit: Git;
 let contributorGit: Git;
@@ -108,7 +105,6 @@ async function openFromFork(branch: string, maintainerCanModify: boolean) {
   return { number: pull.number, head };
 }
 
-/** The maintainer moves the base's main on with a commit of its own (it bypasses the ruleset). */
 async function moveBase(file: string): Promise<string> {
   await maintainerGit.ok(["fetch", "-q", "origin", "main"], baseWork);
   await maintainerGit.ok(["checkout", "-q", "-B", "main", "FETCH_HEAD"], baseWork);
@@ -125,12 +121,10 @@ async function headReaches(number: number, sha: string) {
   });
 }
 
-/** The fork's branch on the server. */
 async function forkBranch(branch: string): Promise<string | undefined> {
   return (await contributorGit.remoteRefs(contributor.handle, REPO))[`refs/heads/${branch}`];
 }
 
-/** A merge refused because no approval of the head being merged stands. */
 const STALE = {
   status: 405,
   code: "merge_refused",
@@ -171,14 +165,12 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
   }, async () => {
     const { number, head } = await openFromFork("edits", false);
     await moveBase("edits-base-1.txt");
-    // Off: refused, and the fork's branch is left alone.
     expect(await refusal(updateBranch(number))).toMatchObject({
       status: 403,
       code: "maintainer_edits_off",
     });
     expect(await forkBranch("edits")).toBe(head);
 
-    // On: the update is a merge commit written to the fork's branch, which the base then follows.
     const allowed = await contributor.api.call("pulls.update", {
       ...at(),
       pull_number: number,
@@ -194,7 +186,6 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
     );
     await headReaches(number, updated.sha);
 
-    // Consent withdrawn: refused again, though it was allowed before.
     const withdrawn = await contributor.api.call("pulls.update", {
       ...at(),
       pull_number: number,
@@ -207,7 +198,6 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
       code: "maintainer_edits_off",
     });
     expect(await forkBranch("edits")).toBe(updated.sha);
-    // Only the author decides: the maintainer cannot turn it back on.
     expect(
       await refusal(
         maintainer.api.call("pulls.update", {
@@ -226,18 +216,15 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
     const { number, head } = await openFromFork("base-push", true);
     await approve(number, head);
     const moved = await moveBase("base-push-base.txt");
-    // The ruleset wants the base's latest commit in the pull request.
     expect(await refusal(mergeAt(number, head))).toMatchObject({
       status: 405,
       code: "merge_refused",
       detail: expect.stringMatching(/must include the latest commit of the branch/),
     });
 
-    // Brought up to date, a new head: the approval of the old one no longer counts.
     const updated = await updateOnceAllowed(number);
     await headReaches(number, updated.sha);
     expect(await refusal(mergeAt(number, updated.sha))).toMatchObject(STALE);
-    // An approval of another head does not do either.
     await approve(number, head);
     expect(await refusal(mergeAt(number, updated.sha))).toMatchObject(STALE);
 
@@ -256,7 +243,6 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
   }, async () => {
     const { number, head } = await openFromFork("fork-push", false);
     await approve(number, head);
-    // The fork's author pushes again; the base follows it in the background.
     const pushed = await contributorGit.commit(forkWork, { "fork-push.txt": "again\n" }, "again");
     await contributorGit.ok(["push", "-q", "origin", "fork-push"], forkWork);
     await headReaches(number, pushed);
@@ -264,7 +250,6 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
     await maintainerGit.ok(["fetch", "-q", "origin", pullRef], baseWork);
     expect(await maintainerGit.ok(["rev-parse", "FETCH_HEAD"], baseWork)).toBe(pushed);
 
-    // The old head is not the pull request's any more, and its approval does not count.
     expect(await refusal(mergeAt(number, head))).toMatchObject({ status: 409, code: "head_moved" });
     expect(await refusal(mergeAt(number, pushed))).toMatchObject(STALE);
 
@@ -273,7 +258,6 @@ describe("fork pull requests under a ruleset (wrangler dev)", () => {
     const merged = await mergeAt(number, pushed);
     expect(merged.merged).toBe(true);
     await maintainerGit.ok(["fetch", "-q", "origin", "main"], baseWork);
-    // The base merged the revision its pull request ref names.
     expect(await maintainerGit.ok(["log", "-1", "--format=%P", merged.sha], baseWork)).toBe(
       `${before} ${pushed}`,
     );

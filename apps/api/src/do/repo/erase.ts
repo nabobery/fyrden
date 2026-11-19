@@ -248,7 +248,6 @@ export async function eraseRepository(
     sql.exec("DELETE FROM ci_runs WHERE run_id = ?", run_id);
   }
 
-  // 3. Membership, and the account's access records of it.
   for (const network of networks) {
     metrics.count("do.request", { class: "NetworkDO", method: "removeMember" });
     await env.NETWORK.getByName(network).removeMember({ networkId: network, repoId });

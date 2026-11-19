@@ -16,7 +16,6 @@ const EXEC = 0o100755;
 const LINK = 0o120000;
 const TREE = 0o40000;
 
-/** A store of trees by id, built from nested descriptions, with a reader that counts. */
 class Store {
   readonly trees = new Map<string, TreeEntry[]>();
   #next = 1;
@@ -158,7 +157,6 @@ describe("diffTreesFrom", () => {
     let reads = 0;
     const first = await diffTreesFrom(
       async (oid) => {
-        // The root pair and d's pair read; e's deferred.
         if (++reads > 4) throw new ReadDeferred();
         return s.read(oid);
       },
@@ -235,7 +233,6 @@ describe("diffTreesFrom", () => {
     });
     expect(first.stop).toBe("accept");
     expect(first.changes.map((c) => c.path)).toEqual(["a/x"]);
-    // The root and `a`, `b` read; `c` never.
     expect(first.trees).toBe(3);
     const rest = await diffTreesFrom(s.read, null, b, first.next, {
       maxChanges: 100,

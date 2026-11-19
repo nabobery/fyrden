@@ -27,7 +27,6 @@ export function renderPage(
 /** A tag a hostile string must never become: one that runs script or loads anything. */
 export const ACTIVE_TAG = /<(script|img|svg|iframe|object|embed|style|link|meta|base)\b/i;
 
-/** A string that is markup, a script and an attribute break-out wherever it lands unescaped. */
 export const HOSTILE = `<script>alert(1)</script><img src=x onerror="alert(2)">"' onmouseover="alert(3)`;
 
 /** `text` as React writes it into HTML (text or an attribute value). */

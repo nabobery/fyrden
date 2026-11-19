@@ -25,7 +25,6 @@ describe("existence check over a 100k-object pack", () => {
     });
     const idx = PackIdx.parse(written.bytes);
 
-    // What the registry row and pack_filters rows hold, and how they come back.
     const stored = PackExistenceSummary.fromIdx(idx);
     const fanoutBlob = encodeFanout(stored.fanout);
     expect(fanoutBlob.length).toBe(1024);
@@ -45,11 +44,9 @@ describe("existence check over a 100k-object pack", () => {
       if (maybe) bloomPositives++;
       else expect(r2.calls).toBe(before);
     }
-    // Each false positive costs one read of the oid's fanout bucket.
     expect(r2.calls).toBe(bloomPositives);
     expect(bloomPositives / N).toBeLessThan(0.012);
 
-    // Present oids: every one is found at its offset.
     const reads = r2.calls;
     for (let i = 0; i < N; i += 97) {
       const oid = members.subarray(i * OID_BYTES, (i + 1) * OID_BYTES);
@@ -64,7 +61,6 @@ describe("existence check over a 100k-object pack", () => {
     for (let i = 0; i < 10; i++) oids[i * 20] = 0x42;
     const summary = new PackExistenceSummary(
       Uint32Array.from({ length: 256 }, (_, b) => (b >= 0x42 ? 10 : 0)),
-      // A filter that answers yes to everything.
       saturated(),
     );
     const other = new Uint8Array(20).fill(0x43);

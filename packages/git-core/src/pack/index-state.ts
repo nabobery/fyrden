@@ -43,7 +43,6 @@ export interface PackEntries {
   crc32(index: number): number;
   /** Bytes the entry takes in the pack: header plus zlib stream. */
   entryLength(index: number): number;
-  /** How the entry is stored. */
   kind(index: number): EntryKind;
   /** Delta chain length: 0 for a whole object, 1 for a delta against one. */
   depth(index: number): number;
@@ -120,7 +119,6 @@ export class PackIndexState implements PackEntries {
     return i;
   }
 
-  /** Records the result of resolving a delta. */
   resolve(index: number, oid: Uint8Array, type: ObjectType, depth: number): void {
     this.oids.set(oid, index * OID_BYTES);
     this.#types[index] = ENTRY_TYPE_CODES[type];

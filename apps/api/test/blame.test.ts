@@ -63,7 +63,6 @@ type Line =
   | { commit: string; line: number; summary: string; name: string; email: string; date: string }
   | { unresolved: string };
 
-/** Each line of the file, from the ranges and facts of every page. */
 function lines(pages: BlameAnswer[]): Line[] {
   const total = pages.at(-1)?.lines ?? 0;
   const out: Line[] = new Array(total);

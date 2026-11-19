@@ -10,7 +10,6 @@ class Fake implements Attachable {
   root: unknown = undefined;
   setups = 0;
   setup(root: Document) {
-    // As the renderer's: a second setup while set up does nothing.
     if (this.root !== undefined) return;
     this.root = root;
     this.setups++;
@@ -32,13 +31,11 @@ describe("the page's virtualizer", () => {
       made.push(f);
       return f;
     };
-    // A file renders, then the page's effect runs (children's effects first).
     const first = owner.instance(create);
     owner.ready();
     expect(first.root).toBeUndefined();
     owner.attach();
     expect(first.root).toBe(document);
-    // Another file drawn later shares it, already set up.
     expect(owner.instance(create)).toBe(first);
     owner.ready();
     expect(made).toHaveLength(1);
@@ -70,7 +67,6 @@ describe("the page's virtualizer", () => {
     again.attach();
     expect(fresh).not.toBe(old);
     expect(fresh.root).toBe(document);
-    // A file drawn on the page mounted again, after it attached.
     again.ready();
     expect(fresh.setups).toBe(1);
   });

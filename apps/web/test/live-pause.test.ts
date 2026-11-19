@@ -10,7 +10,6 @@ const NOW = Date.UTC(2026, 10, 1, 15, 30);
 const TOMORROW = Date.UTC(2026, 10, 2);
 const pause = { kind: "budget", retryAt: TOMORROW } as const;
 
-/** A tab's storage; `failing`: every call throws, as a blocked or full one does. */
 function tab(origin = "https://fyrden.test") {
   const items = new Map<string, string>();
   const state = { failing: false };
@@ -51,7 +50,6 @@ describe("a tab's daily pause", () => {
     ]);
     expect(readPause(viewer, NOW, t.env)).toEqual(pause);
     expect(readPause(viewer, TOMORROW - 1, t.env)).toEqual(pause);
-    // Passed: let go.
     expect(readPause(viewer, TOMORROW, t.env)).toBeNull();
     expect(t.items.size).toBe(0);
   });
@@ -103,7 +101,6 @@ describe("a tab's daily pause", () => {
     t.state.failing = true;
     writePause(viewer, pause, t.env);
     expect(readPause(viewer, NOW, t.env)).toEqual(pause);
-    // Readable again, the storage has none: the memory's still holds (this page's).
     t.state.failing = false;
     expect(t.items.size).toBe(0);
     expect(readPause(viewer, NOW, t.env)).toEqual(pause);

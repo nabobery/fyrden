@@ -9,7 +9,6 @@
     // Query strings can carry tokens; never store them in logs or traces.
     "redact_query_string": true,
     "logs": { "enabled": true, "head_sampling_rate": 1 },
-    // Sampled to keep trace volume low; raise while debugging.
     "traces": { "enabled": true, "head_sampling_rate": 0.1 }
   },
 
@@ -21,7 +20,6 @@
       { "name": "USER", "class_name": "UserDO" },
       { "name": "RUN", "class_name": "RunDO" },
       { "name": "CONCURRENCY", "class_name": "ConcurrencyDO" },
-      // One user deletion's runner (its alarm advances the job).
       { "name": "DELETION", "class_name": "DeletionDO" },
       // Runs the five-minute maintenance cron's work, with a Durable Object's CPU.
       { "name": "MAINTENANCE", "class_name": "MaintenanceDO" }

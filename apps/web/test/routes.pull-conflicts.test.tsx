@@ -64,7 +64,6 @@ describe("conflict markers", () => {
     ]);
     const crlf = "<<<<<<< topic\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> main\r\n";
     expect(readConflicts(crlf, LABELS).regions.map((r) => r.base)).toEqual(["theirs\r\n"]);
-    // A separator outside a conflict (a heading's underline) is content.
     expect(readConflicts("Title\n=======\n", LABELS)).toEqual({
       regions: [],
       ambiguous: false,
@@ -74,15 +73,11 @@ describe("conflict markers", () => {
 
   it("that do not read as whole conflicts are ambiguous, never a clean file", () => {
     for (const text of [
-      // A start marker inside a conflict (literal, or nested).
       "<<<<<<< topic\nbefore\n<<<<<<< topic\nx\n=======\nbase\n>>>>>>> main\n",
-      // Left open.
       "<<<<<<< topic\nours\n=======\ntheirs\n",
       "<<<<<<< topic\nours\n",
-      // An end with no start, or before its separator.
       "x\n>>>>>>> main\n",
       "<<<<<<< topic\nours\n>>>>>>> main\n",
-      // Two separators.
       "<<<<<<< topic\na\n=======\nb\n=======\nc\n>>>>>>> main\n",
     ]) {
       const reading = readConflicts(text, LABELS);
@@ -190,7 +185,6 @@ describe("the conflicts page", () => {
     const unknown = page(files, {}, { viewer: null, viewerKnown: false });
     expect(unknown).toContain("reload the page to resolve the conflicts here");
     expect(unknown).not.toContain(`value="${SNAPSHOT}"`);
-    // Which files conflict, and how, is still there to read.
     expect(unknown).toContain("<code>a.txt</code>");
     expect(unknown).toContain("&lt;&lt;&lt;&lt;&lt;&lt;&lt;");
     expect(unknown).not.toContain("<textarea");
@@ -202,8 +196,6 @@ describe("the conflicts page", () => {
   it("edits the editable files, reading their markers only once in the browser", () => {
     const html = page([{ path: "a.txt", kind: "content", editable: true, content: MARKED }]);
     expect(html).toContain(`value="${SNAPSHOT}"`);
-    // The server's page: the text to edit, the markers not read yet, every control that
-    // needs them off until the browser has read them.
     expect(html).toContain("Reading the conflict markers…");
     expect(html).not.toContain("conflicts left in this file");
     expect(
@@ -211,7 +203,6 @@ describe("the conflicts page", () => {
         /<button type="button" disabled="">(Previous conflict|Next conflict|Keep head|Keep base|Keep both)/g,
       ),
     ).toHaveLength(5);
-    // What the browser then says, as it reads them (also when they are ambiguous).
     expect(leftText(readConflicts(MARKED, LABELS))).toBe("2 conflicts left in this file.");
     expect(leftText(null)).toBe("Reading the conflict markers…");
   });
@@ -298,7 +289,6 @@ describe("resolving conflicts", () => {
     const { outcome } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () =>
       json({ code: "head_moved", detail: "The head moved since the conflicts were read." }, 409),
     );
-    // The refusal names the snapshot it was about, so a later read can tell it is old news.
     expect(outcome).toEqual({
       error: "The head moved since the conflicts were read.",
       stale: true,
@@ -306,7 +296,6 @@ describe("resolving conflicts", () => {
     });
   });
 
-  /** What the page says when it cannot know whether the merge was made. */
   const UNKNOWN =
     "It is not known whether the merge was made: look at the pull request before sending it again.";
 
@@ -316,7 +305,6 @@ describe("resolving conflicts", () => {
     });
     expect(body).toEqual({ conflict_snapshot: SNAPSHOT, files: [] });
     expect(outcome).toEqual({ error: UNKNOWN, snapshot: SNAPSHOT });
-    // The page keeps its editors and says why; the next read tells whether the merge was made.
     expect(
       conflictsView({
         adopted: SNAPSHOT,
@@ -339,7 +327,6 @@ describe("resolving conflicts", () => {
       const { outcome } = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, reply);
       expect(outcome).toEqual({ error: UNKNOWN, snapshot: SNAPSHOT });
     }
-    // A refusal with its problem is one.
     const refused = await resolve({ conflict_snapshot: SNAPSHOT, count: "0" }, () =>
       json({ code: "too_large", detail: "Too large to merge here." }, 422),
     );
@@ -553,7 +540,6 @@ describe("the conflicts page's state", () => {
   });
 
   it("keeps the edits, refusing to send them, when the branches moved and a read again fails", () => {
-    // Sent, refused: the base moved since.
     const refused = { error: "The base moved.", stale: true, snapshot: A };
     expect(view({ latest: B, answer: refused })).toMatchObject({
       editors: true,
@@ -562,14 +548,11 @@ describe("the conflicts page's state", () => {
       showRefusal: true,
       readAgain: "adopt",
     });
-    // The read after the refusal fails: the editors stay, nothing can be sent, and reading
-    // again asks for a new read instead of taking a failed one.
     expect(view({ latest: null, failure: "Too large.", answer: refused })).toMatchObject({
       editors: true,
       canSubmit: false,
       readAgain: "revalidate",
     });
-    // Read again with success: the fresh conflicts are taken, the old refusal no longer shown.
     expect(view({ adopted: B, latest: B, answer: refused })).toMatchObject({
       editors: true,
       moved: false,
@@ -582,7 +565,6 @@ describe("the conflicts page's state", () => {
     expect(view({ adopted: null, latest: B })).toMatchObject({ editors: false, moved: true });
     expect(view({ latest: null })).toMatchObject({ editors: true, moved: true, canSubmit: false });
     expect(view({ answer: { ok: true } })).toMatchObject({ editors: false, moved: false });
-    // Closed meanwhile: the edits stay on the page, nothing is sent.
     expect(view({ open: false, latest: null })).toMatchObject({ editors: true, canSubmit: false });
   });
 });
@@ -600,7 +582,6 @@ describe("the conflicts form as a browser sends it", () => {
     });
   }
 
-  /** Files of nothing but line breaks, as a browser sends them. */
   function newlineFiles(files: number, lines: number): Request {
     const fields: Record<string, string> = {
       viewer: VIEWER,
@@ -635,7 +616,6 @@ describe("the conflicts form as a browser sends it", () => {
     expect(outcome).toMatchObject({ ok: true });
     const post = calls.find((c) => c.method === "POST");
     if (!post) throw new Error("not sent");
-    // The API's own reader takes it.
     const read = await readBoundedBody(post.clone(), MAX_JSON_BODY_BYTES);
     expect(read).toBeDefined();
     const body = (await post.json()) as { files: { content: string }[] };

@@ -44,7 +44,6 @@ function keyOwner(ctx: OpContext): string {
   return ctx.auth.principalId;
 }
 
-/** The `users.ssh_signing_keys.create` operation. */
 export async function createSshSigningKeyOperation(
   ctx: OpContext,
   input: Input<typeof createSshSigningKey>,
@@ -158,7 +157,6 @@ export async function listSshSigningKeysOperation(
   };
 }
 
-/** The `users.ssh_signing_keys.get` operation. */
 export async function getSshSigningKeyOperation(
   ctx: OpContext,
   input: Input<typeof getSshSigningKey>,
@@ -175,7 +173,6 @@ export async function getSshSigningKeyOperation(
   return output(row);
 }
 
-/** The `users.ssh_signing_keys.delete` operation. */
 export async function deleteSshSigningKeyOperation(
   ctx: OpContext,
   input: Input<typeof deleteSshSigningKey>,

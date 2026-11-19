@@ -22,7 +22,6 @@ describe("baseTreeOf", () => {
       objects: [],
     });
     expect((await baseTreeOf(s.source, history, [b1])).kind).toBe("tree");
-    // Two bases adding f differently from nothing: no base to merge from.
     expect(await baseTreeOf(s.source, history, [b1, b2])).toEqual({ kind: "manual" });
   });
 
@@ -45,7 +44,6 @@ describe("baseTreeOf", () => {
     const three = await baseTreeOf(s.source, history, [left, right, third]);
     expect(three.kind).toBe("tree");
     expect(await baseTreeOf(s.source, history, [left, right], {}, 8)).toEqual({ kind: "manual" });
-    // Every step spends one budget: five bases cannot each read a fresh allowance.
     await expect(
       baseTreeOf(s.source, history, [left, right, third, left, right], {
         budget: new MergeBudget(4),
@@ -81,14 +79,12 @@ describe("baseTreeOf, steps and bounds", () => {
       },
       treeOf: async (c: Oid) => c,
     };
-    // The first step makes a 14-byte file; the second merges it with the third base's.
     const base = await baseTreeOf(s.source, history, [left, right, third], { maxFileBytes: 14 });
     if (base.kind !== "tree" || !base.tree) return expect.fail(base.kind);
     const made = new Map(base.objects.map((o) => [oidToHex(o.oid), o]));
     const [f] = await listed(s, base.tree, base.objects);
     expect(dec.decode(made.get(f?.[2] as string)?.bytes)).toBe("0\n1\n2\nX\n4\n5\n6\n");
     expect(asked).toEqual([[right, left].map(oidToHex), [third, left, right].map(oidToHex)]);
-    // The file the first step made is over a smaller bound: the second step cannot merge it.
     expect(await baseTreeOf(s.source, history, [left, right, third], { maxFileBytes: 13 })).toEqual(
       { kind: "manual" },
     );
@@ -103,7 +99,6 @@ describe("baseTreeOf, steps and bounds", () => {
     const q = t({ f: "f\n", g: "G\n" });
     const left = t({ f: "F\n", g: "G\n", h: "h\n" });
     const right = t({ f: "F\n", g: "G\n", k: "k\n" });
-    // Left and right have two merge bases, p and q, which have one.
     const bases = new Map([
       [oidToHex(right), [p, q]],
       [oidToHex(q), [root]],
@@ -121,7 +116,6 @@ describe("baseTreeOf, steps and bounds", () => {
       ["h", "100644", blob("h\n")],
       ["k", "100644", blob("k\n")],
     ]);
-    // The virtual base of p and q, then the merge from it.
     const [virtual] = base.objects;
     expect(base.objects.map((o) => o.type)).toEqual(["tree", "tree"]);
     expect(await listed(s, virtual?.oid as Oid, base.objects)).toEqual([
@@ -135,7 +129,6 @@ describe("baseTreeOf, steps and bounds", () => {
     const [x, y] = [s.tree({ f: { oid: s.blob("x\n") } }), s.tree({ f: { oid: s.blob("y\n") } })];
     let asked = 0;
     const history = {
-      // Every pair has the same two merge bases again.
       mergeBases: async () => {
         if (++asked > 100) throw new Error("no depth bound");
         return [x, y];

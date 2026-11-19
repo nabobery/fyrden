@@ -55,7 +55,6 @@ const strength = (reason: string) => {
 };
 const stronger = (a: string, b: string) => (strength(b) < strength(a) ? b : a);
 
-/** The stronger of two reasons. */
 export const strongestReason = (a: InboxReason, b: InboxReason): InboxReason =>
   stronger(a, b) as InboxReason;
 
@@ -176,7 +175,6 @@ const SUBJECTS = ["issue", "pull"] as const;
 export const MERGE_CHUNK = 8;
 export type SubjectKind = (typeof SUBJECTS)[number];
 
-/** What a list of threads asks for (see `Inbox.page`). */
 export interface InboxQuery {
   /** Only unread threads (GitHub's default: `all=false`). */
   readonly unreadOnly: boolean;
@@ -193,7 +191,6 @@ export interface InboxQuery {
   readonly limit: number;
 }
 
-/** A thread as readers get it. */
 export interface InboxThread {
   readonly id: string;
   readonly repoId: string;

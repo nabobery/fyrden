@@ -3,7 +3,6 @@ import type { getPullRequiredChecks, Output } from "@fyrden/api-contract";
 /** A pull request's required checks, judged on its head, as the API answers them. */
 export type RequiredChecks = Output<typeof getPullRequiredChecks>;
 
-/** The merge methods, in the order the merge box offers them. */
 export const MERGE_METHODS = ["merge", "squash", "rebase"] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
@@ -17,7 +16,6 @@ export interface MergeRules {
   lastPushApproval: boolean;
   upToDate: boolean;
   signatures: boolean;
-  /** The rulesets these come from, by name. */
   rulesets: string[];
 }
 

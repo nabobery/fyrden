@@ -334,7 +334,6 @@ function parseJson(body: Uint8Array | ArrayBuffer | string): unknown {
   }
 }
 
-/** The server's identity, as the SDK names it on results. */
 const SERVER_INFO = { name: "fyrden", version: API_VERSION } as const;
 
 /** A server with only what a listen request's validation reads: its capabilities. */

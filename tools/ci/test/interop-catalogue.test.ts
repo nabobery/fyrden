@@ -9,7 +9,6 @@ import { CATALOGUE } from "../interop/cases/index.ts";
 
 const gitSource = process.env.FYRDEN_GIT_SOURCE;
 
-/** The `test_expect_success` / `test_expect_failure` titles of a git test script. */
 function titles(script: string): string[] {
   const out: string[] = [];
   // Optional prerequisites (possibly followed by a line continuation), then a

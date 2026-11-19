@@ -1,4 +1,3 @@
-# Dependencies and build output
 node_modules/
 dist/
 build/
@@ -7,24 +6,19 @@ coverage/
 .vitest/
 *.tsbuildinfo
 
-# Cloudflare / Wrangler
 .wrangler/
 .dev.vars
 .dev.vars.*
 
-# Environment and secrets
 .env
 .env.*
 !.env.example
 
-# Logs and OS files
 *.log
 .DS_Store
 
-# React Router typegen output
 .react-router/
 
-# Turborepo
 .turbo/
 
 # Generated per account by `fyrden deploy`
@@ -35,6 +29,5 @@ coverage/
 # Written for a Schemathesis run (rate limits raised), removed after it
 **/wrangler.schemathesis-*.jsonc
 
-# Stryker mutation testing
 .stryker-tmp/
 **/reports/mutation/

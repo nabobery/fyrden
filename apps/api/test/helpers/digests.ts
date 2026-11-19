@@ -108,7 +108,6 @@ export const job = async (repoId: string, kind: string) =>
     )
   )[0];
 
-/** The repository's digest events since `from`. */
 export const digestEvents = (repoId: string, from = 0) =>
   rows<{ event: string }>(
     repoId,

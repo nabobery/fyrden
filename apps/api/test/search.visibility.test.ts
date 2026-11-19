@@ -18,7 +18,6 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 /** A repository with an issue: its id. */
@@ -72,7 +71,6 @@ const visible = async (repoId: string) =>
       .first<{ visible: number }>()
   )?.visible;
 
-/** The source's live projected issues. */
 const documents = async (repoId: string) =>
   (
     await db

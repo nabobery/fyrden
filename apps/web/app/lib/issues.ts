@@ -9,11 +9,9 @@ import { repoApiPath } from "./pulls.js";
 export type Issue = Output<typeof getIssue>;
 export type IssuesPage = Output<typeof listIssues>;
 
-/** `/repos/{owner}/{repo}/issues/{number}` for the API. */
 export const issueApiPath = (owner: string, repo: string, number: number | string): string =>
   `${repoApiPath(owner, repo)}/issues/${encodeURIComponent(String(number))}`;
 
-/** An issue's page in the web app. */
 export const issuePage = (owner: string, repo: string, number: number | string): string =>
   `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${encodeURIComponent(String(number))}`;
 
@@ -49,7 +47,6 @@ export function listingOf(url: URL): {
   return { state, kind, filters };
 }
 
-/** What an issue's state reads as (a pull request's, for one listed among issues). */
 export function issueStatus(issue: Pick<Issue, "state" | "state_reason" | "pull_request">): {
   label: string;
   className: string;

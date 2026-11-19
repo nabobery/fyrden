@@ -134,7 +134,6 @@ async function deliver(bodies: unknown[], on: Env = env, now?: number) {
   return getQueueResult(batch, ctx);
 }
 
-/** An events queue that records what is sent to it. */
 function capturingQueue() {
   const sent: { body: unknown; delaySeconds: number | undefined }[] = [];
   const queue = envWith({
@@ -147,7 +146,6 @@ function capturingQueue() {
   return { queue, sent };
 }
 
-/** The test environment with some bindings replaced. */
 const envWith = (overrides: Partial<Env>): Env =>
   // A proxy, so the shared `env` is never changed.
   new Proxy(env, {
@@ -210,7 +208,6 @@ describe("events consumer", () => {
         async ({ n, extra }, seeds) => {
           const repoId = await listedRepo();
           const versions = [...Array.from({ length: n }, (_, i) => i + 1), ...extra];
-          // Shuffle with the generated seeds.
           const order = versions
             .map((v) => ({ v, k: seeds.next().value as number }))
             .sort((a, b) => a.k - b.k)

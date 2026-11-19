@@ -106,9 +106,6 @@ export async function hashToken(token: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// --- Detecting tokens in text (log redaction and leak checks) ---
-
-/** A Fyrden token in plain text. */
 export const TOKEN_IN_TEXT = new RegExp(PREFIX_SOURCE + BODY_SOURCE, "g");
 const TOKEN_PREFIX = new RegExp(PREFIX_SOURCE);
 /** A webhook signing secret in plain text (`whsec_` and its base64 bytes). */

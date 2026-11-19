@@ -31,11 +31,9 @@ export const MAX_RULE_OWNERS = 32;
 /** Owner names a file holds at most, all rules together. Proposed. */
 export const MAX_FILE_OWNERS = 4_096;
 
-/** A team's slug, as Fyrden makes them. */
 const TEAM_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_TEAM_SLUG_LENGTH = 100;
 
-/** An owner a rule names. */
 export type CodeOwner =
   | { readonly kind: "user"; readonly handle: string }
   | { readonly kind: "team"; readonly org: string; readonly slug: string };
@@ -129,7 +127,6 @@ function tokensOf(line: string, max: number): { tokens: Token[]; tooLong?: numbe
   let startColumn = 0;
   let column = 0;
   let bytes = 0;
-  // Where reading stopped: the line's end, or a comment.
   let end = line.length;
   for (let i = 0; i < line.length; ) {
     const code = line.codePointAt(i) as number;

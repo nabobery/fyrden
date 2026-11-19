@@ -1,4 +1,3 @@
-# Slow suites that do not gate pull requests.
 name: Nightly
 
 on:

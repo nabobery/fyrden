@@ -13,7 +13,6 @@ let stack: WebStack;
 let page: Page;
 const handle = "ada";
 const name = "issues";
-/** A title that is markup wherever it lands unescaped. */
 const HOSTILE = "<img src=x onerror=window.pwned=1> crash";
 
 const accessible = (what: string) => axe(page, what);
@@ -67,11 +66,9 @@ describe("issues in the web UI", () => {
     await page.getByRole("button", { name: "Comment", exact: true }).click();
     await see(page.getByRole("status")).toHaveText("Comment added.");
     await see(page.locator(".timeline .markdown").getByText("First comment")).toBeVisible();
-    // Someone else edits it after the page was shown; this page's edit is then refused.
     await page.getByText("Edit title and description").click();
     await rest("PATCH", `/repos/${handle}/${name}/issues/1`, { body: "changed elsewhere" });
     await page.getByLabel("Description (Markdown)").fill("my edit");
-    // Another form sent meanwhile reads the page again: the editor keeps the version it opened at.
     await page.locator("#comment-body").fill("Second comment");
     await page.getByRole("button", { name: "Comment", exact: true }).click();
     await see(page.getByRole("status")).toHaveText("Comment added.");
@@ -79,7 +76,6 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("alert")).toContainText("Someone changed it");
     await see(page.getByLabel("Description (Markdown)")).toHaveValue("my edit");
     await accessible("stale edit");
-    // Read again, then saved.
     await reload(page);
     await see(page.locator(".markdown").getByText("changed elsewhere")).toBeVisible();
     await page.getByText("Edit title and description").click();
@@ -95,20 +91,17 @@ describe("issues in the web UI", () => {
       `/repos/${handle}/${name}/issues/1/comments`,
     ).then((page) => (page as unknown as { comments: { id: number }[] }).comments);
     if (!first || !second) throw new Error("two comments expected");
-    // Second's editor opened and written in; then someone else edits the second comment.
     const secondItem = page.locator(`#comment-${second.id}`);
     await secondItem.getByText("Edit or delete").click();
     await secondItem.locator("textarea").fill("my edit of the second");
     await rest("PATCH", `/repos/${handle}/${name}/issues/comments/${second.id}`, {
       body: "second, changed elsewhere",
     });
-    // The first comment saved from this page: the page is read again.
     const firstItem = page.locator(`#comment-${first.id}`);
     await firstItem.getByText("Edit or delete").click();
     await firstItem.locator("textarea").fill("first, edited here");
     await firstItem.getByRole("button", { name: "Save comment" }).click();
     await see(page.getByRole("status")).toHaveText("Comment saved.");
-    // The second's draft is still checked against what it was written from: refused.
     await secondItem.getByRole("button", { name: "Save comment" }).click();
     await see(page.getByRole("alert")).toContainText("Someone changed it");
   });
@@ -122,7 +115,6 @@ describe("issues in the web UI", () => {
     await see(page).toHaveURL(/labels=bug/);
     await page.getByRole("link", { name: "Clear filters" }).click();
     await see(page).not.toHaveURL(/labels=/);
-    // The URL changes before the list is drawn again: wait for the filtered page to go.
     await see(page.getByRole("link", { name: "Clear filters" })).toHaveCount(0);
     await page.getByText("Filters", { exact: true }).click();
     await see(page.getByLabel(/^Labels/)).toHaveValue("");
@@ -222,7 +214,6 @@ describe("issues in the web UI", () => {
 
   it("keeps what is written while a save or a comment is answered", async () => {
     await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
-    // An edit answered while more is written: the more stays.
     await page.getByText("Edit title and description").click();
     await page.getByLabel("Description (Markdown)").fill("sent text");
     let release = await holdNextPost();
@@ -233,7 +224,6 @@ describe("issues in the web UI", () => {
     await see(page.getByLabel("Description (Markdown)")).toHaveValue(
       "sent text, and more written meanwhile",
     );
-    // A comment added while the next is written: the next stays.
     await page.locator("#comment-body").fill("a comment");
     release = await holdNextPost();
     await page.getByRole("button", { name: "Comment", exact: true }).click();
@@ -255,11 +245,9 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Reaction added.");
     const heart = reactions.getByRole("button", { name: "Heart 1" });
     await see(heart).toHaveAttribute("aria-pressed", "true");
-    // Pressed again, it is taken back by its id.
     await heart.click();
     await see(page.getByRole("status")).toHaveText("Reaction taken back.");
     await see(reactions.getByRole("button", { name: /^Heart \d/ })).toHaveCount(0);
-    // A comment's own, apart from the issue's.
     const first = page.locator(".timeline li").first();
     await first.getByText("Add a reaction").click();
     await first.getByRole("button", { name: "Rocket" }).click();
@@ -284,11 +272,9 @@ describe("issues in the web UI", () => {
     await page.keyboard.press("Enter");
     await page.keyboard.press("Tab");
     await see(reactions.getByRole("button", { name: "Thumbs up" })).toBeFocused();
-    // Added, it moves out of the picker into the counted ones; focus goes with it.
     await page.keyboard.press("Enter");
     const counted = reactions.getByRole("button", { name: "Thumbs up 1" });
     await see(counted).toBeFocused();
-    // Taken back, it moves into the picker again (still open), focus with it.
     await page.keyboard.press("Enter");
     await see(page.getByRole("status")).toHaveText("Reaction taken back.");
     await see(reactions.getByRole("button", { name: "Thumbs up", exact: true })).toBeFocused();
@@ -320,7 +306,6 @@ describe("issues in the web UI", () => {
     await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
       "my unsent edit",
     );
-    // Another answer comes; the edit stays.
     await comment("another comment");
     await see(page.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
       "my unsent edit",
@@ -373,7 +358,6 @@ describe("issues in the web UI", () => {
     await see(editor).toHaveValue("saved, and more written meanwhile");
     await item.getByRole("button", { name: "Save comment" }).click();
     await see(page.getByRole("status")).toHaveText("Comment saved.");
-    // An unsent edit of a comment deleted goes with it.
     await editor.fill("never sent");
     await item.getByRole("button", { name: "Delete comment" }).click();
     await see(page.getByRole("status")).toHaveText("Comment deleted.");
@@ -461,7 +445,6 @@ describe("issues in the web UI", () => {
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
       await see(theirs.getByRole("alert")).toBeVisible();
-      // Nothing left to send them with; both texts still there to copy.
       await see(theirs.getByRole("button", { name: "Comment", exact: true })).toHaveCount(0);
       await see(theirs.getByRole("button", { name: "Save comment" })).toHaveCount(0);
       await see(theirs.getByLabel("New comment", { exact: true })).toHaveValue(
@@ -471,7 +454,6 @@ describe("issues in the web UI", () => {
         "bo's edit, unsent",
       );
       await axe(theirs, "unsent text after a lock");
-      // Discarded, one goes; the other stays.
       await theirs.getByRole("button", { name: "Discard: New comment" }).click();
       await see(theirs.getByLabel("New comment", { exact: true })).toHaveCount(0);
       await see(theirs.getByLabel("Your edit of a comment", { exact: true })).toHaveValue(
@@ -487,7 +469,6 @@ describe("issues in the web UI", () => {
     const issue = `${stack.origin}/${handle}/${name}/issues/1`;
     await visit(page, issue);
     const sidebar = page.getByRole("complementary");
-    // A label, chosen on its own page by name.
     await sidebar.getByRole("link", { name: "Add labels" }).click();
     await page.getByLabel("Labels named").fill("doc");
     await page.getByRole("button", { name: "Search" }).click();
@@ -501,7 +482,6 @@ describe("issues in the web UI", () => {
     await sidebar.getByRole("button", { name: "Remove the label documentation" }).click();
     await see(page.getByRole("status")).toHaveText("Label removed.");
     await see(sidebar.locator(".label-chip", { hasText: "documentation" })).toHaveCount(0);
-    // Assigned by handle, shown as "you"; taken off by id.
     await sidebar.getByLabel("Assign (a handle)").fill(handle);
     await sidebar.getByRole("button", { name: "Assign", exact: true }).click();
     await see(page.getByRole("status")).toHaveText("Assigned.");
@@ -509,7 +489,6 @@ describe("issues in the web UI", () => {
     await sidebar.getByRole("button", { name: "Remove you from its assignees" }).click();
     await see(page.getByRole("status")).toHaveText("Unassigned.");
     await see(sidebar.getByText("No one.")).toBeVisible();
-    // A milestone, chosen among the open ones.
     const chosen = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/milestones`, {
       title: "Sidebar milestone",
     });
@@ -524,7 +503,6 @@ describe("issues in the web UI", () => {
     await see(page.getByRole("status")).toHaveText("Milestone cleared.");
     await see(sidebar.getByText("None.", { exact: true })).toBeVisible();
     await rest("DELETE", `/repos/${handle}/${name}/milestones/${chosen.number}`);
-    // Locked with a reason, then unlocked.
     await sidebar.getByLabel("Reason (optional)").selectOption("resolved");
     await sidebar.getByRole("button", { name: "Lock conversation" }).click();
     await see(page.getByRole("status")).toHaveText("Conversation locked.");
@@ -532,7 +510,6 @@ describe("issues in the web UI", () => {
     await accessible("a locked issue's sidebar");
     await sidebar.getByRole("button", { name: "Unlock conversation" }).click();
     await see(page.getByRole("status")).toHaveText("Conversation unlocked.");
-    // Another issue, deleted: the page goes back to the list.
     const doomed = await rest<{ number: number }>("POST", `/repos/${handle}/${name}/issues`, {
       title: "To be deleted",
     });
@@ -555,7 +532,6 @@ describe("issues in the web UI", () => {
     const naming = await rest<{ id: number }>("POST", `${path}/${number}/comments`, {
       body: "this is about #1",
     });
-    // A reference within the repository is recorded with the comment naming it: listed at once.
     const listed = await rest<{ references: { source: { comment_id: number | null } }[] }>(
       "GET",
       `${path}/1/references`,
@@ -669,7 +645,6 @@ describe("issues in the web UI", () => {
     await visit(page, `${stack.origin}/${handle}/${name}/issues/${known.number}`);
     const highlighted = page.locator(".markdown pre.highlights code.language-ts");
     await see(highlighted.locator("span").first()).toBeVisible();
-    // As the plain block had it: its lines, and the fence's last line break.
     expect(await highlighted.textContent()).toBe(`${code}\n`);
     await see(page.locator(".markdown pre code.language-nope span")).toHaveCount(0);
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
@@ -758,7 +733,6 @@ describe("issues in the web UI", () => {
   it("manages labels: creates one with a hostile name, edits it, keeps a stale edit, deletes it", async () => {
     const labels = `${stack.origin}/${handle}/${name}/labels`;
     await visit(page, labels);
-    // A new repository has the default labels.
     await see(page.locator(".label-chip", { hasText: /^bug$/ })).toBeVisible();
     await accessible("labels");
     await page.getByText("New label").click();
@@ -770,10 +744,8 @@ describe("issues in the web UI", () => {
     await create.getByLabel("Description (optional)").fill(`about ${HOSTILE}`);
     await page.getByRole("button", { name: "Create label" }).click();
     await see(page.getByRole("status")).toHaveText("Label created.");
-    // The form is cleared for the next one.
     await see(create.getByLabel("Name")).toHaveValue("");
     await see(create.getByLabel("Description (optional)")).toHaveValue("");
-    // What is written while the next one is created stays.
     await create.getByLabel("Name").fill("second");
     const release = await holdNextPost("labels");
     await page.getByRole("button", { name: "Create label" }).click();
@@ -787,7 +759,6 @@ describe("issues in the web UI", () => {
     await see(item.locator(".label-chip")).toHaveCSS("color", "rgb(0, 0, 0)");
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
     await accessible("labels with a new one");
-    // Its issues: one carries it.
     await rest("POST", `/repos/${handle}/${name}/issues/1/labels`, { labels: [HOSTILE] });
     await item.getByRole("link", { name: /^Issues/ }).click();
     await see(page).toHaveURL(/\/issues\?labels=/);
@@ -843,7 +814,6 @@ describe("issues in the web UI", () => {
     await see(item.getByText(/Due 2027-01-02 · Nothing in it yet/)).toBeVisible();
     expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
     await accessible("a milestone");
-    // Its items: an issue in it.
     const { number } = (
       await rest<{ milestones: { number: number }[] }>("GET", `/repos/${handle}/${name}/milestones`)
     ).milestones[0] as { number: number };
@@ -863,7 +833,6 @@ describe("issues in the web UI", () => {
     await item.getByRole("button", { name: "Save milestone" }).click();
     await see(page.getByRole("alert")).toContainText("Someone changed it");
     await see(item.getByLabel("Title")).toHaveValue("v1, mine");
-    // Closed, it leaves the open list (its unsent edit kept to copy); reopened, it is back.
     await item.getByRole("button", { name: "Close milestone" }).click();
     await see(page.getByRole("status")).toHaveText("Milestone closed.");
     await see(page.getByText("No open milestones.")).toBeVisible();
@@ -874,10 +843,8 @@ describe("issues in the web UI", () => {
     });
     await closed.getByRole("button", { name: "Reopen milestone" }).click();
     await see(page.getByRole("status")).toHaveText("Milestone reopened.");
-    // Back on the open list (within the page, its drafts kept), its editor resumes the edit.
     await page.getByRole("link", { name: "Open", exact: true }).click();
     await see(item.getByLabel("Title")).toHaveValue("v1, mine");
-    // Deleted, its unsent edit goes with it.
     await item.getByText("Delete", { exact: true }).click();
     await item.getByRole("button", { name: `Delete milestone ${HOSTILE}` }).click();
     await see(page.getByRole("status")).toHaveText("Milestone deleted.");

@@ -3,7 +3,6 @@ import { type PullRequest, pullPage, statusOf, when, who } from "../lib/pulls.js
 
 const STATUS_LABEL = { open: "Open", draft: "Draft", closed: "Closed", merged: "Merged" } as const;
 
-/** A pull request's state as a badge. */
 export function PullStatusBadge({
   pull,
 }: {

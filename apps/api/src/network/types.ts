@@ -16,7 +16,6 @@ export interface ViewPack {
   readonly createdAt: number;
 }
 
-/** A ref a fork starts with. */
 export interface ExportedRef {
   readonly name: string;
   readonly oid: Uint8Array;
@@ -62,7 +61,6 @@ export interface MemberPack {
   readonly origin: string;
 }
 
-/** A member's answer to "condemn these shared packs". */
 export type CondemnAnswer =
   | { readonly ok: true; readonly leasesUntil: number }
   /** The pack is still in the member's live view: the network's claims were out of date. */

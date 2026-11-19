@@ -44,7 +44,6 @@ describe("upload-pack.wants-reachable", () => {
     await source.git(["reset", "-q", "--hard", kept]);
     const dir = await serve(scratch, source);
     const loaded = await openUploadPackRepo(dir);
-    // The commit is in the stored pack and in this repository's commit graph.
     const [row] = await loaded.repository.commitGraph.read([hexOid(dropped)], "verified");
     expect(row).toBeDefined();
 
@@ -55,7 +54,6 @@ describe("upload-pack.wants-reachable", () => {
     );
     expect(error.code).toBe("not-our-ref");
     expect(error.message).toBe(`upload-pack: not our ref ${dropped}`);
-    // Its tree and blob are refused as well.
     const { stdout: tree } = await source.git(["rev-parse", `${dropped}^{tree}`]);
     const { stdout: blob } = await source.git(["rev-parse", `${dropped}:secret.txt`]);
     for (const hex of [tree.trim(), blob.trim()]) {
@@ -98,7 +96,6 @@ describe("upload-pack.wants-reachable", () => {
       expect(error.message).toBe(`upload-pack: not our ref ${hex}`);
     }
 
-    // A full clone of this repository does not carry the sibling's objects.
     const main = (await source.git(["rev-parse", "main"])).stdout.trim();
     const { bytes } = await planAndRender(loaded, fetchArgs({ wants: [hexOid(main)] }));
     const pack = parseFetchResponse(bytes).pack as Uint8Array;

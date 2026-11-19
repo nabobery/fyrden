@@ -67,7 +67,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     issues: listed.issues,
     pages: pageLinks(url, "cursor", listed.next_cursor),
     viewer: session.state === "signed-in" ? session.user.id : null,
-    // A session check that failed says nothing of who is viewing: the page keeps the last known.
     viewerKnown: session.state !== "unknown",
     proposed: url.searchParams.get("new") === "1",
   };
@@ -120,7 +119,6 @@ export default function Issues({ loaderData }: Route.ComponentProps) {
   const known = useRef(loaderData.viewer);
   if (loaderData.viewerKnown) known.current = loaderData.viewer;
   const viewer = known.current;
-  // A draft returned is shown only to the viewer it was written by.
   const draft = failed?.draft?.viewer === viewer ? failed?.draft : undefined;
   const base = `/${repo.owner}/${repo.name}`;
   const withState = (s: string) => {

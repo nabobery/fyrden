@@ -5,7 +5,6 @@
  */
 export const FINDER_SHOWN = 100;
 
-/** The first paths matching a query, and how many match in all. */
 export interface PathMatches {
   readonly shown: readonly string[];
   readonly total: number;

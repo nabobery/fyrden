@@ -1,12 +1,5 @@
-/**
- * Pages of the API's listings on a web page: the page's URL names each
- * listing's cursor by its own parameter, so a page with two listings moves
- * through each on its own.
- */
-
 import { pageUrl } from "./target.js";
 
-/** A positive id from a page's URL, else none. */
 export const positiveId = (value: string | null): number | null =>
   value !== null && /^[1-9][0-9]{0,14}$/.test(value) ? Number(value) : null;
 
@@ -19,15 +12,12 @@ export function pageQuery(url: URL, param: string, perPage = 100): string {
 }
 
 export interface PageLinks {
-  /** The next page, or null on the last. */
   readonly next: string | null;
-  /** The first page, or null on it. */
   readonly first: string | null;
 }
 
 /** Links to a listing's next page (from the API's `next_cursor`) and its first. */
 export function pageLinks(request: URL, param: string, nextCursor: string | null): PageLinks {
-  // A navigation's data request's URL: links go to the page itself.
   const url = pageUrl(request);
   const at = (cursor: string | null) => {
     const query = new URLSearchParams(url.search);

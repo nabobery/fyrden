@@ -92,7 +92,6 @@ async function tryGit(args: string[], cwd = scratch): Promise<Run> {
       GIT_COMMITTER_EMAIL: "e2e@fyrden.invalid",
     },
   });
-  // A failure's message never shows the token in a remote's URL.
   const redact = (text: string) => text.replace(/\/\/[^/@\s]*@/g, "//***@");
   return {
     code: result.code,
@@ -101,14 +100,12 @@ async function tryGit(args: string[], cwd = scratch): Promise<Run> {
   };
 }
 
-/** Stock git that must succeed: its output. */
 async function git(args: string[], cwd = scratch): Promise<string> {
   const result = await tryGit(args, cwd);
   expect(result.code, result.stderr).toBe(0);
   return result.stdout;
 }
 
-/** A REST call as the user, with its personal access token. */
 async function rest<T = Record<string, unknown>>(
   method: string,
   path: string,
@@ -132,7 +129,6 @@ async function rest<T = Record<string, unknown>>(
   return { status: res.status, body: (text ? JSON.parse(text) : {}) as T };
 }
 
-/** Each request of the test gives up after this long (the server is local). */
 const DEADLINE_MS = 30_000;
 const timed = (init: RequestInit = {}): RequestInit => ({
   ...init,
@@ -211,7 +207,6 @@ async function sessionCookie(): Promise<string> {
   return cookie.split(";")[0] ?? "";
 }
 
-/** The MCP client's OAuth sign-in: registration, consent, code, DPoP-bound tokens. */
 async function signIn(key: DpopKey) {
   const registered = await fetch(`${origin}/oauth/register`, {
     signal: AbortSignal.timeout(DEADLINE_MS),
@@ -290,16 +285,7 @@ beforeAll(async () => {
     expect(migrate.code, migrate.stdout + migrate.stderr).toBe(0);
   }
   server = await startWranglerDev({
-    args: [
-      "-c",
-      apiConfig,
-      "--persist-to",
-      persist,
-      "--env-file",
-      envFile,
-      // The cron (the expiry reaper) runs when the test asks (`/__scheduled`).
-      "--test-scheduled",
-    ],
+    args: ["-c", apiConfig, "--persist-to", persist, "--env-file", envFile, "--test-scheduled"],
     cwd: join(root, "apps/api"),
     onOutput: (text) => {
       output += text;
@@ -320,7 +306,6 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await server?.stop();
-    // Neither the Worker nor wrangler's access log may print a token.
     expect(output.split("\n").filter(mentionsToken)).toEqual([]);
   } finally {
     // Its state and the env file (a signing seed, the bootstrap secret) go in any case.
@@ -339,7 +324,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     const name = `agent-${Date.now().toString(36)}`;
     const at = { owner: handle, repo: name };
 
-    // A repository, and a git token for stock git.
     await mcp.tool("create_repo", { name });
     const gitToken = await mcp.tool<{ token: string; expires_at: number }>("create_git_token", {});
     expect(gitToken.expires_at - Date.now()).toBeLessThanOrEqual(60 * 60 * 1000);
@@ -352,7 +336,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     const remote = `http://x-access-token:${gitToken.token}@127.0.0.1:${port}/${handle}/${name}.git`;
     await git(["push", "-q", remote, "main"], work);
 
-    // Browse it: its history, its tree and a file's bytes.
     const commits = await mcp.tool<{ commits: { sha: string }[] }>("list_commits", at);
     expect(commits.commits.map((c) => c.sha)).toEqual([first]);
     const tree = await mcp.tool<{ tree: { path: string; type: string }[] }>("list_files", {
@@ -367,7 +350,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     );
     expect(Buffer.from(readme.content, "base64").toString()).toBe("# Agent\n");
 
-    // A change of that file, committed by the server and signed with the platform's key.
     await mcp.tool("create_or_update_file", {
       ...at,
       path: "README.md",
@@ -380,7 +362,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     }>("list_commits", at);
     expect(after.commits.map((c) => c.sha).slice(1)).toEqual([first]);
     expect(after.commits[0]?.commit.verification.verified).toBe(true);
-    // As a resource: at the first commit, the file as it was there; on main, as it is.
     const resource = async (ref: string) =>
       (
         await mcp.rpc<{ contents: { text?: string }[] }>("resources/read", {
@@ -395,7 +376,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
       ...at,
       format: "zip",
     });
-    // Built in the background: 202 until it is ready.
     const zip = await eventually(
       "the archive",
       async () => {
@@ -410,10 +390,8 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     expect(zip.status).toBe(200);
     const bytes = Buffer.from(await zip.arrayBuffer());
     expect(bytes.subarray(0, 2).toString()).toBe("PK");
-    // Its central directory names the file under the archive's top directory.
     expect(bytes.toString("latin1")).toMatch(/\/README\.md/);
 
-    // A fork, with the history it was forked with.
     const forkName = `${name}-fork`;
     const fork = await mcp.tool<{ name: string; parent_id: string }>("fork_repo", {
       ...at,
@@ -451,7 +429,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
   it("lets an agent act for its user under a grant, held to the agents' rules, until it is revoked", {
     timeout: 180_000,
   }, async () => {
-    // The user's agent, its own token, and a grant to act for the user.
     const agent = `${handle}-bot`;
     expect((await rest("POST", "/agents", { handle: agent })).status).toBe(201);
     const own = await rest<{ token: string }>("POST", `/agents/${agent}/tokens`, {});
@@ -471,7 +448,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     expect(delegated.token_type).toBe("DPoP");
     const mcp = mcpClient(delegated.access_token, key);
 
-    // A scratch repository in the user's account, expiring unless told otherwise.
     const name = `scratch-${Date.now().toString(36)}`;
     const made = await mcp.tool<{ owner: string; expires_at: number | null }>("create_repo", {
       name,
@@ -488,7 +464,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     await git(["commit", "-q", "-m", "one"], work);
     await git(["push", "-q", remote(agentGit.token), "main"], work);
 
-    // Agents must use pull requests on the default branch; the user may push.
     const ruleset = await rest("POST", `/repos/${handle}/${name}/rulesets`, {
       name: "agents use PRs",
       enforcement: "active",
@@ -507,7 +482,6 @@ describe("an agent's workflow through MCP, OAuth and stock git (wrangler dev)", 
     expect(userGit.status).toBe(201);
     await git(["push", "-q", remote(userGit.body.token), "main"], work);
 
-    // Revoked, the grant stops the agent's git token at its next write.
     expect((await rest("DELETE", `/grants/${grant.body.id}`)).status).toBe(200);
     const revoked = await tryGit(["push", remote(agentGit.token), "main:refs/heads/side"], work);
     expect(revoked.code).not.toBe(0);

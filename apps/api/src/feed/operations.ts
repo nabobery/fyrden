@@ -757,7 +757,6 @@ async function cursorOf(
   return encodeFeedCursor(epoch, id, quiet);
 }
 
-/** The `feed.list` operation. */
 export async function getFeedOperation(
   ctx: OpContext,
   input: Input<typeof getFeed>,
@@ -888,7 +887,6 @@ export async function getFeedOperation(
   };
 }
 
-/** The `feed.sync` operation. */
 export async function syncFeedOperation(ctx: OpContext): Promise<Output<typeof syncFeed>> {
   ctx = await freshly(ctx);
   const feed = feedOf(ctx);

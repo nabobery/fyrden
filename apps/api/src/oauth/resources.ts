@@ -11,7 +11,6 @@ export type Resource = (typeof RESOURCES)[number];
 /** A resource's identifier: its URL on this deployment's origin. */
 export const resourceUri = (origin: string, resource: Resource): string => `${origin}/${resource}`;
 
-/** The resource `uri` names on this origin, if any. */
 export function resourceOf(origin: string, uri: string): Resource | undefined {
   return RESOURCES.find((r) => resourceUri(origin, r) === uri);
 }

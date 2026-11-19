@@ -37,7 +37,6 @@ async function refusing<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-/** The `admin.read_model.recovery.begin` operation. */
 export async function beginReadModelRecoveryOperation(
   ctx: OpContext,
   input: Input<typeof beginReadModelRecovery>,
@@ -53,7 +52,6 @@ export async function beginReadModelRecoveryOperation(
   });
 }
 
-/** The `admin.read_model.recovery.get` operation. */
 export async function getReadModelRecoveryOperation(
   ctx: OpContext,
   _input: Input<typeof getReadModelRecovery>,

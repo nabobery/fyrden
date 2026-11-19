@@ -57,9 +57,7 @@ describe("push.chunked-1gb (local scale)", () => {
     const puts = server.requests.filter((r) => r.method === "PUT");
     expect(puts).toHaveLength(64);
     expect(puts.every((p) => (p.bytes ?? 0) === PART && PART < DEFAULT_BODY_LIMIT)).toBe(true);
-    // The parts tile the pack: offsets 0, 16 MiB, ... with no gap or overlap.
     expect(reads).toEqual(Array.from({ length: 64 }, (_, i) => [i * PART, PART]));
-    // One create, 64 parts, one complete: 66 requests for 1 GiB.
     expect(server.requests).toHaveLength(66);
   }, 60_000);
 });

@@ -133,7 +133,6 @@ describe("forks", () => {
       api("GET", `/repos/${owner.handle}/${grandchild.body.name}`, owner.token),
     );
     expect(read.body).toMatchObject({ parent_id: fork.id, source_id: target.repo.id });
-    // The source itself, and a repository forked from nothing, have none.
     expect((await json(api("GET", base, owner.token))).body).toMatchObject({ source_id: null });
     // A token limited to the fork does not see the source.
     const limited = await scopedToken(owner.principalId, [], "pat", [fork.id]);
@@ -173,7 +172,6 @@ describe("forks", () => {
     expect(listed.body.repos.find((r) => r.name === fork.name)).toMatchObject({
       parent_id: null,
     });
-    // A fork of a fork names the fork.
     const grandchild = await json<{ parent_id: string }>(
       api("POST", `${path}/forks`, reader.token, { name: uniqueId("grand") }),
     );

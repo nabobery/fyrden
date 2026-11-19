@@ -13,7 +13,6 @@ export interface DigestName {
   readonly epoch: number;
 }
 
-/** A digest's name from a page's parameters, or null when they name none. */
 export function digestName(params: Record<string, string | undefined>): DigestName | null {
   const { repo, subject, window, epoch } = params;
   if (!repo || !/^[A-Za-z0-9_]{1,64}$/.test(repo)) return null;
@@ -33,7 +32,6 @@ export function digestPage(apiUrl: string): string | null {
   return name ? `/notifications/digests/${digestPath(name)}` : null;
 }
 
-/** What a digest is about: `Pull request activity in owner/name`. */
 export const digestTitle = (subject: "issue" | "pull", repo: string) =>
   `${subject === "pull" ? "Pull request" : "Issue"} activity in ${repo}`;
 

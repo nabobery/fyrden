@@ -28,7 +28,6 @@ export async function runEffectsCron(
   const { metrics, sinks = EFFECT_SINKS } = options;
   const now = options.now ?? (() => Date.now());
   const failures: unknown[] = [];
-  // One writer for the run's writes.
   await withReadModel(env, DEFAULT_ORG_SHARD, async (db) => {
     const log = createLogger({ op: "cron.effects" });
     const deps: DispatchDeps = {

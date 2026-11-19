@@ -15,7 +15,6 @@ import { type DomainEvent, type Envelope, type EventId, eventKey } from "@fyrden
  * limit of 128 KB (https://developers.cloudflare.com/queues/platform/limits/).
  */
 export interface OutboxPolicy {
-  /** Events in one message at most. */
   readonly maxEvents: number;
   /** Envelope bytes in one message at most, unless a single event alone is larger. */
   readonly maxBytes: number;
@@ -34,7 +33,6 @@ export interface OutboxPolicy {
    * is not sent yet is kept regardless.
    */
   readonly payloadRetentionMs: number;
-  /** Stored payloads one drain deletes at most. */
   readonly payloadPruneLimit: number;
 }
 
@@ -168,7 +166,6 @@ export class Outbox {
     return pruneAt === null ? sendAt : Math.min(sendAt, pruneAt);
   }
 
-  /** Rows waiting to be sent. */
   pending(): number {
     return this.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM outbox").one().n;
   }
@@ -259,7 +256,6 @@ export class Outbox {
     const events: DomainEvent[] = [];
     let bytes = envelopeOverhead(sourceId);
     for (const row of rows) {
-      // One comma between events.
       const added = row.bytes + (events.length > 0 ? 1 : 0);
       if (events.length > 0 && bytes + added > policy.maxBytes) break;
       events.push(JSON.parse(row.event) as DomainEvent);

@@ -27,7 +27,6 @@ export const FEED_KINDS = [
 ] as const;
 export type FeedKind = (typeof FEED_KINDS)[number];
 
-/** What a feed thread is about. */
 export const FEED_SUBJECT_KINDS = ["issue", "pull"] as const;
 export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
 
@@ -38,7 +37,6 @@ export type FeedSubjectKind = (typeof FEED_SUBJECT_KINDS)[number];
 export const digestThreadKey = (subject: FeedSubjectKind, window: number, epoch: number) =>
   `${subject}-digest/${window}.${epoch}`;
 
-/** What a feed thread key names: a conversation, or a kind's digest of a window. */
 export type FeedThread =
   | { readonly subject: FeedSubjectKind; readonly number: number }
   | {
@@ -202,7 +200,6 @@ export const FeedBlockSchema = z
   );
 export type FeedBlock = z.infer<typeof FeedBlockSchema>;
 
-/** A feed item's key in a principal's feed. */
 export function feedItemKey(repoId: string, threadKey: string, kind: FeedKind): string {
   return `${repoId}:${threadKey}:${kind}`;
 }

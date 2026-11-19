@@ -61,7 +61,6 @@ const digestItems = async (who: Who, token = who.token) => {
   return read.body.items.filter((i) => i.kind === "digest");
 };
 
-/** A digest event's digest. */
 function digestOf(event: DomainEvent) {
   const digest = event.data?.digest as
     | { key: string; epochGen: number; deadline: number }
@@ -104,7 +103,6 @@ async function deliver(repo: Repo, event: DomainEvent, deliverAt?: number) {
   return await effectsOf(repo);
 }
 
-/** The repository's digest effects. */
 const effectsOf = async (repo: Repo) =>
   (
     await admitted()
@@ -202,7 +200,6 @@ describe("a digest", () => {
     // A token reading issues only sees the issue digest.
     const issuesOnly = await scopedToken(second.principalId, ["issues:read", "metadata:read"]);
     expect((await digestItems(second, issuesOnly)).map((i) => i.subject.kind)).toEqual(["issue"]);
-    // Nothing in the inbox.
     const inbox = await json<{ notifications: unknown[] }>(
       api("GET", "/notifications?all=true", second.token),
     );
@@ -468,7 +465,6 @@ describe("a forgotten digest's tombstone", () => {
       expect(left).toContain(digestThreadKey("issue", window - 1, 1));
       expect(left).not.toContain(digestThreadKey("issue", Math.min(...ended), 1));
       expect(read).toBeLessThan(60);
-      // Its entry again: dropped.
       expect(apply([told(window - 1)])).toMatchObject({ changed: 0 });
       // A digest of a window ahead of the feed's clock (past a window's skew): dropped too, and
       // answered as expired (its effect ends so).

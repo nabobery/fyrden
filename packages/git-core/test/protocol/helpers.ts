@@ -4,7 +4,6 @@ import { ProtocolError, type ProtocolErrorCode } from "../../src/protocol/errors
 /** One byte per character (U+0000 to U+00FF), so test inputs can hold any byte. */
 export const bin = (text: string): Uint8Array => Uint8Array.from(text, (c) => c.charCodeAt(0));
 
-/** The inverse of `bin`. */
 export const str = (bytes: Uint8Array): string => Buffer.from(bytes).toString("latin1");
 
 export const concat = (...parts: Uint8Array[]): Uint8Array =>

@@ -31,7 +31,6 @@ function harness(offsets: (number | null)[]) {
     scrollY: () => y,
     onReached: (line) => reached.push(line),
   });
-  /** Runs every frame requested so far; returns how many ran. */
   const frame = () => {
     const due = [...frames.entries()];
     frames.clear();
@@ -43,7 +42,6 @@ function harness(offsets: (number | null)[]) {
     while (frames.size > 0 && ran < limit) ran += frame();
     return ran;
   };
-  /** The viewer scrolls the page by `dy`. */
   const viewerScrolls = (dy: number) => {
     y += dy;
   };
@@ -136,7 +134,6 @@ describe("a line to bring into view", () => {
 
 describe("a line reached, held", () => {
   it("is brought back when something above it moves, the viewer not having scrolled", () => {
-    // Reached in place, then the progress line above shrinks and the line rises 37 px.
     const h = harness([0, 0, -37, 0, 0]);
     h.target.go(2400);
     h.drain();
@@ -167,14 +164,12 @@ describe("a line reached, held", () => {
     h.viewerScrolls(400);
     expect(h.target.hold()).toBe(false);
     expect(h.frames.size).toBe(0);
-    // Back where the target left it: still let go.
     h.viewerScrolls(-400);
     expect(h.target.hold()).toBe(false);
     expect(h.scrolled).toEqual([]);
   });
 
   it("is let go when the viewer scrolls before bringing it back has finished", () => {
-    // Held, the line rises 37 px, and the viewer drags the scrollbar before the next frame.
     const h = harness([0, 0, -37, -37, 0, 0]);
     h.target.go(8);
     h.drain();
@@ -213,7 +208,6 @@ describe("a line reached, held", () => {
     const h = harness([0, 500]);
     expect(h.target.hold()).toBe(false);
     h.target.go(8);
-    // Still being brought in: its own frames see the change.
     expect(h.target.hold()).toBe(false);
     expect(h.frames.size).toBe(1);
     h.drain();

@@ -15,7 +15,6 @@ export function decideComment(
   input: {
     readonly isCommentAuthor: boolean;
     readonly role: RepoRole | null;
-    /** The issue's or pull request's conversation is locked. */
     readonly locked?: boolean;
   },
 ): { ok: true } | { ok: false; refusal: "forbidden" | "locked" } {

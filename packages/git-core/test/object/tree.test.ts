@@ -149,7 +149,6 @@ describe("parseTree checks (git's fsck_tree)", () => {
     expect(issueIds(rawTree(rawEntry("100644", "b"), rawEntry("100644", "a")))).toEqual([
       "treeNotSorted",
     ]);
-    // A directory sorts as "a/", after "a.c".
     expect(issueIds(rawTree(rawEntry("40000", "a"), rawEntry("100644", "a.c")))).toEqual([
       "treeNotSorted",
     ]);

@@ -132,7 +132,6 @@ export const inFeed = <T>(fn: (storage: Storage) => T) =>
 /** A read of a feed from its start, by a credential with no cursor. */
 export const FROM_START: StreamRead = { credential: "crd_test", cursor: null, after: null };
 
-/** Shown items counted in the feed's streams. */
 export const shownCount = (storage: Storage) =>
   storage.sql.exec<{ n: number }>("SELECT coalesce(sum(items), 0) AS n FROM feed_streams").one().n;
 

@@ -40,7 +40,6 @@ describe("an email's category", () => {
 
   it("is watching only for watched activity and nothing more", () => {
     expect(emailCategory([of("activity", ["watching"], "comment")])).toBe("watching");
-    // A watcher who also took part: its participation wins.
     expect(
       emailCategory([
         of("activity", ["watching"], "comment"),

@@ -4,10 +4,8 @@ import { type DiffSide, type Thread, when, who } from "../../lib/pulls.js";
 import { useDraft, useScopedKey, ViewerField } from "../drafts.js";
 import { Markdown } from "../markdown.js";
 
-/** What a files-page form answers: what was done, or why not. */
 type Answer = { ok?: string; error?: string } | undefined;
 
-/** An answer's message for screen readers and sighted people alike. */
 function Outcome({ answer, done }: { answer: Answer; done: string }) {
   if (answer?.error)
     return (
@@ -47,7 +45,6 @@ function useSuggestions(thread: Thread): ReadonlySet<number> {
  */
 const applyKey = (file: string) => `apply-suggestion:${file}`;
 
-/** The answer to applying a suggestion on one of `file`'s threads. */
 export function AppliedSuggestion({ file }: { file: string }) {
   const apply = useFetcher<Answer>({ key: applyKey(file) });
   return <Outcome answer={apply.data} done="Suggestion applied." />;
@@ -80,7 +77,6 @@ export function SentReply({ thread }: { thread: number }) {
 
 const sideName = (side: DiffSide) => (side === "LEFT" ? "old" : "new");
 
-/** Where a thread is, in words: its lines and side. */
 export function anchorText(
   thread: Pick<Thread, "side" | "line" | "startLine" | "originalLine">,
 ): string {
@@ -92,10 +88,6 @@ export function anchorText(
   return `${lines} of the ${sideName(thread.side)} file`;
 }
 
-/**
- * A review thread: its comments, a reply, resolving it, and applying a
- * comment's suggested change.
- */
 export function ThreadView({
   thread,
   viewer,
@@ -186,21 +178,18 @@ export function ThreadView({
   );
 }
 
-/** Lines a new comment is on, as a gutter click or a selection names them. */
 export interface LinePick {
   side: DiffSide;
   start: number;
   end: number;
 }
 
-/** A new comment's lines, as its fields hold them. */
 interface LineFields {
   side: DiffSide;
   start: string;
   line: string;
 }
 
-/** The fields for lines picked in the diff (empty for none). */
 function fieldsOf(pick: LinePick | null): LineFields {
   return {
     side: pick?.side ?? "RIGHT",
@@ -254,7 +243,6 @@ export function LineCommentForm({
     setLines({ ...lines, ...change });
     setMoved(false);
   };
-  // Lines picked in the diff: the form opens on them, ready to type.
   useEffect(() => {
     if (pick && open) bodyField.current?.focus();
   }, [pick, open]);

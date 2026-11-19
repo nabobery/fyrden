@@ -113,7 +113,6 @@ describe("thin packs", () => {
     const { source } = await trimmedRepo();
     const loaded = await openUploadPackRepo(await serve(scratch, source));
     const main = await blobOid(source, "main");
-    // A clone: no haves, so nothing is known to be held.
     const { bytes } = await planAndRender(
       loaded,
       fetchArgs({ wants: [hexOid(main)], thinPack: true, ofsDelta: false }),

@@ -12,7 +12,6 @@
  * in a page.
  */
 
-/** A stream that changed: a repository's issues or pull requests. */
 export interface LiveStream {
   readonly repo: string;
   readonly kind: "issue" | "pull";
@@ -24,10 +23,8 @@ export type LiveBudgetPause = {
   readonly retryAt: number;
 };
 
-/** What asking for a ticket answered. */
 export type LiveTicket =
   | { readonly kind: "ticket"; readonly url: string }
-  /** The deployment sends no live hints. */
   | { readonly kind: "off" }
   /** Not signed in, or not allowed: no point asking again. */
   | { readonly kind: "stop" }
@@ -40,7 +37,6 @@ export type LiveTicket =
 
 const DAY = 86_400_000;
 
-/** The start of the UTC day after `now`. */
 export const nextUtcDay = (now: number) => (Math.floor(now / DAY) + 1) * DAY;
 
 /** The furthest a daily pause reaches: the next UTC day, with room for clocks that disagree. */
@@ -123,11 +119,9 @@ export const LIVE_CLIENT = {
   steadyMs: 5_000,
 } as const;
 
-/** The server's close codes. */
 const EXPIRED = 4401;
 const REVOKED = 4403;
 const RESYNC = 4409;
-/** Refused for now: try again soon. */
 const TEMPORARY = 4412;
 /** Refused for today: the deployment's allowance (or the principal's day) is spent. */
 const SPENT = 4413;
@@ -164,7 +158,6 @@ export class LiveClient {
     this.#deps = deps;
   }
 
-  /** Connects, unless already running. */
   start(): void {
     if (this.#running) return;
     this.#running = true;
@@ -173,7 +166,6 @@ export class LiveClient {
     void this.#connect();
   }
 
-  /** Closes the socket and stops (no page listens, a tab hidden long). */
   stop(): void {
     this.#running = false;
     this.#drop(1000, "done");
@@ -219,7 +211,6 @@ export class LiveClient {
           this.#deadline = this.#openedAt + LIVE_CLIENT.renewMs;
           this.#scheduleRenew();
           if (this.#temporary) this.#set("steady", LIVE_CLIENT.steadyMs, () => this.#tell(false));
-          // What changed before the socket listened is read now.
           this.#deps.changed("all");
         },
         message: (data) => {
@@ -247,13 +238,11 @@ export class LiveClient {
       this.#halt("revoked");
       return;
     }
-    // Today's allowance spent: nothing more until the next UTC day, and no failure.
     if (code === SPENT) {
       this.#pause(nextUtcDay(this.#deps.now()));
       return;
     }
     const opened = this.#openedAt;
-    // Refused for now (each such socket was admitted): backed off as a refused one, never at once.
     if (code === TEMPORARY) {
       if (opened !== null && this.#deps.now() - opened >= LIVE_CLIENT.stableMs) {
         this.#failures = 0;
@@ -269,14 +258,12 @@ export class LiveClient {
       this.#failed();
       return;
     }
-    // Closed before it was stable: a failure, backed off whatever the code.
     if (this.#deps.now() - opened < LIVE_CLIENT.stableMs) {
       this.#failed();
       return;
     }
     this.#failures = 0;
     this.#refused = 0;
-    // Its deadline or life passed, or it fell behind: a new socket at once (it refreshes).
     if (code === EXPIRED || code === RESYNC) void this.#connect();
     else {
       // A lost connection is usually everyone's: spread further than a failure's first retry.
@@ -322,7 +309,6 @@ export class LiveClient {
     this.#deps.paused?.({ kind: "budget", retryAt });
   }
 
-  /** Tells whether a refusal for now holds, when that changed. */
   #tell(refused: boolean): void {
     if (this.#temporary === refused) return;
     this.#temporary = refused;
@@ -424,7 +410,6 @@ export class LiveClient {
     return Math.max(1, oldest + 60_000 - this.#deps.now());
   }
 
-  /** A new socket in place of this one. */
   #rotate(): void {
     this.#drop(1000, "rotating");
     void this.#connect();

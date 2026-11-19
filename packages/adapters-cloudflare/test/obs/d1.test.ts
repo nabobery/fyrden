@@ -43,12 +43,10 @@ describe("a counted D1 binding", () => {
       await session.prepare("SELECT ?").bind(2).run();
       await session.batch([session.prepare("SELECT 1"), session.prepare("SELECT 2")]);
       await db.exec("SELECT 1");
-      // A statement prepared and bound but never run costs nothing.
       db.prepare("SELECT 3").bind(3);
       return d1StatementsRun();
     });
     expect(seen).toBe(6);
-    // Outside any invocation nothing is counted.
     await db.prepare("SELECT 1").first();
     expect(d1StatementsRun()).toBe(0);
   });
@@ -88,7 +86,6 @@ describe("a counted D1 binding", () => {
       const row = await db.prepare("SELECT x").first();
       const column = await db.prepare("SELECT x").first("x");
       await db.prepare("UPDATE t").run();
-      // What the invocation has counted so far, as its own work asks.
       const sofar = d1RowsRun();
       await db.batch([db.prepare("A"), db.prepare("B")]);
       return [row, column, sofar, d1RowsRun()];

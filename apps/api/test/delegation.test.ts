@@ -89,14 +89,12 @@ describe("agents", () => {
     expect(me.body).toMatchObject({ id: agent.id, type: "agent", act: [] });
     const listed = await json<{ agents: Agent[] }>(api("GET", "/agents", owner.token));
     expect(listed.body.agents.map((a) => a.id)).toEqual([agent.id]);
-    // Someone else sees none of it.
     const other = await user();
     expect((await api("GET", `/agents/${agent.handle}`, other.token)).status).toBe(404);
     // Nor takes a handle the web origin's paths take.
     expect(
       (await json(api("POST", "/agents", owner.token, { handle: "auth" }))).body,
     ).toMatchObject({ code: "invalid_input" });
-    // An agent makes no agents.
     expect((await api("POST", "/agents", agent.token, { handle: uniqueId("x") })).status).toBe(403);
     expect((await json(api("DELETE", `/agents/${agent.handle}`, owner.token))).body).toMatchObject({
       disabled: true,
@@ -161,7 +159,6 @@ describe("agents", () => {
     const [tokenId] = (
       await json<{ tokens: { id: string }[] }>(api("GET", path, owner.token))
     ).body.tokens.map((t) => t.id);
-    // Read access lists, not revokes.
     const reader = await scopedToken(owner.principalId, ["agents:read"]);
     expect((await api("GET", path, reader)).status).toBe(200);
     expect((await api("DELETE", `${path}/${tokenId}`, reader)).status).toBe(403);
@@ -200,7 +197,6 @@ describe("agents", () => {
     const owner = await user();
     const repo = await repoOf(owner);
     const agent = await agentOf(owner);
-    // No role of its own yet.
     expect((await api("GET", repo.path, agent.token)).status).toBe(404);
     // Agents are not collaborators through the API yet: granted in the account's object.
     const collaborate = async (a: Agent) => {

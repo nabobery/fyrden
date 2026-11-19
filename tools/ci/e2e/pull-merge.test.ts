@@ -26,7 +26,6 @@ let maintainer: Account;
 let contributor: Account;
 let maintainerGit: Git;
 let contributorGit: Git;
-/** The maintainer's working copy of the base repository. */
 let baseWork = "";
 
 beforeAll(async () => {
@@ -36,7 +35,6 @@ beforeAll(async () => {
   maintainerGit = new Git(forge, maintainer);
   contributorGit = new Git(forge, contributor);
   baseWork = await seededRepo(forge, maintainer, maintainerGit, REPO, { "README.md": "base\n" });
-  // The contributor reads the base (and so may fork it and open pull requests on it).
   await maintainer.api.call("repos.collaborators.set", {
     owner: maintainer.handle,
     repo: REPO,
@@ -60,7 +58,6 @@ async function pushBranch(git: Git, work: string, branch: string): Promise<strin
   return [one, two];
 }
 
-/** Fetches the base's main into the maintainer's copy: its tip. */
 async function baseTip(): Promise<string> {
   await maintainerGit.ok(["fetch", "-q", "origin", "main"], baseWork);
   return maintainerGit.ok(["rev-parse", "FETCH_HEAD"], baseWork);
@@ -122,7 +119,6 @@ describe("pull requests merged by each strategy (wrangler dev)", () => {
     timeout: 300_000,
   }, async () => {
     const forkWork = await contributorGit.clone(contributor.handle, REPO, "fork");
-    // An agent acting for the contributor opens them, through MCP.
     const agent = await delegatedAgent(forge, contributor, `${contributor.handle}-bot`, [
       "metadata:read",
       "contents:read",
@@ -151,7 +147,6 @@ describe("pull requests merged by each strategy (wrangler dev)", () => {
       expect(opened.head_repo_id).not.toBeNull();
       expect(opened.user.id).toBe(contributor.id);
       expect(opened.performed_via_agents).toHaveLength(1);
-      // The base serves the pull request's revision (and only through its ref).
       const pullRef = `refs/pull/${opened.number}/head`;
       await maintainerGit.ok(["fetch", "-q", "origin", pullRef], baseWork);
       expect(await maintainerGit.ok(["rev-parse", "FETCH_HEAD"], baseWork)).toBe(head);
@@ -166,7 +161,6 @@ describe("pull requests merged by each strategy (wrangler dev)", () => {
         merged: result.sha,
         head,
         commits,
-        // The agent opened it: the squash is its, the contributor its co-author.
         author: agent.handle,
         coAuthor: contributor.handle,
         title: opened.title,
@@ -180,13 +174,11 @@ describe("pull requests merged by each strategy (wrangler dev)", () => {
       });
       expect(pull).toMatchObject({ state: "closed", merged: true, merge_commit_sha: result.sha });
     }
-    // The fork's branches are the fork's: merging into the base moved none of them.
     const forkRefs = await contributorGit.remoteRefs(contributor.handle, REPO);
     for (const method of METHODS)
       expect(forkRefs[`refs/heads/fork-${method}`]).toBe(
         await contributorGit.ok(["rev-parse", `fork-${method}`], forkWork),
       );
-    // An MCP client on the maintainer's own token sees them merged.
     const listed = await mcpClient(forge.origin, maintainer.token).tool<{
       pull_requests: { number: number; merged: boolean }[];
     }>("list_pull_requests", { owner: maintainer.handle, repo: REPO, state: "closed" });
@@ -254,12 +246,10 @@ async function expectHistory(options: {
     (await git.ok(["diff", "--name-only", from, to], baseWork)).split("\n").sort();
   expect(await files(before, merged)).toEqual(await files(`${head}~${commits.length}`, head));
   const made = (await range("%H")).filter((sha) => !commits.includes(sha));
-  // Every commit the server made is signed with the platform's key.
   for (const sha of made)
     expect(await git.ok(["cat-file", "commit", sha], baseWork)).toMatch(/^gpgsig /m);
   switch (method) {
     case "merge":
-      // A merge commit of the base's tip and the head; the head's own commits kept as they are.
       expect(await show("%P", merged)).toBe(`${before} ${head}`);
       if (options.headLabel === null)
         expect(await show("%s", merged)).toMatch(
@@ -272,7 +262,6 @@ async function expectHistory(options: {
       expect(await range("%H")).toEqual([...commits, merged]);
       break;
     case "squash":
-      // One commit on the base's tip, by the pull request's author.
       expect(await show("%P", merged)).toBe(before);
       expect(await show("%s", merged)).toBe(`${title} (#${number})`);
       expect(await show("%an", merged)).toBe(author);
@@ -283,7 +272,6 @@ async function expectHistory(options: {
       expect(made).toEqual([merged]);
       break;
     case "rebase": {
-      // The commits replayed one by one: authors, dates and messages kept, new ids.
       expect(made).toHaveLength(commits.length);
       expect(await show("%P", made[0] as string)).toBe(before);
       const original = async (format: string) =>

@@ -27,7 +27,6 @@ export function ReviewForm({
   const [verdict, setVerdict] = useState<Verdict>("COMMENT");
   const [body, setBody] = useState("");
   const [reviewing, setReviewing] = useState(headSha);
-  /** The head moved under a review being written (to the one shown now). */
   const [moved, setMoved] = useState(false);
   if (reviewing !== headSha) {
     setReviewing(headSha);

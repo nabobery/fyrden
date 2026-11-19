@@ -1,7 +1,6 @@
 import { apiFetch } from "../lib/api.server.js";
 import type { Route } from "./+types/repo.paths";
 
-/** What the finder may ask the API. */
 const QUERY = ["ref", "cursor", "per_page"] as const;
 
 /**

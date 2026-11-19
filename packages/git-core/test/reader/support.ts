@@ -18,14 +18,12 @@ import { chunked } from "../pack/pack-builder.js";
 export const MiB = 1024 * 1024;
 export const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString("hex");
 
-/** One `openRange` call as the store saw it. */
 export interface RangeCall {
   readonly packId: PackId;
   readonly offset: number;
   readonly length: number;
 }
 
-/** Wraps a pack store, recording every `openRange` call. */
 export function countingPackStore(inner: PackStore): PackStore & { calls: RangeCall[] } {
   const calls: RangeCall[] = [];
   return {

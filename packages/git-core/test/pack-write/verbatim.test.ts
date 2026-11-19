@@ -145,7 +145,6 @@ describe("verbatim pack streaming", () => {
           })) {
             chunks.push(new Uint8Array(c));
           }
-          // Coalesced: every chunk but the last is at least minChunkBytes.
           for (const c of chunks.slice(0, -1))
             expect(c.length).toBeGreaterThanOrEqual(minChunkBytes);
           expect(hex(concatBytes(chunks))).toBe(hex(reference));

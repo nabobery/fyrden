@@ -8,7 +8,6 @@ import { type ApiTarget, apiTarget, callApi } from "../api.ts";
  * their ids and what they carry, and the effects cron sends them again.
  */
 
-/** The sinks whose effects may be repaired. */
 export const REPAIRABLE_SINKS = ["feed", "webhooks", "references"] as const;
 export type RepairableSink = (typeof REPAIRABLE_SINKS)[number];
 

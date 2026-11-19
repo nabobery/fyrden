@@ -85,7 +85,6 @@ describe("MCP endpoint", () => {
     const { tools } = await result<{ tools: Record<string, unknown>[] }>(res);
     const expected = mcpTools(registry);
     expect(tools.map((t) => t.name)).toEqual(expected.map((t) => t.name));
-    // Everything the registry declares is advertised unchanged.
     for (const want of expected) {
       const tool = tools.find((t) => t.name === want.name);
       expect(tool).toMatchObject({
@@ -152,7 +151,6 @@ describe("MCP endpoint", () => {
       owner: 1,
     });
     expect(checked.issues?.length).toBeGreaterThan(0);
-    // And the listing is the same on every request.
     const again = async () =>
       JSON.stringify(await result<{ tools: unknown[] }>(await rpc("tools/list")));
     expect(await again()).toBe(await again());

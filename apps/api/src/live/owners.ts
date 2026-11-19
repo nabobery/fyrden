@@ -43,7 +43,6 @@ export const LIVE_OWNER_LIMITS: LiveOwnerLimits = {
   perObjectCleanup: 1,
 };
 
-/** Days a settlement page covers at most. */
 export const LIVE_OWNER_PAGE_DAYS = 4;
 
 /** Owners one request admits at most (a caller and its callees). */

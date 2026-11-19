@@ -41,6 +41,7 @@ import {
   eventually,
   type Forge,
   Git,
+  queryDirectory,
   type StoredRun,
   startForge,
   storedRuns,
@@ -216,11 +217,13 @@ async function triggered(repo: string, event: string, sha: string): Promise<Stor
 /** The run's pending job rows in the directory, as the claim reads them. */
 async function pending(runId: string) {
   expect(runId).toMatch(/^[0-9A-Z]{26}$/);
-  return forge.d1(
-    "DIRECTORY",
+  const { results } = await queryDirectory(
+    forge,
     `SELECT p.repo_id, p.fork, p.claimed_by, r.visibility FROM ci_pending_jobs p
-     JOIN repos r ON r.id = p.repo_id WHERE p.run_id = '${runId}'`,
+     JOIN repos r ON r.id = p.repo_id WHERE p.run_id = ?`,
+    [runId],
   );
+  return results;
 }
 
 /** Waits until run `runId` of `repo` has its one job queued and offered to the account's runners. */
@@ -420,7 +423,12 @@ beforeAll(async () => {
 
   // A public repository's job: no operation makes a repository public, so the directory is set.
   const pub = await owner.api.call("orgs.repos.create", { org, name: "pub" });
-  await forge.d1("DIRECTORY", `UPDATE repos SET visibility = 'public' WHERE id = '${pub.id}'`);
+  const visibility = await queryDirectory(
+    forge,
+    "UPDATE repos SET visibility = 'public' WHERE id = ?",
+    [pub.id],
+  );
+  expect(visibility.changes).toBe(1);
   const pubSha = await newRepo("pub", {
     ".github/workflows/ci.yml": never(`${WORKFLOW_NAME}-public`, "push"),
   });
@@ -1140,7 +1148,7 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
 
   it("never gave it a fork's job, approved, or a public repository's job", async () => {
     // Each run above polled with both denied jobs queued and took only its own job.
-    const tasks = await forge.d1("DIRECTORY", "SELECT run_id FROM ci_tasks");
+    const { results: tasks } = await queryDirectory(forge, "SELECT run_id FROM ci_tasks");
     expect(tasks.map((t) => t.run_id)).not.toContain(forkRun);
     expect(tasks.map((t) => t.run_id)).not.toContain(publicRun);
     expect(completedRuns.size).toBe(4);

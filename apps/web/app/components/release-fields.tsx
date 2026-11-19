@@ -1,11 +1,9 @@
 import type { FormEvent } from "react";
 import { fieldsOf } from "./kept-drafts.js";
 
-/** What a release form records as it is written. */
 export const writtenRelease = (event: FormEvent<HTMLFormElement>) =>
   fieldsOf(event, ["tag_name", "name", "body", "prerelease"]);
 
-/** A release's tag, title, notes and prerelease flag, filled from `shown`. */
 export function ReleaseFields({
   shown,
   tagFixed,

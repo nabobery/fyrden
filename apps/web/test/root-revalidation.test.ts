@@ -40,7 +40,6 @@ function stack() {
       return json(pullRequest());
     },
     rpcVersion: async () => {
-      // Only the root's loader asks for it: a count of its runs.
       state.rpcCalls++;
       if (state.failing) throw new TypeError("The service binding refused the call.");
       return 1;
@@ -65,7 +64,6 @@ function stack() {
             id: "conflicts",
             path: ":owner/:repo/pull/:number/conflicts",
             loader: run(conflictsLoader),
-            // As a refused resolution answers: the page then reads itself again.
             action: () => ({ error: "The base moved.", stale: true, snapshot: SNAPSHOT }),
           },
         ],
@@ -105,11 +103,9 @@ describe("a page holding conflict edits, read again", () => {
     const rootRuns = state.rpcCalls;
 
     state.failing = true;
-    // "Read the conflicts again" (a revalidation).
     void router.revalidate();
     await settled(router);
     expect(router.state.errors).toBeNull();
-    // The page's own data answers its failure (the page keeps the editors it holds).
     expect(router.state.loaderData.conflicts).toMatchObject({ conflicts: null });
     expect((router.state.loaderData.conflicts as { failure: string | null }).failure).toBeTruthy();
     // A resolution sent and refused: the page reads itself again after it.
@@ -119,7 +115,6 @@ describe("a page holding conflict edits, read again", () => {
     await settled(router);
     expect(router.state.errors).toBeNull();
     expect(router.state.actionData?.conflicts).toMatchObject({ stale: true });
-    // The site's data was not read again for the same page: as it was.
     expect(state.rpcCalls).toBe(rootRuns);
     expect(router.state.loaderData.root).toEqual({
       user: { id: VIEWER, handle: "ada" },

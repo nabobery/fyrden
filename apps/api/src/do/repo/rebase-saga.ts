@@ -51,7 +51,6 @@ import type { ReviewerConfirmations } from "./reviewer-confirmation.js";
  * kept) is `rebase-replay.ts`; this file is the saga around it.
  */
 
-/** The job that drives the pull request's saga. */
 export const rebaseJobId = (number: number) => `merge-saga:${number}`;
 
 export interface RebaseDeps {
@@ -104,7 +103,6 @@ const FINISH_QUERIES = 6;
 
 export type SagaState = "running" | "done" | "failed";
 
-/** A saga as a request sees it. */
 export interface SagaView {
   readonly sagaId: string;
   readonly state: SagaState;
@@ -257,7 +255,6 @@ export class RebaseSagas {
     );
   }
 
-  /** Sagas running now. */
   running(): number {
     return this.git.context.storage.sql
       .exec<{ n: number }>("SELECT count(*) AS n FROM merge_sagas WHERE state = 'running'")

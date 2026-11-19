@@ -49,7 +49,6 @@ describe("redelivery", () => {
     const { hook, id } = await delivered(400);
     expect((await t.deliveries())[0]).toMatchObject({ state: "failed", attempts: 1 });
     const again = await redeliver(hook, id);
-    // Queued for its attempt.
     expect(queued).toEqual([id]);
     expect(again.status).toBe(202);
     expect(again.body).toMatchObject({ id, state: "pending" });
@@ -183,7 +182,6 @@ describe("redelivery", () => {
         .prepare("UPDATE webhook_deliveries SET attempts = ? WHERE delivery_id = ?")
         .bind(n, id)
         .run();
-    // One short of the most: the last one allowed.
     await attempted(ATTEMPT_POLICY.maxTotalAttempts - 1);
     expect((await redeliver(hook, id)).status).toBe(202);
     const limit = await admitted()

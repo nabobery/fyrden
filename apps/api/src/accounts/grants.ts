@@ -136,7 +136,6 @@ export async function removeCollaboratorOperation(
   return { repo: fullName(repo), user: user.handle, state: "removed" };
 }
 
-/** The `repos.collaborators.list` operation. */
 export async function listCollaboratorsOperation(
   ctx: OpContext,
   input: Input<typeof listCollaborators>,
@@ -176,7 +175,6 @@ export function teamSlug(name: string): string {
     .replace(/-+$/, "");
 }
 
-/** The `orgs.teams.create` operation. */
 export async function createTeamOperation(
   ctx: OpContext,
   input: Input<typeof createTeam>,
@@ -198,7 +196,6 @@ export async function createTeamOperation(
   return { slug, name: input.name };
 }
 
-/** The `orgs.teams.list` operation. */
 export async function listTeamsOperation(
   ctx: OpContext,
   input: Input<typeof listTeams>,
@@ -215,7 +212,6 @@ export async function listTeamsOperation(
   };
 }
 
-/** The `orgs.teams.memberships.set` operation. */
 export async function setTeamMembershipOperation(
   ctx: OpContext,
   input: Input<typeof setTeamMembership>,
@@ -236,7 +232,6 @@ export async function setTeamMembershipOperation(
   return { team: input.team_slug, user: user.handle, state: "active" };
 }
 
-/** The `orgs.teams.memberships.remove` operation. */
 export async function removeTeamMembershipOperation(
   ctx: OpContext,
   input: Input<typeof removeTeamMembership>,
@@ -276,7 +271,6 @@ async function orgRepo(ctx: OpContext, orgId: string, owner: string, name: strin
   return repo;
 }
 
-/** The `orgs.teams.repos.set` operation. */
 export async function setTeamRepoOperation(
   ctx: OpContext,
   input: Input<typeof setTeamRepo>,
@@ -299,7 +293,6 @@ export async function setTeamRepoOperation(
   return { team: input.team_slug, repo: fullName(repo), permission: input.permission };
 }
 
-/** The `orgs.teams.repos.remove` operation. */
 export async function removeTeamRepoOperation(
   ctx: OpContext,
   input: Input<typeof removeTeamRepo>,

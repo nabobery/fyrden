@@ -374,7 +374,6 @@ describe("a maintenance run's pages, full", () => {
         },
       );
 
-      // The receipt removed by it.
       expect(
         await env.DIRECTORY.prepare("SELECT count(*) AS n FROM live_budget_receipts WHERE seq = ?")
           .bind(one.seq)

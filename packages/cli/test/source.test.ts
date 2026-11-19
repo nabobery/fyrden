@@ -26,7 +26,6 @@ describe("readSource", () => {
     await git("add", ".");
     await git("-c", "user.name=T", "-c", "user.email=t@fyrden.invalid", "commit", "-q", "-m", "a");
     const head = await git("rev-parse", "HEAD");
-    // Ignored files (the generated deploy config) do not count.
     await writeFile(join(dir, "wrangler.deploy.jsonc"), "{}");
     expect(await readSource(dir)).toEqual({ commit: head, dirty: false });
     await writeFile(join(dir, "0006_new.sql"), "CREATE TABLE t (a);");

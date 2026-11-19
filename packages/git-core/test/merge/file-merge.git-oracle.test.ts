@@ -37,7 +37,6 @@ async function gitMerge(base: string, ours: string, theirs: string) {
 const merge = (base: string, ours: string, theirs: string): FileMerge =>
   mergeFiles(enc.encode(base), enc.encode(ours), enc.encode(theirs));
 
-/** A base of distinct lines and two sides that delete some, insert lines of their own, and move none. */
 const unique = fc
   .tuple(fc.integer({ min: 0, max: 12 }), fc.array(fc.boolean(), { minLength: 12, maxLength: 12 }))
   .chain(([n]) => {
@@ -95,12 +94,9 @@ describe("mergeFiles against git merge-file", () => {
     fc.assert(
       fc.property(repeating, ([base, ours, theirs]) => {
         const text = (m: FileMerge) => (m.kind === "clean" ? dec.decode(m.bytes) : m.kind);
-        // One side unchanged: the other side, cleanly.
         expect(text(merge(base, base, theirs))).toBe(theirs);
         expect(text(merge(base, ours, base))).toBe(ours);
-        // The same change on both sides: that change, cleanly.
         expect(text(merge(base, ours, ours))).toBe(ours);
-        // The sides swapped: the same outcome.
         const forward = merge(base, ours, theirs);
         const backward = merge(base, theirs, ours);
         expect(forward.kind).toBe(backward.kind);

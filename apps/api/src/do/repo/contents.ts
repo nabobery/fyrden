@@ -113,7 +113,6 @@ export interface TreeListing {
   readonly truncated: boolean;
 }
 
-/** Subtrees of one directory whose lookups a recursive listing batches at most. */
 const PREFETCH_BATCH = 1_000;
 
 const utf8 = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });

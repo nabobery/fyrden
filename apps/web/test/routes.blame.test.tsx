@@ -78,7 +78,6 @@ async function open(
   return { ...outcome, calls };
 }
 
-/** Loader data, and the status a `data()` answer set. */
 function unwrap(value: unknown): { data: unknown; status: number; headers: Headers } {
   if (value && typeof value === "object" && "init" in value && "data" in value) {
     const init = (value as { init?: ResponseInit }).init ?? {};
@@ -290,7 +289,6 @@ describe("pages of a large file", () => {
     expect(html).toContain("Lines 2,001 to 4,000 of 4,500");
     expect(html).toContain(`href="${at("?from=1")}">Previous</a>`);
     expect(html).toContain(`href="${at("?from=4001")}">Next</a>`);
-    // The group that started before this window is named again at its top.
     expect(html.indexOf("First")).toBeLessThan(html.indexOf('id="L2001"'));
   });
 });
@@ -312,7 +310,6 @@ describe("states", () => {
     );
     expect(status).toBe(503);
     expect(headers.get("Retry-After")).toBe("3");
-    // The page's own answer carries it: a loader's headers reach it only through `headers`.
     expect(new Headers(pageHeaders(headers)).get("Retry-After")).toBe("3");
     expect(new Headers(pageHeaders(new Headers())).has("Retry-After")).toBe(false);
     expect(html).toContain("Blame is busy right now. Try again in a moment.");

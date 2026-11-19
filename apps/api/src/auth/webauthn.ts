@@ -27,8 +27,6 @@ const fail = (message: string): never => {
   throw new WebAuthnError(message);
 };
 
-// ---- encodings --------------------------------------------------------------
-
 export function base64urlEncode(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -140,8 +138,6 @@ function decodeItem(
   }
 }
 
-// ---- keys -------------------------------------------------------------------
-
 /** A COSE public key (RFC 9053) as a JWK, with its algorithm. */
 export function coseToJwk(cose: unknown): { jwk: JsonWebKey; alg: CoseAlg } {
   if (!(cose instanceof Map)) return fail("the public key is not a COSE key");
@@ -210,8 +206,6 @@ function derToRaw(der: Uint8Array): Uint8Array {
   raw.set(s.value, 32);
   return raw;
 }
-
-// ---- ceremonies -------------------------------------------------------------
 
 export interface Expected {
   readonly challenge: string;

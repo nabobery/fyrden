@@ -22,10 +22,8 @@ import {
 } from "../src/read-model/export.js";
 import { pauseReadModel, resumeReadModel } from "../src/read-model/maintenance.js";
 
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
-/** The whole export from `from`: its pages. */
 async function exportAll(
   generation: number,
   from: ExportCursor = { table: 0, after: null },

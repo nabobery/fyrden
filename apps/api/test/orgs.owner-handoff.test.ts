@@ -45,7 +45,6 @@ describe("an administrator handing an organization to a new owner", () => {
     expect(await org.stub.accountRole(bob.principalId)).toBe("owner");
     await org.stub.deliverAudit();
     expect(await audited(org.id)).toBe(1);
-    // Again: nothing more.
     expect((await handOver(org.login, bob)).status).toBe(204);
     await org.stub.deliverAudit();
     expect(await audited(org.id)).toBe(1);

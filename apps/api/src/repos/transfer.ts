@@ -64,13 +64,11 @@ type Transfer = {
 
 /** Proposed. */
 export const TRANSFER_POLICY = {
-  /** Transfers one cron run advances. */
   perCronRun: 10,
   /** How long a runner holds a transfer (one that dies frees it after this). */
   leaseMs: 60_000,
 };
 
-/** The `repos.transfer` operation. */
 export async function transferRepoOperation(
   ctx: OpContext,
   input: Input<typeof transferRepo>,
@@ -417,7 +415,6 @@ async function runStep(
   }
 }
 
-/** Hooks into a transfer's directory move. For tests. */
 export const transferHooks: {
   beforeMove?: () => Promise<void>;
   /** Between the fence's generation and its write to the read model. */

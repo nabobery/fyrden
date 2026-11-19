@@ -75,8 +75,6 @@ const isLarge = (f: Fixture) => f.bytes > 128 * 1024;
 let esbuild: ReturnType<typeof loadEsbuild>;
 let fixtures: Fixture[] = [];
 
-// ---------------------------------------------------------------- workerd
-
 interface WorkerdRow {
   fixture: string;
   mode: Mode;
@@ -218,8 +216,6 @@ async function workerdSection() {
   };
 }
 
-// ------------------------------------------------------------------- Node
-
 function nodeRun(script: string, command: object): Record<string, unknown> {
   const result = spawnSync(process.execPath, [script, JSON.stringify(command)], {
     encoding: "utf8",
@@ -306,8 +302,6 @@ async function nodeSection() {
   }
   return { rows, firstScreen };
 }
-
-// ----------------------------------------------------------------- report
 
 const results: Record<string, unknown> = {
   date: new Date().toISOString().slice(0, 10),

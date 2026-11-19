@@ -45,7 +45,6 @@ describe("fyrden push preflight (receive-pack.body-limit)", () => {
     const message = d.err.join("\n");
     expect(message).toContain("1000 bytes");
     expect(message).toContain("fyrden push --chunked origin main");
-    // Stock git push is never run, and the pack is removed.
     expect(git.passthroughs).toEqual([]);
     expect(files.data.size).toBe(0);
   });

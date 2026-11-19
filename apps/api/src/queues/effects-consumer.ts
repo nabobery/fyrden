@@ -62,7 +62,6 @@ export async function consumeEffects(
   const ours = valid.filter((message) => message.body.sink === name);
   for (const message of valid.filter((m) => m.body.sink !== name)) message.retry();
   try {
-    // One writer for the invocation's writes.
     await withReadModel(env, DEFAULT_ORG_SHARD, (db) =>
       deliverEffects(
         {

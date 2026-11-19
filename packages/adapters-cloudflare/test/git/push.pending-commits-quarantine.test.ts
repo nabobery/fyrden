@@ -63,7 +63,6 @@ describe("pending commit quarantine (storage)", () => {
         uploadId: seed.uploadId,
       });
 
-      // Push A writes C (child of R) as pending.
       const a = begin(git, "usr_a");
       await addPendingCommits(graph, a.uploadId, [commit(2, [1])]);
       const b = begin(git, "usr_b");
@@ -86,7 +85,6 @@ describe("pending commit quarantine (storage)", () => {
         ),
       };
 
-      // A is rejected (its connectivity check failed): everything it wrote goes.
       const keys = git.uploads.abort(a.uploadId);
       const afterAbort = {
         ownRead: (await graph.read([oid(2)], { uploadId: a.uploadId }))[0],
@@ -99,7 +97,6 @@ describe("pending commit quarantine (storage)", () => {
         pack: git.registry.get(a.packId as string)?.state,
         upload: git.uploads.get(a.uploadId)?.state,
         keys: keys?.length,
-        // An aborted upload can never commit.
         commit: git.refStore.commitSync({
           addPacks: [],
           removePacks: [],
@@ -143,7 +140,6 @@ describe("pending commit quarantine (storage)", () => {
       await addPendingCommits(git.commitGraph, a.uploadId, [commit(1, []), commit(2, [1])]);
       git.uploads.markIndexed(a.uploadId, { deps: [] });
       const before = await git.commitGraph.read([oid(2)], "verified");
-      // A refused commit (here by the re-authorization hook) promotes nothing.
       const refused = git.refStore.commitSync({
         addPacks: [],
         removePacks: [],

@@ -66,7 +66,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** What a state of the evaluation means, as the page says it. */
 const STATE: Record<CodeOwners["state"], string> = {
   pending: "Being worked out for the current base and head; read this page again shortly.",
   complete: "Worked out for the current base and head.",

@@ -60,7 +60,6 @@ describe("each kind of file", () => {
     const html = await page("/ada/demo/blob/main/a.ts", contents);
     expect(html).toContain(message);
     expect(html).toMatch(rawButton);
-    // A file that can't be shown never reads as anything else.
     expect(html).not.toContain('id="L1"');
   });
 

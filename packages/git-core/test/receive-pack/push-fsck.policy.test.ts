@@ -127,7 +127,6 @@ describe("push fsck policy (default)", () => {
     }
     expect(error).toBeInstanceOf(PushFsckError);
     const findings = (error as PushFsckError).findings;
-    // Ten findings, then one per id that counts the other 50.
     expect(findings).toHaveLength(12);
     expect(findings.slice(-2).map((f) => f.message)).toEqual([
       "gitmodulesName: and 25 more disallowed submodule settings",
@@ -153,7 +152,6 @@ describe("push fsck policy (default)", () => {
     const names = Array.from({ length: 11 }, (_, i) => `[submodule "../${i}"]\n\tpath = a\n`);
     const data = latin1(`${names.join("")}[submodule "ok"]\n\turl = -evil\n`);
     expect(() => fsck.check(blob, "blob", data)).toThrow(/gitmodulesUrl/);
-    // Each id past the cap keeps its own count.
     expect(
       checkGitmodules(data, 10)
         .slice(10)

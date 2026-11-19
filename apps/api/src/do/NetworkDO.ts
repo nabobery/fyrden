@@ -45,7 +45,6 @@ export class NetworkDO extends MigratingDO {
 
   /** Timings and budgets. Tests may replace them. */
   policy: NetworkPolicy = NETWORK_DEFAULTS;
-  /** Pause points for tests. */
   hooks: NetworkHooks = {};
 
   readonly context: GitStorageContext;

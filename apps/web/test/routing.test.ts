@@ -53,7 +53,6 @@ describe("the web Worker's routing", () => {
     expect(navigate("/ada/demo.data")?.headers.get("Location")).toBe(
       "https://fyrden.test/ada/demo.data/?x=1",
     );
-    // React Router's own data requests are fetches.
     expect(navigate("/ada/demo/blob/main/notes.data", "cors")).toBeUndefined();
     expect(navigate("/ada/demo")).toBeUndefined();
   });
@@ -89,15 +88,12 @@ describe("the web Worker's routing", () => {
         `https://fyrden.test${spelled}/?x=1`,
       );
     }
-    // Encoded slashes stay inside their segment.
     expect(ask("/ada%2Fdemo/releases/download/notes.data", "GET", "cors")).toBeUndefined();
-    // A bad escape: React Router matches the path as it stands, so this does too.
     expect(ask("/ada/demo/releases/download/v1/notes%zz.data", "GET", "cors")?.status).toBe(308);
     expect(ask("/ada/demo/%zzeleases/download/notes.data", "GET", "cors")).toBeUndefined();
     expect(ask("/ada/demo/%72eleases/download/notes%zz.data", "GET", "cors")).toBeUndefined();
     expect(ask(download, "POST", "cors")).toBeUndefined();
     expect(ask("/ada/demo/releases/download/v1/notes.zip", "HEAD")).toBeUndefined();
-    // Already moved: the slash ends it, so it can't redirect again.
     expect(ask(`${download}/`, "GET", "cors")).toBeUndefined();
     // Anywhere else a data request can be real, or the path only looks alike.
     for (const elsewhere of [
@@ -117,7 +113,6 @@ describe("the web Worker's routing", () => {
       ...API_PATHS.map((p) => p.slice(1)),
       ...routes.flatMap((r) => (r.path && !r.path.startsWith(":") ? [r.path.split("/")[0]] : [])),
     ].filter((name): name is string => name !== undefined && !name.startsWith("."));
-    // The built assets the platform serves before the Worker runs.
     names.push("assets");
     expect(names).toContain("settings");
     for (const name of names) expect(isReservedHandle(name), name).toBe(true);

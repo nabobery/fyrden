@@ -220,7 +220,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
 export async function action({ request, context, params }: Route.ActionArgs): Promise<MergeResult> {
   assertSameOrigin(request);
   const form = await readForm(request, PULL_FORM_MAX_BYTES);
-  // The form was made for one viewer: another signed in since (another tab) sends nothing.
   const refused = await viewerRefusal(context, request, form);
   if (refused) return { error: refused };
   const api = pullApiOf(params);

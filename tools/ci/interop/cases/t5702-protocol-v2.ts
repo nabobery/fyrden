@@ -50,7 +50,6 @@ export const t5702: CaseFile = {
         const seen = await loggedRequests(t, "v2-one-post", mark, (r) =>
           r.some((line) => line.startsWith("POST ")),
         );
-        // The first request is answered 401; git asks its credential helper and repeats it.
         expect(seen).toEqual([
           "GET /info/refs 401",
           "GET /info/refs 200",

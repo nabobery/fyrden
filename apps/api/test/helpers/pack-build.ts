@@ -25,7 +25,6 @@ export interface BuiltObject {
   readonly oid: Oid;
 }
 
-/** An object and its id. */
 export async function object(type: ObjectType, bytes: Uint8Array): Promise<BuiltObject> {
   return { type, bytes, oid: await hashObject(sha1, type, bytes) };
 }

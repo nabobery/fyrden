@@ -23,7 +23,6 @@ export const MIN_PART_BYTES = 5 * MiB;
 /** States a pack can be written again from (see `rewritePack`). */
 const REWRITABLE_STATES: readonly PackState[] = ["pending", "indexing", "discarded"];
 
-/** Where a new pack belongs. */
 export interface NewPackUnit {
   readonly kind: PackKind;
   /** Packs that live and die together. */
@@ -39,7 +38,6 @@ export interface R2PackStoreOptions {
   /** The repository's current network: new packs are stored under it. */
   readonly networkId: () => string;
   readonly partBytes?: number;
-  /** The kind recorded for packs this store writes. */
   readonly kind?: PackKind;
   /** Allocates pack ids; tests inject a fixed sequence. */
   readonly newPackId?: () => PackId;

@@ -91,7 +91,6 @@ type ListingContext = Pick<Input<typeof listIssues>, "state" | "sort" | "directi
   readonly filters: string | undefined;
 };
 
-/** Label names a `labels` filter takes at most. */
 const MAX_FILTER_LABELS = 20;
 
 /**
@@ -213,7 +212,6 @@ function decodeListingCursor(
   return { key: value?.k as number, number: value?.n as number };
 }
 
-/** The `issues.list` operation. */
 export async function listIssuesOperation(
   ctx: OpContext,
   input: Input<typeof listIssues>,
@@ -255,7 +253,6 @@ export async function listIssuesOperation(
   };
 }
 
-/** The `issues.get` operation. */
 export async function getIssueOperation(
   ctx: OpContext,
   input: Input<typeof getIssue>,
@@ -271,7 +268,6 @@ export async function getIssueOperation(
   return subjectOutput(subject, kinds);
 }
 
-/** The `issues.create` operation. */
 export async function createIssueOperation(
   ctx: OpContext,
   input: Input<typeof createIssue>,
@@ -286,7 +282,6 @@ export async function createIssueOperation(
   return subjectOutput(result.subject, tokenKinds(ctx, entry, "read"));
 }
 
-/** The `issues.update` operation. */
 export async function updateIssueOperation(
   ctx: OpContext,
   input: Input<typeof updateIssue>,
@@ -344,7 +339,6 @@ async function setLock(
   return { locked: result.locked, active_lock_reason: result.reason };
 }
 
-/** The `issues.lock` operation. */
 export function lockIssueOperation(
   ctx: OpContext,
   input: Input<typeof lockIssue>,
@@ -352,7 +346,6 @@ export function lockIssueOperation(
   return setLock(ctx, input, { locked: true, reason: input.lock_reason ?? null });
 }
 
-/** The `issues.unlock` operation. */
 export function unlockIssueOperation(
   ctx: OpContext,
   input: Input<typeof unlockIssue>,
@@ -360,7 +353,6 @@ export function unlockIssueOperation(
   return setLock(ctx, input, { locked: false, reason: null });
 }
 
-/** The `issues.delete` operation. */
 export async function deleteIssueOperation(
   ctx: OpContext,
   input: Input<typeof deleteIssue>,

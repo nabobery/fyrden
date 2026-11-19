@@ -354,7 +354,6 @@ export const PERMISSIONS = {
 
 export type Permission = keyof typeof PERMISSIONS;
 
-/** Permissions checked against one repository. */
 export type RepoPermission = {
   [P in Permission]: (typeof PERMISSIONS)[P]["resource"] extends "repo" ? P : never;
 }[Permission];
@@ -375,7 +374,6 @@ export function isScope(name: string): name is Permission {
   return isPermission(name) && permissionDef(name).sessionOnly !== true;
 }
 
-/** The definition, typed as the union so callers can narrow on `resource`. */
 export function permissionDef(permission: Permission): PermissionDef {
   return PERMISSIONS[permission];
 }

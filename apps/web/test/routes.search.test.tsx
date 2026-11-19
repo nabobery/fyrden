@@ -164,10 +164,8 @@ describe("the search page's call", () => {
     expect(loaded.data.outcome).toEqual({ state: "scope" });
     const html = render(path, loaded);
     expect(html).toContain("Choose where to search");
-    // The controls keep what was asked.
     expect(html).toMatch(/id="search-q"[^>]*value="lantern is:open"/);
     expect(html).toMatch(/id="search-per-page"[^>]*value="10"/);
-    // The page with nothing asked yet shows the form alone.
     const bare = await load("/search");
     expect(bare.calls).toEqual([]);
     expect(bare.data.outcome).toEqual({ state: "idle" });
@@ -188,7 +186,6 @@ describe("the search page's call", () => {
       expect(calls, query).toEqual([]);
       expect(data.outcome.state, query).toBe("invalid");
     }
-    // The last page the API pages to is asked for.
     const deepest = await load("/search?q=lantern+repo%3Aada%2Fforge&page=34&per_page=30");
     expect(deepest.calls).toHaveLength(1);
   });
@@ -228,7 +225,6 @@ describe("a page too large", () => {
       expect(res.status).toBe(302);
       expect(res.headers.get("Cache-Control")).toBe(NO_STORE);
       expect(res.headers.get("Location")).toBe(asked(chain[i + 1] as number, 1));
-      // The query, type, scope and sort stay as asked.
       const next = new URL(res.headers.get("Location") ?? "", ORIGIN).searchParams;
       expect(Object.fromEntries(next)).toEqual({
         q: "lantern",
@@ -284,7 +280,6 @@ describe("refusals", () => {
     }
     const unscoped = await load(path, () => problem("search_scope_required"));
     expect(unscoped.data.outcome).toEqual({ state: "scope" });
-    // An answer with no problem document still says what happened.
     const bare = await load(path, () => new Response(null, { status: 502 }));
     expect(bare.data.outcome).toEqual({
       state: "refused",
@@ -336,7 +331,6 @@ describe("results", () => {
     expect(listed).toContain('href="/grace/lamp"');
     expect(listed).toContain("private");
     expect(listed).toContain("A forge for lanterns");
-    // The issue search's sort and order are not offered for repositories.
     expect(listed).not.toContain('id="search-sort"');
   });
 
@@ -412,13 +406,10 @@ describe("result pages", () => {
     const last = await pagesOf("page=4&per_page=30", 95);
     expect(pageOf(last.pages.previous)).toBe("3");
     expect(last.pages.next).toBeNull();
-    // Exactly full: no page past it.
     expect((await pagesOf("page=3&per_page=30", 90)).pages.next).toBeNull();
-    // Counted to the depth: the page that would start past it is not offered.
     expect((await pagesOf("page=10&per_page=100", 1_000)).pages.next).toBeNull();
     expect(pageOf((await pagesOf("page=33&per_page=30", 1_000)).pages.next)).toBe("34");
     expect((await pagesOf("page=34&per_page=30", 1_000)).pages.next).toBeNull();
-    // Results that may be missing make no page more.
     expect((await pagesOf("per_page=30", 30, true)).pages.next).toBeNull();
     expect((await pagesOf("per_page=30", 1)).pages.numbers).toEqual([]);
   });
@@ -442,7 +433,6 @@ describe("result pages", () => {
     );
     expect(html).toContain('rel="prev"');
     expect(html).toContain('rel="next"');
-    // Each page link asks the same search at the same size.
     const next = new URL(pages.next ?? "", ORIGIN).searchParams;
     expect(Object.fromEntries(next)).toEqual({
       q: "lantern repo:ada/forge",

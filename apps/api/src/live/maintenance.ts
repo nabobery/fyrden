@@ -306,7 +306,6 @@ export async function settleStrandedOwners(db: D1Database, limit: number): Promi
   return released;
 }
 
-/** A cleanup grant paying for one recovery page of `feed`. */
 export async function recoveryGrant(db: D1Database, feed: string, metrics?: Metrics) {
   const target = await liveTarget(db, feed);
   return reserveLive(

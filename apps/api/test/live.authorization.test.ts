@@ -36,7 +36,6 @@ function deadlines() {
   };
 }
 
-/** A promise the test settles. */
 function held<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;

@@ -199,16 +199,13 @@ button.danger {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-/* Text shown as written: its line breaks kept, long words broken. */
 .pre-wrap {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-/* A form that is one button, inline with what it acts on. */
 .inline-form {
   display: inline;
 }
-/* The comment a permalink names. */
 .panel.linked {
   border-color: var(--accent);
 }
@@ -296,7 +293,6 @@ mark.file-line > a {
 .file-goto input {
   width: 6rem;
 }
-/* Blame's plain table: each group's row above its lines, numbered as blame counts them. */
 .blame-scroll {
   overflow-x: auto;
 }
@@ -380,7 +376,6 @@ ul.label-list {
   list-style: none;
   padding: 0;
 }
-/* A subject's or comment's reactions: counts, and toggles for who may react. */
 ul.reactions {
   list-style: none;
   padding: 0;

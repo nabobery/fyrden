@@ -121,7 +121,6 @@ export const typed = (column: string, i: number) =>
      WHEN 'null' THEN NULL WHEN 'blob' THEN hex(${column}) WHEN 'real' THEN printf('%!.17g', ${column})
      ELSE CAST(${column} AS TEXT) END AS v${i}`;
 
-/** A row of `typed` columns, as preserved. */
 export const typedRow = (row: Record<string, unknown>, columns: number): Typed[] =>
   Array.from(
     { length: columns },
@@ -335,7 +334,6 @@ async function readPage(
   return { columns, types, rows, bytes, more: take < keys.length };
 }
 
-/** The page's object key: the recovery's, the table's, its number and digest. */
 const objectKey = (recovery: string, table: string, page: number, digest: string) =>
   `${PRESERVATION_PREFIX}${recovery}/${table}/${page}-${digest}.json`;
 

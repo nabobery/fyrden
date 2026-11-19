@@ -42,7 +42,6 @@ import { liveSearch, Settling } from "../search/live.js";
 import { repairSql } from "../search/repairs.js";
 import { bound, IN_REPO_INDEX } from "../search/statements.js";
 
-/** The queue repository outboxes send to. */
 export const EVENTS_QUEUE = "fyrden-events";
 
 /**
@@ -195,7 +194,6 @@ export async function consumeEvents(
   env: Env,
   options: ConsumerOptions = {},
 ): Promise<void> {
-  // One writer for the invocation's writes to the read model.
   await withReadModel(env, DEFAULT_ORG_SHARD, (readModel) =>
     consumeWith(batch, env, { ...options, readModel: options.readModel ?? readModel }),
   );
@@ -690,9 +688,7 @@ export function epochStatement(
     .bind(sourceId, epochGen, now);
 }
 
-/** What the repository's own row projects. */
 const REPO_TYPES: ReadonlySet<string> = new Set([REPO_ENTITY]);
-/** What search projects (`search/live.ts`). */
 const SEARCHED_TYPES: ReadonlySet<string> = new Set([
   ISSUE_ENTITY,
   PULL_ENTITY,

@@ -83,7 +83,6 @@ describe("the reviewers page", () => {
       params,
     } as never);
     expect(calls.map(pathOf)).toContain(`GET ${PULL}/requested_reviewers`);
-    // A user's repository: no team field.
     expect(data).toMatchObject({ requested, triage: true, teamsOf: null, viewer: VIEWER });
   });
 
@@ -107,13 +106,10 @@ describe("the reviewers page", () => {
     expect(html).toMatch(/value="withdraw-team"\/><input type="hidden" name="id" value="team_1"/);
     expect(html).toContain("Request a review");
     expect(html).toContain('name="teams"');
-    // A user's repository takes no team reviewers: none offered.
     const personal = page({ teamsOf: null });
     expect(personal).toContain('name="reviewers"');
     expect(personal).not.toContain('name="teams"');
-    // The author of their own, without triage.
     expect(page({ pull: pullRequest(), triage: false })).toContain("Request a review");
-    // A reader of someone else's, and a closed one: nothing to change.
     for (const html of [
       page({ triage: false }),
       page({ pull: pullRequest({ state: "closed" }) }),
@@ -154,7 +150,6 @@ describe("the reviewers page", () => {
     });
     expect(stale.outcome).toMatchObject({ error: expect.any(String) });
     expect(stale.outcome).not.toHaveProperty("ok");
-    // Drawn after the move (its old name in the URL): neworg's, named either way.
     for (const teams of ["core", "neworg/core"]) {
       const fresh = await send({ intent: "request", teams, teams_of: "neworg" });
       expect(fresh.sent?.path).toBe(`POST ${PULL}/requested_reviewers/teams`);
@@ -164,7 +159,6 @@ describe("the reviewers page", () => {
         team_owner: "neworg",
       });
     }
-    // Another account's team, or a team on a form that showed no owner: never sent.
     for (const fields of [
       { intent: "request", teams: "ada/core", teams_of: "neworg" },
       { intent: "request", teams: "core" },
@@ -178,11 +172,9 @@ describe("the reviewers page", () => {
     );
     expect(earlier.outcome).toMatchObject({ error: expect.any(String) });
     expect(earlier.outcome).not.toHaveProperty("ok");
-    // People alone carry no owner, through the plain path.
     const people = await send({ intent: "request", reviewers: "bo", teams_of: "neworg" });
     expect(people.sent?.path).toBe(`POST ${PULL}/requested_reviewers`);
     expect(people.sent?.body).toEqual({ reviewers: ["bo"], team_reviewers: [] });
-    // The page names the owner it is now.
     const { context } = api({
       [`GET ${PULL}`]: () => json(pullRequest()),
       [`GET ${PULL}/requested_reviewers`]: () => json(requested),
@@ -216,7 +208,6 @@ describe("the reviewers page", () => {
     });
     for (const [fields, viewer] of [
       [{ intent: "request", teams: "other/core", teams_of: "ada" }, VIEWER],
-      // A team with no owner shown (a user's repository's form): never sent.
       [{ intent: "request", teams: "core" }, VIEWER],
       [{ intent: "withdraw-user", id: "../x" }, VIEWER],
       [{ intent: "request", reviewers: "bo" }, "usr_other"],
@@ -289,7 +280,6 @@ describe("the code owners page", () => {
       [() => json({ code: "invalid_cursor", detail: "x" }, 422), () => json(owners())],
       "?cursor=old",
     );
-    // The stale page, then the first one again.
     expect(calls.filter((c) => c.includes("/code-owners"))).toEqual([
       `GET ${PULL}/code-owners?per_page=30&cursor=old`,
       `GET ${PULL}/code-owners?per_page=30`,
@@ -375,7 +365,6 @@ describe("a CODEOWNERS file's blob view", () => {
       expect(html).toContain("could not be read just now");
       expect(html).toContain("* @ada");
     }
-    // No file in effect there: nothing said.
     const none = await view(".github/CODEOWNERS", () =>
       json({ code: "not_found", detail: "x" }, 404),
     );

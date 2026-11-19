@@ -7,7 +7,6 @@ import type { CaseFile } from "./types.ts";
 
 const from = "t5533-push-cas.sh";
 
-/** A history on both remotes, and a work tree whose main has been rewritten. */
 async function rewritten(t: Interop, name: string) {
   const { work, remotes } = await seeded(t, name);
   const remoteMain = (await t.ok(["rev-parse", "main"], work)).trim();

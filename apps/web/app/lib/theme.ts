@@ -12,7 +12,6 @@ const COOKIE_ATTRIBUTES = "HttpOnly; Secure; SameSite=Lax";
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
 const MAX_RETURN_LENGTH = 4096;
 
-/** The mode `value` names, if any. */
 export function themeModeOf(value: unknown): ThemeMode | null {
   return value === "system" || value === "light" || value === "dark" ? value : null;
 }

@@ -107,7 +107,6 @@ describe("SmartHttpClient", () => {
     );
     const peeled = (listed.get("refs/tags/v1") as RemoteRef).peeled;
     expect(peeled && oidToHex(peeled)).toBe(await text(["rev-parse", "v1^{}"]));
-    // The name that is not UTF-8 comes back as the same bytes.
     expect(refs.some((r) => Buffer.from(r.name).equals(Buffer.from(NON_UTF8)))).toBe(true);
   });
 

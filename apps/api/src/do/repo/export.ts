@@ -8,7 +8,6 @@
  * export's answers `stale`: the export starts again.
  */
 
-/** What an export walks, in its order. */
 export const EXPORT_KINDS = ["repo", "subjects", "labels", "milestones"] as const;
 export type ExportKind = (typeof EXPORT_KINDS)[number];
 
@@ -52,7 +51,6 @@ export interface ExportPage {
   readonly next: number | null;
 }
 
-/** Where the repository's events stand, and its own entity. */
 export interface ExportPosition {
   readonly sourceId: string;
   readonly epochGen: number;
@@ -61,7 +59,6 @@ export interface ExportPosition {
   readonly repo: ExportedEntity;
 }
 
-/** An entity an export may answer: its key, and how to read it whole. */
 export interface ExportEntry {
   readonly key: number;
   load(): ExportedEntity;

@@ -14,7 +14,6 @@ export class BodyRangeCache {
   readonly #maxBlocks: number;
   readonly #memory: MemoryBudget;
   readonly #blocks = new Map<number, { bytes: Uint8Array; reservation: MemoryReservation }>();
-  /** Storage reads made, for metrics and tests. */
   reads = 0;
 
   constructor(body: StoredBody, memory: MemoryBudget, blockBytes: number, maxBlocks: number) {

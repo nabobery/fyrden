@@ -175,7 +175,6 @@ describe("git tokens", () => {
     // A caller with nothing git uses gets none.
     const none = await scopedToken(owner.principalId, ["repos:create"], "pat");
     expect((await api("POST", "/user/git-tokens", none, {})).status).toBe(403);
-    // At most an hour.
     expect((await api("POST", "/user/git-tokens", wide, { expires_in_minutes: 61 })).status).toBe(
       422,
     );

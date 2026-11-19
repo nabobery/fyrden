@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { SubjectMetaRowShape } from "./metadata.js";
 
-/** Where an issue stands. */
 export const ISSUE_STATES = ["open", "closed"] as const;
 export type IssueState = (typeof ISSUE_STATES)[number];
 
@@ -22,10 +21,8 @@ export const MAX_ISSUE_TITLE_LENGTH = 256;
 /** The longest body, in characters (GitHub's). */
 export const MAX_ISSUE_BODY_LENGTH = 65_536;
 
-/** The entity type issue snapshots travel as in events. */
 export const ISSUE_ENTITY = "issue";
 
-/** An issue as events carry it. */
 export const IssueRowSchema = z.strictObject({
   number: z.number().int().positive(),
   title: z.string().min(1).max(MAX_ISSUE_TITLE_LENGTH),

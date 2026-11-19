@@ -1,6 +1,5 @@
 import { Link } from "react-router";
 
-/** The inbox's tabs, and the digests of watched repositories beside them. */
 const INBOX_TABS = [
   { tab: "unread", label: "Unread", to: "/notifications" },
   { tab: "all", label: "All", to: "/notifications?tab=all" },

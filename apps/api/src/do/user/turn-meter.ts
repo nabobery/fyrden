@@ -28,7 +28,6 @@ export const NO_ROWS: TurnRows = {
   d1_rows_written: 0,
 };
 
-/** `rows` times `n`, counter by counter. */
 export const times = (rows: TurnRows, n: number): TurnRows =>
   Object.fromEntries(COUNTERS.map((c) => [c, rows[c] * n])) as unknown as TurnRows;
 
@@ -69,7 +68,6 @@ export class TurnMeter {
     };
   }
 
-  /** What the turn has used so far. */
   used(): TurnRows {
     const d1 = d1RowsRun();
     let read = 0;

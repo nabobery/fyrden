@@ -5,7 +5,6 @@ import { UNSAFE_ErrorResponseImpl as ErrorResponse } from "react-router";
 import { describe, expect, it } from "vitest";
 import { logServerError } from "../app/lib/log-error.server.js";
 
-// Fails any test whose console output carries a token in any form.
 const logs = installLogCapture();
 const token = generateToken("pat", secureRandomBytes);
 

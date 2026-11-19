@@ -33,7 +33,6 @@ const UNMATCHED = "This file's lines couldn't be matched to its blame.";
 
 type Base = { owner: string; repo: string; ref: string; path: string };
 
-/** A page with a sentence and no blame drawn. */
 function message(
   base: Base,
   status: number,

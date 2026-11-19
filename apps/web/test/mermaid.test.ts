@@ -14,7 +14,6 @@ vi.mock("mermaid", () => ({ default: { initialize, render } }));
 const { drawDiagrams, redrawDiagrams } = await import("../app/lib/mermaid.client.js");
 const { FJORD } = await import("../app/lib/fjord.js");
 
-/** An element as the stubbed document makes it: what was set on it and put in it. */
 interface Made {
   tag: string;
   className?: string;
@@ -25,7 +24,6 @@ interface Made {
   isConnected?: boolean;
 }
 
-/** A `pre > code.language-mermaid` block: where its figure went, if anywhere. */
 function block(code: string) {
   const placed: Made[] = [];
   const element = {
@@ -35,7 +33,6 @@ function block(code: string) {
   return { element: element as unknown as Element, placed };
 }
 
-/** The operating system's scheme, and who listens for it changing. */
 const scheme = { matches: false, listeners: [] as (() => unknown)[] };
 const media = {
   get matches() {
@@ -43,9 +40,7 @@ const media = {
   },
   addEventListener: (_type: string, listener: () => unknown) => scheme.listeners.push(listener),
 };
-/** The figures on the page. */
 const figures: unknown[] = [];
-/** The page's `<html data-theme>`. */
 const dataset: { theme?: string } = {};
 
 beforeEach(() => {
@@ -119,7 +114,6 @@ describe("drawing Mermaid diagrams", () => {
 
   it("draws again when the scheme changes while a drawing is under way", async () => {
     render.mockImplementationOnce(async (id: string) => {
-      // The operating system changes while Mermaid draws in the old scheme.
       scheme.matches = true;
       return { svg: `<svg id="${id}" data-scheme="stale"></svg>` };
     });
@@ -226,7 +220,6 @@ describe("drawing Mermaid diagrams", () => {
   });
 
   it("gives every diagram on the page its own id, across components", async () => {
-    // A description's diagram, then a comment's two drawn later by another component.
     const description = block("graph TD\n  A --> B");
     await drawDiagrams([description.element], () => false);
     const comment = [block("graph LR\n  C --> D"), block("graph LR\n  E --> F")];

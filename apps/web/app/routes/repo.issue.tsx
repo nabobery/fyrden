@@ -70,7 +70,6 @@ const COMMENTS_PAGE = 25;
 const SOURCE_BUDGET = 256 * 1024;
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
-  // As the page's own (a navigation's data request's suffix off): its links go to it.
   const url = pageUrl(new URL(request.url));
   const number = pullNumber(params.number);
   const api = issueApiPath(params.owner, params.repo, number);
@@ -103,7 +102,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const last = shownComments.at(-1);
   const at = (id: number | null) => {
     const query = new URLSearchParams(url.search);
-    // A page of comments, no longer one comment's.
     query.delete("comment");
     if (id === null) query.delete("after");
     else query.set("after", String(id));
@@ -123,7 +121,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     // The comment a permalink named; `missing` when it is not this issue's now (deleted, or another's).
     linked: linked === null ? null : { id: linked, missing: shownComments[0]?.id !== linked },
     permissions: repo.permissions ?? null,
-    // What live hints name the repository by.
     repoId: repo.id,
     viewer: session.state === "signed-in" ? session.user.id : null,
     // A session check that failed says nothing of who is viewing: the page keeps the last known.
@@ -131,12 +128,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
-/** An issue page's answer is about its viewer and issue. */
 type IssueScope = Scope & { owner: string; repo: string; number: number };
 
 type Result = EditResult<IssueScope>;
 
-/** What a form wrote, as its refused draft keeps it (none for one that writes nothing). */
 function draftOf(form: FormData): Written | undefined {
   switch (field(form, "intent")) {
     case "comment":
@@ -284,7 +279,6 @@ const DONE: Record<string, string> = {
 
 type ActionData = Exclude<Awaited<ReturnType<typeof action>>, Response> | undefined;
 
-/** The issue page's editors: the description's, the new comment's, and each comment's. */
 const EDITORS: DraftEditors = {
   ofDraft: (draft) => {
     if (draft.target !== undefined) return `comment-${draft.target}`;
@@ -299,7 +293,6 @@ const EDITORS: DraftEditors = {
   },
 };
 
-/** What a kept draft's field is, as its recovery shows it. */
 function unsentLabel(editor: string, field: string): string {
   if (editor === "issue") return field === "title" ? "Title" : "Description";
   return editor === "comment" ? "New comment" : "Your edit of a comment";
@@ -441,7 +434,6 @@ function CommentEditor({
 }
 
 export default function IssuePage({ loaderData }: Route.ComponentProps) {
-  // Kept through the page's live rereads (an answer saying what to do next, or why not).
   const result = useKeptActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
@@ -582,7 +574,6 @@ export default function IssuePage({ loaderData }: Route.ComponentProps) {
                   >
                     <header className="muted">
                       <strong>{who(comment.user.id, viewer)}</strong> commented{" "}
-                      {/* Its permalink: the page of comments that starts with it. */}
                       <Link to={`?comment=${comment.id}#comment-${comment.id}`}>
                         <time dateTime={new Date(comment.created_at).toISOString()}>
                           {when(comment.created_at)}

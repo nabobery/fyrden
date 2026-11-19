@@ -40,7 +40,6 @@ export function first<T extends Record<string, SqlStorageValue>>(
   return storage.sql.exec<T>(query, ...bindings).toArray()[0];
 }
 
-/** Counts rows written by one storage operation. */
 export function countRowsWritten(context: GitStorageContext, op: string, written: number): void {
   if (written > 0)
     context.metrics.count("do.rows_written", { class: context.doClass, op }, written);

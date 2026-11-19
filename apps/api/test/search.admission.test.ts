@@ -51,7 +51,6 @@ const docStatement = (...args: Parameters<typeof docStatements>) => ({
 });
 
 const fx = inject("pushFixtures");
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 
 const today = async () =>
@@ -548,7 +547,6 @@ describe("search's allowance", () => {
       )
       .bind(repoId, epoch)
       .run();
-    // And an issue the projection does not have yet.
     await db.prepare("DELETE FROM search_docs WHERE repo_id = ? AND number = 1").bind(repoId).run();
     await repairStatement(db, repoId, "lost", 1).run();
     // The database's size last observed (any is past a threshold of a byte).

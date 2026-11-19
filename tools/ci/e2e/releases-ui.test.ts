@@ -89,7 +89,6 @@ afterAll(async () => {
   await stack?.stop();
 });
 
-/** Axe, in each of the six theme states. */
 const checked = (what: string) => accessibleInEveryTheme(page, what);
 
 describe("releases", () => {
@@ -179,7 +178,6 @@ describe("release assets", () => {
   const downloadUrl = (name: string, tag = TAG) =>
     `${stack.origin}${REPO}/releases/download/${tag}/${encodeURIComponent(name)}`;
 
-  /** The release's assets as the API lists them now. */
   const assets = async () =>
     (
       await rest<{ assets: { id: number; name: string; updated_at: number }[] }>(
@@ -229,7 +227,6 @@ describe("release assets", () => {
     );
   }
 
-  /** The page's own `intent` post to its upload route. */
   const uploadPost = (intent: string) => (request: Request) =>
     new URL(request.url()).pathname === `${REPO}/releases/uploads` &&
     JSON.parse(request.postData() ?? "{}").intent === intent;
@@ -247,7 +244,6 @@ describe("release assets", () => {
   it("uploads from the release's page in parts, one retried, and lists it", async () => {
     await visit(page, editUrl());
     await see(page.getByText("No assets.")).toBeVisible();
-    // Part 2's first try fails as an overloaded Worker would; the page tries it again.
     let failed = 0;
     await page.route("**/parts/2", async (r) => {
       if (failed++ === 0) return r.fulfill({ status: 502, body: "" });
@@ -313,7 +309,6 @@ describe("release assets", () => {
     const head = await page.request.head(downloadUrl(NAME));
     expect(head.status()).toBe(200);
     expect(head.headers()["content-length"]).toBe(String(BYTES.length));
-    // The tag's slash encoded reaches the same asset.
     const encoded = await page.request.get(downloadUrl(NAME, "v2%2Frc"), {
       headers: { Range: "bytes=0-0" },
     });
@@ -373,7 +368,6 @@ describe("release assets", () => {
 
   it("offers no Retry while a Cancel is ending a stopped upload", async () => {
     await visit(page, editUrl());
-    // Every try of part 1 fails as an overloaded Worker would, until the upload stops.
     await page.route("**/parts/1", (r) => r.fulfill({ status: 502, body: "" }));
     let release = () => {};
     const held = new Promise<void>((done) => {
@@ -434,9 +428,7 @@ describe("release assets", () => {
       .getByRole("link", { name: "Commits" })
       .click();
     const res = await ended;
-    // Its body went with the page it was asked from; the status stays.
     expect(res.status()).toBe(200);
-    // Ended at the API.
     const { upload_id } = JSON.parse(res.request().postData() ?? "{}") as { upload_id: string };
     await takesNoParts(upload_id);
     expect((await assets()).map((a) => a.name)).not.toContain("left.bin");
@@ -476,7 +468,6 @@ describe("release assets", () => {
 
   it("ends the session a start made when its answer was lost and the upload is cancelled", async () => {
     await visit(page, editUrl());
-    // The API makes the session; its answer never reaches the page.
     let made = "";
     await page.route(`**${REPO}/releases/uploads`, async (r) => {
       if (made !== "" || JSON.parse(r.request().postData() ?? "{}").intent !== "begin")
@@ -566,7 +557,6 @@ describe("release assets", () => {
   it("offers Cancel again when ending an upload couldn't be confirmed, and asks again on Dismiss", async () => {
     await visit(page, editUrl());
     await page.route("**/parts/1", (r) => r.fulfill({ status: 502, body: "" }));
-    // Each upload's first ending is lost on the network; the next goes through.
     const lost = new Set<string>();
     await page.route(`**${REPO}/releases/uploads`, (r) => {
       const sent = JSON.parse(r.request().postData() ?? "{}") as Record<string, string>;
@@ -623,7 +613,6 @@ describe("release assets", () => {
       asset: { id: number; updated_at: number };
     };
     expect(made.state).toBe("completed");
-    // As after an answer never learnt: the same request with a new key.
     const second = await complete(crypto.randomUUID());
     expect(second.status(), await second.text()).toBe(200);
     expect(await second.json()).toMatchObject({ state: "completed", asset: made.asset });
@@ -631,7 +620,6 @@ describe("release assets", () => {
     expect(listed).toEqual([
       expect.objectContaining({ id: made.asset.id, updated_at: made.asset.updated_at }),
     ]);
-    // A key that isn't a UUID never reaches the API.
     expect((await complete("not-a-uuid")).status()).toBe(400);
   });
 
@@ -665,7 +653,6 @@ describe("release assets", () => {
       const saved = page.waitForEvent("download");
       await page.getByRole("link", { name: file }).click();
       expect((await saved).suggestedFilename()).toBe(file);
-      // Opened in a tab of its own, it is a download there too, and nothing runs.
       const tab = await page.context().newPage();
       const opened = tab.waitForEvent("download");
       await tab.goto(downloadUrl(file)).catch(() => undefined);
@@ -732,7 +719,6 @@ describe("release assets", () => {
   });
 
   describe("once access is lost", () => {
-    /** Each kind of answer a download can give but a whole file, asked of `path`. */
     const KINDS = (etag: string) =>
       ({
         206: { Range: "bytes=0-1" },
@@ -743,7 +729,6 @@ describe("release assets", () => {
     let etag = "";
     let bo: { id: string; token: string };
 
-    /** What `ask` answers for each kind. */
     async function answers(
       ask: (headers: Record<string, string>) => Promise<{ status: number; location?: string }>,
     ) {
@@ -752,7 +737,6 @@ describe("release assets", () => {
       return seen;
     }
 
-    /** A browser signed in as bo with `token`. */
     async function signedIn(token: string) {
       const browser = page.context().browser();
       if (!browser) throw new Error("no browser");
@@ -795,7 +779,6 @@ describe("release assets", () => {
         const cookie = (await context.cookies()).map((c) => `${c.name}=${c.value}`).join("; ");
         await tab.getByRole("button", { name: "Sign out" }).click();
         await see(tab.getByRole("banner").getByRole("link", { name: "Sign in" })).toBeVisible();
-        // The old cookie, sent on: the session it named is over.
         const replayed = await answers(async (headers) => {
           const res = await fetch(downloadUrl(NAME), {
             headers: { ...headers, Cookie: cookie },
@@ -849,7 +832,6 @@ describe("release assets", () => {
         412: { status: 401 },
         416: { status: 401 },
       });
-      // bo's own token, still good, gets the range.
       expect(
         (await fetch(api, { headers: { Range: "bytes=0-1", Authorization: `Bearer ${bo.token}` } }))
           .status,

@@ -6,15 +6,12 @@
 
 import type { getPullConflicts, Output, resolvePullConflicts } from "@fyrden/api-contract";
 
-/** A pull request's conflicts, as the API reads them (types only, from its contract). */
 export type Conflicts = Output<typeof getPullConflicts>;
 export type ConflictFile = Conflicts["files"][number];
 export type ConflictKind = ConflictFile["kind"];
 
-/** The API's answer to a resolution: the merge commit, and the files still holding markers. */
 export type Resolution = Output<typeof resolvePullConflicts>;
 
-/** Why a conflict cannot be resolved in the browser, in words. */
 export const KIND_TEXT: Record<ConflictKind, string> = {
   content: "Both sides changed the same lines.",
   add_add: "Both sides added this file with different contents.",
@@ -37,15 +34,12 @@ export interface ConflictRegion {
   base: string;
 }
 
-/** The branch names the marker lines carry. */
 export interface MarkerLabels {
   head: string;
   base: string;
 }
 
-/** A file's conflicts as its markers say. */
 export interface ConflictReading {
-  /** The complete conflicts, in order. */
   regions: ConflictRegion[];
   /**
    * The markers do not read as whole conflicts (one inside another, one
@@ -62,10 +56,8 @@ function linesOf(text: string): string[] {
   return text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
 }
 
-/** A line without its line break. */
 const bare = (line: string) => line.replace(/\r?\n$/, "");
 
-/** Reads `text`'s conflicts from its exact marker lines. */
 export function readConflicts(text: string, labels: MarkerLabels): ConflictReading {
   const open = `<<<<<<< ${labels.head}`;
   const close = `>>>>>>> ${labels.base}`;
@@ -154,7 +146,6 @@ export function conflictsView(state: {
   adopted: string | null;
   /** The snapshot of the latest read with conflicts; null when it found none or failed. */
   latest: string | null;
-  /** Why the latest read failed, if it did. */
   failure: string | null;
   open: boolean;
   answer?:

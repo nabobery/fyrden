@@ -41,7 +41,6 @@ const DraftsContext = createContext<{
   viewer: string | null;
 } | null>(null);
 
-/** The drafts written by `viewer`. */
 export interface ViewerDrafts {
   readonly viewer: string | null;
   readonly store: DraftStore;

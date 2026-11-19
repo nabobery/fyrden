@@ -51,7 +51,6 @@ const EVERY_RESOURCE = [
   "kv:fyrden-api-cache",
 ];
 
-/** A fake account with a full Paid deployment, made by the real deploy command. */
 async function deployedAccount() {
   const fake = fakeWrangler();
   await deploy({
@@ -68,7 +67,6 @@ async function deployedAccount() {
   return fake;
 }
 
-/** The KV namespace ids deploy wrote into the generated config. */
 async function generatedKvIds(): Promise<string[]> {
   const config = JSON.parse(
     await readFile(join(repoRoot, "apps/api", API_DEPLOY_CONFIG), "utf8"),
@@ -88,7 +86,6 @@ function deps(runner: WranglerRunner, overrides: Partial<DestroyDeps> = {}) {
   return { d, lines };
 }
 
-/** Wrangler calls that change something. */
 const isChange = (args: string[]) =>
   args.includes("delete") ||
   args.includes("remove") ||
@@ -227,7 +224,6 @@ describe("fyrden destroy", () => {
     // No per-object deletes: they would take hours on a large bucket.
     expect(fake.calls.some((c) => c.args[0] === "r2" && c.args[1] === "object")).toBe(false);
 
-    // Once the bucket is empty, a rerun finishes the job.
     fake.state.r2Objects.delete("fyrden-git");
     const rerun = await destroy(deps(fake.runner, { confirmed: true }).d);
     expect(rerun.deleted).toEqual(["r2:fyrden-git"]);
@@ -250,16 +246,13 @@ describe("fyrden destroy", () => {
     expect(output).toContain("incomplete multipart uploads");
     expect(output).toContain("added lifecycle rule fyrden-destroy-abort");
     expect(output).toContain("rerun `fyrden destroy --yes`");
-    // The object advice stays, for a bucket that also holds objects.
     expect(output).toContain("--expire-days 1");
 
-    // A rerun before R2 has aborted them: the rule is there already, which is fine.
     const early = deps(fake.runner, { confirmed: true });
     const again = await destroy(early.d);
     expect(again.left).toContain("r2:fyrden-git");
     expect(early.lines.join("\n")).toContain("could not add lifecycle rule fyrden-destroy-abort");
 
-    // R2 aborts them (within about a day); the next run deletes the bucket.
     fake.state.r2Uploads.delete("fyrden-git");
     const rerun = await destroy(deps(fake.runner, { confirmed: true }).d);
     expect(rerun.deleted).toEqual(["r2:fyrden-git"]);

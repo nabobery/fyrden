@@ -38,7 +38,6 @@ describe("pack-parse: duplicate REF_DELTA bases", () => {
   it("resolves N duplicate roots with N shared REF_DELTAs in about N log N lookups", async () => {
     const n = 128;
     const count = await lookups(duplicateRoots(n));
-    // Sorting and one binary search per root and per result: well under 16 N log2 N.
     expect(count).toBeLessThan(16 * n * Math.log2(n));
   });
 

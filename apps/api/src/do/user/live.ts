@@ -15,7 +15,6 @@
  */
 
 export const LIVE_POLICY = {
-  /** How long a ticket can be redeemed. */
   ticketMs: 30_000,
   /**
    * How long a renewal keeps a socket (never past its absolute expiry); one is
@@ -106,7 +105,6 @@ export type LiveSignal =
     }
   | { readonly repoId: string; readonly subject: "issue" | "pull"; readonly explicit: true };
 
-/** A stream's key. */
 export const streamOf = (repoId: string, subject: string) => `${repoId}\n${subject}`;
 
 /** A dirty stream, and the causes a socket at a progress still has to hear of. */
@@ -168,7 +166,6 @@ const restamp = (first: number) => {
 export class Live {
   constructor(private readonly sql: SqlStorage) {}
 
-  /** The next sequence of changes. */
   #nextSeq(): number {
     this.sql.exec(
       `INSERT INTO live_meta (id, seq, gen) VALUES (1, 1, 0)
@@ -233,7 +230,6 @@ export class Live {
     return { feed: row.feed, credential: row.credential };
   }
 
-  /** Whether any of `dependencies` was revoked. */
   anyRevoked(dependencies: readonly string[]): boolean {
     return (
       this.sql
@@ -378,7 +374,6 @@ export class Live {
     );
   }
 
-  /** The dependencies a socket rests on. */
   depsOf(socketId: string): string[] {
     return this.sql
       .exec<{ dependency: string }>(
@@ -389,7 +384,6 @@ export class Live {
       .map((r) => r.dependency);
   }
 
-  /** Forgets a socket's local state. */
   forget(socketId: string): void {
     this.sql.exec("DELETE FROM live_local_deps WHERE socket_id = ?", socketId);
     this.sql.exec("DELETE FROM live_local WHERE socket_id = ?", socketId);

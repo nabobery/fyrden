@@ -113,7 +113,6 @@ async function commit(cwd: string, file: string, content: string, message: strin
   return (await ok(["rev-parse", "HEAD"], cwd)).trim();
 }
 
-/** `git ls-remote` as `{ ref: oid }`. */
 async function remoteRefs(name: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const line of (await ok(["ls-remote", repoUrl(name)])).split("\n")) {
@@ -188,7 +187,6 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await server?.stop();
-    // Neither the Workers nor wrangler's access log may print a token.
     expect(output.split("\n").filter(mentionsToken)).toEqual([]);
   } finally {
     if (scratch) await rm(scratch, { recursive: true, force: true });
@@ -271,7 +269,6 @@ describe("stock git push against fyrden-api (wrangler dev)", () => {
     await ok(["push", "origin", "main"], work);
     const before = await remoteRefs("atomic");
     await commit(work, "a.txt", "a\n", "second");
-    // Pull request refs are moved by the server only.
     const atomic = await git(
       ["push", "--atomic", "origin", "main", "HEAD:refs/heads/other", "HEAD:refs/pull/1/head"],
       work,

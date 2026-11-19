@@ -23,7 +23,6 @@ export interface VerifyContext {
   readonly metrics?: Metrics;
 }
 
-/** What a signature check says, and whose commit it is on. */
 export interface SignedFact {
   readonly reason: SignatureCheck["reason"];
   /** The signing key's fingerprint, when the signature is valid. */

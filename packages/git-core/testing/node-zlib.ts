@@ -12,7 +12,6 @@ interface InflateInfo {
   engine: { bytesWritten: number };
 }
 
-/** The `Zlib` port over Node's `node:zlib`, for tests. */
 export function createNodeZlib(): Zlib {
   return {
     inflate(input, { maxOutput }) {

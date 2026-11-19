@@ -25,11 +25,8 @@ let stack: WebStack;
 let page: Page;
 const handle = "ada";
 const name = "prs";
-/** The working copy branches are pushed from: main is its first commit. */
 let work = "";
-/** The repository's git URL, with a git token. */
 let remote = "";
-/** A file name that is markup wherever it lands unescaped. */
 const HOSTILE_FILE = "<img src=x onerror=window.pwned=1>.md";
 
 /** Stock git with no user or system config, never prompting; fails with its output, the token redacted. */
@@ -88,7 +85,6 @@ async function rest<T>(
   return JSON.parse(text) as T;
 }
 
-/** Nothing a hostile string held has run. */
 async function inert(): Promise<void> {
   expect(await page.evaluate(() => (globalThis as { pwned?: unknown }).pwned)).toBeUndefined();
 }
@@ -144,7 +140,6 @@ async function pushFile(branch: string, path: string): Promise<void> {
   });
 }
 
-/** The pull request's head now. */
 async function headOf(number: number): Promise<string> {
   const pull = await rest<{ head: { sha: string } }>(
     "GET",
@@ -226,7 +221,6 @@ async function hold(
   return { release: end("continue"), abort: end("abort") };
 }
 
-/** `#rrggbb` as `getComputedStyle` reports it. */
 function rgb(hex: string): string {
   const n = Number.parseInt(hex.slice(1), 16);
   return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
@@ -238,7 +232,6 @@ const fillsOf = (scheme: Scheme) => ({
   keyword: rgb(scheme.syntax.keyword),
 });
 
-/** The colours `file`'s renderer actually drew, from inside its shadow root. */
 function renderedFills(file: Locator) {
   return file
     .locator("diffs-container")
@@ -270,7 +263,6 @@ function renderedFills(file: Locator) {
     });
 }
 
-/** `file`'s changed lines are filled in `scheme`'s colours. */
 async function filledAs(file: Locator, scheme: Scheme): Promise<void> {
   const line = (type: string) =>
     file.locator(`diffs-container [data-line][data-line-type="${type}"]`).first();
@@ -278,7 +270,6 @@ async function filledAs(file: Locator, scheme: Scheme): Promise<void> {
   await see(line("change-deletion")).toHaveCSS("background-color", rgb(scheme.diff.removed));
 }
 
-/** The line a click in its gutter picked, and that gutter cell, are filled as selected. */
 async function selectedIn(file: Locator, fill: string): Promise<void> {
   const drawn = file.locator("diffs-container").first();
   await see(drawn.locator("[data-line][data-selected-line]").first()).toHaveCSS(
@@ -291,7 +282,6 @@ async function selectedIn(file: Locator, fill: string): Promise<void> {
   );
 }
 
-/** Opens the form for a comment on lines of `file`, from the keyboard. */
 async function openLineComment(file: Locator): Promise<void> {
   await file.getByText("Comment on lines").focus();
   await page.keyboard.press("Enter");
@@ -316,7 +306,6 @@ beforeAll(async () => {
 afterAll(async () => {
   const output = stack?.output() ?? "";
   await stack?.stop();
-  // Neither Worker logs a token (wrangler's own access log lines aside).
   expect(
     output
       .split("\n")
@@ -327,7 +316,6 @@ afterAll(async () => {
 
 describe("pull requests in the web UI", () => {
   it("opens a pull request from a branch, with a hostile title and description", async () => {
-    // A repository of its own has none yet.
     await rest("POST", "/user/repos", { name: "no-pulls" });
     await visit(page, `${stack.origin}/${handle}/no-pulls/pulls`);
     await see(page.getByText("No open pull requests.")).toBeVisible();
@@ -363,7 +351,6 @@ describe("pull requests in the web UI", () => {
     await see(page.locator(".badge.status-draft")).toBeVisible();
     await page.getByRole("button", { name: "Ready for review" }).click();
     await see(page.locator(".badge.status-open")).toBeVisible();
-    // A reaction to the pull request, pressed as the viewer's own, then taken back.
     const reactions = page
       .locator("section", { has: page.getByRole("heading", { name: "Description" }) })
       .getByRole("list", { name: "Reactions" });
@@ -376,7 +363,6 @@ describe("pull requests in the web UI", () => {
     await hooray.click();
     await see(page.getByRole("status")).toHaveText("Reaction taken back.");
     await see(reactions.getByRole("button", { name: /^Hooray \d/ })).toHaveCount(0);
-    // The sidebar changes it through its number, as an issue's.
     const sidebar = page.getByRole("complementary");
     await sidebar.getByLabel("Assign (a handle)").fill(handle);
     await sidebar.getByRole("button", { name: "Assign", exact: true }).click();
@@ -396,7 +382,6 @@ describe("pull requests in the web UI", () => {
     await page.getByRole("link", { name: "Files changed" }).click();
     await see(page).toHaveURL(`${stack.origin}/${handle}/${name}/pull/${number}/files`);
     await see(page.getByRole("link", { name: HOSTILE_FILE })).toBeVisible();
-    // The renderer draws each file into its own element's shadow root.
     await see(page.locator("diffs-container")).toHaveCount(2, { timeout: 30_000 });
     const drawn = page.locator("diffs-container");
     await see(drawn.getByText('const html = "<script>window.pwned=2</script>";')).toBeVisible({
@@ -414,14 +399,12 @@ describe("pull requests in the web UI", () => {
     expect(await renderedFills(file)).toEqual(fillsOf(FJORD.dark));
     await page.emulateMedia({ colorScheme: "light" });
     await accessible(page, "files");
-    // A scheme picked in the site header reaches the renderer, over the operating system's.
     await page.getByRole("button", { name: "Dark", exact: true }).click();
     await see(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await filledAs(file, FJORD.dark);
     await page.getByRole("button", { name: "System", exact: true }).click();
     await see(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
     await filledAs(file, FJORD.light);
-    // Selected lines take Fjord's fill too, unchanged and changed alike, in both schemes.
     for (const type of ["context", "change-addition"]) {
       await file
         .locator(`diffs-container [data-column-number][data-line-type="${type}"]`)
@@ -439,7 +422,6 @@ describe("pull requests in the web UI", () => {
     const number = await openPull(await pushTopic(), "Drawn by Shiki");
     const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
     const file = page.locator("section.file", { hasText: "src/app.ts" });
-    // The highlighter's module (its package's `default` entry) refused.
     const blocked = /\/assets\/default-[^/]+\.js$/;
     await page.route(blocked, (route) => route.abort());
     try {
@@ -449,11 +431,9 @@ describe("pull requests in the web UI", () => {
     } finally {
       await page.unroute(blocked);
     }
-    // WebAssembly that does not compile on the page.
     const other = await page.context().newPage();
     try {
       await other.addInitScript(() => {
-        // Compiling throws (an arrow function is no constructor either).
         (globalThis as unknown as { WebAssembly: { Module: unknown } }).WebAssembly.Module = () => {
           throw new Error("refused");
         };
@@ -492,7 +472,6 @@ describe("pull requests in the web UI", () => {
       "data-highlighter",
       "highlights",
     );
-    // Each worker throws once it has started (each failure counts once).
     const crash = async () => {
       for (const worker of page.workers()) {
         await worker
@@ -514,7 +493,6 @@ describe("pull requests in the web UI", () => {
     await highlightedWith(file, "shiki-js", "none");
     await see(thread.getByLabel("Reply")).toHaveValue("An unsent reply.");
     await accessible(page, "files drawn without workers");
-    // The session keeps it: the files drawn again on another page, the same way.
     await page.getByRole("link", { name: "Split" }).click();
     await see(page).toHaveURL(/[?&]style=split/);
     await highlightedWith(file, "shiki-js", "none");
@@ -523,7 +501,6 @@ describe("pull requests in the web UI", () => {
   it("steps down when the workers answer requests with errors", async () => {
     const number = await openPull(await pushTopic(), "Workers erring");
     const workers = /\/assets\/worker-[^/]+\.js$/;
-    // Each worker starts, then answers every diff it is asked to draw with an error.
     await page.route(workers, async (route) => {
       const response = await route.fetch();
       const erring = `const fyrdenPost = self.postMessage.bind(self);
@@ -547,7 +524,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     const number = await openPull(await pushTopic(), "Nothing highlights");
     const files = `${stack.origin}/${handle}/${name}/pull/${number}/files`;
     const file = page.locator("section.file", { hasText: "src/app.ts" });
-    // No workers, and Shiki's backend refused on the page itself.
     const refused = /\/assets\/(worker|shiki)-[^/]+\.js$/;
     await page.route(refused, (route) => route.abort());
     try {
@@ -614,7 +590,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     try {
       await visit(page, `${stack.origin}/${handle}/${name}/pull/${first}/files`);
       await drawnWith(page.locator("section.file", { hasText: "src/app.ts" }), "shiki-js", "none");
-      // Another pull request's files, in the same session.
       await page.getByRole("link", { name: "Pull requests" }).first().click();
       await page.getByRole("link", { name: "Only a script" }).click();
       await page.getByRole("link", { name: "Files changed" }).click();
@@ -724,7 +699,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await file.getByLabel(/^Comment \(Markdown/).fill('```suggestion\nconst html = "";\n```');
     await file.getByRole("button", { name: "Add comment" }).click();
     await file.getByRole("button", { name: "Apply suggestion" }).click();
-    // The head moves: the thread goes outdated and leaves the diff, and the answer stays.
     await see(file.locator(".threads .badge", { hasText: "outdated" }).first()).toBeVisible();
     await see(file.getByRole("status").filter({ hasText: "Suggestion applied." })).toBeVisible();
     const pull = await rest<{ head: { sha: string } }>(
@@ -740,14 +714,12 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
 
   it("reviews, brings the branch up to date and squashes it into the base", async () => {
     const number = await openPull(await pushTopic(), "Change things");
-    // The base moves on, touching nothing the pull request changes.
     await rest("PUT", `/repos/${handle}/${name}/contents/docs/later.md`, {
       message: "Add docs",
       content: Buffer.from("later\n").toString("base64"),
     });
     await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
-    // Its author may only comment.
     await see(review.getByLabel("Approve")).toBeDisabled();
     await review.getByLabel(/^Review comment/).fill("Reviewed the change.");
     await review.getByRole("button", { name: "Submit review" }).click();
@@ -821,10 +793,8 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
   });
 
   it("resolves a conflict in the web editor, from the keyboard", async () => {
-    // A branch whose README conflicts with the base's once the base changes it too.
     await pushBranch("clash", { "README.md": "# Clash\n" });
     const number = await openPull("clash", "Clash");
-    // The base changes the same line.
     const readme = await rest<{ sha: string }>(
       "GET",
       `/repos/${handle}/${name}/contents/README.md`,
@@ -873,7 +843,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       timeout: 30_000,
     });
     await accessible(page, "conflicts resolved");
-    // One merge commit on the head branch, the file's line breaks as they were.
     const head = await rest<{ parents: unknown[] }>(
       "GET",
       `/repos/${handle}/${name}/commits/clash`,
@@ -887,7 +856,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
   });
 
   it("draws only a window of a long file's lines, following the scroll", async () => {
-    // One long file, for the renderer to draw a window of.
     await pushBranch("big", {
       "big.txt": `${Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n")}\n`,
     });
@@ -904,7 +872,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       );
     expect(await mounted()).toBeGreaterThan(0);
     expect(await mounted()).toBeLessThan(1000);
-    // Scrolled to its end, the last lines are drawn, and still only a window of them.
     await page.keyboard.press("End");
     await see(drawn.getByText("line 3000", { exact: true })).toBeVisible({ timeout: 30_000 });
     expect(await mounted()).toBeLessThan(1000);
@@ -922,7 +889,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
   });
 
   it("asks for the verdict again when the head moves under an unfinished review", async () => {
-    // Someone else's pull request, so ada may approve it.
     const author = await rest<{ id: string }>("POST", "/admin/users", { handle: "bo" });
     const { token } = await rest<{ token: string }>("POST", `/admin/users/${author.id}/tokens`, {
       type: "pat",
@@ -938,12 +904,10 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await see(review.locator("legend")).toContainText(first.slice(0, 7));
     await review.getByLabel("Approve").check();
     await review.getByLabel(/^Review comment/).fill("Read the first version.");
-    // The head moves, and the page reads the pull request again (after another change).
     await pushFile("verdict", "second.txt");
     const moved = await headOf(number);
     await page.getByRole("button", { name: "Convert to draft" }).click();
     await see(page.locator(".badge.status-draft")).toBeVisible();
-    // The draft is now of the new head, its text kept and its verdict asked for again.
     await see(review.locator("legend")).toContainText(moved.slice(0, 7));
     await see(review.getByRole("alert")).toContainText(
       `The pull request moved to ${moved.slice(0, 7)}`,
@@ -978,7 +942,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
       });
     await comment(2, '```suggestion\nconst line2 = "two";\n```');
     await comment(6, "A plain remark.");
-    // A comment being written survives a review joining the conversation.
     await visit(page, `${stack.origin}/${handle}/${name}/pull/${number}`);
     await page.getByLabel("Comment (Markdown)").fill("An unsent comment.");
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
@@ -986,7 +949,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await review.getByRole("button", { name: "Submit review" }).click();
     await see(page.locator(".timeline").getByText("A review meanwhile.")).toBeVisible();
     await see(page.getByLabel("Comment (Markdown)")).toHaveValue("An unsent comment.");
-    // A line comment being written survives picking other lines.
     await page.getByRole("link", { name: "Files changed" }).click();
     const file = page.locator("section.file", { hasText: "drafts.txt" });
     const drawn = file.locator("diffs-container");
@@ -1006,7 +968,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await see(file.getByRole("status").filter({ hasText: "Suggestion applied." })).toBeVisible();
     await see(remark.getByLabel("Reply")).toHaveValue("An unsent reply.");
     await see(file.getByLabel(/^Comment \(Markdown/)).toHaveValue("An unsent line comment.");
-    // Sent, a reply's box empties.
     await remark.getByRole("button", { name: "Reply" }).click();
     await see(remark.getByText("An unsent reply.")).toBeVisible();
     await see(remark.getByLabel("Reply")).toHaveValue("");
@@ -1022,14 +983,12 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await drawn.locator('[data-column-number="3"]').first().click();
     await see(file.getByLabel("Line", { exact: true })).toHaveValue("3");
     await file.getByLabel(/^Comment \(Markdown/).fill("About the third line.");
-    // The head moves, and the page reads the pull request again (after a review is sent).
     await pushFile("relined", "later.txt");
     const moved = await headOf(number);
     const review = page.locator("section", { has: page.getByRole("heading", { name: "Review" }) });
     await review.getByLabel(/^Review comment/).fill("A review meanwhile.");
     await review.getByRole("button", { name: "Submit review" }).click();
     await see(review.getByRole("status")).toHaveText("Review submitted.");
-    // The comment is now of the new head: its text kept, its lines asked for again.
     await see(file.getByRole("alert")).toContainText(
       `The pull request moved to ${moved.slice(0, 7)}`,
     );
@@ -1060,22 +1019,18 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     const first = file.getByLabel("First line (for a range)");
     const last = file.getByLabel("Line", { exact: true });
     await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
-    // A line number picks its line, and the button stays beside it.
     await lineNumber(3).click();
     await see(last).toHaveValue("3");
     await see(first).toHaveValue("");
     await accessible(page, "a line picked with the mouse");
     await see(button).toBeVisible();
-    // A pointer's control: not a stop for the keyboard, where it would do nothing.
     await see(button).toHaveAttribute("tabindex", "-1");
-    // With nothing picked, the button comes with the hovered line and picks it.
     await visit(page, files);
     await see(drawn.getByText("const line8 = 8;")).toBeVisible({ timeout: 30_000 });
     await lineNumber(5).hover();
     await button.click();
     await see(last).toHaveValue("5");
     await see(first).toHaveValue("");
-    // Dragged from the button, a range.
     await button.hover();
     await page.mouse.down();
     await lineNumber(7).hover();
@@ -1118,7 +1073,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await visitTopicPull("Reviewed");
     await page.getByRole("link", { name: "Reviewers", exact: true }).click();
     await see(page.getByText("No review is requested.")).toBeVisible();
-    // A user's repository takes no team reviewers: only people are asked.
     await see(page.getByLabel(/^Teams of/)).toHaveCount(0);
     await page.getByLabel(/^Users or agents/).fill("@cy");
     await page.getByRole("button", { name: "Request", exact: true }).click();
@@ -1134,7 +1088,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     await see(page.getByRole("heading", { name: "Code owners", level: 2 })).toBeVisible();
     await see(page.getByText(/Being worked out|has no CODEOWNERS file/)).toBeVisible();
     await accessible(page, "code owners");
-    // A CODEOWNERS file with an invalid line, viewed where it is in effect: its errors.
     await pushBranch("owners", { ".github/CODEOWNERS": "* @ada\n*.md not-an-owner\n" });
     await visit(page, `${stack.origin}/${handle}/${name}/blob/owners/.github/CODEOWNERS`);
     await see(page.getByRole("heading", { name: "CODEOWNERS errors" })).toBeVisible();
@@ -1221,7 +1174,6 @@ self.postMessage = (m, t) => fyrdenPost(m && m.requestType === "diff" ? { type: 
     expect(removed.ok).toBe(true);
   });
 
-  // Last: every page the suite visited.
   it("never had a script, style or image refused by the policy on any page", () => {
     expect(stack.refused).toEqual([]);
   });

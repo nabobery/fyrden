@@ -91,7 +91,6 @@ export interface PackBuilderOptions extends PackBuilderResumeOptions {
   readonly ofsDelta?: boolean;
 }
 
-/** An entry as stored in an existing pack. */
 export interface CopiedEntry {
   readonly oid: Uint8Array;
   /** The entry's bytes in its source pack: entry header, then the zlib stream. */

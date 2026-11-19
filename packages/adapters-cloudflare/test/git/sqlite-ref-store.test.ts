@@ -445,17 +445,14 @@ describe("SqliteRefStore deriveUpdates", () => {
       followMain(git);
       const ff = new Set(["refs/heads/main"]);
       const states: number[] = [];
-      // main is created at 7: the pull ref already points there, so nothing moves it.
       commit(git, [{ name: "refs/heads/main", oldOid: null, newOid: oid(7) }]);
       states.push(
         git.context.storage.sql.exec("SELECT count(*) AS n FROM reflog").one().n as number,
       );
-      // A fast-forward of main from 7 moves the pull ref from 7 too: still fast-forward.
       commit(git, [{ name: "refs/heads/main", oldOid: oid(7), newOid: oid(8) }], {
         fastForward: ff,
       });
       states.push(git.refStore.state().nonffVersion);
-      // The pull ref is moved elsewhere; a fast-forward of main no longer is one for it.
       commit(git, [{ name: "refs/pull/1/head", oldOid: oid(8), newOid: oid(3) }], {
         fastForward: new Set(["refs/pull/1/head"]),
       });

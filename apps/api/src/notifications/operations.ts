@@ -158,7 +158,6 @@ function judge(
   return repo;
 }
 
-/** `thread` with its conversation's title as the repository answered it now. */
 function titled(visibility: Visibility, thread: InboxThread): InboxThread {
   const now = visibility.identity(thread.repoId, `${thread.subject}/${thread.number}`);
   return now?.conversation === thread.conversation ? { ...thread, title: now.title } : thread;
@@ -201,7 +200,6 @@ async function list(
   const replaced = new Map<string, number>();
   const subjects = kindsOf(ctx);
   const repoIds = repo ? [repo.id] : ctx.auth.repoIds;
-  /** The readable threads passed, in order, with whether each is shown. */
   const passedThreads: { thread: InboxThread; shown: boolean }[] = [];
   let shownCount = 0;
   let after = decodeAfter(input.cursor);
@@ -259,13 +257,11 @@ async function list(
           visibility.repository(thread.repoId) as RepoEntry,
         ),
       ),
-    // None at the end, or when nothing readable was passed (see the top).
     next_cursor: ended || passed === null ? null : encodeCursor(`${passed.updatedAt}:${passed.id}`),
     delivery: await deliveryOf(ctx),
   };
 }
 
-/** The `notifications.list` operation. */
 export async function listNotificationsOperation(
   ctx: OpContext,
   input: Input<typeof listNotifications>,
@@ -305,7 +301,6 @@ async function namedRepo(
   return { repo: decided, visibility };
 }
 
-/** The `notifications.repo_list` operation. */
 export async function listRepoNotificationsOperation(
   ctx: OpContext,
   input: Input<typeof listRepoNotifications>,
@@ -335,7 +330,6 @@ async function visibleThread(
   return { thread: titled(visibility, thread), repo: decided };
 }
 
-/** The `notifications.thread_get` operation. */
 export async function getNotificationThreadOperation(
   ctx: OpContext,
   input: Input<typeof getNotificationThread>,
@@ -345,7 +339,6 @@ export async function getNotificationThreadOperation(
   return threadOutput(ctx, thread, repo);
 }
 
-/** The `notifications.thread_read` operation. */
 export async function markNotificationThreadReadOperation(
   ctx: OpContext,
   input: Input<typeof markNotificationThreadRead>,
@@ -356,7 +349,6 @@ export async function markNotificationThreadReadOperation(
   return null;
 }
 
-/** The `notifications.thread_done` operation. */
 export async function markNotificationThreadDoneOperation(
   ctx: OpContext,
   input: Input<typeof markNotificationThreadDone>,
@@ -395,7 +387,6 @@ async function markRead(
   return { message: MARK_MESSAGE };
 }
 
-/** The `notifications.mark` operation. */
 export async function markNotificationsReadOperation(
   ctx: OpContext,
   input: Input<typeof markNotificationsRead>,
@@ -408,7 +399,6 @@ export async function markNotificationsReadOperation(
   return markRead(await freshly(ctx), input.last_read_at, started, null);
 }
 
-/** The `notifications.repo_mark` operation. */
 export async function markRepoNotificationsReadOperation(
   ctx: OpContext,
   input: Input<typeof markRepoNotificationsRead>,
@@ -441,7 +431,6 @@ function subscriptionOutput(
   };
 }
 
-/** The `notifications.subscription_get` operation. */
 export async function getNotificationThreadSubscriptionOperation(
   ctx: OpContext,
   input: Input<typeof getNotificationThreadSubscription>,
@@ -490,7 +479,6 @@ async function setPreference(
   return { thread, repo, row };
 }
 
-/** The `notifications.subscription_put` operation. */
 export async function setNotificationThreadSubscriptionOperation(
   ctx: OpContext,
   input: Input<typeof setNotificationThreadSubscription>,
@@ -503,7 +491,6 @@ export async function setNotificationThreadSubscriptionOperation(
   return subscriptionOutput(ctx, thread, repo, row);
 }
 
-/** The `notifications.subscription_delete` operation. */
 export async function deleteNotificationThreadSubscriptionOperation(
   ctx: OpContext,
   input: Input<typeof deleteNotificationThreadSubscription>,

@@ -71,7 +71,6 @@ export class StreamBuffer {
     const unread = this.available;
     if (this.#end + chunk.length > this.#buffer.length) {
       const needed = unread + chunk.length;
-      // Grow for a large entry; shrink again once it has been consumed.
       let size = this.#buffer.length;
       if (needed > size / 2) size = Math.max(needed, size * 2);
       else if (size > 4 * Math.max(needed, INITIAL_BYTES))

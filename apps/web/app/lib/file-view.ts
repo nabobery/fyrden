@@ -229,7 +229,6 @@ export function blockLink(from: number, selected: string | null, plain: boolean)
   return `?${query.join("&")}`;
 }
 
-/** The query's form of `range`. */
 export function lineParam(range: LineRange | null): string | null {
   if (range === null) return null;
   return range.start === range.end ? `${range.start}` : `${range.start}-${range.end}`;

@@ -58,11 +58,9 @@ export function spyZlib(): Zlib & { maxOutputs: number[] } {
 
 export interface ParseResult {
   pack: ParsedPack;
-  /** Every object handed to onObject, by hex oid. */
   objects: Map<string, { type: string; data: Uint8Array }>;
 }
 
-/** Parses an in-memory pack, streamed in `chunkSize` pieces. */
 export async function parseBytes(
   bytes: Uint8Array,
   options: Partial<ParsePackOptions> & { chunkSize?: number } = {},

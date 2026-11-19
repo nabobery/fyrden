@@ -10,9 +10,7 @@ import worker from "../src/index.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-/** An archive key with its content digest removed, for comparing names. */
 const withoutDigest = (key: string) => key.replace(/-[0-9a-f]{16}\.ndjson$/, ".ndjson");
-// 2026-10-13T10:00:00Z
 const T0 = Date.UTC(2026, 9, 13, 10);
 
 // This file owns the directory's audit log: each test starts from an empty one.
@@ -104,7 +102,6 @@ describe("directory audit archiver", () => {
       ["token.revoke", "usr_actor", "tok_target", { type: "pat" }],
     ]);
     expect((await seqs()).every((r) => r.archived === 1)).toBe(true);
-    // Nothing left: the next run writes nothing.
     expect(await a.run()).toBe(0);
   });
 

@@ -54,7 +54,6 @@ afterAll(async () => {
 describe("live hints", () => {
   it("bring a new thread into an open inbox, read after the hint, acknowledged", async () => {
     const { id: repoId } = await rest<{ id: string }>("GET", `/repos/${handle}/${name}`);
-    // When each read of the page's data started, and when the hint came.
     const reads: number[] = [];
     page.on("request", (request) => {
       if (new URL(request.url()).pathname === "/notifications.data") reads.push(Date.now());
@@ -69,7 +68,6 @@ describe("live hints", () => {
     await see(page.getByText("Nothing here.")).toBeVisible();
     const socket: WebSocket = await opened;
     expect(new URL(socket.url()).pathname).toBe("/api/notifications/live");
-    // Finished before anything happens.
     await connectRead;
     let heardAt = 0;
     const heard = socket.waitForEvent("framereceived", {
@@ -105,7 +103,6 @@ describe("live hints", () => {
       token,
     );
     const hint = JSON.parse(String((await heard).payload)) as { n: number };
-    // No reload: the hint makes the page read itself again.
     await see(page.getByRole("listitem").filter({ hasText: "Heard live" })).toBeVisible({
       timeout: 60_000,
     });
@@ -132,15 +129,12 @@ describe("live hints", () => {
     );
     await page.getByRole("button", { name: /^Mark read:/ }).click();
     await see(page.getByRole("status")).toHaveText("Marked read.");
-    // The read's own hint reaches this tab's socket, and the page reads itself again.
     await reread;
     await see(page.getByRole("status")).toHaveText("Marked read.");
   }, 120_000);
 
   it("pauses a tab's live updates for the day when its socket is refused for today, through a reload", async () => {
-    // Another tab of the same session: its own storage and socket.
     const tab = await page.context().newPage();
-    // Refused while `refuse` holds, then the real socket.
     let refuse = true;
     await tab.routeWebSocket(/\/api\/notifications\/live\?/, (ws) => {
       if (refuse) ws.close({ code: 4413, reason: "live hints spent today's allowance" });
@@ -153,7 +147,6 @@ describe("live hints", () => {
       { timeout: 30_000 },
     );
     await accessible(tab, "the inbox, its live updates paused");
-    // A socket would open now: the note after the reload is the tab's kept pause.
     refuse = false;
     await reload(tab);
     await see(note).toBeVisible();

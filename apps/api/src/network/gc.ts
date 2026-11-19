@@ -80,7 +80,6 @@ interface GcWait {
   readonly phase: "wait";
 }
 
-/** Registry states of a member's row that count as holding the pack. */
 const HOLDING = new Set(["indexing", "indexed", "live", "garbage", "superseded", "condemned"]);
 
 /** The members a mark asks (a fork still joining is waited for before the epoch opens). */
@@ -244,7 +243,6 @@ async function gcSlice(
   }
   registry.setGcState({ phase: "idle", fence: false });
   context.metrics.count("git.maintenance", { job: "network-gc", what: "epochs" }, 1);
-  // Collect again later while the network is shared.
   if (registry.members(undefined, 2).length > 1)
     return { done: false, cursor: null, runAfterMs: policy.gcIntervalMs };
   return { done: true };

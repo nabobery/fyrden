@@ -38,7 +38,6 @@ const activeOption = (on: Page = page) => on.locator('[role="option"][aria-selec
 const spoken = () => dialog().getByRole("status").first();
 const countShown = () => dialog().locator(".file-finder-count");
 
-/** Answers the page's path requests in turn, and counts them. */
 async function answering(on: Page, ...replies: unknown[]) {
   const asked: URL[] = [];
   await on.unroute("**/ada/finder/paths*");
@@ -239,7 +238,6 @@ describe("Go to file", () => {
     );
     await see(options()).toHaveCount(100);
     await accessibleEverywhere("the finder, matches cut short");
-    // The active row stays in view, far down the list.
     for (let i = 0; i < 99; i++) await box().press("ArrowDown");
     await see(activeOption()).toBeInViewport();
   });
@@ -295,7 +293,6 @@ describe("the t shortcut", () => {
     await page.keyboard.press("t");
     await see(dialog()).toBeVisible();
     await see(box()).toBeFocused();
-    // The key opened it: it isn't typed in it. And in it, `t` is only a letter.
     await see(box()).toHaveValue("");
     await page.keyboard.press("t");
     await see(box()).toHaveValue("t");
@@ -437,7 +434,6 @@ describe("a list that ends early", () => {
             answer({ state: "incomplete", reason: "more_pages", paths, next_cursor: "n" }),
           ),
         });
-      // The second is left hanging the first time, so closing is what ends it.
       if (asked.length === 2) return;
       return route.fulfill({
         contentType: "application/json",
@@ -478,7 +474,6 @@ describe("a list that ends early", () => {
   });
 });
 
-/** The whole keyboard path, in one browser. */
 async function keyboardPath(on: Page) {
   await visit(on, home());
   await on.keyboard.press("t");
@@ -496,7 +491,6 @@ async function keyboardPath(on: Page) {
   await see(activeOption(on)).toHaveText(FILES.at(-1) as string);
   await on.keyboard.press("ArrowDown");
   await see(activeOption(on)).toHaveText(FILES[0] as string);
-  // Focus never left the input, and the active option is the one it names.
   await see(box(on)).toBeFocused();
   await see(box(on)).toHaveAttribute(
     "aria-activedescendant",
@@ -506,7 +500,6 @@ async function keyboardPath(on: Page) {
   await on.keyboard.type("guide");
   await see(options(on)).toHaveCount(2);
   await see(activeOption(on)).toHaveText("docs/Guide.md");
-  // First Escape clears, second closes, focus back where it came from.
   await on.keyboard.press("Escape");
   await see(box(on)).toHaveValue("");
   await see(dialog(on)).toBeVisible();
@@ -521,7 +514,6 @@ async function keyboardPath(on: Page) {
   await see(dialog(on)).toBeHidden();
   await see(opener(on)).toBeFocused();
 
-  // Tab stays in the dialog: the browser's own trap, the page behind is inert.
   await opener(on).focus();
   await on.keyboard.press("Enter");
   await see(box(on)).toBeFocused();

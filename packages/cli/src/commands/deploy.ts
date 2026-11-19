@@ -86,7 +86,6 @@ export interface DeployDeps {
       }
     | undefined;
   runner: WranglerRunner;
-  /** Builds fyrden-web (react-router build). */
   buildWeb: () => Promise<void>;
   /** The checkout being deployed, recorded on fyrden-api as FYRDEN_COMMIT. */
   source: SourceState;
@@ -204,7 +203,6 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       `WARN the working tree has uncommitted changes: recorded as ${commitLabel(deps.source)}. ` +
         "D1 records a migration by file name, so a migration applied now is never applied again after it changes",
     );
-  // Every command below targets this account, whichever directory it runs in.
   const runner = pinAccount(deps.runner, account.id);
 
   const config = await readApiConfig(join(apiDir, "wrangler.jsonc"));
@@ -339,7 +337,6 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   // The key unsubscribe links are signed with: made once, kept across deploys (replacing it
   // breaks every link already sent).
   if (!existing?.has("EMAIL_KEY")) upload.EMAIL_KEY = base64urlKey();
-  // The email provider's key, whenever one is given (a new one replaces it).
   if (deps.email) upload.RESEND_API_KEY = deps.email.apiKey;
   if (deps.email?.webhookSecret) upload.RESEND_WEBHOOK_SECRET = deps.email.webhookSecret;
   if (Object.keys(upload).length > 0) {

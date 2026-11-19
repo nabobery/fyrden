@@ -20,7 +20,6 @@ import { type PushTarget, postPush } from "./helpers/push.js";
 import { pushBody, ZERO } from "./helpers/push-fixtures.js";
 
 const fx = inject("pushFixtures");
-// Written as production writes it: through the read model's executor.
 const db = readModelFor(env, DEFAULT_ORG_SHARD);
 const TODAY = "CAST(unixepoch() / 86400 AS INTEGER)";
 
@@ -133,7 +132,6 @@ async function unnumbered(count: number, numbered = true): Promise<string> {
   return repoId;
 }
 
-/** Search's spending today. */
 const spent = () =>
   db
     .prepare(`SELECT rows, reads FROM search_budget WHERE day = ${TODAY}`)

@@ -73,7 +73,6 @@ export function* sidebandPackets(
   }
 }
 
-/** `sidebandPackets` joined into one buffer. */
 export function encodeSideband(
   band: SidebandBand,
   data: Uint8Array | string,

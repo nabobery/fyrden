@@ -147,7 +147,6 @@ describe("response cache", () => {
       "read",
     )) as RepoAccessGrant;
     const cache = authorizedCache(grant, { open });
-    // Making the cache touches nothing; the cache opens on first use.
     expect(log).toEqual([]);
     for (const request of [
       blobAt,

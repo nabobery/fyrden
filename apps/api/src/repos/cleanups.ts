@@ -35,11 +35,8 @@ export const CLEANUP_POLICY = {
    * cleanup: a repository with little to clean up is cleaned up in one call.
    */
   pagesPerCall: 8,
-  /** Journaled effects deleted a page. */
   effectsPage: 500,
-  /** Webhook deliveries (and their attempts) deleted a page. */
   deliveriesPage: 200,
-  /** Search projection rows deleted a page, of each table. */
   searchPage: 500,
   /** Webhook bodies deleted a page (one R2 delete takes up to 1,000 keys). */
   bodiesPage: 1_000,
@@ -66,7 +63,6 @@ export type PageOutcome = "done" | "more" | "wait";
 export interface RepoCleanup {
   /** Recorded once done; never renamed (a deletion under way would run it again). */
   readonly name: string;
-  /** Removes one page. */
   page(env: Env, target: CleanupTarget, metrics?: Metrics): Promise<PageOutcome>;
 }
 

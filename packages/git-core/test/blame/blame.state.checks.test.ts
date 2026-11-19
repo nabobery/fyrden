@@ -21,7 +21,6 @@ const oid = (k: number) => oidFromHex(k.toString(16).padStart(40, "0"));
 const HEADER = 48;
 const fact = { summary: "s", name: "n", email: "e", date: "d" };
 
-/** Four lines: two pending at one commit, one at an older one, one settled. */
 function base(overrides: Partial<BlameState> = {}): BlameState {
   return {
     commit: oid(99),

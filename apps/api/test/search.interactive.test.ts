@@ -30,7 +30,6 @@ const budget = () =>
     .first<{ rows: number; reads: number; interactive_reads: number }>()
     .then((r) => r ?? { rows: 0, reads: 0, interactive_reads: 0 });
 
-/** Today's searches' reads set to `n`. */
 const spent = (n: number) =>
   db.batch([
     db.prepare(`INSERT INTO search_budget (day) VALUES (${TODAY}) ON CONFLICT (day) DO NOTHING`),

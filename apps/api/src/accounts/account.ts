@@ -4,7 +4,6 @@ import { evaluate, isValidHandle, type OrgRole, type Permission } from "@fyrden/
 import type { AclChange } from "../do/OrgDO.js";
 import { OperationError } from "../ops/execute.js";
 
-/** A user or an organization: a namespace that owns repositories. */
 export interface Account {
   readonly id: string;
   readonly type: "user" | "org";

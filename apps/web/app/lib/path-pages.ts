@@ -13,7 +13,6 @@ export const PATHS_PER_PAGE = 10_000;
  */
 export const PATH_REQUEST_BUDGET = 64;
 
-/** How many times a busy answer is asked again before the list is called unavailable. */
 const BUSY_TRIES = 3;
 
 /** How long to wait on a 409 `busy`, which comes with no time of its own. */
@@ -72,7 +71,6 @@ export class PathLoader {
   #cursor: string | null = null;
   #startedOver = false;
   #spent = 0;
-  /** Whether anyone is waiting for the list: a run that was dropped goes on if so. */
   #wanted = false;
   #running: Promise<void> | null = null;
   #stopping: AbortController | null = null;
@@ -100,7 +98,6 @@ export class PathLoader {
     return this.run();
   }
 
-  /** Drops the request under way and asks for no more. */
   pause(): void {
     this.#wanted = false;
     this.#stopping?.abort();
@@ -249,7 +246,6 @@ export async function readPathReply(response: Response): Promise<PathReply> {
 
 const number = (n: number) => n.toLocaleString("en");
 
-/** What stopped a truncated list, after "Showing the first N files". */
 const STOPPED: Readonly<Record<string, string>> = {
   too_many_paths: "; this repository has more.",
   too_many_bytes: ": this repository's paths are too long to list them all.",
@@ -260,7 +256,6 @@ const STOPPED: Readonly<Record<string, string>> = {
   too_much_work: ": a folder here takes too much work to read.",
 };
 
-/** What is said of a list that stopped for good, or for now. */
 const UNAVAILABLE: Readonly<Record<string, string>> = {
   busy: "The file list isn't available right now: the repository is busy.",
   unreadable: "The file list isn't available right now: some files can't be read at the moment.",
@@ -269,7 +264,6 @@ const UNAVAILABLE: Readonly<Record<string, string>> = {
 
 export interface ListNotice {
   readonly text: string;
-  /** The list can go on from here if asked. */
   readonly retry: boolean;
   /** The folders may show what the list doesn't. */
   readonly browse: boolean;
@@ -320,7 +314,6 @@ export interface CountInput {
   readonly total: number;
 }
 
-/** The two halves of the count line. */
 export interface CountParts {
   /** For the live region, so it mustn't change with every page of a list. */
   readonly live: string;

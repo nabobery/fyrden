@@ -7,14 +7,11 @@ import type { getContents, getRepo, listCommits, listRepos, Output } from "@fyrd
 
 export type Repo = Output<typeof getRepo>;
 
-/** A page of the signed-in user's repositories. */
 export type ReposPage = Output<typeof listRepos>;
 
-/** What a path names: a directory page, a file, a symlink or a submodule. */
 export type Contents = Output<typeof getContents>;
 export type Entry = Extract<Contents, { type: "dir" }>["entries"][number];
 
-/** A page of a branch's history. */
 export type CommitsPage = Output<typeof listCommits>;
 
 /**

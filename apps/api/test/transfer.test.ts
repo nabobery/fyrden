@@ -162,7 +162,6 @@ describe("repository transfers", () => {
       .bind(repo.id)
       .first<{ owner_gen: number }>();
     expect(fence?.owner_gen).toBe(2);
-    // Pushes go on at the new path.
     const pushed = await postPush(
       {
         repo: { id: repo.id, name: repo.name, stub: env.REPO.getByName(repo.id) },
@@ -997,7 +996,6 @@ async function pendingTransfer(
   return transferId;
 }
 
-/** Whether the repository's object takes no change now. */
 function frozen(repoId: string): Promise<boolean> {
   return runInDurableObject(
     env.REPO.getByName(repoId),

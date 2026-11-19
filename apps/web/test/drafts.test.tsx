@@ -33,7 +33,6 @@ describe("drafts", () => {
     const b = draftsFor(a, "usr_b");
     expect(b.viewer).toBe("usr_b");
     expect(b.store.get("reply:1")).toBe("");
-    // Back to the first account: what it wrote went with the change.
     expect(draftsFor(b, "usr_a").store.get("reply:1")).toBe("");
   });
 });
@@ -53,9 +52,7 @@ describe("an issue page's unsent drafts", () => {
     global.window = {};
     try {
       renderToString(<Editor write="Half written." />);
-      // The page drawn again (it came back after a failed reload): its draft is there.
       expect(renderToString(<Editor />)).toBe("Half written.");
-      // Another viewer's, or another issue's, is not.
       expect(renderToString(<Editor scope="usr_b|ada/demo#7" />)).toBe("(none)");
     } finally {
       delete global.window;

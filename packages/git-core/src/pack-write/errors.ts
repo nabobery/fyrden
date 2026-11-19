@@ -1,4 +1,3 @@
-/** Why a pack could not be written. */
 export type PackWriteErrorCode =
   /** More or fewer entries than the object count in the pack header. */
   | "object-count"
@@ -13,7 +12,6 @@ export type PackWriteErrorCode =
 
 export class PackWriteError extends Error {
   readonly code: PackWriteErrorCode;
-  /** The message without the code. */
   readonly detail: string;
   constructor(code: PackWriteErrorCode, detail: string) {
     super(`${code}: ${detail}`);

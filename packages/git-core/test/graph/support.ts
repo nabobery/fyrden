@@ -7,7 +7,6 @@ import {
   type MemoryCommitGraph,
 } from "../../testing/fakes/memory-commit-graph.js";
 
-/** A stand-in oid for a commit name in hand-built histories. */
 export function fakeOid(name: string): Oid {
   return oidFromBytes(createHash("sha1").update(name).digest());
 }
@@ -34,7 +33,6 @@ export async function verifiedGraph(spec: HistorySpec): Promise<MemoryCommitGrap
   return graph;
 }
 
-/** Maps oids back to the names used in a spec, for readable assertions. */
 export function namer(spec: HistorySpec): (oids: Iterable<Oid>) => string[] {
   const names = new Map(spec.map(([name]) => [oidToHex(fakeOid(name)), name]));
   return (oids) => [...oids].map((o) => names.get(oidToHex(o)) ?? oidToHex(o)).sort();

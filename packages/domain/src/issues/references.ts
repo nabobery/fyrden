@@ -11,7 +11,6 @@ import { visibleText } from "../pulls/mentions.js";
 /** References one text names at most; the rest are ignored. */
 export const MAX_REFERENCES = 50;
 
-/** A reference: a number, in this repository or in `owner/repo`. */
 export interface Reference {
   /** Lower-cased owner handle and repository name; absent for this repository. */
   readonly repo?: { readonly owner: string; readonly name: string };

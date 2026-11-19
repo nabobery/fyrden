@@ -42,7 +42,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     "GET",
     `/feed/digests/${digestPath(name)}`,
   );
-  // Not readable now, or no longer shown (its threads gone, the repository restored, too old).
   if (answer.status === 404) return { gone: true as const };
   const digest = bodyOf(answer, request);
   const [owner = "", repo = ""] = digest.repo.full_name.split("/");

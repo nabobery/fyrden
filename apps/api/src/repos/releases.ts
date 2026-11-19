@@ -109,7 +109,6 @@ async function shown(
   return releaseOutput(release, entry);
 }
 
-/** The `releases.list` operation. */
 export async function listReleasesOperation(
   ctx: OpContext,
   input: Input<typeof listReleases>,
@@ -129,7 +128,6 @@ export async function listReleasesOperation(
   };
 }
 
-/** The `releases.get` operation. */
 export async function getReleaseOperation(
   ctx: OpContext,
   input: Input<typeof getRelease>,
@@ -138,7 +136,6 @@ export async function getReleaseOperation(
   return shown(ctx, entry, await repo(ctx, entry, "getRelease").getRelease(input.release_id));
 }
 
-/** The `releases.get_by_tag` operation. */
 export async function getReleaseByTagOperation(
   ctx: OpContext,
   input: Input<typeof getReleaseByTag>,
@@ -147,7 +144,6 @@ export async function getReleaseByTagOperation(
   return shown(ctx, entry, await repo(ctx, entry, "getReleaseByTag").getReleaseByTag(input.tag));
 }
 
-/** The `releases.latest` operation. */
 export async function getLatestReleaseOperation(
   ctx: OpContext,
   input: Input<typeof getLatestRelease>,
@@ -156,7 +152,6 @@ export async function getLatestReleaseOperation(
   return shown(ctx, entry, await repo(ctx, entry, "getLatestRelease").getLatestRelease());
 }
 
-/** The `releases.create` operation. */
 export async function createReleaseOperation(
   ctx: OpContext,
   input: Input<typeof createRelease>,
@@ -176,7 +171,6 @@ export async function createReleaseOperation(
   return releaseOutput(result.release, entry);
 }
 
-/** The `releases.update` operation. */
 export async function updateReleaseOperation(
   ctx: OpContext,
   input: Input<typeof updateRelease>,
@@ -199,7 +193,6 @@ export async function updateReleaseOperation(
   return releaseOutput(result.release, entry);
 }
 
-/** The `releases.delete` operation. */
 export async function deleteReleaseOperation(
   ctx: OpContext,
   input: Input<typeof deleteRelease>,

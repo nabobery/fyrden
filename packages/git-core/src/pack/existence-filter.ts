@@ -130,7 +130,6 @@ export class OidBloomFilter {
     return true;
   }
 
-  /** The stored form: header and bit array. */
   serialize(): Uint8Array {
     const out = new Uint8Array(EXISTENCE_FILTER_HEADER_BYTES + this.#bits.length);
     const view = new DataView(out.buffer);

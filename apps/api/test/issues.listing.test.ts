@@ -128,7 +128,6 @@ function listed(stub: DurableObjectStub<RepoDO>, query: SubjectQuery) {
   return inRepo(stub, (r: RepoDO) => counted(r, query));
 }
 
-/** What the page should be, worked out from what the repository holds. */
 function expected(held: readonly Held[], query: SubjectQuery): number[] {
   const states = (kind: SubjectKind) =>
     query.state === "all"
@@ -252,7 +251,6 @@ describe("the issue listing", () => {
 const labelsOf = (n: number) => [
   ...(n % 3 === 0 ? [1] : []),
   ...(n % 5 === 0 ? [2] : []),
-  // Rare: one subject in the whole repository.
   ...(n === N + 1 ? [3] : []),
 ];
 const assigneeOf = (n: number) => (n % 7 === 0 ? "usr_x" : null);
@@ -414,7 +412,6 @@ describe("the issue listing's filters", () => {
           id,
           `l${id}`,
         );
-      // Odd numbers carry all twenty; even ones all but the last.
       for (const h of held)
         for (const id of h.number % 2 ? ids : ids.slice(0, -1))
           sql.exec("INSERT INTO subject_labels (number, label_id) VALUES (?, ?)", h.number, id);

@@ -23,7 +23,6 @@ async function lintProbe(pkg: string, source: string): Promise<LintResult> {
   const tree = await mkdtemp(join(tmpdir(), "fyrden-boundary-"));
   try {
     const config = JSON.parse(await readFile(join(root, "biome.json"), "utf8"));
-    // The temporary tree is not a git checkout.
     config.vcs = { enabled: false };
     delete config.$schema;
     await writeFile(join(tree, "biome.json"), JSON.stringify(config));
@@ -79,9 +78,7 @@ async function workspacePackages(): Promise<Map<string, Record<string, string>>>
           peerDependencies?: Record<string, string>;
         };
         packages.set(pkg.name, { ...pkg.dependencies, ...pkg.peerDependencies });
-      } catch {
-        // Not a package directory.
-      }
+      } catch {}
     }
   }
   return packages;

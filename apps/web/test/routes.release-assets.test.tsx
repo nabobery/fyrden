@@ -148,7 +148,6 @@ describe("an asset's download", () => {
   });
 });
 
-/** A same-origin JSON post to the upload route. */
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   new Request(`${ORIGIN}/ada/demo/releases/uploads`, {
     method: "POST",

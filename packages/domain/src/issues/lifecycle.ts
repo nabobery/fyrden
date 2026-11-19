@@ -1,7 +1,6 @@
 import { atLeast, type RepoRole } from "../authz/roles.js";
 import type { IssueState, IssueStateReason } from "./issue.js";
 
-/** What can be done to an issue after it is opened. */
 export const ISSUE_ACTIONS = [
   "edit",
   "close",
@@ -17,11 +16,8 @@ export type IssueAction = (typeof ISSUE_ACTIONS)[number];
 export interface IssueActionRule {
   /** The author (anyone with the author's root identity) may do it to its own issue. */
   readonly author: boolean;
-  /** The role anyone else needs. */
   readonly minRole: RepoRole;
-  /** The states it applies in. */
   readonly from: readonly IssueState[];
-  /** The audit action it records. */
   readonly audit: string;
 }
 
@@ -83,12 +79,9 @@ export interface IssueStatePatch {
 }
 
 export type IssueStateRefusal =
-  /** A reason that does not go with the state asked for (`reopened` to close, a close reason to open). */
   | "reason_not_for_state"
-  /** Closing as a duplicate names no issue or pull request. */
   | "duplicate_target_required"
   | "duplicate_of_itself"
-  /** A duplicate target given with another reason. */
   | "duplicate_target_without_reason";
 
 export type IssueStatePlan =

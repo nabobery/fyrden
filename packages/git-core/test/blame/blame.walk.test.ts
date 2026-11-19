@@ -302,7 +302,6 @@ describe("what ends a line unresolved", () => {
     const blobs = source.blob.bind(source);
     source.blob = (oid, max) => blobs(oid, max);
     const state = await finished(source, "m");
-    // `later` is identical, so it wins before anything's read.
     expect(answer(source, state)).toEqual(["later@1", "later@2", "later@3"]);
 
     const refused = new FakeSource({
@@ -342,9 +341,7 @@ describe("what ends a line unresolved", () => {
     const got = answer(source, await finished(source, "m"));
     expect(got[0]).toBe("first@1");
     expect(got[100]).toBe("diff_budget");
-    // The refused lines went no further, though `later` has them word for word.
     expect(got.filter((line) => line.startsWith("later"))).toEqual([]);
-    // A whole refusal: nothing's left to be the commit's own, not even a line only it has.
     expect(got.at(-1)).toBe("diff_budget");
   });
 
@@ -401,7 +398,6 @@ describe("a step is atomic", () => {
     const before = encodeBlameState(state);
     await expect(advanceBlame(state, source, SLICE)).rejects.toThrow("R2 unavailable");
     expect(encodeBlameState(state)).toEqual(before);
-    // It may pass next time.
     await advanceBlame(state, source, SLICE);
     expect(answer(source, state)).toEqual(["base@1", "p@2", "q@3", "m@4"]);
   });

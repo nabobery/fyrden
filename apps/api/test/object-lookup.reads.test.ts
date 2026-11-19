@@ -19,7 +19,6 @@ import { inRepo } from "./helpers/repo-git.js";
 const fx = inject("pushFixtures");
 
 const WORDS = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima".split(" ");
-/** Forty lines of eight words, different for each seed. */
 const lines = (seed: number) =>
   Array.from({ length: 40 }, (_, i) =>
     Array.from({ length: 8 }, (_, j) => WORDS[(seed * 7 + i * 3 + j) % WORDS.length]).join(" "),

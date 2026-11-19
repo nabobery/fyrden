@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// Runs the package's Vitest suite twice with shuffled file and test order and
-// different seeds, so a test that depends on another test's state fails here
-// instead of flaking later. Usage: fyrden-shuffle-guard [extra vitest args]
+// Usage: fyrden-shuffle-guard [extra vitest args]
 import { spawnSync } from "node:child_process";
 import { randomInt } from "node:crypto";
 

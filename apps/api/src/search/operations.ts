@@ -49,7 +49,6 @@ export const SEARCH_RESERVE: Record<SearchTarget, number> = {
 
 const SEARCH_RATE_RETRY = 60;
 
-/** The `search.issues` operation. */
 export async function searchIssuesOperation(
   ctx: OpContext,
   input: Input<typeof searchIssues>,
@@ -79,7 +78,6 @@ export async function searchIssuesOperation(
   });
 }
 
-/** The `search.repositories` operation. */
 export async function searchRepositoriesOperation(
   ctx: OpContext,
   input: Input<typeof searchRepositories>,

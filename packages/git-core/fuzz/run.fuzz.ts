@@ -85,7 +85,6 @@ const editArb: fc.Arbitrary<Edit> = fc.oneof(
         return join2(x.subarray(0, p), x.subarray(p + n));
       },
   ),
-  // Duplicates a run of bytes (repeated sections, long lines).
   fc.tuple(fc.nat(), fc.integer({ min: 1, max: 256 }), fc.integer({ min: 1, max: 8 })).map(
     ([i, n, times]): Edit =>
       (x) => {
@@ -94,7 +93,6 @@ const editArb: fc.Arbitrary<Edit> = fc.oneof(
         return join2(x.subarray(0, p), ...Array.from({ length: times }, () => run), x.subarray(p));
       },
   ),
-  // Four hex digits written over the input: a plausible pkt-line length.
   fc.tuple(fc.nat(), fc.array(fc.constantFrom(...hexDigits), { minLength: 4, maxLength: 4 })).map(
     ([i, digits]): Edit =>
       (x) => {
@@ -104,7 +102,6 @@ const editArb: fc.Arbitrary<Edit> = fc.oneof(
         return out;
       },
   ),
-  // A big-endian 32-bit word (counts, sizes, offsets) set to an edge value.
   fc.tuple(fc.nat(), fc.constantFrom(0, 1, 0x7fffffff, 0x80000000, 0xffffffff)).map(
     ([i, value]): Edit =>
       (x) => {
@@ -119,7 +116,6 @@ const editArb: fc.Arbitrary<Edit> = fc.oneof(
       (x) =>
         x.subarray(0, at(i, x.length)),
   ),
-  // Splices the tail of another seed in.
   fc.tuple(fc.nat(), fc.nat(), fc.nat()).map(
     ([i, which, from]): Edit =>
       (x, seeds) => {

@@ -40,7 +40,6 @@ async function pack(): Promise<{ head: Oid; bytes: Uint8Array }> {
     return tree.oid;
   };
   const oids = new Map<string, Oid>();
-  // Children first.
   for (const directory of [...directories].reverse()) {
     const blob = await object("blob", enc.encode(`${directory.path}\n`));
     objects.push(blob);

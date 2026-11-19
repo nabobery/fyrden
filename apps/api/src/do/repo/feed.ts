@@ -43,7 +43,6 @@ export interface FeedPrincipal {
   readonly root: string;
 }
 
-/** Who makes the change being emitted, as the caller worked it out. */
 export interface FeedActor {
   /** The root identity: the user its agents act for. */
   readonly root: string | null;
@@ -164,7 +163,6 @@ const STATE_CHANGES: ReadonlySet<string> = new Set([
   "pull_request.reopened",
 ]);
 
-/** Kinds that are something to act on (the others: what happened). */
 const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "review_requested",
   "changes_requested",
@@ -840,7 +838,6 @@ export class RepoFeed {
         const state = data.state;
         const conflicting = conflictingState(state);
         if (!conflicting && state !== "clean") return undefined;
-        // From one conflicting state to another is no news.
         if (conflicting && conflictingState(data.previous_state)) return undefined;
         const number = data.number as number;
         const pull = this.#pull(number);

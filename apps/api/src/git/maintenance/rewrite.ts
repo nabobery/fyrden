@@ -50,7 +50,6 @@ export interface RewriteSpec {
   readonly keep?: readonly (BitSet | undefined)[];
 }
 
-/** Where an unfinished output stands (kept in the job's cursor). */
 export interface RewriteState {
   readonly packId: PackId;
   readonly upload: PackUploadState;

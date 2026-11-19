@@ -14,7 +14,6 @@ import { pathToFileURL } from "node:url";
 export interface PushLoadOptions {
   readonly origin: string;
   readonly token: string;
-  /** `owner/name`. */
   readonly repo: string;
   readonly agents: number;
   readonly pushesPerAgent: number;
@@ -29,7 +28,6 @@ export interface PushLoadReport {
   readonly seconds: number;
   readonly pushesPerSecond: number;
   readonly latencyMs: { readonly p50: number; readonly p95: number; readonly max: number };
-  /** The first few failures' git output, to see why. */
   readonly errors: readonly string[];
 }
 

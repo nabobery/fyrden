@@ -30,7 +30,6 @@ const at = { number: 7, actor: "usr_actor", now: 500 };
 
 describe("decideIssueAction", () => {
   it.each([
-    // [action, isAuthor, role, state, allowed]
     ["edit", true, "read", "open", true],
     ["edit", false, "triage", "open", false],
     ["edit", false, "write", "closed", true],
@@ -41,7 +40,6 @@ describe("decideIssueAction", () => {
     ["reopen", true, "read", "closed", true],
     ["reopen", false, "triage", "closed", true],
     ["reopen", false, "admin", "open", false],
-    // Marking a duplicate takes triage, the author's own issue included.
     ["mark_duplicate", true, "read", "open", false],
     ["mark_duplicate", true, "triage", "closed", true],
     ["lock", true, "triage", "open", false],
@@ -122,7 +120,6 @@ describe("planIssueState", () => {
     expect(
       planIssueState(open, { state: "closed", stateReason: "duplicate", duplicateOf: 7 }, at),
     ).toEqual({ ok: false, refusal: "duplicate_of_itself" });
-    // A target without the duplicate reason says nothing coherent.
     expect(planIssueState(open, { state: "closed", duplicateOf: 3 }, at)).toEqual({
       ok: false,
       refusal: "duplicate_target_without_reason",
@@ -166,7 +163,6 @@ describe("planIssueState", () => {
     expect(planIssueState(open, { stateReason: "not_planned" }, at)).toMatchObject({
       action: null,
     });
-    // To duplicate: the target is set, the close (who, when) kept.
     expect(
       planIssueState(closed("completed"), { stateReason: "duplicate", duplicateOf: 4 }, at),
     ).toEqual({
@@ -175,19 +171,16 @@ describe("planIssueState", () => {
       event: "edited",
       next: { ...closed("completed"), stateReason: "duplicate", duplicateOf: 4 },
     });
-    // From duplicate: the target goes.
     expect(planIssueState(closed("duplicate", 4), { stateReason: "not_planned" }, at)).toEqual({
       ok: true,
       action: "mark_duplicate",
       event: "edited",
       next: { ...closed("not_planned"), duplicateOf: null },
     });
-    // Another target.
     expect(planIssueState(closed("duplicate", 4), { duplicateOf: 5 }, at)).toMatchObject({
       action: "mark_duplicate",
       next: { duplicateOf: 5 },
     });
-    // The same target: nothing to do.
     expect(planIssueState(closed("duplicate", 4), { duplicateOf: 4 }, at)).toMatchObject({
       action: null,
     });

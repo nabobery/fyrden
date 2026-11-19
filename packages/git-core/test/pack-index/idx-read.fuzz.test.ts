@@ -130,7 +130,6 @@ describe("idx readers on corrupted input", () => {
     };
     expect(code(good)).toBe("ok");
     expect(code(good.subarray(0, 100))).toBe("truncated");
-    // Past the header, but short of the tables the fanout counts.
     expect(code(good.subarray(0, good.length - 8))).toBe("truncated");
     const badMagic = good.slice();
     badMagic[0] = 0;
@@ -144,7 +143,6 @@ describe("idx readers on corrupted input", () => {
     const longer = new Uint8Array(good.length + 4);
     longer.set(good);
     expect(code(longer)).toBe("bad-size");
-    // A checksum mismatch is reported by verifyChecksum, not by parse.
     const flipped = good.slice();
     flipped[8 + 1024] = (flipped[8 + 1024] as number) ^ 1;
     expect(await PackIdx.parse(flipped).verifyChecksum(idxHasher)).toBe(false);
@@ -155,7 +153,6 @@ describe("idx readers on corrupted input", () => {
     const bad = good.slice();
     const offsetsAt = 8 + 1024 + 5 * 24;
     new DataView(bad.buffer).setUint32(offsetsAt, 0x80000000);
-    // Rejected for the reference itself, before any read of the table.
     const message = "bad-large-offset: entry 0 refers to large offset 0 of 0";
     const idx = PackIdx.parse(bad);
     expect(() => idx.offsetAt(0)).toThrow(message);

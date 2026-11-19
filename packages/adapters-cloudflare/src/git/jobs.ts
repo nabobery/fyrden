@@ -71,7 +71,6 @@ export interface Job {
 /** Where a job stands after `runJob`: `busy` when another run holds it. */
 export type RunJobState = "done" | "queued" | "failed" | "busy" | "missing";
 
-/** What one slice of a job did. */
 export type SliceResult =
   | {
       readonly done: true;
@@ -157,7 +156,6 @@ export class JobQueue {
     /** Arms the object's alarm (`ctx.storage.setAlarm`). */
     private readonly setAlarm: (at: number) => void,
     private readonly policy: JobPolicy = DEFAULT_JOB_POLICY,
-    /** Internal-service calls made so far in the current invocation. */
     private readonly internalCalls: () => number = invocationInternalCalls,
   ) {}
 

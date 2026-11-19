@@ -14,7 +14,6 @@ import { base64url } from "./params.js";
 export const DPOP_POLICY = {
   /** How far a proof's `iat` may be from now, either way. */
   maxSkewMs: 60 * 1000,
-  /** The largest proof read. */
   maxProofBytes: 4096,
 };
 

@@ -112,7 +112,6 @@ export interface BlameAdvance {
   readonly steps: number;
   /** "budget": reads or decoding work ran out, and the step was undone. */
   readonly stop: "done" | "slice" | "budget";
-  /** Engine work this slice spent. */
   readonly work: number;
 }
 
@@ -194,7 +193,6 @@ export async function startBlame(
   const live = liveBytesOf({
     path: pathLiveBytes(path),
     pairs: lines,
-    // An empty file has no line to queue.
     queue: lines === 0 ? 0 : 1,
     ranges: 0,
     facts: 0,
@@ -493,7 +491,6 @@ function appendRanges(state: BlameState, records: readonly number[]): void {
   state.rangeCount += records.length / 4;
 }
 
-/** Running totals, so a long walk's steps don't each recount the state. */
 interface Totals {
   pairs: number;
   factText: number;

@@ -33,7 +33,6 @@ describe("effects repair", () => {
     expect(
       parse(["--url", URL_, "--sink", "feed", "--since", "2027-01-14", "--force"]),
     ).toHaveProperty("error");
-    // The API's URL, an origin over https (http only for a local one).
     expect(parse(["--sink", "feed", "--since", "2027-01-14"])).toHaveProperty("error");
     expect(parse(["--url", "ftp://x", "--sink", "feed", "--since", "2027-01-14"])).toHaveProperty(
       "error",
@@ -52,7 +51,6 @@ describe("effects repair", () => {
     );
     expect(malformed).toHaveProperty("error");
     expect(JSON.stringify(malformed)).not.toMatch(/secret/);
-    // An administrator's token, from the environment only (never an argument).
     expect(
       parseRepairArgs(["--url", URL_, "--sink", "feed", "--since", "2027-01-14"], NOW, {}),
     ).toHaveProperty("error");

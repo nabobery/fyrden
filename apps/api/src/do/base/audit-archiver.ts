@@ -14,7 +14,6 @@ import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 
 /** Proposed values. */
 export interface AuditArchivePolicy {
-  /** Rows in one segment at most. */
   readonly maxRows: number;
   /** How long archived rows stay in the object as well. */
   readonly retentionMs: number;

@@ -80,7 +80,6 @@ export interface DeliveryState {
    * out on that answer: Continue waits out what's left of it first.
    */
   readonly owedUntil: number | null;
-  /** Requests counted against the visit so far. */
   readonly requests: number;
 }
 
@@ -234,7 +233,6 @@ export class BlameDelivery {
       if (signal.aborted) return;
       const problem = (answer.body ?? {}) as { code?: string; retry_after?: number };
       if (answer.status === 200) {
-        // Anything but a blame (a body that didn't parse, another shape) is a failure.
         if (!isBlame(answer.body)) return this.#set({ status: "failed" });
         const wait = this.#take(answer.body);
         if (this.#state.status === "done") return;
@@ -298,7 +296,6 @@ export class BlameDelivery {
   }
 }
 
-/** Whether a 200's body has the shape of a blame answer: what the delivery reads of it. */
 function isBlame(body: unknown): body is BlameAnswer {
   if (typeof body !== "object" || body === null) return false;
   const b = body as Record<string, unknown>;

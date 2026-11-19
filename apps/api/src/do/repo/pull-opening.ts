@@ -24,7 +24,6 @@ import type { WriteContext } from "./write-context.js";
  * its commit, and tried again when the refs moved meanwhile.
  */
 
-/** A pull request opened, or why not. */
 export type PullOpened =
   | { ok: true; record: PullView }
   | {
@@ -42,7 +41,6 @@ export type PullOpened =
       number?: number;
     };
 
-/** A pull request from another repository opened, or why not. */
 export type ForkPullOpened =
   | { ok: true; record: PullView }
   | {

@@ -533,7 +533,6 @@ export const handlers: Handlers = {
   "repos.generate": generateRepoOperation,
   "repos.transfer": transferRepoOperation,
 
-  // Rulesets live in the repository's object (repos/rulesets).
   "repos.rulesets.list": listRulesetsOperation,
   "repos.rulesets.rule_suites.list": listRuleSuitesOperation,
   "repos.rulesets.get": getRulesetOperation,
@@ -541,7 +540,6 @@ export const handlers: Handlers = {
   "repos.rulesets.update": updateRulesetOperation,
   "repos.rulesets.delete": deleteRulesetOperation,
 
-  // Pull requests live in the repository's object (repos/pulls).
   "pulls.list": listPullsOperation,
   "pulls.create": createPullOperation,
   "pulls.get": getPullOperation,
@@ -665,7 +663,6 @@ export const handlers: Handlers = {
   "notifications.subscription_put": setNotificationThreadSubscriptionOperation,
   "notifications.subscription_delete": deleteNotificationThreadSubscriptionOperation,
 
-  // The caller's activity feed (feed/operations).
   "feed.list": getFeedOperation,
   "feed.sync": syncFeedOperation,
   "feed.ack": ackFeedItemOperation,
@@ -708,7 +705,6 @@ export const handlers: Handlers = {
   "admin.search.check_index": checkSearchIndexOperation,
   "admin.search.rebuild_index": rebuildSearchIndexOperation,
 
-  // Branches, tags, commits and comparisons (repos/browse).
   "repos.branches.list": listBranchesOperation,
   "repos.branches.get": getBranchOperation,
   "repos.tags.list": listTagsOperation,
@@ -735,12 +731,10 @@ export const handlers: Handlers = {
   "repos.paths.list": listPathsOperation,
   "repos.archives.get": getArchiveOperation,
 
-  // File writes (repos/file-writes).
   "repos.contents.put": putContentsOperation,
   "repos.contents.delete": deleteContentsOperation,
   "repos.file_commits.create": createFileCommitOperation,
 
-  // Chunked pack uploads and server-side import (git/chunked, git/import).
   "uploads.create": createUploadSession,
   "uploads.get": getUploadSession,
   "uploads.complete": completeUploadSession,

@@ -191,7 +191,6 @@ async function clientBundles(esbuild: typeof Esbuild, work: string) {
   const fileDiff = joint.of("fileDiff");
   const file = joint.of("file");
   const bothInitial = total(new Set([...fileDiff.initial, ...file.initial]));
-  // The chunks holding Highlights (its WebAssembly inlined), the one a file view fetches to highlight.
   const highlights = file.lazy.filter((p) =>
     Object.keys(joint.outputs[p]?.inputs ?? {}).some((i) => i.includes("@pierre+highlights@")),
   );
@@ -213,13 +212,11 @@ async function clientBundles(esbuild: typeof Esbuild, work: string) {
 }
 
 export async function measureBundles(esbuild: typeof Esbuild, work: string) {
-  // The web app as it ships (the build `pnpm --filter @fyrden/web deploy:dry-run` uploads).
   run("pnpm", ["--filter", "@fyrden/web", "build"], ROOT);
   const webOnly = dryRun(WEB, join(work, "dry-web"));
   const withRenderer = await serverWithRenderer(esbuild, work, "with-shiki", false);
   const withRendererNoShiki = await serverWithRenderer(esbuild, work, "without-shiki", true);
 
-  // What the browser build already ships (apps/web/build/client/assets).
   const assets = join(WEB, "build/client/assets");
   return {
     server: { webOnly, withRenderer, withRendererNoShiki },

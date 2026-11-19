@@ -64,7 +64,6 @@ describe("push.shared-pack-closure", () => {
       "unpack index-pack abnormal exit",
       "ng refs/tags/stolen unpacker error",
     ]);
-    // The same answer as for a base that is nowhere.
     const absent = "0123456789abcdef0123456789abcdef01234567";
     const nowhere = await server.push(
       request(

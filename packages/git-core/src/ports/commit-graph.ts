@@ -1,6 +1,5 @@
 import type { Oid } from "../object/oid.js";
 
-/** What a commit graph row records about a commit, as parsed from the object. */
 export interface CommitInfo {
   readonly oid: Oid;
   readonly tree: Oid;

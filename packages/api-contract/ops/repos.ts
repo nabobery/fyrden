@@ -254,7 +254,6 @@ export const deleteRepo = defineOperation({
   },
 });
 
-/** Repositories one bulk delete takes at most. */
 export const MAX_BULK_DELETE = 100;
 
 export const deleteRepos = defineOperation({

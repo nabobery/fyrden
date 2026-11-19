@@ -6,14 +6,12 @@
  * that let both exist would advertise refs a client cannot store.
  */
 
-/** Existing refs, as a ref store can look them up. */
 export interface RefNamespace {
   has(name: string): boolean;
   /** Up to `limit` existing refs whose names start with `name + "/"`, in any order. */
   below(name: string, limit: number): readonly string[];
 }
 
-/** One ref creation the namespace refuses, and the ref it collides with. */
 export interface RefnameConflict {
   readonly ref: string;
   readonly conflictsWith: string;

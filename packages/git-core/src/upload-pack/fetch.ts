@@ -36,7 +36,6 @@ import { RefTips, validateWants, type WantedObjects } from "./wants.js";
 export type { MaterialisedPackStore } from "./materialise.js";
 export type { VerbatimCandidate } from "./verbatim-plan.js";
 
-/** What planning a fetch reads and writes for one repository. */
 export interface UploadPackRepository {
   /** The current refs: wants are validated against these. */
   readonly refs: RefSnapshot;
@@ -48,7 +47,6 @@ export interface UploadPackRepository {
   readonly extraTips?: readonly Oid[];
   /** Read with the verified view only. */
   readonly commitGraph: CommitGraph;
-  /** The repository's packs, as the object reader opens them. */
   readonly view: RepoView;
   readonly packStore: Pick<PackStore, "openRange">;
   readonly zlib: Zlib;
@@ -120,7 +118,6 @@ export interface FetchPlanOptions {
 export interface FetchPlan {
   /** The response, in order. Empty for a request without wants (git sends nothing). */
   readonly parts: readonly FetchResponsePart[];
-  /** Set when the response carries a pack. */
   readonly pack?: {
     readonly kind: "as-is" | "stitched" | "regenerated";
     /** Objects in the pack; not known for a materialised object found again by key. */

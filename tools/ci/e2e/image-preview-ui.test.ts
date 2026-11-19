@@ -13,7 +13,6 @@ import { accessible, startWebStack, visit, type WebStack } from "./web-stack.js"
 let stack: WebStack;
 let page: Page;
 const REPO = "/ada/pictures";
-/** A failed image's request takes as long as a loaded machine does: a limit, not a wait. */
 const SETTLED = { timeout: 30_000 };
 
 function pngChunk(type: string, body: Uint8Array): Buffer {
@@ -178,7 +177,6 @@ describe("an image on a file's page", () => {
     await see(failure()).toBeVisible(SETTLED);
     await see(page.getByRole("img")).toHaveCount(0);
     await see(raw()).toBeVisible();
-    // A later file on the same page component starts afresh.
     await page.goBack();
     await page.getByRole("link", { name: "small.png" }).click();
     await see(image("small.png")).toHaveJSProperty("naturalWidth", 64, SETTLED);
@@ -231,7 +229,6 @@ describe("an image on a file's page", () => {
     await see(failure()).toBeVisible();
     await see(raw()).toBeVisible();
     await accessible(page, "an image that failed");
-    // The CSP allows every image above; nothing here depended on a refusal.
     expect(stack.refused).toEqual([]);
   });
 });
@@ -267,7 +264,6 @@ describe("another origin's page", () => {
     await see(taken).toHaveJSProperty("complete", true, SETTLED);
     await see(taken).toHaveJSProperty("naturalWidth", 0);
     const frame = page.frames().find((candidate) => candidate !== page.mainFrame());
-    // Chromium's page for a frame it refused.
     expect(frame?.url()).toMatch(/^chrome-error:/);
   });
 });

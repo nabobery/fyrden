@@ -55,7 +55,6 @@ export async function resolveDeltas(ctx: ResolveContext): Promise<Oid[]> {
     totalSize += state.size(i);
   }
   if (deltas === 0) return [];
-  // A small pack does not need the whole cache budget.
   const cacheBytes = Math.min(ctx.limits.deltaBaseCacheBytes, totalSize);
   const resolver = await Resolver.create(ctx, deltas, cacheBytes);
   try {

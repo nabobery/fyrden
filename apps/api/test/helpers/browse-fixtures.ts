@@ -58,7 +58,6 @@ declare module "vitest" {
   }
 }
 
-/** The revisions and paths the fixtures record logs for. */
 export const BROWSE_LOGS = {
   revs: ["main", "feature/ü-slash", "v1", "v1-light"],
   paths: ["README.md", "src", "src/lib/util.ts", "docs/ünï.md", "missing", "src/app.ts"],

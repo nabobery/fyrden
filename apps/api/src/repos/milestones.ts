@@ -99,7 +99,6 @@ function decodeListingCursor(
   return { key: value?.k as number, number: value?.n as number };
 }
 
-/** The `milestones.list` operation. */
 export async function listMilestonesOperation(
   ctx: OpContext,
   input: Input<typeof listMilestones>,
@@ -124,7 +123,6 @@ export async function listMilestonesOperation(
   };
 }
 
-/** The `milestones.get` operation. */
 export async function getMilestoneOperation(
   ctx: OpContext,
   input: Input<typeof getMilestone>,
@@ -136,7 +134,6 @@ export async function getMilestoneOperation(
   return milestoneOutput(milestone, kinds);
 }
 
-/** The `milestones.create` operation. */
 export async function createMilestoneOperation(
   ctx: OpContext,
   input: Input<typeof createMilestone>,
@@ -155,7 +152,6 @@ export async function createMilestoneOperation(
   return milestoneOutput(result.milestone, tokenKinds(ctx, entry, "read"));
 }
 
-/** The `milestones.update` operation. */
 export async function updateMilestoneOperation(
   ctx: OpContext,
   input: Input<typeof updateMilestone>,
@@ -186,7 +182,6 @@ export async function updateMilestoneOperation(
   return milestoneOutput(result.milestone, tokenKinds(ctx, entry, "read"));
 }
 
-/** The `milestones.delete` operation. */
 export async function deleteMilestoneOperation(
   ctx: OpContext,
   input: Input<typeof deleteMilestone>,

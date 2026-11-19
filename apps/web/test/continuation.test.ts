@@ -34,7 +34,6 @@ describe("a continuation", () => {
 });
 
 describe("a page's items within a budget", () => {
-  // Ids 1-5, of these sizes.
   const page = [4, 4, 4, 10, 1].map((size, i) => ({ id: i + 1, size }));
   const take = (
     items: typeof page,
@@ -80,7 +79,6 @@ describe("a page's items within a budget", () => {
   it("skips nothing and repeats nothing when items are deleted between navigations", () => {
     const first = take(page, null, 8);
     expect(ids(first)).toEqual([1, 2]);
-    // Id 1 (shown) and id 4 (not yet) are deleted before the next navigation.
     const after = page.filter((i) => i.id !== 1 && i.id !== 4);
     const second = take(after, first.next?.after ?? null, 8);
     expect(ids(second)).toEqual([3, 5]);

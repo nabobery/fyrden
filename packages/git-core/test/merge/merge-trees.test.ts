@@ -80,7 +80,6 @@ describe("mergeTrees", () => {
     if (merged.kind !== "clean") return expect.fail(JSON.stringify(merged.conflicts));
     const blobs = merged.objects.filter((o) => o.type === "blob").map((o) => dec.decode(o.bytes));
     expect(blobs.sort()).toEqual(["", "both\n"]);
-    // Declined: the conflict stays.
     const declined = await mergeTrees(s.source, base, without, theirs, {
       resolve: () => undefined,
     });
@@ -128,7 +127,6 @@ describe("mergeTrees, more cases", () => {
     const one = await mergeTrees(s.source, t(0o100644), t(0o100755), t(0o100644));
     if (one.kind !== "clean") return expect.fail("conflicts");
     expect(await entries(s, one.tree, one.objects)).toEqual([["x", "100755"]]);
-    // Content changed on one side, mode on the other: both kept.
     const y = s.tree({ x: { mode: 0o100644, oid: s.blob("y\n") } });
     const both = await mergeTrees(s.source, t(0o100644), t(0o100755), y);
     if (both.kind !== "clean") return expect.fail("conflicts");
@@ -151,7 +149,6 @@ describe("mergeTrees, more cases", () => {
     const conflict = await mergeTrees(s.source, base, keepY, gone);
     if (conflict.kind !== "conflicts") return expect.fail("clean");
     expect(conflict.conflicts.map((c) => [c.kind, c.path])).toEqual([["modify_delete", "d/y"]]);
-    // Nothing changed inside: the directory goes with the deletion.
     const same = s.tree({
       d: { mode: 0o40000, oid: dir({ x: "x\n", y: "y\n" }) },
       k: { oid: s.blob("K\n") },
@@ -320,7 +317,6 @@ describe("mergeTrees, kinds of entry", () => {
 });
 
 describe("mergeTrees, modes", () => {
-  /** A source that counts the blobs read through it. */
   const counting = (s: ReturnType<typeof store>) => {
     const counter = { reads: 0 };
     const source = {

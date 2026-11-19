@@ -85,7 +85,6 @@ export function errPacket(message: string): Uint8Array<ArrayBuffer> {
 export const V2_ONLY_MESSAGE =
   "Fyrden serves fetch and clone over git protocol version 2 only. Use git 2.26 or later and do not set protocol.version to 0 or 1.";
 
-/** The parts, joined into one buffer. */
 export function concatBytes(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;

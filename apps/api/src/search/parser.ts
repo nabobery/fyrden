@@ -108,7 +108,6 @@ export function tokens(text: string): string[] {
   return out;
 }
 
-/** The qualifiers each search takes. */
 const QUALIFIERS: Record<SearchTarget, ReadonlySet<string>> = {
   issues: new Set(["repo", "org", "user", "is", "label", "author", "assignee", "milestone", "in"]),
   repositories: new Set(["repo", "org", "user", "in"]),
@@ -237,7 +236,6 @@ function positive(text: string, what: string, bad: (what: string) => SearchQuery
   return n;
 }
 
-/** Adds one qualifier's value to `parsed`. */
 function qualify(
   parsed: {
     repos: { owner: string; name: string }[];
