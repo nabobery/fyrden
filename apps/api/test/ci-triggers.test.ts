@@ -780,6 +780,7 @@ describe("failures while deciding an event", () => {
         getByName: (name: string) => {
           const stub = real.getByName(name);
           return {
+            reserve: (spec: Parameters<typeof stub.reserve>[0]) => stub.reserve(spec),
             create: async (spec: Parameters<typeof stub.create>[0]) => {
               const answer = await stub.create(spec);
               if (lost) {

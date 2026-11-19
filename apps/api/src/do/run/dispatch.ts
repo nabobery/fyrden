@@ -239,7 +239,10 @@ export class RunDispatch {
             type: "job",
             scopes: [...assigned.tokenScopes],
             repoIds: [assigned.repoId],
-            ttlMs: Math.min(assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS, JOB_TOKEN_MAX_MS),
+            ttlMs: Math.min(
+              assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS,
+              JOB_TOKEN_MAX_MS,
+            ),
             audit: { actorId: null },
           });
     // Failed assignments retry revocation before propagating the error. Confirmed tasks are
@@ -267,17 +270,17 @@ export class RunDispatch {
     let triggeringActor: string;
     try {
       if (minted) {
-      this.#count("ci_job_token_map");
-      await db
-        .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
-        .bind(minted.id, wireId, host.now())
-        .run();
-      await host.hooks.afterMint?.(minted.token);
-      await host.hooks.beforeTokenMask?.();
-      if (!host.addJobTokenMask(ref.task, minted.token)) {
-        await revokeOwn();
-        return this.#tokensFull(wireId, ref, minted.id);
-      }
+        this.#count("ci_job_token_map");
+        await db
+          .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
+          .bind(minted.id, wireId, host.now())
+          .run();
+        await host.hooks.afterMint?.(minted.token);
+        await host.hooks.beforeTokenMask?.();
+        if (!host.addJobTokenMask(ref.task, minted.token)) {
+          await revokeOwn();
+          return this.#tokensFull(wireId, ref, minted.id);
+        }
       }
       triggeringActor = await this.#triggeringActor(assigned, github);
       await host.hooks.beforeTokenRotation?.();
