@@ -178,18 +178,17 @@ jobs:
           path: apps/api/coverage/coverage-final.json
           retention-days: 14
 
-  # The web UI's end-to-end test drives Chromium: the headless shell of
-  # the pinned Playwright, with the system libraries it needs. A stalled
-  # mirror or download once held this job to its timeout: apt gets its own
-  # network timeouts and retries (its package transaction is never cut
-  # short), and the browser, cached by its pinned revisions, is downloaded again
-  # when an attempt stalls.
-  # Its files split across two jobs (Vitest's split, by path); each file still
-  # starts its own fresh stack.
+  # Official browsers and native libraries match the pinned Playwright package.
+  # Bump the image with @playwright/test: https://playwright.dev/docs/ci#via-containers
   e2e:
     name: Both Workers together locally (end to end), shard ${{ matrix.shard }}/2
     runs-on: ubuntu-latest
-    # About 6 minutes, plus Firefox and WebKit; room for the installs to recover (up to 20).
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7
+      options: --user 1001 --init --ipc=host
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -200,41 +199,22 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
-      # The browser revisions the pinned Playwright installs, so a dependency
-      # change elsewhere in the lockfile keeps the cached browsers.
-      - name: Playwright's browser revisions
-        id: browsers
+      - name: Verify Playwright image matches the installed package
         run: |
-          revisions=(node_modules/.pnpm/playwright-core@*/node_modules/playwright-core/browsers.json)
-          test -f "${revisions[0]}"
-          echo "digest=$(cat "${revisions[@]}" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-      - name: Playwright's browser cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/ms-playwright
-          # Names the browsers: a hit on an entry without one of them would never gain it.
-          key: playwright-chromium-firefox-webkit-${{ runner.os }}-${{ runner.arch }}-${{ steps.browsers.outputs.digest }}
-      - name: The browsers' system libraries
-        timeout-minutes: 10
-        run: |
-          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-            | sudo tee /etc/apt/apt.conf.d/80-ci-network > /dev/null
-          pnpm --filter @fyrden/ci-tools exec playwright install-deps chromium-headless-shell firefox webkit
-      - name: Playwright's browsers
-        # Three attempts of up to 190 s, and the pauses between them.
-        timeout-minutes: 10
-        run: |
-          for attempt in 1 2 3; do
-            if timeout --kill-after=10 180 pnpm --filter @fyrden/ci-tools exec playwright install --only-shell chromium firefox webkit; then
-              exit 0
-            fi
-            echo "::warning::Playwright's browsers: attempt $attempt failed or stalled"
-            sleep 5
-          done
-          exit 1
+          id -u
+          git --version
+          pnpm --filter @fyrden/ci-tools exec node <<'NODE'
+          const fs = require('node:fs');
+          const installed = require('@playwright/test/package.json').version;
+          const image = JSON.parse(fs.readFileSync('/ms-playwright/.docker-info', 'utf8')).driverVersion;
+          if (installed !== image) {
+            throw new Error(`Playwright package ${installed} does not match image ${image}. Update the pinned e2e container in .github/workflows/ci.yml with the catalog version in pnpm-workspace.yaml.`);
+          }
+          console.log(`Playwright package and image both use ${installed}`);
+          NODE
       - uses: ./.github/actions/turbo-cache
         with:
-          partition: e2e-${{ matrix.shard }}
+          partition: e2e-playwright-1.63.0-noble-${{ matrix.shard }}
       - name: Both Workers together locally, through the service binding
         env:
           SHARD: ${{ matrix.shard }}
