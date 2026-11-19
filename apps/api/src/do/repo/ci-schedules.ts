@@ -62,6 +62,8 @@ export interface ScheduleAdmission {
 
 export const ADMIT_ALL: ScheduleAdmission = { allowTick: () => "fire" };
 
+export type ScheduleWriteAccess = "allowed" | "denied" | "unknown";
+
 export interface CiSchedulesDeps {
   readonly git: RepoGitStorage;
   readonly enabled: () => boolean;
@@ -78,7 +80,7 @@ export interface CiSchedulesDeps {
    * Pulls role ceilings. The returned check reads current local authority
    * synchronously in the transaction recording the tick.
    */
-  readonly prepareWrite: (principal: string) => Promise<() => boolean>;
+  readonly prepareWrite: (principal: string) => Promise<() => ScheduleWriteAccess>;
   /** The final remote read before recording: principal and owner activity from the primary. */
   readonly actorActive: (principal: string) => Promise<boolean>;
   /** In the caller's transaction: records a `schedule` event in the trigger inbox. */
@@ -273,14 +275,14 @@ export class CiSchedules {
       const pushed = this.#pushedAt();
       for (const row of due) {
         let disable: Disabled | null = null;
-        let mayWrite: (() => boolean) | undefined;
+        let writeAccess: (() => ScheduleWriteAccess) | undefined;
         if (pushed === null || at - pushed > INACTIVE_MS) disable = "inactive";
         else {
           try {
             await this.hooks.beforeRoleCheck?.(row.workflow_path);
-            mayWrite = await this.deps.prepareWrite(row.actor_id);
+            writeAccess = await this.deps.prepareWrite(row.actor_id);
             await this.hooks.afterRoleCheck?.(row.workflow_path);
-            if (!mayWrite() && !(await this.deps.aclKnown()))
+            if (writeAccess() !== "allowed" && !(await this.deps.aclKnown()))
               return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
             if (!(await this.deps.actorActive(row.actor_id))) disable = "actor_lost";
           } catch (error) {
@@ -289,7 +291,7 @@ export class CiSchedules {
             return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
           }
         }
-        this.deps.git.context.storage.transactionSync(() => {
+        const retryAcl = this.deps.git.context.storage.transactionSync(() => {
           // Read again with no await before the write: another fire (the alarm and the test
           // hook) or a refresh may have moved the entry since.
           const [now] = this.#sql()
@@ -309,7 +311,9 @@ export class CiSchedules {
             now.workflow_blob !== row.workflow_blob
           )
             return;
-          if (mayWrite && !mayWrite()) disable = "actor_lost";
+          const access = writeAccess?.();
+          if (access === "unknown") return true;
+          if (access === "denied") disable = "actor_lost";
           if (disable) {
             this.#sql().exec(
               "UPDATE ci_schedules SET disabled = ?, updated_at = ? WHERE workflow_path = ? AND cron = ?",
@@ -369,6 +373,7 @@ export class CiSchedules {
             );
           }
         });
+        if (retryAcl) return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
       }
     }
     const next = this.#earliest();

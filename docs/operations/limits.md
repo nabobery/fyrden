@@ -1263,7 +1263,7 @@ to run) from its own environment.
 
 ## CI runners
 
-Scheduled ticks pull the actor's role ceilings first, then read actor and agent-owner activity from the directory primary as their final remote authorization check. The repository immediately checks the schedule row and current local role in its recording transaction. A failed activity read leaves the tick retryable. Activity changes after the primary read can affect the next tick; the directory and repository do not share an atomic transaction.
+Scheduled ticks pull the actor's role ceilings first, then read actor and agent-owner activity from the directory primary as their final remote authorization check. The repository immediately checks the schedule row and current local role in its recording transaction. A failed activity read, or an ACL snapshot that expires or is invalidated before recording, leaves the tick retryable. Unknown authority never disables the schedule as a lost actor. Activity changes after the primary read can affect the next tick; the directory and repository do not share an atomic transaction.
 
 Self-hosted runners (the stock gitea/runner, v6.0.0 and v5.4.1) speak its Connect protocol at `/api/actions/runner.v1.RunnerService/*` and `/api/actions/ping.v1.PingService/Ping`, binary protobuf only. A runner belongs to one organization and serves its repositories.
 

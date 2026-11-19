@@ -707,7 +707,12 @@ export class RepoDO extends MigratingDO {
       },
       prepareWrite: async (principal) => {
         const ceilings = await this.#authority.rolesPulled(principal, null);
-        return () => atLeast(this.#authority.roleNow(principal, ceilings), "write");
+        return () => {
+          if (this.acl.basis() === "unknown") return "unknown";
+          return atLeast(this.#authority.roleNow(principal, ceilings), "write")
+            ? "allowed"
+            : "denied";
+        };
       },
       actorActive: (principal) => this.#authority.principalActive(principal),
       record: (key, actor, facts) => this.ciTriggers.recordSchedule(key, actor, facts),

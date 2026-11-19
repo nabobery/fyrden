@@ -9,7 +9,12 @@ import { uniqueId } from "@fyrden/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { recordedAccount } from "../src/accounts/grants.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { CI_SCHEDULE_JOB, latestOccurrence } from "../src/do/repo/ci-schedules.js";
+import {
+  CI_SCHEDULE_JOB,
+  CiSchedules,
+  type CiSchedulesDeps,
+  latestOccurrence,
+} from "../src/do/repo/ci-schedules.js";
 import { ciSince } from "../src/runner/service.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user } from "./helpers/api.js";
@@ -310,7 +315,7 @@ describe("scheduled workflows", () => {
     expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
   });
 
-  it("checks the actor's current role in the transaction that records the tick", async () => {
+  it("checks role revocation while the activity read is pending before recording the tick", async () => {
     const f = await scheduleRepo({ "b.txt": "b\n" });
     const writer = await user();
     expect(
@@ -322,16 +327,36 @@ describe("scheduled workflows", () => {
     ).toBe(200);
     await commitLive(f, "main", { [CI]: scheduled(["*/5 * * * *"]) }, "add", writer);
     await runTriggers(f.stub);
-    await inRepo(f.stub, (r: RepoDO) => {
-      r.ciSchedules.hooks = {
-        afterRoleCheck: () => {
-          r.git.context.storage.sql.exec(
-            "UPDATE acl_snapshot SET roles = '{}', version = version + 1",
-          );
+    f.clock.now = f.base + 10_000;
+    await inRepo(f.stub, async (r: RepoDO) => {
+      const deps = (r.ciSchedules as unknown as { deps: CiSchedulesDeps }).deps;
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const schedules = new CiSchedules({
+        ...deps,
+        actorActive: async (principal) => {
+          const active = await deps.actorActive(principal);
+          entered.resolve();
+          await release.promise;
+          return active;
         },
-      };
+      });
+      const firing = schedules.fire(f.clock.now);
+      try {
+        await Promise.race([
+          entered.promise,
+          firing.then(() => {
+            throw new Error("schedule finished before the activity gate");
+          }),
+        ]);
+        r.git.context.storage.sql.exec(
+          "UPDATE acl_snapshot SET roles = '{}', version = version + 1",
+        );
+      } finally {
+        release.resolve();
+        await firing;
+      }
     });
-    await fireAt(f, f.base + 10_000);
     expect(await scheduleRuns(f)).toEqual([]);
     expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
   });
@@ -407,6 +432,66 @@ describe("scheduled workflows", () => {
     expect(await scheduleRuns(f)).toEqual([]);
     expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
   });
+
+  it.each(["expires", "is invalidated"] as const)(
+    "defers without disabling when the ACL %s during the activity read, then recovers",
+    async (change) => {
+      const f = await scheduleRepo({ "b.txt": "b\n" });
+      const writer = await user();
+      expect(
+        (
+          await api("PUT", `${f.path}/collaborators/${writer.handle}`, f.owner.token, {
+            permission: "push",
+          })
+        ).status,
+      ).toBe(200);
+      await commitLive(f, "main", { [CI]: scheduled(["*/5 * * * *"]) }, "add", writer);
+      await runTriggers(f.stub);
+      f.clock.now = f.base + 10_000;
+      const first = await inRepo(f.stub, async (r: RepoDO) => {
+        const deps = (r.ciSchedules as unknown as { deps: CiSchedulesDeps }).deps;
+        const pull = r.pullAcl;
+        const schedules = new CiSchedules({
+          ...deps,
+          actorActive: async (principal) => {
+            const active = await deps.actorActive(principal);
+            const basis = r.acl.basis();
+            if (typeof basis !== "object") throw new Error("no prepared ACL");
+            if (change === "expires") {
+              const aclNow = (r.acl as unknown as { deps: { now: () => number } }).deps.now();
+              r.git.context.storage.sql.exec(
+                "UPDATE acl_snapshot SET pulled_at = ?",
+                aclNow - MINUTE,
+              );
+            } else r.acl.invalidate(basis.accountId, basis.epochGen, basis.version + 1);
+            r.pullAcl = () => Promise.reject(new Error("account temporarily unavailable"));
+            return active;
+          },
+        });
+        try {
+          return await schedules.fire(f.clock.now);
+        } finally {
+          r.pullAcl = pull;
+        }
+      });
+      expect(first).toMatchObject({ done: false, cursor: null, runAfterMs: 60_000 });
+      expect((await eventsOf(f.stub)).filter((e) => e.kind === "schedule")).toEqual([]);
+      expect(await rowsOf(f)).toMatchObject([{ disabled: null, next_at: f.base }]);
+      const reader = await user();
+      expect(
+        (
+          await live(f, () =>
+            api("PUT", `${f.path}/collaborators/${reader.handle}`, f.owner.token, {
+              permission: "pull",
+            }),
+          )
+        ).status,
+      ).toBe(200);
+      await fireAt(f, f.base + 70_000);
+      expect((await scheduleRuns(f)).map((r) => r.tick)).toEqual([f.base]);
+      expect(await rowsOf(f)).toMatchObject([{ disabled: null }]);
+    },
+  );
 
   it("start nothing for a tick whose cron left the file before the trigger read it", async () => {
     const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
