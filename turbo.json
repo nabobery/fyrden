@@ -45,7 +45,7 @@
     "test:e2e": {
       "dependsOn": ["@fyrden/web#build"],
       "cache": false,
-      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI"]
+      "passThroughEnv": ["FYRDEN_TEST_WORKERS", "CI", "PLAYWRIGHT_BROWSERS_PATH"]
     },
     // Uses the package's own build output (the web Worker's), built once and
     // shared with test:e2e when both run in one workspace (CI runs them in
