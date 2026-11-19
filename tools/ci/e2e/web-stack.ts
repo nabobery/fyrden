@@ -113,7 +113,6 @@ export async function startWebStack(
   ) =>
     new Promise<void>((done, fail) => {
       const lines = () => (options.accessLog ? output.slice(from).split("\n") : workerLines(from));
-      // A deadline for failing, not a wait: the line itself resolves the promise.
       // biome-ignore lint/style/noRestrictedGlobals: a deadline for failing, not a wait: the line itself resolves the promise.
       const deadline = setTimeout(() => {
         waiters.delete(check);

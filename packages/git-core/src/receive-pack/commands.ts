@@ -74,6 +74,7 @@ export interface PushPlan {
   readonly shallow: readonly Oid[];
   /** Whether a pack follows: false only when every command is a deletion (git `delete_only`). */
   readonly expectsPack: boolean;
+  /** `error: ...` lines for the client's progress channel. */
   readonly messages: string[];
 }
 
