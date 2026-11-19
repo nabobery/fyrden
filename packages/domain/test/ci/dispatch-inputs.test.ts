@@ -200,19 +200,58 @@ describe("validateDispatchInputs", () => {
       ["42", 42, "42"],
       [" 2.50 ", 2.5, "2.5"],
       ["1e3", 1000, "1000"],
+      ["+.25", 0.25, "0.25"],
+      ["-.25", -0.25, "-0.25"],
+      ["12.", 12, "12"],
+      ["+12.5E-2", 0.125, "0.125"],
+      ["-0", -0, "0"],
     ])("accepts %j", (given, typed, text) => {
       const result = ok(declared, { level: given });
       expect(result.inputs.level).toBe(typed);
       expect(result.eventInputs.level).toBe(text);
     });
-    it.each([["abc"], [""], ["  "], ["Infinity"], ["0x10"], [Number.NaN], [true], [null]])(
-      "refuses %j",
-      (given) => {
-        expect(errors(declared, { level: given })).toStrictEqual([
-          { input: "level", message: "Input `level` must be a number." },
-        ]);
-      },
-    );
+    it.each([
+      ["abc"],
+      [""],
+      ["  "],
+      ["Infinity"],
+      ["0x10"],
+      [Number.NaN],
+      [true],
+      [null],
+      ["."],
+      ["+."],
+      ["1e"],
+      ["1e+"],
+      ["1e309"],
+      ["1..0"],
+      ["0b10"],
+      ["1_000"],
+    ])("refuses %j", (given) => {
+      expect(errors(declared, { level: given })).toStrictEqual([
+        { input: "level", message: "Input `level` must be a number." },
+      ]);
+    });
+  });
+
+  it.each(["x", "e", "e+", ".x"])(
+    "refuses an admitted-size digit run with invalid suffix %s, as input or default",
+    (suffix) => {
+      const value = `${"0".repeat(65_000)}${suffix}`;
+      expect(JSON.stringify({ level: value }).length).toBeLessThan(65_535);
+      expect(errors([declare("level", "number")], { level: value })).toStrictEqual([
+        { input: "level", message: "Input `level` must be a number." },
+      ]);
+      expect(errors([declare("level", "number", { default: scalar(value) })], {})).toStrictEqual([
+        { input: "level", message: "The default of input `level` must be a number." },
+      ]);
+    },
+  );
+
+  it("keeps long decimal values valid in inputs and defaults", () => {
+    const value = "0".repeat(65_000);
+    expect(ok([declare("level", "number")], { level: value }).inputs.level).toBe(0);
+    expect(ok([declare("level", "number", { default: scalar(value) })], {}).inputs.level).toBe(0);
   });
 
   describe("choice", () => {

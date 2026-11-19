@@ -110,7 +110,7 @@ function defaultValue(input: DispatchInput, value: ScalarValue): unknown {
     : value.value;
 }
 
-const DECIMAL = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
 
 /** The typed value of `value` for `input`, or undefined when it does not fit. */
 function coerce(input: DispatchInput, value: unknown): DispatchInputValue | undefined {
