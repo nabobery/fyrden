@@ -56,6 +56,14 @@ export interface LogFlushRequest {
   readonly oversizedFirstRow?: { readonly bytes: number } | undefined;
 }
 
+/**
+ * Why a request's rows are stored: a whole final request, a cut request,
+ * or which threshold the other rows reached. `age` is checked
+ * before `rows` and `bytes`, so a request whose oldest row has waited long
+ * enough always reports it.
+ */
+export type LogFlushTrigger = "final" | "partial-final" | "partial" | "age" | "rows" | "bytes";
+
 export type LogFlushDecision =
   /** The request starts past the stored rows, which cannot happen unless stored state was lost. */
   | { readonly kind: "ahead" }
@@ -77,6 +85,7 @@ export type LogFlushDecision =
       readonly end: number;
       readonly lines: readonly string[];
       readonly final: boolean;
+      readonly trigger: LogFlushTrigger;
     }
   /**
    * Store an omission record for position `index` (the stored ack) and then
@@ -172,26 +181,124 @@ export function decideLogFlush(
   const end = ackIndex + fresh.length;
   if (request.noMore && request.whole) {
     const lines = isFinalSentinel(request) ? [] : fresh.map((row) => row.content);
-    return { kind: "flush", start: ackIndex, end, lines, final: true };
+    return { kind: "flush", start: ackIndex, end, lines, final: true, trigger: "final" };
   }
   if (fresh.length === 0) return { kind: "hold", ackIndex, firstUnackedSeenAt: undefined };
   const seen = state.firstUnackedSeenAt;
-  if (
-    request.noMore ||
-    !request.whole ||
-    fresh.length >= LOG_FLUSH_ROWS ||
-    (seen !== undefined && now - seen >= LOG_FLUSH_AGE_MS) ||
-    reachesBytes(fresh, LOG_FLUSH_BYTES)
-  ) {
+  const trigger: LogFlushTrigger | null = request.noMore
+    ? "partial-final"
+    : !request.whole
+      ? "partial"
+      : seen !== undefined && now - seen >= LOG_FLUSH_AGE_MS
+        ? "age"
+        : fresh.length >= LOG_FLUSH_ROWS
+          ? "rows"
+          : reachesBytes(fresh, LOG_FLUSH_BYTES)
+            ? "bytes"
+            : null;
+  if (trigger !== null) {
     return {
       kind: "flush",
       start: ackIndex,
       end,
       lines: fresh.map((row) => row.content),
       final: false,
+      trigger,
     };
   }
   return { kind: "hold", ackIndex, firstUnackedSeenAt: seen ?? now };
+}
+
+/** Unsettled rows a flush may leave unacked; more than this and everything is stored, forced. */
+export const LOG_HOLD_MAX_ROWS = 8;
+
+export type LogSettleDecision =
+  /** Store nothing: answer the stored ack and remember `firstUnackedSeenAt`. */
+  | { readonly kind: "hold"; readonly ackIndex: number; readonly firstUnackedSeenAt: number }
+  /**
+   * Store `lines` as positions `[start, end)` and then ack `end`, as
+   * `decideLogFlush`'s flush (a final sentinel is acked, not a line). `force`:
+   * mask the rows as stored now, a trailing partial match included.
+   * `firstUnackedSeenAt` is what to remember after the commit: set when rows
+   * of the request are left unacked.
+   */
+  | {
+      readonly kind: "store";
+      readonly start: number;
+      readonly end: number;
+      readonly lines: readonly string[];
+      readonly final: boolean;
+      readonly force: boolean;
+      readonly firstUnackedSeenAt: number | undefined;
+    };
+
+/**
+ * Decides how much of a flush is stored once masking has said how many of
+ * its leading rows are settled (no later row can change their masked text).
+ * The rest are left unacked for the runner to resend, so a value printed
+ * across requests is masked whole, but never more than `LOG_HOLD_MAX_ROWS`
+ * of them, and never past the age rule or on a final call:
+ *
+ * - a whole final call stores everything;
+ * - with nothing unsettled, everything is stored;
+ * - once the oldest unacked row has waited `LOG_FLUSH_AGE_MS` (the `age`
+ *   trigger, or a cut final call that `decideLogFlush` reports first),
+ *   everything is stored, forced: keeping a tail back would make it wait on;
+ * - a few unsettled rows after settled ones: the settled rows are stored, and
+ *   the age clock keeps its start, so held rows are not made to wait longer;
+ * - a few unsettled rows and nothing settled, on the row or byte threshold:
+ *   nothing is stored, and the age clock starts if it has not (`decideLogFlush`
+ *   reports `age` first once it runs out, and the next rule then stores);
+ * - otherwise (more unsettled rows, or nothing settled on a cut final call,
+ *   which must advance or it could repeat forever) everything is stored,
+ *   forced.
+ *
+ * So no row waits past the first request 15 s after it was first seen, and
+ * the ack only ever moves to what is stored: `end` is at most the flush's.
+ */
+export function settleFlush(
+  decision: Extract<LogFlushDecision, { kind: "flush" }>,
+  settled: number,
+  state: LogFlushState,
+  now: number,
+): LogSettleDecision {
+  const all = (force: boolean): LogSettleDecision => ({
+    kind: "store",
+    start: decision.start,
+    end: decision.end,
+    lines: decision.lines,
+    final: decision.final,
+    force,
+    firstUnackedSeenAt: undefined,
+  });
+  if (decision.final) return all(false);
+  const fresh = decision.end - decision.start;
+  const kept = Math.min(Math.max(settled, 0), fresh);
+  const held = fresh - kept;
+  if (held === 0) return all(false);
+  const seen = state.firstUnackedSeenAt;
+  if (decision.trigger === "age" || (seen !== undefined && now - seen >= LOG_FLUSH_AGE_MS)) {
+    return all(true);
+  }
+  if (held <= LOG_HOLD_MAX_ROWS && kept > 0) {
+    return {
+      kind: "store",
+      start: decision.start,
+      end: decision.start + kept,
+      lines: decision.lines.slice(0, kept),
+      final: false,
+      force: false,
+      firstUnackedSeenAt: state.firstUnackedSeenAt ?? now,
+    };
+  }
+  if (held <= LOG_HOLD_MAX_ROWS && (decision.trigger === "rows" || decision.trigger === "bytes")) {
+    return {
+      kind: "hold",
+      ackIndex: decision.start,
+      firstUnackedSeenAt: state.firstUnackedSeenAt ?? now,
+    };
+  }
+  return all(true);
 }
 
 /** Whether the rows' content is at least `limit` UTF-8 bytes, stopping once it is. */

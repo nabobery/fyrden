@@ -29,7 +29,7 @@ function runStub(ctx: OpContext, runId: string, method: string): DurableObjectSt
 }
 
 /** The run, when it exists and is this repository's. */
-async function runOf(ctx: OpContext, entry: RepoEntry, runId: string): Promise<RunView> {
+export async function runOf(ctx: OpContext, entry: RepoEntry, runId: string): Promise<RunView> {
   const view = (await runStub(ctx, runId, "get").get()) as RunView | undefined;
   if (!view || view.repoId !== entry.id) throw runNotFound();
   return view;

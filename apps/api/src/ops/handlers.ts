@@ -266,6 +266,7 @@ import {
   listRulesetsOperation,
   updateRulesetOperation,
 } from "../repos/rulesets.js";
+import { issueJobLogTicketOperation } from "../repos/run-logs.js";
 import {
   cancelWorkflowRunOperation,
   forceCancelWorkflowRunOperation,
@@ -717,6 +718,7 @@ export const handlers: Handlers = {
   "statuses.combined": getCombinedStatusOperation,
   "actions.runs.get": getWorkflowRunOperation,
   "actions.runs.jobs.list": listWorkflowRunJobsOperation,
+  "actions.runs.jobs.live_ticket": issueJobLogTicketOperation,
   "actions.runs.cancel": cancelWorkflowRunOperation,
   "actions.runs.force_cancel": forceCancelWorkflowRunOperation,
   "actions.runs.rerun": rerunWorkflowRunOperation,

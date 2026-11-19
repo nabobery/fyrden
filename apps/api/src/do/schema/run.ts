@@ -254,4 +254,44 @@ export const runSchema: readonly DoMigration[] = [
       ) STRICT, WITHOUT ROWID;
     `,
   },
+  {
+    version: 5,
+    name: "ci_log_masks",
+    sql: `
+      CREATE TABLE ci_log_masks (
+        task INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask')),
+        from_index INTEGER NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (task, seq)
+      ) STRICT;
+
+      ALTER TABLE ci_logs ADD COLUMN mask_carry TEXT;
+      ALTER TABLE ci_logs ADD COLUMN ended_at INTEGER;
+      ALTER TABLE ci_logs ADD COLUMN gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0);
+      ALTER TABLE ci_logs ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1));
+      ALTER TABLE ci_logs ADD COLUMN unmasked INTEGER NOT NULL DEFAULT 0 CHECK (unmasked IN (0, 1));
+      INSERT INTO ci_logs (task, state, updated_at)
+        SELECT task, 'incomplete', COALESCE((SELECT updated_at FROM runs WHERE id = 1), 0)
+        FROM run_instances WHERE task IS NOT NULL
+        ON CONFLICT (task) DO NOTHING;
+      UPDATE ci_logs SET ended_at = (
+        SELECT completed_at FROM run_instances
+        WHERE run_instances.task = ci_logs.task AND status = 'completed'
+      ) WHERE state = 'incomplete';
+      UPDATE ci_logs SET unmasked = 1, finalized = 1,
+        state = CASE WHEN state = 'complete' THEN 'complete' ELSE 'incomplete' END;
+
+      CREATE TABLE ci_log_tickets (
+        hash TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL,
+        job_id INTEGER NOT NULL,
+        credential_id TEXT NOT NULL,
+        principal_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX ci_log_tickets_expiry ON ci_log_tickets (expires_at);
+    `,
+  },
 ];

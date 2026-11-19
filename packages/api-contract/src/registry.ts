@@ -13,6 +13,7 @@ import {
   cancelWorkflowRun,
   forceCancelWorkflowRun,
   getWorkflowRun,
+  issueJobLogTicket,
   listWorkflowRunJobs,
   rerunWorkflowRun,
 } from "../ops/actions.js";
@@ -478,6 +479,7 @@ export const registry = defineRegistry([
   cancelWorkflowRun,
   forceCancelWorkflowRun,
   rerunWorkflowRun,
+  issueJobLogTicket,
   getBlame,
   getRootContents,
   getContents,

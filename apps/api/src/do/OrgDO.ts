@@ -213,10 +213,10 @@ export const MAX_CONFIRMED_PRINCIPALS = 1_024;
 /** Most repositories, and principals, one confirmation of feed readers reads. Proposed. */
 export const MAX_READER_REPOS = 100;
 export const MAX_READER_PRINCIPALS = 16;
-/** Most team grants a live check reads on one repository; past them it answers "unknown". */
+/** Most team grants a live check reads on one repository; past them only an independently known admin role is resolved. */
 export const LIVE_TEAM_GRANTS = 100;
 
-/** What `confirmReadersLive` answers: as `confirmReaders`, a role "unknown" past its bound. */
+/** What `confirmReadersLive` answers: as `confirmReaders`, with roles unresolved within its work bound marked "unknown". */
 export interface LiveReaderConfirmation extends Omit<ReaderConfirmation, "repos"> {
   readonly repos: Readonly<
     Record<
@@ -535,8 +535,8 @@ export class OrgDO extends MigratingDO {
   /**
    * As `confirmReaders`, for live hints: every read bounded, each
    * repository's team grants read at most `LIVE_TEAM_GRANTS` (then each
-   * principal's membership of them by its key); past that, its roles are
-   * "unknown", never a guess (the caller passes over what it cannot decide).
+   * principal's membership of them by its key). Past that bound, only an
+   * admin role established without teams is resolved; other roles are unknown.
    */
   confirmReadersLive(
     repoIds: readonly string[],
@@ -585,7 +585,9 @@ export class OrgDO extends MigratingDO {
           unique.map((p) => [
             p,
             grants.length > LIVE_TEAM_GRANTS
-              ? "unknown"
+              ? this.#roleWithGrants(repoId, p, meta, []) === "admin"
+                ? "admin"
+                : "unknown"
               : this.#roleWithGrants(repoId, p, meta, grants),
           ]),
         ),

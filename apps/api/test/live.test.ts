@@ -730,62 +730,97 @@ describe("a live socket", () => {
     socket.ws?.close(1000, "done");
   });
 
-  it("passes over a repository whose check cannot be bounded, and goes on", async () => {
-    const [admin, owner] = [await user(true), await user()];
-    const login = uniqueId("org").slice(0, 39);
-    const org = (
-      await json<{ id: string }>(
-        api("POST", "/admin/organizations", admin.token, { login, admin: owner.handle }),
-      )
-    ).body;
-    const made = await json<{ id: string; name: string }>(
-      api("POST", `/orgs/${login}/repos`, owner.token, { name: uniqueId("live") }),
-    );
-    expect(
-      (await api("POST", `/repos/${login}/${made.body.name}/issues`, owner.token, { title: "x" }))
-        .status,
-    ).toBe(201);
-    const crowded = {
-      id: made.body.id,
-      conversation: await runInDurableObject(env.REPO.getByName(made.body.id), (_: RepoDO, state) =>
-        String(
-          state.storage.sql
-            .exec<{ c: string }>("SELECT conversation_id AS c FROM issues WHERE number = 1")
-            .one().c,
+  it.each(["owner", "collaborator"] as const)(
+    "handles a %s past the live team-grant bound",
+    async (kind) => {
+      const [admin, owner] = [await user(true), await user()];
+      const login = uniqueId("org").slice(0, 39);
+      const org = (
+        await json<{ id: string }>(
+          api("POST", "/admin/organizations", admin.token, { login, admin: owner.handle }),
+        )
+      ).body;
+      const made = await json<{ id: string; name: string }>(
+        api("POST", `/orgs/${login}/repos`, owner.token, { name: uniqueId("live") }),
+      );
+      expect(
+        (await api("POST", `/repos/${login}/${made.body.name}/issues`, owner.token, { title: "x" }))
+          .status,
+      ).toBe(201);
+      const crowded = {
+        id: made.body.id,
+        conversation: await runInDurableObject(
+          env.REPO.getByName(made.body.id),
+          (_: RepoDO, state) =>
+            String(
+              state.storage.sql
+                .exec<{ c: string }>("SELECT conversation_id AS c FROM issues WHERE number = 1")
+                .one().c,
+            ),
         ),
-      ),
-    };
-    // More teams on it than the live check reads.
-    await runInDurableObject(env.ORG.getByName(org.id), (_: OrgDO, state) => {
-      for (let i = 0; i <= 100; i++) {
-        state.storage.sql.exec(
-          "INSERT INTO teams (team_id, slug, name, created_at) VALUES (?, ?, ?, 0)",
-          `tm_many${i}`,
-          `many-${i}`,
-          `Many ${i}`,
+      };
+      const reader = kind === "owner" ? owner : await user();
+      if (kind === "collaborator") {
+        const granted = await api(
+          "PUT",
+          `/repos/${login}/${made.body.name}/collaborators/${reader.handle}`,
+          owner.token,
+          { permission: "pull" },
         );
-        state.storage.sql.exec(
-          "INSERT INTO team_repos (team_id, repo_id, role, added_at) VALUES (?, ?, 'read', 0)",
-          `tm_many${i}`,
-          crowded.id,
-        );
+        expect(granted.ok).toBe(true);
       }
-    });
-    const own = await repoWithIssue(owner);
-    const socket = await open(owner.token);
-    await feedOf(owner).applyFeed([change(owner, crowded, 1), change(owner, own, 1)]);
-    // The organization's run: its repository not known, passed over; nothing to send.
-    await runDurableObjectAlarm(feedOf(owner));
-    expect(socket.frames).toEqual([]);
-    // The next account's: the own repository, the crowded one never named.
-    await runDurableObjectAlarm(feedOf(owner));
-    expect(await socket.next()).toEqual({
-      t: "changed",
-      n: 1,
-      streams: [{ repo: own.id, kind: "issue" }],
-    });
-    socket.ws?.close(1000, "done");
-  });
+      await runInDurableObject(env.ORG.getByName(org.id), (_: OrgDO, state) => {
+        for (let i = 0; i <= 100; i++) {
+          state.storage.sql.exec(
+            "INSERT INTO teams (team_id, slug, name, created_at) VALUES (?, ?, ?, 0)",
+            `tm_many${i}`,
+            `many-${i}`,
+            `Many ${i}`,
+          );
+          state.storage.sql.exec(
+            "INSERT INTO team_repos (team_id, repo_id, role, added_at) VALUES (?, ?, 'read', 0)",
+            `tm_many${i}`,
+            crowded.id,
+          );
+        }
+      });
+      const expectedRole = kind === "owner" ? "admin" : "read";
+      const account = env.ORG.getByName(org.id);
+      expect(
+        (await account.confirmReaders([crowded.id], [reader.principalId])).repos[crowded.id]?.roles[
+          reader.principalId
+        ],
+      ).toBe(expectedRole);
+      expect(
+        (await account.confirmReadersLive([crowded.id], [reader.principalId])).repos[crowded.id]
+          ?.roles[reader.principalId],
+      ).toBe(kind === "owner" ? "admin" : "unknown");
+      const own = await repoWithIssue(reader);
+      const socket = await open(reader.token);
+      try {
+        await feedOf(reader).applyFeed([change(reader, crowded, 1), change(reader, own, 1)]);
+        await runDurableObjectAlarm(feedOf(reader));
+        if (kind === "owner") {
+          expect(await socket.next()).toEqual({
+            t: "changed",
+            n: 1,
+            streams: [{ repo: crowded.id, kind: "issue" }],
+          });
+          await say(reader, socket, { t: "ack", n: 1 });
+        } else {
+          expect(socket.frames).toEqual([]);
+        }
+        await runDurableObjectAlarm(feedOf(reader));
+        expect(await socket.next()).toEqual({
+          t: "changed",
+          n: kind === "owner" ? 2 : 1,
+          streams: [{ repo: own.id, kind: "issue" }],
+        });
+      } finally {
+        socket.ws?.close(1000, "done");
+      }
+    },
+  );
 
   it("is opened only with its ticket, once, by the credential it was issued to", async () => {
     const owner = await user();

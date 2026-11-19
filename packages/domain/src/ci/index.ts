@@ -9,6 +9,7 @@ export * from "./expression-sites.js";
 export * from "./expression-values.js";
 export * from "./expressions.js";
 export * from "./graph.js";
+export * from "./mask.js";
 export * from "./matrix.js";
 export * from "./parse.js";
 export * from "./payload.js";

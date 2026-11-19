@@ -64,6 +64,8 @@ export async function dispatchTask(
   const answer = (task: Uint8Array | undefined, version: number) =>
     encodeFetchTaskAnswer(task, version);
 
+  const exhausted: { runId: string; jobId: number }[] = [];
+
   // The runner repeats the version its task was offered with: it never read that answer. An
   // ephemeral runner that already holds a task is offered only that task again, never another.
   const reoffer =
@@ -81,24 +83,27 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
-    await refuseTask(
-      db,
-      {
-        taskId: offered.id,
-        code: assigned.refused,
-        runId: offered.runId,
-        jobId: offered.jobId,
-        now: clock(),
-      },
-      call.metrics,
-    );
+    if (assigned.refused === "tokens_exhausted")
+      exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+    else
+      await refuseTask(
+        db,
+        {
+          taskId: offered.id,
+          code: assigned.refused,
+          runId: offered.runId,
+          jobId: offered.jobId,
+          now: clock(),
+        },
+        call.metrics,
+      );
   }
   // Lapsed claims go first, so a claim of a Worker that died never holds a job, whoever polls.
   if (view.expiredClaims) await clearLapsedClaims(db, runner.accountId, clock(), call.metrics);
   // An ephemeral runner gets one task (the claim enforces it too, for polls that overlap).
   if (runner.ephemeral && (runner.taskConfirmed || view.liveOffers > 0))
     return answer(undefined, requestVersion);
-  if (!view.expiredClaims && view.tasksVersion === requestVersion)
+  if (exhausted.length === 0 && !view.expiredClaims && view.tasksVersion === requestVersion)
     return answer(undefined, view.tasksVersion);
 
   for (let claims = 0; claims < MAX_CLAIMS && clock() < deadline; claims++) {
@@ -112,6 +117,7 @@ export async function dispatchTask(
         ephemeral: runner.ephemeral,
         version: requestVersion,
         now: clock(),
+        skipJobs: exhausted,
       },
       call.metrics,
     );
@@ -137,6 +143,10 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
+    if (assigned.refused === "tokens_exhausted") {
+      exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      continue;
+    }
     call.log.info("task refused by its run", {
       taskId: claimed.taskId,
       runId: claimed.runId,

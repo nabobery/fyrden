@@ -204,3 +204,33 @@ export const rerunWorkflowRun = defineOperation({
     readOnly: false,
   },
 });
+
+export const issueJobLogTicket = defineOperation({
+  id: "actions.runs.jobs.live_ticket",
+  method: "POST",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/live",
+  summary: "Get a ticket to watch a job's log live",
+  description:
+    'A single-use ticket (30 seconds) to open a WebSocket at `url` (`GET` with `Upgrade: websocket`; add `&from=<index>` to start at a row, 0 by default) that streams the job\'s log rows, masked as they are stored: `{"t":"rows","rows":[{"i":<index>,"t":<Unix ms or null>,"c":"<text>"}]}` in order, each position once. An oversized omitted row is a whole record in the same `rows` array: `{"i":<index>,"omitted":"row_too_large","bytes":<declared size>}`. It has no content or timestamp, is never split into parts, and keeps the log incomplete. The stream immediately after a gap is conservatively masked and can hide non-secret text. Logs created before server masking was introduced are unavailable: the socket sends no history and ends with `log: "incomplete"` and `durable: 0`. A row too long for one frame comes as `{"t":"part","i","o","c","end"}` pieces (the first with `"ts"`, the row\'s time) to join in order. Once a whole final upload seals the log, or ten minutes have passed since its task ended, and every stored row was sent: `{"t":"end","log":"complete"|"incomplete","durable":<n>}` (rows at or past `durable` were not stored and cannot be added after `end`; late uploads are accepted only after task completion and before final sealing or the ten-minute deadline; `"unfinished":<index>` names a row whose parts cannot be finished, to discard), then close 1000. Acknowledge with `{"t":"ack","i":<next index>,"o":<UTF-16 offset in it>}` only at the position immediately after a received frame: the next row index and offset 0 after a `rows` frame, or the end position of a `part` frame (the next row and offset 0 when `end` is true). Send an acknowledgement after each 256 KiB or 16 complete frames handled. Only an acknowledgement at a sent frame boundary that releases outstanding frames advances the window; other acknowledgements count against the control-message limit. At most 64 frames or 1 MiB go unacknowledged, and a socket full for 2 minutes closes 4408. `ping` is answered `pong`. Closes: 4401 the credential no longer holds, 4403 access to the repository was lost (checked at least every 60 seconds while rows flow), 4404 the run was erased, 1001 after 24 hours, 1011 a stored chunk or outgoing frame could not be read or sent, 1008 any other message, or more than 20 a minute that do not acknowledge a sent frame boundary and release outstanding frames. The upgrade needs the same credential: the session\'s cookie from this origin, or the token in `Authorization`. The caller\'s own credentials only (a delegated or DPoP-bound token: 403 `delegated_listing`). At most 20 tickets a run unredeemed (429 `too_many_tickets`); a run takes 20 sockets, 5 a credential and 10 a principal. If the response is lost, retrying its `Idempotency-Key` returns `409 secret_already_disclosed`; use a new key to request another ticket. The lost ticket expires automatically. Takes the `actions:read` permission. A Fyrden extension.',
+  input: z.object({
+    ...RepoInput,
+    run_id: RunId,
+    job_id: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(2 ** 31 - 1)
+      .describe("The job's id within its run."),
+  }),
+  output: z.object({
+    ticket: z.string(),
+    expires_in: z.number().int().describe("Seconds the ticket can be redeemed."),
+    url: z.string().describe("Where to open the WebSocket (the ticket in its query)."),
+  }),
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "write",
+  idempotency: "key",
+  secretResponse: true,
+  mcp: false,
+});

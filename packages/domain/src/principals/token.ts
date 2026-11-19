@@ -82,6 +82,11 @@ function randomBase62(length: number, randomBytes: RandomBytes): string {
   return out;
 }
 
+/** The length of every token of `type`: the format is fixed. */
+export function tokenLength(type: TokenType): number {
+  return `fyrden_${type}_`.length + RANDOM_LENGTH + CHECKSUM_LENGTH;
+}
+
 export function generateToken(type: TokenType, randomBytes: RandomBytes): string {
   const body = `fyrden_${type}_${randomBase62(RANDOM_LENGTH, randomBytes)}`;
   return body + checksum(body);

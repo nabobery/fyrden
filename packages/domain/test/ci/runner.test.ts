@@ -9,10 +9,15 @@ import {
   LOG_FLUSH_AGE_MS,
   LOG_FLUSH_BYTES,
   LOG_FLUSH_ROWS,
+  LOG_HOLD_MAX_ROWS,
   LOG_ROW_TOO_LARGE,
+  type LogFlushDecision,
   type LogFlushRequest,
+  type LogFlushTrigger,
   labelsMatch,
+  maskRows,
   type StoredLogLine,
+  settleFlush,
 } from "../../src/ci/index.js";
 
 describe("labelsMatch", () => {
@@ -98,6 +103,7 @@ describe("decideLogFlush", () => {
       end: 60,
       lines: fifty.map((row) => row.content),
       final: false,
+      trigger: "rows",
     });
   });
 
@@ -113,6 +119,7 @@ describe("decideLogFlush", () => {
       start: 0,
       end: 2,
       final: false,
+      trigger: "bytes",
     });
   });
 
@@ -178,7 +185,14 @@ describe("decideLogFlush", () => {
         request({ rows: rows(1) }),
         now,
       ),
-    ).toEqual({ kind: "flush", start: 0, end: 1, lines: ["line 0"], final: false });
+    ).toEqual({
+      kind: "flush",
+      start: 0,
+      end: 1,
+      lines: ["line 0"],
+      final: false,
+      trigger: "age",
+    });
   });
 
   it("drops resent rows below the ack and counts only new ones", () => {
@@ -192,13 +206,21 @@ describe("decideLogFlush", () => {
       end: 65,
       lines: sent.slice(5).map((row) => row.content),
       final: false,
+      trigger: "rows",
     });
   });
 
   it("stores a whole final call's trailing rows however few", () => {
     expect(
       decideLogFlush({ ackIndex: 4 }, request({ index: 2, rows: rows(4), noMore: true }), now),
-    ).toEqual({ kind: "flush", start: 4, end: 6, lines: ["line 2", "line 3"], final: true });
+    ).toEqual({
+      kind: "flush",
+      start: 4,
+      end: 6,
+      lines: ["line 2", "line 3"],
+      final: true,
+      trigger: "final",
+    });
   });
 
   it("completes on a final call with zero rows", () => {
@@ -208,13 +230,14 @@ describe("decideLogFlush", () => {
       end: 7,
       lines: [],
       final: true,
+      trigger: "final",
     });
   });
 
   it("completes on a resent final call whose rows are all stored", () => {
     expect(
       decideLogFlush({ ackIndex: 7 }, request({ index: 5, rows: rows(2), noMore: true }), now),
-    ).toEqual({ kind: "flush", start: 7, end: 7, lines: [], final: true });
+    ).toEqual({ kind: "flush", start: 7, end: 7, lines: [], final: true, trigger: "final" });
   });
 
   it("acks the empty-row sentinel of a final call without storing it as a line", () => {
@@ -226,6 +249,7 @@ describe("decideLogFlush", () => {
       end: 8,
       lines: [],
       final: true,
+      trigger: "final",
     });
   });
 
@@ -237,6 +261,7 @@ describe("decideLogFlush", () => {
       end: 8,
       lines: [],
       final: true,
+      trigger: "final",
     });
   });
 
@@ -249,6 +274,7 @@ describe("decideLogFlush", () => {
       end: 2,
       lines: ["a", ""],
       final: true,
+      trigger: "final",
     });
   });
 
@@ -267,7 +293,14 @@ describe("decideLogFlush", () => {
         request({ index: 3, rows: rows(2), noMore: true, whole: false }),
         now,
       ),
-    ).toEqual({ kind: "flush", start: 3, end: 5, lines: ["line 0", "line 1"], final: false });
+    ).toEqual({
+      kind: "flush",
+      start: 3,
+      end: 5,
+      lines: ["line 0", "line 1"],
+      final: false,
+      trigger: "partial-final",
+    });
   });
 
   it("holds a final call that is not whole and carries no new row", () => {
@@ -287,7 +320,14 @@ describe("decideLogFlush", () => {
         request({ index: 3, rows: [{ content: "" }], noMore: true, whole: false }),
         now,
       ),
-    ).toEqual({ kind: "flush", start: 3, end: 4, lines: [""], final: false });
+    ).toEqual({
+      kind: "flush",
+      start: 3,
+      end: 4,
+      lines: [""],
+      final: false,
+      trigger: "partial-final",
+    });
   });
 
   it("stores the new rows of a cut request at once: waiting cannot make it whole", () => {
@@ -299,6 +339,7 @@ describe("decideLogFlush", () => {
       end: 1,
       lines: ["line 0"],
       final: false,
+      trigger: "partial",
     });
     expect(
       decideLogFlush({ ackIndex: 0 }, request({ rows: rows(50), whole: false }), now),
@@ -383,6 +424,334 @@ describe("stored log lines", () => {
       omitted: "row_too_large",
       bytes: 5_000_000,
     });
+  });
+});
+
+describe("decideLogFlush triggers", () => {
+  const now = 1_000_000;
+
+  it("reports age before rows and bytes", () => {
+    const state = { ackIndex: 0, firstUnackedSeenAt: now - LOG_FLUSH_AGE_MS };
+    expect(decideLogFlush(state, request({ rows: rows(LOG_FLUSH_ROWS) }), now)).toMatchObject({
+      kind: "flush",
+      trigger: "age",
+    });
+    const big = [{ content: "x".repeat(LOG_FLUSH_BYTES) }];
+    expect(decideLogFlush(state, request({ rows: big }), now)).toMatchObject({ trigger: "age" });
+  });
+
+  it("reports rows before bytes", () => {
+    const many = Array.from({ length: LOG_FLUSH_ROWS }, () => ({
+      content: "x".repeat(LOG_FLUSH_BYTES / LOG_FLUSH_ROWS + 1),
+    }));
+    expect(decideLogFlush({ ackIndex: 0 }, request({ rows: many }), now)).toMatchObject({
+      trigger: "rows",
+    });
+  });
+});
+
+type Flush = Extract<LogFlushDecision, { kind: "flush" }>;
+
+function flush(start: number, count: number, trigger: LogFlushTrigger, final = false): Flush {
+  const lines = Array.from({ length: count }, (_, i) => `line ${start + i}`);
+  return { kind: "flush", start, end: start + count, lines, final, trigger };
+}
+
+describe("settleFlush", () => {
+  const now = 2_000_000;
+
+  it("holds at most 8 rows", () => {
+    expect(LOG_HOLD_MAX_ROWS).toBe(8);
+  });
+
+  it.each([
+    // [what, decision, settled, expected]
+    ["final: everything", flush(10, 5, "final", true), 0, { end: 15, force: false }],
+    ["nothing held", flush(10, 50, "rows"), 50, { end: 60, force: false }],
+    ["more settled than fresh", flush(10, 3, "age"), 9, { end: 13, force: false }],
+    ["a few held after settled rows", flush(10, 50, "rows"), 47, { end: 57, force: false }],
+    ["8 held after settled rows", flush(10, 10, "rows"), 2, { end: 12, force: false }],
+    // On age nothing is kept back: every row of the request has waited long enough.
+    ["held after settled rows, age", flush(10, 10, "age"), 2, { end: 20, force: true }],
+    ["one held after settled rows, age", flush(10, 50, "age"), 49, { end: 60, force: true }],
+    [
+      "held, partial final, settled rows",
+      flush(10, 6, "partial-final"),
+      1,
+      { end: 11, force: false },
+    ],
+    ["9 held", flush(10, 50, "rows"), 41, { end: 60, force: true }],
+    ["all held past 8", flush(10, 9, "bytes"), 0, { end: 19, force: true }],
+    ["nothing settled, age", flush(10, 3, "age"), 0, { end: 13, force: true }],
+    ["nothing settled, partial final", flush(10, 3, "partial-final"), 0, { end: 13, force: true }],
+    ["nothing settled, cut non-final", flush(10, 3, "partial"), 0, { end: 13, force: true }],
+  ] as const)("%s", (_what, decision, settled, expected) => {
+    const result = settleFlush(decision, settled, { ackIndex: decision.start }, now);
+    expect(result).toEqual({
+      kind: "store",
+      start: decision.start,
+      end: expected.end,
+      lines: decision.lines.slice(0, expected.end - decision.start),
+      final: decision.final,
+      force: expected.force,
+      firstUnackedSeenAt: expected.end < decision.end ? now : undefined,
+    });
+  });
+
+  it.each(["rows", "bytes", "partial-final"] as const)(
+    "keeps the age of rows already seen when storing settled rows on %s",
+    (trigger) => {
+      const decision = flush(10, 5, trigger);
+      const state = { ackIndex: 10, firstUnackedSeenAt: now - 9_000 };
+      expect(settleFlush(decision, 3, state, now)).toMatchObject({
+        kind: "store",
+        end: 13,
+        force: false,
+        firstUnackedSeenAt: now - 9_000,
+      });
+    },
+  );
+
+  it.each(["rows", "bytes", "partial-final"] as const)(
+    "stores everything, forced, once the held rows have waited 15 s, even on %s",
+    (trigger) => {
+      const decision = flush(10, 2, trigger);
+      const aged = { ackIndex: 10, firstUnackedSeenAt: now - LOG_FLUSH_AGE_MS };
+      expect(settleFlush(decision, 1, aged, now)).toMatchObject({
+        kind: "store",
+        end: 12,
+        force: true,
+        firstUnackedSeenAt: undefined,
+      });
+      expect(settleFlush(flush(10, 2, trigger), 0, aged, now)).toMatchObject({
+        kind: "store",
+        end: 12,
+        force: true,
+      });
+      const young = { ackIndex: 10, firstUnackedSeenAt: now - LOG_FLUSH_AGE_MS + 1 };
+      expect(settleFlush(decision, 1, young, now)).toMatchObject({ end: 11, force: false });
+    },
+  );
+
+  it.each(["rows", "bytes"] as const)("holds a request with nothing settled on %s", (trigger) => {
+    const decision = flush(10, 3, trigger);
+    expect(settleFlush(decision, 0, { ackIndex: 10 }, now)).toEqual({
+      kind: "hold",
+      ackIndex: 10,
+      firstUnackedSeenAt: now,
+    });
+    expect(settleFlush(decision, 0, { ackIndex: 10, firstUnackedSeenAt: now - 7 }, now)).toEqual({
+      kind: "hold",
+      ackIndex: 10,
+      firstUnackedSeenAt: now - 7,
+    });
+  });
+
+  it("stores a final sentinel as decided: acked, not a line", () => {
+    const sentinel: Flush = {
+      kind: "flush",
+      start: 7,
+      end: 8,
+      lines: [],
+      final: true,
+      trigger: "final",
+    };
+    expect(settleFlush(sentinel, 0, { ackIndex: 7 }, now)).toEqual({
+      kind: "store",
+      start: 7,
+      end: 8,
+      lines: [],
+      final: true,
+      force: false,
+      firstUnackedSeenAt: undefined,
+    });
+  });
+
+  it("never acks past what it stores", () => {
+    for (let fresh = 1; fresh <= 20; fresh++) {
+      for (let settled = 0; settled <= fresh; settled++) {
+        for (const trigger of ["age", "rows", "bytes", "partial-final"] as const) {
+          const decision = flush(100, fresh, trigger);
+          const result = settleFlush(decision, settled, { ackIndex: 100 }, now);
+          if (result.kind === "hold") {
+            expect(result.ackIndex).toBe(100);
+            expect(fresh).toBeLessThanOrEqual(LOG_HOLD_MAX_ROWS);
+            continue;
+          }
+          expect(result.lines).toHaveLength(result.end - result.start);
+          expect(result.end).toBeGreaterThan(100);
+          expect(decision.end - result.end).toBeLessThanOrEqual(LOG_HOLD_MAX_ROWS);
+          if (!result.force) expect(result.end - 100).toBe(settled);
+        }
+      }
+    }
+  });
+});
+
+describe("log flush with masking", () => {
+  const TOKEN = "fyrden_job_Q8x2LmN4pR7sT1vW3yZ5bC6dF9gH0jK";
+  const masks = [{ value: TOKEN, fromIndex: 0 }];
+
+  /** One request through the flush rule, the masker and the hold, as the log path runs them. */
+  function handle(
+    state: { ackIndex: number; firstUnackedSeenAt?: number | undefined },
+    carry: ReturnType<ReturnType<typeof maskRows>["carryAt"]>,
+    req: LogFlushRequest,
+    now: number,
+    list: readonly { value: string; fromIndex: number }[] = masks,
+  ) {
+    const decision = decideLogFlush(state, req, now);
+    if (decision.kind !== "flush") return { decision, settle: null, lines: [], carry };
+    const fresh = req.rows.slice(state.ackIndex - req.index).map((row) => row.content);
+    const masked = maskRows(list, carry, fresh, { start: decision.start, final: decision.final });
+    const settle = settleFlush(decision, masked.settled, state, now);
+    if (settle.kind === "hold") return { decision, settle, lines: [], carry };
+    const result = settle.force
+      ? maskRows(list, carry, fresh, { start: decision.start, force: true })
+      : masked;
+    const count = settle.end - settle.start;
+    return {
+      decision,
+      settle,
+      lines: result.lines.slice(0, Math.min(count, fresh.length)),
+      carry: result.carryAt(Math.min(count, fresh.length)),
+    };
+  }
+
+  it("stores every row by the first request 15 s after it was first seen", () => {
+    // Each "abcd" row extends a partial match of the value, so masking never settles the
+    // last rows; the age rule must still store each row on time.
+    const list = [{ value: "abcdabcdX", fromIndex: 0 }];
+    const printed: string[] = [];
+    const firstSeen: number[] = [];
+    let state: { ackIndex: number; firstUnackedSeenAt?: number | undefined } = { ackIndex: 0 };
+    let carry: ReturnType<ReturnType<typeof maskRows>["carryAt"]> = null;
+    for (let now = 0; now <= 60_000; now += 5_000) {
+      printed.push("abcd");
+      if (now === 0) printed.push("abcd");
+      const req = {
+        index: state.ackIndex,
+        rows: printed.slice(state.ackIndex).map((content) => ({ content })),
+        noMore: false,
+        whole: true,
+      };
+      for (let i = state.ackIndex; i < printed.length; i++) firstSeen[i] ??= now;
+      const out = handle(state, carry, req, now, list);
+      if (out.decision.kind === "hold") {
+        state = { ackIndex: state.ackIndex, firstUnackedSeenAt: out.decision.firstUnackedSeenAt };
+      } else if (out.settle === null || out.settle.kind === "hold") {
+        state = { ackIndex: state.ackIndex, firstUnackedSeenAt: out.settle?.firstUnackedSeenAt };
+      } else {
+        state = { ackIndex: out.settle.end, firstUnackedSeenAt: out.settle.firstUnackedSeenAt };
+        carry = out.carry;
+      }
+      for (let i = 0; i < printed.length; i++) {
+        if ((firstSeen[i] as number) + LOG_FLUSH_AGE_MS <= now)
+          expect(state.ackIndex).toBeGreaterThan(i);
+      }
+    }
+    expect(state.ackIndex).toBeGreaterThan(2);
+  });
+
+  it("advances a cut non-final row even when its masked suffix is unsettled", () => {
+    const result = handle(
+      { ackIndex: 0 },
+      null,
+      { index: 0, rows: [{ content: "abcd" }], noMore: false, whole: false },
+      1_000,
+      [{ value: "abcdefgh", fromIndex: 0 }],
+    );
+    expect(result.decision).toMatchObject({ kind: "flush", trigger: "partial" });
+    expect(result.settle).toMatchObject({ kind: "store", start: 0, end: 1, force: true });
+    expect(result.lines).toEqual(["***"]);
+  });
+
+  it("stores an already aged cut final request whole, forced", () => {
+    const list = [{ value: "abcdefgh", fromIndex: 0 }];
+    const rows = [{ content: "ordinary" }, { content: "abcd" }];
+    const first = handle(
+      { ackIndex: 0 },
+      null,
+      { index: 0, rows, noMore: false, whole: true },
+      0,
+      list,
+    );
+    expect(first.decision).toEqual({ kind: "hold", ackIndex: 0, firstUnackedSeenAt: 0 });
+    // The same rows 15 s later in a final call the decoder cut: its trigger is partial-final.
+    const cut = handle(
+      { ackIndex: 0, firstUnackedSeenAt: 0 },
+      null,
+      { index: 0, rows, noMore: true, whole: false },
+      LOG_FLUSH_AGE_MS,
+      list,
+    );
+    expect(cut.decision).toMatchObject({ kind: "flush", trigger: "partial-final" });
+    expect(cut.settle).toMatchObject({ kind: "store", start: 0, end: 2, force: true });
+    expect(cut.lines).toEqual(["ordinary", "***"]);
+  });
+
+  it("advances a capped final after a lost ack, and the next request masks the rest", () => {
+    // Rows 0..10,000; the decoder stops after 10,000 rows, so the last is not read.
+    const all = Array.from({ length: 10_001 }, (_, i) => ({ content: `line ${i}` }));
+    all[9_999] = { content: `token: ${TOKEN.slice(0, 12)}` };
+    all[10_000] = { content: `${TOKEN.slice(12)} done` };
+    const now = 5_000_000;
+    // The answer to the request that stored 9,995 rows was lost: the runner resends from 0.
+    const capped = { index: 0, rows: all.slice(0, 10_000), noMore: true, whole: false };
+    const first = handle({ ackIndex: 9_995 }, null, capped, now);
+    expect(first.decision).toMatchObject({ kind: "flush", trigger: "partial-final", start: 9_995 });
+    expect(first.settle).toMatchObject({ kind: "store", start: 9_995, end: 9_999, force: false });
+    expect(first.lines).toEqual(["line 9995", "line 9996", "line 9997", "line 9998"]);
+    // Resent from the new ack, whole this time.
+    const rest = { index: 9_999, rows: all.slice(9_999), noMore: true, whole: true };
+    const second = handle({ ackIndex: 9_999 }, first.carry, rest, now);
+    expect(second.settle).toMatchObject({ kind: "store", start: 9_999, end: 10_001, final: true });
+    expect(second.lines).toEqual(["token: ***", "*** done"]);
+  });
+
+  it("stores a capped final whose only fresh row holds a partial, forced, and masks the rest", () => {
+    const now = 5_000_000;
+    const head = { content: `token: ${TOKEN.slice(0, 12)}` };
+    const capped = { index: 9_999, rows: [head], noMore: true, whole: false };
+    const first = handle({ ackIndex: 9_999 }, null, capped, now);
+    expect(first.settle).toMatchObject({ kind: "store", start: 9_999, end: 10_000, force: true });
+    expect(first.lines).toEqual(["token: ***"]);
+    expect(first.carry).toMatchObject({ length: 12 });
+    const rest = {
+      index: 10_000,
+      rows: [{ content: `${TOKEN.slice(12)} done` }],
+      noMore: true,
+      whole: true,
+    };
+    const second = handle({ ackIndex: 10_000 }, first.carry, rest, now);
+    expect(second.lines).toEqual(["*** done"]);
+  });
+
+  it("holds a first request of one 600 KiB row ending in a partial, then stores it by age", () => {
+    const now = 7_000_000;
+    const row = { content: `${"p".repeat(600 * 1024)} ${TOKEN.slice(0, 10)}` };
+    const req = { index: 0, rows: [row], noMore: false, whole: true };
+    const first = handle({ ackIndex: 0 }, null, req, now);
+    expect(first.decision).toMatchObject({ kind: "flush", trigger: "bytes" });
+    expect(first.settle).toEqual({ kind: "hold", ackIndex: 0, firstUnackedSeenAt: now });
+    const seen = first.settle?.firstUnackedSeenAt;
+    const before = handle(
+      { ackIndex: 0, firstUnackedSeenAt: seen },
+      null,
+      req,
+      now + LOG_FLUSH_AGE_MS - 1,
+    );
+    expect(before.settle).toMatchObject({ kind: "hold", firstUnackedSeenAt: now });
+    const later = handle(
+      { ackIndex: 0, firstUnackedSeenAt: seen },
+      null,
+      req,
+      now + LOG_FLUSH_AGE_MS,
+    );
+    expect(later.decision).toMatchObject({ kind: "flush", trigger: "age" });
+    expect(later.settle).toMatchObject({ kind: "store", start: 0, end: 1, force: true });
+    expect(later.lines).toEqual([`${"p".repeat(600 * 1024)} ***`]);
+    expect(later.carry).toMatchObject({ length: 10 });
   });
 });
 

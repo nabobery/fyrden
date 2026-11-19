@@ -151,6 +151,8 @@ Points are lost when an object is reset while it waits.
 | `effects.refused` | `sink` | Discretionary effects (watched activity: one per event with watchers) the day's allowance did not admit: never journaled or delivered (see limits.md, Discretionary work). An event delivered again whose effect was journaled the first time counts too |
 | `feed.audience_dropped` | — | Recipients an event named past the 100 it carries and its 128 pages (the value is the amount; the bounds keep every event within them) |
 | `feed.participants_overflow` | — | Joins a thread refused at its cap of 1,000 participants, by principals not already participating |
+| `live.log_socket` | `event` (`opened`, `closed`), `reason` | Live job log sockets: `opened` (`reason` `ticket`), and `closed` with why: `done` (the log ended and every stored row was sent), `life` (24 hours), `protocol` (a message that is not an ack, over 1 KiB, or past 20 controls a minute), `unavailable` (a stored chunk could not be read), `broken` (a frame could not be sent), `credential` (it no longer holds), `access` (the repository's), `erased` (the run), `slow` (a full window for 2 minutes) and `client` (closed or failed on the client's side) |
+| `ci.mask_dropped` | `run` (run id), `task` (task number in the run), `reason` (`values`, `bytes`) | `::add-mask::` values a job log registered past its job's caps (256 values, 16 KiB of value text), so not masked by the server; counted when the row that registered it is stored. The value itself is never recorded |
 | `code_owners.request_skipped` | `reason` | Code owners not asked to review: `team_too_large` (a team with more members than one request asks; never asked), `reviewers` (more reviewers that can matter than one read covers; asked again once a review changes) |
 | `d1.invocation_statements` | `where`, `op` | D1 statements one platform invocation ran in all (every binding the repository object counts), one point an invocation: how near it came to D1's 50 queries an invocation |
 | `live.grant_refusal` | `unit`, `gate` | One live grant or owned run refused: `unit` is the ledger's kind, `gate` the check that refused it (`daily_total`, `debt:d1_rows_written`, `owner:capacity` and so on; `unknown` means no check did, such as an answer lost). A turn's or cleanup's are here only. Diagnostic: names may change |
@@ -183,6 +185,12 @@ false.
 | `auth.token` | `type`, `outcome` | One per token check |
 | `acl.snapshot` | `purpose` (`read` or `write`), `outcome` (`cached`, `pulled`, `denied`: no usable snapshot, and the pull failed or was refused) | One per access decision a repository object makes from its ACL snapshot |
 | `acl.snapshot_age_ms` | `purpose` | Age of the snapshot that decision used, in milliseconds (one point per decision; its maximum is the snapshot staleness bound in practice: at most 60 s for writes, 5 minutes for reads) |
+
+Job logs are in the `fyrden-ci` bucket: `r2.class_a` `op` `put_log_chunk`
+(one stored chunk), and `r2.class_b` `op` `get_log_chunk` (one chunk read
+for live log sockets catching up, shared by every socket that needs it).
+Each recheck of a live log socket's credential counts `d1.query` `op`
+`live_log_recheck`.
 
 Release assets are in the `fyrden-assets` bucket. Their `r2.class_a` `op`
 values are `create_multipart` (a session begun), `upload_part`,

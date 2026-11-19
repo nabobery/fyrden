@@ -1,4 +1,8 @@
-import { parseTokenRestrictions } from "@fyrden/adapters-cloudflare/auth";
+import { parseTokenRestrictions, type TokenRecord } from "@fyrden/adapters-cloudflare/auth";
+import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import type { RepoPermission } from "@fyrden/domain";
+import { FreshAccess } from "../feed/access.js";
+import { allowedWithRole, type RepoEntry } from "../repos/directory.js";
 
 /*
  * A live socket's credential, read by its id on the directory's primary
@@ -22,6 +26,24 @@ export interface LiveCredential {
   readonly scopes: readonly string[];
   readonly repoIds: readonly string[] | null;
   readonly dependencies: readonly string[];
+  /**
+   * Whose rights cap it, as token authentication names them: an agent's
+   * owner for an agent's own token; none for a session or a user's token.
+   */
+  readonly ceilingIds: readonly string[];
+}
+
+/** The caller repository authorization (`authorize`) sees for a live credential, its owner's ceiling included. */
+export function callerOfLiveCredential(
+  credential: LiveCredential,
+): Pick<TokenRecord, "principalId" | "principalType" | "scopes" | "repoIds" | "ceilingIds"> {
+  return {
+    principalId: credential.principalId,
+    principalType: credential.principalType,
+    scopes: [...credential.scopes],
+    repoIds: credential.repoIds === null ? null : [...credential.repoIds],
+    ceilingIds: [...credential.ceilingIds],
+  };
 }
 
 type TokenRow = {
@@ -51,6 +73,34 @@ type SessionRow = {
   expires_at: number;
 };
 
+/**
+ * Whether `credential` may use `permission` on `repo` now, decided fresh:
+ * its principal's role, and its owner's for an agent, read from the
+ * repository's account object itself (`FreshAccess`), never from the
+ * repository's cached ACL snapshot (which a lost invalidation leaves
+ * standing for minutes); then its token's own limits. "unknown" when the
+ * account could not answer.
+ */
+export async function freshlyAllowed(
+  env: Env,
+  metrics: Metrics,
+  credential: LiveCredential,
+  repo: RepoEntry,
+  permission: RepoPermission,
+  checkpoint?: () => void,
+): Promise<boolean | "unknown"> {
+  const decided = await new FreshAccess(
+    { env, metrics },
+    { principalId: credential.principalId, grantId: null },
+  ).decide([repo], { live: true, ...(checkpoint && { checkpoint }) });
+  const decision = decided.get(repo.id);
+  if (decision === undefined || decision === "unknown") return "unknown";
+  return (
+    decision.held &&
+    allowedWithRole(callerOfLiveCredential(credential), repo, permission, decision.role)
+  );
+}
+
 /** A credential by id (a session's `ses_…` or a token's `tok_…`), when it holds at `now`. */
 export async function liveCredential(
   db: D1Database,
@@ -77,6 +127,7 @@ export async function liveCredential(
       scopes: [],
       repoIds: null,
       dependencies: [`credential:${row.id}`, `principal:${row.user_id}:${row.lifecycle_gen}`],
+      ceilingIds: [],
     };
   }
   if (!credentialId.startsWith("tok_")) return null;
@@ -125,5 +176,7 @@ export async function liveCredential(
     scopes: restrictions.scopes,
     repoIds: restrictions.repoIds,
     dependencies,
+    // As token authentication fills it (`token-store.ts`): the owner caps an agent's own token.
+    ceilingIds: row.owner_id === null ? [] : [row.owner_id],
   };
 }

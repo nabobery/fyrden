@@ -219,6 +219,7 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
   "tag_moving",
   "quota_unavailable",
   "release_asset_transferring",
+  "run_lookup_unavailable",
 ]);
 
 /** Answers that are not final: the same request has more to do when it is sent again. */

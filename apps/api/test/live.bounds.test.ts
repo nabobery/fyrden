@@ -302,8 +302,9 @@ describe("the live check of who reads an organization's repository", () => {
     });
     // A hundred grants and a sentinel through their index, and the account's few rows.
     expect(reads).toBeLessThan(101 * 2 + 64);
-    const past = await stub.confirmReadersLive([repo.id], [alice.principalId]);
+    const past = await stub.confirmReadersLive([repo.id], [alice.principalId, owner.principalId]);
     expect(past.repos[repo.id]?.roles[alice.principalId]).toBe("unknown");
+    expect(past.repos[repo.id]?.roles[owner.principalId]).toBe("admin");
     // The full check still answers (it is not the live one's to change).
     expect(
       (await stub.confirmReaders([repo.id], [alice.principalId])).repos[repo.id]?.roles[
