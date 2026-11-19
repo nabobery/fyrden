@@ -810,14 +810,14 @@ describe("Fjord on the file view", () => {
   });
 
   it("changes scheme in place, every row kept", async () => {
-    await visit(page, blob("lines.ts"));
+    await visit(page, blob("no-final-newline.ts"));
     const view = await drawn();
     await coloured(view, FJORD.light);
     type Kept = { kept?: boolean };
-    await row(view, 1).evaluate((element) => {
-      (element as unknown as Kept).kept = true;
-    });
-    await page.evaluate(() => {
+    const rows = view.locator("[data-line]");
+    await see(rows).toHaveCount(2);
+    await rows.evaluateAll((elements) => {
+      for (const element of elements) (element as unknown as Kept).kept = true;
       (globalThis as unknown as Kept).kept = true;
     });
     await page.getByRole("button", { name: "Dark", exact: true }).click();
@@ -831,7 +831,11 @@ describe("Fjord on the file view", () => {
     await coloured(view, FJORD.light);
     await see(page.locator(".file-view")).toHaveAttribute("data-drawn", "file");
     expect(await page.evaluate(() => (globalThis as unknown as Kept).kept)).toBe(true);
-    expect(await row(view, 1).evaluate((element) => (element as unknown as Kept).kept)).toBe(true);
+    expect(
+      await rows.evaluateAll((elements) =>
+        elements.map((element) => (element as unknown as Kept).kept),
+      ),
+    ).toEqual([true, true]);
   });
 
   it("had nothing refused under the Content Security Policy", () => {
