@@ -34,7 +34,7 @@ CREATE TABLE ci_job_tokens (
 CREATE TABLE ci_pending_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, run_id TEXT NOT NULL,
   job_id INTEGER NOT NULL, attempt INTEGER NOT NULL, labels TEXT NOT NULL, queued_at INTEGER NOT NULL,
-  claimed_by INTEGER, claim_until INTEGER, claim_nonce TEXT,
+  claimed_by INTEGER, claim_until INTEGER, claim_nonce TEXT, repo_id TEXT NOT NULL DEFAULT '', fork INTEGER NOT NULL DEFAULT 1,
   UNIQUE (run_id, job_id)                -- job ids are never reused in a run
 ) STRICT;
 
@@ -61,7 +61,7 @@ CREATE TABLE ci_tasks (
   task INTEGER,                          -- the run's task number, set once the assignment succeeds
   runner_id INTEGER NOT NULL, offered_version INTEGER NOT NULL,   -- the version echoed with the task
   created_at INTEGER NOT NULL, confirmed_at INTEGER, ended_at INTEGER, superseded_at INTEGER
-) STRICT;
+, repo_id TEXT NOT NULL DEFAULT '', fork INTEGER NOT NULL DEFAULT 1) STRICT;
 
 -- table deployment_settings
 CREATE TABLE deployment_settings (

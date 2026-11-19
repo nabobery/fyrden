@@ -1,5 +1,8 @@
+import { newUlid } from "@fyrden/adapters-cloudflare/git";
 import type {
+  approveWorkflowRun,
   cancelWorkflowRun,
+  dispatchWorkflow,
   forceCancelWorkflowRun,
   getWorkflowRun,
   Input,
@@ -7,7 +10,10 @@ import type {
   Output,
   rerunWorkflowRun,
 } from "@fyrden/api-contract";
+import type { RepoDO } from "../do/RepoDO.js";
 import type { JobView, RunDO, RunView } from "../do/RunDO.js";
+import type { DispatchAnswer } from "../do/repo/ci-triggers.js";
+import { publicOrigin } from "../email/notifications.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -50,15 +56,22 @@ function runOutput(view: RunView): Output<typeof getWorkflowRun> {
     head_branch: view.ref.startsWith(BRANCH) ? view.ref.slice(BRANCH.length) : null,
     event: view.event,
     path: view.workflowPath,
-    status: view.status,
-    conclusion: view.conclusion,
+    // A held run shows as GitHub shows one: completed, its action required.
+    ...(view.approval?.state === "waiting" && view.status !== "completed"
+      ? { status: "completed" as const, conclusion: "action_required" as const }
+      : { status: view.status, conclusion: view.conclusion }),
+    approval: view.approval && {
+      state: view.approval.state,
+      decided_by: view.approval.decidedBy === null ? null : { id: view.approval.decidedBy },
+      decided_at: view.approval.decidedAt,
+    },
     actor: { id: view.actor },
     triggering_actor: { id: view.triggeringActor },
     created_at: view.createdAt,
     updated_at: view.updatedAt,
     run_started_at: view.startedAt,
     completed_at: view.completedAt,
-    errors: [...view.errors],
+    errors: view.errors.map((e) => ({ ...e })),
     faults: view.faults.map((f) => ({ ...f })),
   };
 }
@@ -170,6 +183,12 @@ export async function rerunWorkflowRunOperation(
       throw runNotFound();
     case "rerun_limit":
       throw new OperationError(409, "rerun_limit", "The run has been re-run 50 times, its limit.");
+    case "approval_required":
+      throw new OperationError(
+        409,
+        "approval_required",
+        "The run ended without the approval it waited for; it cannot be re-run.",
+      );
     default:
       throw new OperationError(
         409,
@@ -177,4 +196,129 @@ export async function rerunWorkflowRunOperation(
         "The run has not completed, or its workflow could not run, which a re-run cannot change.",
       );
   }
+}
+
+const notPending = () =>
+  new OperationError(
+    409,
+    "approval_not_pending",
+    "The run does not wait for approval: it needed none, or it was superseded, cancelled or expired.",
+  );
+
+/**
+ * The `actions.runs.approve` operation: the repository records the
+ * approval (checking the approver again), then the run is told at once,
+ * with the approver the repository recorded (the first, if two approve
+ * before it is told); a failure there is left to the repository's delivery
+ * job. A run whose approval ended unapproved (cancelled, expired,
+ * superseded) is refused before anything is recorded; one the run refuses
+ * on the fast path settles the repository's record as the run ended.
+ */
+export async function approveWorkflowRunOperation(
+  ctx: OpContext,
+  input: Input<typeof approveWorkflowRun>,
+): Promise<Output<typeof approveWorkflowRun>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
+  const view = await runOf(ctx, entry, input.run_id);
+  if (view.approval && view.approval.state !== "waiting" && view.approval.state !== "approved")
+    throw notPending();
+  const repo = ctx.env.REPO.getByName(entry.id);
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "approveRun" });
+  const recorded = (await repo.approveRun({
+    runId: input.run_id,
+    approver: actingPrincipal(ctx),
+  })) as unknown as Awaited<ReturnType<RepoDO["approveRun"]>>;
+  if (!recorded.ok) {
+    if (recorded.code === "approval_not_pending") throw notPending();
+    if (recorded.code === "run_not_found") throw runNotFound();
+    throw new OperationError(
+      404,
+      "repo_not_found",
+      `No repository ${input.owner}/${input.repo} was found.`,
+    );
+  }
+  let answer: Awaited<ReturnType<RunDO["approve"]>>;
+  try {
+    answer = (await runStub(ctx, input.run_id, "approve").approve(
+      recorded.binding,
+      recorded.approver,
+    )) as unknown as Awaited<ReturnType<RunDO["approve"]>>;
+  } catch {
+    // The repository's job delivers it.
+    return {};
+  }
+  if (answer.ok) return {};
+  // The run ended unapproved in between: the repository records how, and nothing was approved.
+  const ended = ((await runStub(ctx, input.run_id, "get").get()) as RunView | undefined)?.approval;
+  if (ended && (ended.state === "cancelled" || ended.state === "expired")) {
+    ctx.metrics.count("do.request", { class: "RepoDO", method: "settleApproval" });
+    await repo.settleApproval({ runId: input.run_id, outcome: ended.state });
+  }
+  throw notPending();
+}
+
+const DISPATCH_REFUSALS: Record<
+  Exclude<DispatchAnswer, { ok: true }>["code"],
+  { status: 404 | 409 | 422 | 503; detail: string }
+> = {
+  busy: { status: 503, detail: "The repository is busy. Try again shortly." },
+  ci_off: { status: 409, detail: "This deployment runs no CI." },
+  repo_not_ready: { status: 409, detail: "The repository cannot run workflows yet." },
+  ref_not_found: { status: 422, detail: "No branch or tag has that name." },
+  workflow_not_found: {
+    status: 404,
+    detail: "No workflow file has that name at the ref and on the default branch.",
+  },
+  workflow_not_dispatchable: {
+    status: 422,
+    detail: "The workflow has no workflow_dispatch trigger.",
+  },
+  invalid_inputs: { status: 422, detail: "The inputs do not match the workflow's." },
+  invalid_workflow: { status: 422, detail: "The workflow file's triggers cannot be read." },
+};
+
+/**
+ * The `actions.workflows.dispatch` operation. The dispatch is recorded
+ * under the request's idempotency claim (a later request with the same
+ * key past its window is a new claim, so a new run), or under a fresh id
+ * without a key, as GitHub makes one run per such request.
+ */
+export async function dispatchWorkflowOperation(
+  ctx: OpContext,
+  input: Input<typeof dispatchWorkflow>,
+): Promise<Output<typeof dispatchWorkflow>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "dispatchWorkflow" });
+  const answer = (await ctx.env.REPO.getByName(entry.id).dispatchWorkflow({
+    file: input.workflow_id,
+    ref: input.ref,
+    inputs: input.inputs,
+    // The token's principal, as a push by the same token records: a delegated agent acts for its
+    // user, whose role the run's job token reads with (the agent alone may have none).
+    actor: ctx.auth.principalId,
+    // MCP calls carry no key yet, so each is a dispatch of its own (a retried tool call makes a
+    // second run); a caller-supplied key through the MCP mount is a recorded follow-up.
+    key: ctx.idempotencyClaim ?? newUlid(Date.now()),
+  })) as unknown as DispatchAnswer;
+  if (!answer.ok) {
+    const refusal = DISPATCH_REFUSALS[answer.code];
+    throw new OperationError(
+      refusal.status,
+      answer.code,
+      refusal.detail,
+      undefined,
+      undefined,
+      refusal.status === 503 ? 1 : undefined,
+      undefined,
+      undefined,
+      "errors" in answer ? answer.errors : undefined,
+    );
+  }
+  const path = `${entry.ownerHandle}/${entry.name}/actions/runs/${answer.runId}`;
+  return {
+    workflow_run_id: answer.runId,
+    run_url: `${ctx.requestOrigin}/api/repos/${path}`,
+    // No run page exists yet: where it will be, on the deployment's public origin.
+    html_url: `${publicOrigin(ctx.env) ?? ctx.requestOrigin}/${path}`,
+  };
 }

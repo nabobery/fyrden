@@ -40,6 +40,12 @@ export type { VerbatimCandidate } from "./verbatim-plan.js";
 export interface UploadPackRepository {
   /** The current refs: wants are validated against these. */
   readonly refs: RefSnapshot;
+  /**
+   * Commits a want may also name, with their history, though no ref
+   * reaches them: never advertised, and only those with verified commit
+   * rows count. The caller decides who may have them.
+   */
+  readonly extraTips?: readonly Oid[];
   /** Read with the verified view only. */
   readonly commitGraph: CommitGraph;
   /** The repository's packs, as the object reader opens them. */
@@ -154,7 +160,7 @@ export async function planFetch(
     stats: options.stats ?? createReadStats(),
   });
   try {
-    const tips = new RefTips(repo.refs, graph, reader);
+    const tips = new RefTips(repo.refs, graph, reader, repo.extraTips);
     const wanted = await validateWants(args.wants, tips, graph, reader, limits.wantWalkCommits);
     const common = await commonCommits(graph, args.haves);
     const parts: FetchResponsePart[] = [];
@@ -240,6 +246,7 @@ async function regenerate(
     thinPack: args.thinPack,
     includeTag: args.includeTag,
     framedPayload: framed,
+    ...(repo.extraTips ? { extraTips: repo.extraTips } : {}),
   });
   const found = await repo.materialised.find(key);
   if (found) return packPart(found.packId, found.bytes, framed, { cached: true });

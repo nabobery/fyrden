@@ -20,6 +20,23 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "detail": {
             "type": "string",
           },
+          "errors": {
+            "description": "Fyrden: with a refusal of several things at once, each one: \`invalid_inputs\` (\`input\`, \`message\`), \`invalid_workflow\` (\`code\`, \`feature\`, \`path\`, \`line\`, \`column\`, \`message\`).",
+            "items": {
+              "additionalProperties": {
+                "type": [
+                  "string",
+                  "number",
+                  "null",
+                ],
+              },
+              "propertyNames": {
+                "type": "string",
+              },
+              "type": "object",
+            },
+            "type": "array",
+          },
           "missing_permission": {
             "type": "string",
           },
@@ -3407,6 +3424,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                 "approved",
                 "merge_conflict",
                 "ci_failed",
+                "approval_requested",
                 "assigned",
                 "mention",
                 "activity",
@@ -3544,6 +3562,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "approved",
                               "merge_conflict",
                               "ci_failed",
+                              "approval_requested",
                               "assigned",
                               "mention",
                               "activity",
@@ -4152,6 +4171,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                               "approved",
                               "merge_conflict",
                               "ci_failed",
+                              "approval_requested",
                               "assigned",
                               "mention",
                               "activity",
@@ -8490,6 +8510,66 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       ],
                       "type": "object",
                     },
+                    "approval": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "decided_at": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                {
+                                  "type": "null",
+                                },
+                              ],
+                            },
+                            "decided_by": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "id": {
+                                      "type": "string",
+                                    },
+                                  },
+                                  "required": [
+                                    "id",
+                                  ],
+                                  "type": "object",
+                                },
+                                {
+                                  "type": "null",
+                                },
+                              ],
+                            },
+                            "state": {
+                              "enum": [
+                                "waiting",
+                                "approved",
+                                "cancelled",
+                                "superseded",
+                                "expired",
+                              ],
+                              "type": "string",
+                            },
+                          },
+                          "required": [
+                            "state",
+                            "decided_by",
+                            "decided_at",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: the maintainer's approval the run waits for, or got: a run from a fork's first-time contributor. Null when none is needed.",
+                    },
                     "completed_at": {
                       "anyOf": [
                         {
@@ -8509,6 +8589,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "success",
                             "failure",
                             "cancelled",
+                            "action_required",
                           ],
                           "type": "string",
                         },
@@ -8516,6 +8597,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "type": "null",
                         },
                       ],
+                      "description": "\`action_required\`: the run waits for a maintainer's approval.",
                     },
                     "created_at": {
                       "maximum": 9007199254740991,
@@ -8525,7 +8607,45 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "errors": {
                       "description": "Why the workflow could not run, when it could not.",
                       "items": {
-                        "type": "string",
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "description": "The error's code, such as \`unsupported_key\`.",
+                            "type": "string",
+                          },
+                          "column": {
+                            "description": "From 1; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "feature": {
+                            "description": "The workflow feature it concerns; empty for none.",
+                            "type": "string",
+                          },
+                          "line": {
+                            "description": "From 1; 0 for the file as a whole.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "message": {
+                            "type": "string",
+                          },
+                          "path": {
+                            "description": "Where in the file, such as \`jobs.build.steps[0].uses\`.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "code",
+                          "feature",
+                          "path",
+                          "line",
+                          "column",
+                          "message",
+                        ],
+                        "type": "object",
                       },
                       "type": "array",
                     },
@@ -8643,6 +8763,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "updated_at",
                     "run_started_at",
                     "completed_at",
+                    "approval",
                     "errors",
                     "faults",
                   ],
@@ -8674,6 +8795,81 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "user",
           "agent",
         ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/approve": {
+      "post": {
+        "description": "Lets a run from a fork's first-time contributor start: it waits (\`status: completed\`, \`conclusion: action_required\`, \`approval.state: waiting\`) until a user with write access approves it. Approving again answers the same; a run that is not waiting (it needed no approval, or was superseded by a newer push, cancelled or expired) is 409 \`approval_not_pending\`. Only users may approve. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.runs.approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {},
+                  "type": "object",
+                },
+              },
+            },
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Approve a workflow run from a fork",
+        "x-fyrden-permission": "actions:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
       },
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel": {
@@ -9260,6 +9456,135 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "Re-run a workflow",
+        "x-fyrden-permission": "actions:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": {
+      "post": {
+        "description": "Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`, and \`ci_off\` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "operationId": "actions.workflows.dispatch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "description": "The workflow's file name, such as \`ci.yml\`.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "inputs": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                      ],
+                    },
+                    "description": "The workflow's inputs by name (at most 25).",
+                    "propertyNames": {
+                      "type": "string",
+                    },
+                    "type": "object",
+                  },
+                  "ref": {
+                    "description": "A branch or tag name, or a full ref.",
+                    "maxLength": 1024,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "ref",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "html_url": {
+                      "type": "string",
+                    },
+                    "run_url": {
+                      "description": "The run in the REST API.",
+                      "type": "string",
+                    },
+                    "workflow_run_id": {
+                      "description": "The run's id.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "workflow_run_id",
+                    "run_url",
+                    "html_url",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a workflow dispatch event",
         "x-fyrden-permission": "actions:write",
         "x-fyrden-principals": [
           "user",

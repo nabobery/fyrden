@@ -19,12 +19,15 @@ type Stub = ReturnType<Env["REPO"]["getByName"]>;
  * The protocol v2 `fetch` command: the repository object plans the
  * response and leases what it names; the Worker streams it and releases
  * the lease when the body is complete or the client has gone (in
- * `waitUntil`, after the response has been returned).
+ * `waitUntil`, after the response has been returned). `runCommit`, a CI
+ * job token's run commit from its verified task, is also a valid want,
+ * with its history.
  */
 export async function fetchCommand(
   c: GitContext,
   repo: RepoEntry,
   rawArgs: readonly Uint8Array[],
+  runCommit?: string,
 ): Promise<Response> {
   const args = parseFetchArgs(rawArgs);
   const plan = workersPlan(c.env);
@@ -37,6 +40,7 @@ export async function fetchCommand(
     args,
     plan,
     holder: c.get("requestId") ?? "unknown",
+    ...(runCommit !== undefined && { extraTips: [runCommit] }),
   })) as FetchPlanReply;
 
   metrics.count("git.fetch.calls", { where: "do", kind: "r2" }, reply.calls.r2);

@@ -18,6 +18,11 @@ export interface FetchPlanRequest {
   readonly plan: WorkersPlan;
   /** Recorded on the leases this request takes (the request id). */
   readonly holder: string;
+  /**
+   * Commits (hex) a want may also name, with their history, though no ref
+   * reaches them: a CI job token's run commit, from its verified task.
+   */
+  readonly extraTips?: readonly string[];
 }
 
 /** Stored bytes the Worker reads with one ranged GET. */

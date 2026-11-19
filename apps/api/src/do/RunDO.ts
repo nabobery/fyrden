@@ -7,13 +7,15 @@ import {
   JobQueue,
 } from "@fyrden/adapters-cloudflare/git";
 import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
-import { MAX_CHECK_BATCH } from "@fyrden/domain";
+import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
+  effectiveScope,
   type InstanceConclusion,
   jobPayload,
   type NeedResult,
   nodeOutcome,
   type RunnerResult,
+  type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
 import { jobPolicy } from "../invocation-calls.js";
@@ -54,6 +56,8 @@ const LEASE_MARGIN_MS = 60_000;
 /** How often an owner renews its grant and a pending scope reads its receipt. Proposed. */
 const RENEW_EVERY_MS = 3 * 60_000;
 
+import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
+import { workflowFileCheckName } from "./run/plan-check.js";
 import { type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
 
@@ -81,13 +85,56 @@ export interface RunView {
   readonly cancel: AttemptRow["cancel"];
   /** Who started the current attempt. */
   readonly triggeringActor: string;
-  readonly errors: readonly string[];
+  /** Whether the run's code is trusted (from its trigger). */
+  readonly trust: "trusted" | "untrusted";
+  /** Whether the run is a fork job (its pull request's head is in another repository). */
+  readonly fork: boolean;
+  /** Why the workflow could not run, when it could not. */
+  readonly errors: readonly RunError[];
+  /** The maintainer's approval the run waits for, or got; null for a run that needs none. */
+  readonly approval: {
+    readonly state: ApprovalRow["state"];
+    readonly decidedBy: string | null;
+    readonly decidedAt: number | null;
+  } | null;
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly startedAt: number | null;
   readonly completedAt: number | null;
   /** Background work that exhausted its attempts and is still being retried. */
   readonly faults: readonly { kind: string; error: string; since: number; count: number }[];
+}
+
+/** A held run's approval (`run_approval`). */
+interface ApprovalRow {
+  binding: string;
+  state: "waiting" | "approved" | "cancelled" | "superseded" | "expired";
+  decided_by: string | null;
+  decided_at: number | null;
+  expires_at: number;
+  notified: number;
+}
+
+export type ApproveAnswer =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly code: "not_waiting" | "approval_stale" | "run_not_found" };
+
+/** One error of a workflow that could not run, as the parser and planner name it. */
+export interface RunError {
+  readonly code: string;
+  readonly feature: string;
+  readonly path: string;
+  readonly line: number;
+  readonly column: number;
+  readonly message: string;
+}
+
+/** Stored errors: objects, or (rows written before they were) messages alone. */
+function storedErrors(text: string | null): RunError[] {
+  if (!text) return [];
+  return (JSON.parse(text) as (RunError | string)[]).map((e) =>
+    typeof e === "string" ? { code: "", feature: "", path: "", line: 0, column: 0, message: e } : e,
+  );
 }
 
 export interface JobView {
@@ -126,6 +173,12 @@ export type AssignAnswer =
       readonly triggeringActorId: string;
       readonly github: unknown;
       readonly timeoutMinutes: number;
+      /**
+       * The job token's scopes, from the immutable workflow and the run's trust: empty when the
+       * job is granted none, and then it gets no token (an empty list on a token means its
+       * principal's full rights).
+       */
+      readonly tokenScopes: readonly TokenScope[];
     }
   | {
       readonly ok: false;
@@ -318,6 +371,8 @@ export class RunDO extends MigratingDO {
   async create(spec: RunSpec): Promise<CreateAnswer> {
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
+    const planCheck = await workflowFileCheckName(spec.workflow.path);
+    const binding = await approvalBinding(spec);
     return this.#tx((): CreateAnswer => {
       const reserved = this.#reserve(spec, digest);
       if (!reserved.ok) return reserved;
@@ -329,8 +384,8 @@ export class RunDO extends MigratingDO {
       const now = this.context.now();
       this.engine.exec(
         `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
-           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
         spec.runId,
         spec.repoId,
         spec.sha,
@@ -343,16 +398,39 @@ export class RunDO extends MigratingDO {
         digest,
         now,
         now,
+        spec.trust,
+        spec.fork ? 1 : 0,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
+      // A workflow that fails to plan runs nothing: it needs no approval, and fails at once.
+      if (binding !== null && loaded.ok) {
+        // Held: no attempt is admitted (no concurrency group, no job, no check) until approved.
+        const expires = now + APPROVAL_EXPIRY_MS;
+        this.engine.exec(
+          "INSERT INTO run_approval (id, binding, state, expires_at) VALUES (1, ?, 'waiting', ?)",
+          binding,
+          expires,
+        );
+        this.jobs.ensure("run_deadlines", RUN_JOB.deadlines, { runAt: expires });
+      }
       this.engine.insertAttempt(1, spec.actor, loaded.ok ? loaded.model : undefined);
       const attempt = this.engine.attempt(1) as AttemptRow;
       if (!loaded.ok) {
         this.engine.exec(
           "UPDATE run_attempts SET errors = ? WHERE attempt = 1",
-          JSON.stringify(loaded.errors.map((e) => e.message)),
+          JSON.stringify(
+            loaded.errors.map(({ code, feature, path, line, column, message }) => ({
+              code,
+              feature,
+              path,
+              line,
+              column,
+              message,
+            })),
+          ),
         );
         this.engine.advanceAttempt(attempt, { kind: "plan_failed" });
+        this.#publishPlanFailure(spec.runId, planCheck);
       } else this.#admit(attempt);
       this.jobs.ensure("run_reconcile", RUN_JOB.reconcile, {
         runAt: now + this.policy.reconcileMs,
@@ -361,9 +439,157 @@ export class RunDO extends MigratingDO {
     });
   }
 
-  /** Lets an attempt start, at once or once it owns its workflow's concurrency group. */
+  /**
+   * Queues the failed plan's one check in the outbox (it has no job: id 0),
+   * so the commit shows the workflow file that could not run.
+   */
+  #publishPlanFailure(runId: string, name: string): void {
+    this.engine.exec(
+      `INSERT INTO run_checks (attempt, name_key, name, start_key, job_id, desired, rev)
+       VALUES (1, ?, ?, ?, 0, 'failure', 1)`,
+      checkNameKey(name),
+      name,
+      `${runId}/a1/plan`,
+    );
+    this.jobs.ensure("run_checks", RUN_JOB.checks, {
+      runAt: this.context.now() + this.policy.checkFlushMs,
+    });
+  }
+
+  /**
+   * Lets an attempt start, at once or once it owns its workflow's
+   * concurrency group: every admission (the first attempt, a re-run, an
+   * approval) passes here, and a run waiting for approval, or whose
+   * approval ended without one, admits nothing.
+   */
   #admit(attempt: AttemptRow): void {
+    const approval = this.#approvalRow();
+    if (approval && approval.state !== "approved") return;
     this.engine.admitOrQueue(attempt);
+  }
+
+  #approvalRow(): ApprovalRow | undefined {
+    return this.engine.rows<ApprovalRow & Record<string, SqlStorageValue>>(
+      "SELECT * FROM run_approval WHERE id = 1",
+    )[0];
+  }
+
+  /**
+   * A maintainer's approval, delivered by the repository with the binding it
+   * recorded: a waiting run whose binding is the same is approved and its
+   * current attempt admitted in the same transaction. Approved already: the
+   * same answer. Ended (cancelled, superseded, expired): `not_waiting`. A
+   * waiting approval past its expiry, which the deadline has not processed
+   * yet, expires here as the deadline would expire it.
+   */
+  approve(binding: string, approver: string): ApproveAnswer {
+    return this.#tx((): ApproveAnswer => {
+      if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      this.#expireApproval();
+      const approval = this.#approvalRow();
+      if (!approval) return { ok: false, code: "not_waiting" };
+      if (approval.binding !== binding) return { ok: false, code: "approval_stale" };
+      if (approval.state === "approved") return { ok: true };
+      if (approval.state !== "waiting") return { ok: false, code: "not_waiting" };
+      this.engine.exec(
+        "UPDATE run_approval SET state = 'approved', decided_by = ?, decided_at = ? WHERE id = 1",
+        approver,
+        this.context.now(),
+      );
+      const current = this.engine.current();
+      if (current && current.attempt.status === "queued") this.#admit(current.attempt);
+      return { ok: true };
+    });
+  }
+
+  /**
+   * A newer run of the same pull request and workflow waits instead: a
+   * waiting run ends cancelled, its approval superseded. The repository,
+   * which decided it, is not told back.
+   */
+  supersede(): ApproveAnswer {
+    return this.#tx((): ApproveAnswer => {
+      if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      const approval = this.#approvalRow();
+      if (approval?.state === "superseded") return { ok: true };
+      if (approval?.state !== "waiting") return { ok: false, code: "not_waiting" };
+      this.engine.exec(
+        "UPDATE run_approval SET state = 'superseded', decided_at = ? WHERE id = 1",
+        this.context.now(),
+      );
+      this.engine.cancel("system", "graceful");
+      return { ok: true };
+    });
+  }
+
+  /** In a change's transaction: a waiting approval ended here, which the repository must hear of. */
+  #endApproval(state: "cancelled" | "expired"): void {
+    const approval = this.#approvalRow();
+    if (approval?.state !== "waiting") return;
+    this.engine.exec(
+      "UPDATE run_approval SET state = ?, decided_at = ?, notified = 0 WHERE id = 1",
+      state,
+      this.context.now(),
+    );
+    this.jobs.ensure("run_approval", RUN_JOB.approval);
+  }
+
+  /** A waiting approval past its expiry: the run fails, named; when the next expiry falls otherwise. */
+  #expireApproval(): number | undefined {
+    const approval = this.#approvalRow();
+    if (approval?.state !== "waiting") return undefined;
+    if (approval.expires_at > this.context.now()) return approval.expires_at;
+    const current = this.engine.current();
+    if (current && current.attempt.status !== "completed") {
+      this.engine.exec(
+        "UPDATE run_attempts SET errors = ? WHERE attempt = ?",
+        JSON.stringify([
+          {
+            code: "approval_expired",
+            feature: "",
+            path: "",
+            line: 0,
+            column: 0,
+            message: "No maintainer approved the run within 30 days.",
+          },
+        ]),
+        current.attempt.attempt,
+      );
+      this.engine.advanceAttempt(current.attempt, { kind: "plan_failed" });
+    }
+    this.#endApproval("expired");
+    return undefined;
+  }
+
+  /**
+   * Tells the repository of an approval this object ended (a user's cancel,
+   * the expiry), until it answers: never exhausts, as the repository's item
+   * must not stay open.
+   */
+  async #notifyApproval(): Promise<
+    { done: true } | { done: false; cursor: null; runAfterMs: number }
+  > {
+    const run = this.engine.run();
+    const approval = this.#approvalRow();
+    if (!run || !approval || approval.notified === 1) return { done: true };
+    if (approval.state !== "cancelled" && approval.state !== "expired") return { done: true };
+    try {
+      const answer = await this.#repoCall(
+        "settleApproval",
+        (repo) =>
+          repo.settleApproval({
+            runId: run.run_id,
+            outcome: approval.state as "cancelled",
+          }) as unknown as Promise<Awaited<ReturnType<RepoDO["settleApproval"]>>>,
+      );
+      if (!answer.ok && answer.code !== "run_not_found")
+        return { done: false, cursor: null, runAfterMs: this.policy.sweepMs };
+    } catch (error) {
+      this.#log.warn("telling the repository of an approval failed", { error });
+      return { done: false, cursor: null, runAfterMs: this.policy.sweepMs };
+    }
+    this.#tx(() => this.engine.exec("UPDATE run_approval SET notified = 1 WHERE id = 1"));
+    return { done: true };
   }
 
   // ------------------------------------------------------------------ reads
@@ -393,7 +619,13 @@ export class RunDO extends MigratingDO {
       conclusion: attempt.conclusion,
       cancel: attempt.cancel,
       triggeringActor: attempt.triggering_actor_id,
-      errors: attempt.errors ? (JSON.parse(attempt.errors) as string[]) : [],
+      trust: run.trust,
+      fork: run.fork !== 0,
+      errors: storedErrors(attempt.errors),
+      approval: ((a) =>
+        a ? { state: a.state, decidedBy: a.decided_by, decidedAt: a.decided_at } : null)(
+        this.#approvalRow(),
+      ),
       createdAt: run.created_at,
       updatedAt: run.updated_at,
       startedAt: attempt.started_at,
@@ -459,21 +691,26 @@ export class RunDO extends MigratingDO {
   ): { ok: true } | { ok: false; code: "run_not_found" | "run_not_cancellable" } {
     return this.#tx(() => {
       if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
-      return this.engine.cancel(by, mode)
-        ? { ok: true }
-        : { ok: false, code: "run_not_cancellable" };
+      if (!this.engine.cancel(by, mode)) return { ok: false, code: "run_not_cancellable" };
+      this.#endApproval("cancelled");
+      return { ok: true };
     });
   }
 
-  rerun(
-    by: string,
-  ):
+  rerun(by: string):
     | { ok: true; attempt: number }
-    | { ok: false; code: "run_not_found" | "run_not_completed" | "rerun_limit" } {
+    | {
+        ok: false;
+        code: "run_not_found" | "run_not_completed" | "rerun_limit" | "approval_required";
+      } {
     return this.#tx(() => {
       if (this.#erased()) return { ok: false, code: "run_not_found" };
       const current = this.engine.current();
       if (!current) return { ok: false, code: "run_not_found" };
+      // A run never approved stays unapproved: re-running it would start code no one approved.
+      const approval = this.#approvalRow();
+      if (approval && approval.state !== "approved")
+        return { ok: false, code: "approval_required" };
       if (current.attempt.status !== "completed") return { ok: false, code: "run_not_completed" };
       if (current.attempt.errors) return { ok: false, code: "run_not_completed" };
       const n = current.attempt.attempt + 1;
@@ -588,6 +825,11 @@ export class RunDO extends MigratingDO {
       triggeringActorId: attempt.triggering_actor_id,
       github: JSON.parse(run.contexts).github,
       timeoutMinutes: Math.round(row.timeout_ms / 60_000),
+      tokenScopes: effectiveScope({
+        workflowPermissions: model.workflow.permissions,
+        jobPermissions: model.workflow.jobs.find((j) => j.id.value === row.job_key)?.permissions,
+        trust: run.trust,
+      }),
     };
   }
 
@@ -607,6 +849,17 @@ export class RunDO extends MigratingDO {
     return (
       "row" in found && (found.row.status === "in_progress" || found.row.status === "cancelling")
     );
+  }
+
+  /**
+   * Read only: for a task in progress or cancelling, its run's repository
+   * and checkout commit, which the task's job token may fetch even once no
+   * ref reaches it; null otherwise.
+   */
+  liveTaskCheckout(ref: TaskRef): { readonly repoId: string; readonly sha: string } | null {
+    if (!this.taskLive(ref)) return null;
+    const run = this.engine.run();
+    return run ? { repoId: run.repo_id, sha: run.sha } : null;
   }
 
   /** A heartbeat; `cancel` tells the runner to stop. */
@@ -1060,6 +1313,7 @@ export class RunDO extends MigratingDO {
         "ci_log_chunks",
         "ci_log_masks",
         "ci_log_tickets",
+        "run_approval",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1161,7 +1415,11 @@ export class RunDO extends MigratingDO {
       },
       run_deadlines: {
         runSlice: async () => {
-          const next = this.#tx(() => this.engine.applyDeadlines());
+          const next = this.#tx(() => {
+            const expiry = this.#expireApproval();
+            const due = this.engine.applyDeadlines();
+            return expiry === undefined || (due !== undefined && due < expiry) ? due : expiry;
+          });
           return next === undefined
             ? { done: true }
             : { done: false, cursor: null, runAfterMs: Math.max(0, next - this.context.now()) };
@@ -1179,6 +1437,7 @@ export class RunDO extends MigratingDO {
       handlers[kind] = this.#marked(kind, handler);
     // Never exhausts, so never marked: nothing else would visit a finished run again.
     handlers.run_reconcile = { runSlice: () => this.#reconcile() };
+    handlers.run_approval = { runSlice: () => this.#notifyApproval() };
     return handlers;
   }
 

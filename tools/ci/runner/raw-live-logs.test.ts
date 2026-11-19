@@ -78,6 +78,11 @@ async function takeTask(runId: string, attempt = 1) {
     return answer.task;
   });
   expect(task.id > 0).toBe(true);
+  const [routed] = await forge.d1(
+    "DIRECTORY",
+    `SELECT run_id, job_id FROM ci_tasks WHERE id = ${task.id}`,
+  );
+  expect(routed).toEqual({ run_id: runId, job_id: job.id });
   return { runId, jobId: job.id, task };
 }
 
@@ -260,7 +265,7 @@ beforeAll(async () => {
   const work = join(forge.scratch, REPO);
   await git.ok(["init", "-q", "-b", "main", work]);
   await git.ok(["remote", "add", "origin", git.url(org, REPO)], work);
-  sha = await git.commit(work, { ".github/workflows/raw.yml": WORKFLOW }, "raw log fixture");
+  sha = await git.commit(work, { "README.md": "raw log fixture\n" }, "raw log fixture");
   await git.ok(["push", "-u", "origin", "main"], work);
   const minted = await owner.api.call("orgs.runners.registration_tokens.create", { org });
   const response = decodeRunnerResponse(

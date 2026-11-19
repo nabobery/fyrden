@@ -1,4 +1,4 @@
-import type { CreateAnswer } from "../do/RunDO.js";
+import type { CreateAnswer, RunDO } from "../do/RunDO.js";
 import type { RunSpec } from "../do/run/spec.js";
 
 export type { RunSpec } from "../do/run/spec.js";
@@ -10,6 +10,22 @@ export type StartRunAnswer =
       readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
     };
 
+type RegisterAnswer =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+    };
+
+/** What records a run in its repository (the repository object's `registerRun`). */
+export interface RunRegistrar {
+  registerRun(input: {
+    readonly runId: string;
+    readonly sha: string;
+    readonly path: string;
+  }): Promise<RegisterAnswer>;
+}
+
 /**
  * Starts a CI run: the seam triggers call. The repository records the run
  * after its id is reserved, so erasing the repository always finds its own
@@ -17,13 +33,26 @@ export type StartRunAnswer =
  * whole call with the same spec after any failure.
  */
 export async function startRun(env: Env, spec: RunSpec): Promise<StartRunAnswer> {
+  return startRunFrom(env.REPO.getByName(spec.repoId), env, spec);
+}
+
+/**
+ * `startRun` with the repository given: the repository object starting its
+ * own runs passes itself, so recording the run is no call to itself.
+ */
+export async function startRunFrom(
+  repo: RunRegistrar,
+  env: { readonly RUN: DurableObjectNamespace<RunDO> },
+  spec: RunSpec,
+): Promise<StartRunAnswer> {
   const reserved = await env.RUN.getByName(spec.runId).reserve(spec);
   if (!reserved.ok) return reserved;
-  const registered = await env.REPO.getByName(spec.repoId).registerRun({
+  const registered = await repo.registerRun({
     runId: spec.runId,
     sha: spec.sha,
     path: spec.workflow.path,
   });
   if (!registered.ok) return registered;
-  return env.RUN.getByName(spec.runId).create(spec);
+  // The RPC stub's type of a union answer is not assignable to the union; it is the union.
+  return (await env.RUN.getByName(spec.runId).create(spec)) as unknown as CreateAnswer;
 }

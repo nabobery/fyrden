@@ -54,6 +54,8 @@ export function specFor(f: Fixture, source: string, extra: Partial<RunSpec> = {}
     actor: f.owner.principalId,
     workflow: { path: ".github/workflows/ci.yml", source },
     github: { ref: "refs/heads/main", event_name: "push", workflow: "ci" },
+    trust: "trusted",
+    fork: false,
     ...extra,
   };
 }

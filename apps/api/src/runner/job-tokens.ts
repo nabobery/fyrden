@@ -4,16 +4,22 @@
 
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 
+/** A job token's live task: its run's repository and checkout commit. */
+export interface LiveJobTask {
+  readonly repoId: string;
+  readonly sha: string;
+}
+
 /**
- * `live` while job token `tokenId`'s task is in progress or cancelling;
- * `ended` when it is not, or the token maps to no assigned task (fail
- * closed); `unavailable` when the run could not answer.
+ * The live task of job token `tokenId` (in progress or cancelling), as its
+ * run reads it; `ended` when it is not live, or the token maps to no
+ * assigned task (fail closed); `unavailable` when the run could not answer.
  */
 export async function jobTokenTask(
   env: Env,
   tokenId: string,
   metrics?: Metrics,
-): Promise<"live" | "ended" | "unavailable"> {
+): Promise<LiveJobTask | "ended" | "unavailable"> {
   metrics?.count("d1.query", { db: "directory", op: "ci_job_token_task" });
   try {
     const row = await env.DIRECTORY.withSession("first-primary")
@@ -24,12 +30,12 @@ export async function jobTokenTask(
       .bind(tokenId)
       .first<{ run_id: string; job_id: number; task: number | null }>();
     if (!row || row.task === null) return "ended";
-    metrics?.count("do.request", { class: "RunDO", method: "taskLive" });
-    const live = await env.RUN.getByName(row.run_id).taskLive({
+    metrics?.count("do.request", { class: "RunDO", method: "liveTaskCheckout" });
+    const live = await env.RUN.getByName(row.run_id).liveTaskCheckout({
       jobId: row.job_id,
       task: row.task,
     });
-    return live ? "live" : "ended";
+    return live ? { repoId: live.repoId, sha: live.sha } : "ended";
   } catch {
     return "unavailable";
   }

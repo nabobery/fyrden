@@ -34,6 +34,11 @@ export interface OpContext {
   requestOrigin: string;
   /** When the request arrived, before anything awaited (milliseconds since the epoch). */
   receivedAt?: number;
+  /**
+   * This execution's claim of its `Idempotency-Key`: the same for a replay
+   * within the key's window, new once it passed. Absent without a key.
+   */
+  idempotencyClaim?: string;
   waitUntil(promise: Promise<unknown>): void;
 }
 
@@ -69,6 +74,8 @@ export class OperationError extends Error {
     readonly retryAt?: number,
     /** With a refusal that says which check refused it (diagnostic). */
     readonly reason?: string,
+    /** With a refusal of several things at once: each one. */
+    readonly errors?: readonly Readonly<Record<string, string | number | null>>[],
   ) {
     super(detail);
   }
@@ -81,7 +88,13 @@ function fail(
   detail: string,
   extra: Pick<
     ProblemInit,
-    "missingPermission" | "resync" | "currentVersion" | "retryAfter" | "retryAt" | "reason"
+    | "missingPermission"
+    | "resync"
+    | "currentVersion"
+    | "retryAfter"
+    | "retryAt"
+    | "reason"
+    | "errors"
   > = {},
 ): OpResult {
   return {
@@ -250,7 +263,10 @@ export async function executeOperation(
   }
   let result: OpResult;
   try {
-    const output = await handler({ ...ctx, auth, authState }, input.data);
+    const output = await handler(
+      { ...ctx, auth, authState, ...(claim && { idempotencyClaim: claim.claimId }) },
+      input.data,
+    );
     // A handler returning the wrong shape is a server bug, never sent as-is.
     result = { ok: true, output: op.output.parse(output) };
   } catch (error) {
@@ -266,6 +282,7 @@ export async function executeOperation(
       ...(error.retryAfter !== undefined && { retryAfter: error.retryAfter }),
       ...(error.retryAt !== undefined && { retryAt: error.retryAt }),
       ...(error.reason !== undefined && { reason: error.reason }),
+      ...(error.errors !== undefined && { errors: error.errors }),
     });
   }
   if (claim) await finishIdempotent(ctx.env, claim, outcomeOf(op, result), ctx.metrics);

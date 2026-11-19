@@ -1,6 +1,7 @@
 import type { Job, SliceResult } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { NeedResult, RunnerResult } from "@fyrden/domain/ci";
+import { SHOWN_HANDLE } from "../../accounts/handles.js";
 import type { ConnectCode } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
@@ -115,8 +116,6 @@ export interface DispatchHost {
   jobTokensFull(task: number): boolean;
 }
 
-/** A job token reads its repository's contents, nothing else. */
-const JOB_TOKEN_SCOPES = ["contents:read", "metadata:read"];
 /** A job token outlives its job's timeout by this. Proposed. */
 const JOB_TOKEN_GRACE_MS = 10 * 60_000;
 /** And never lives longer than this (GitHub's ceiling for a self-hosted job's token). */
@@ -232,18 +231,25 @@ export class RunDispatch {
     const previous = ((earlier?.results ?? []) as { token_id: string }[]).map((r) => r.token_id);
 
     const store = this.#store();
-    const minted = await store.mint({
-      principalId: assigned.actorId,
-      type: "job",
-      scopes: JOB_TOKEN_SCOPES,
-      repoIds: [assigned.repoId],
-      ttlMs: Math.min(assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS, JOB_TOKEN_MAX_MS),
-      audit: { actorId: null },
-    });
+    const minted =
+      assigned.tokenScopes.length === 0
+        ? undefined
+        : await store.mint({
+            principalId: assigned.actorId,
+            type: "job",
+            scopes: [...assigned.tokenScopes],
+            repoIds: [assigned.repoId],
+            ttlMs: Math.min(
+              assigned.timeoutMinutes * 60_000 + JOB_TOKEN_GRACE_MS,
+              JOB_TOKEN_MAX_MS,
+            ),
+            audit: { actorId: null },
+          });
     // Failed assignments retry revocation before propagating the error. Confirmed tasks are
     // excluded from token rotation.
     let ownRevoked = false;
     const revokeOwn = async () => {
+      if (!minted) return;
       const at = host.now();
       this.#count("ci_job_token_revoke", 2);
       await db.batch([
@@ -260,18 +266,23 @@ export class RunDispatch {
       ]);
       ownRevoked = true;
     };
+    const github = jsonObject(assigned.github);
+    let triggeringActor: string;
     try {
-      this.#count("ci_job_token_map");
-      await db
-        .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
-        .bind(minted.id, wireId, host.now())
-        .run();
-      await host.hooks.afterMint?.(minted.token);
-      await host.hooks.beforeTokenMask?.();
-      if (!host.addJobTokenMask(ref.task, minted.token)) {
-        await revokeOwn();
-        return this.#tokensFull(wireId, ref, minted.id);
+      if (minted) {
+        this.#count("ci_job_token_map");
+        await db
+          .prepare("INSERT INTO ci_job_tokens (token_id, task_id, created_at) VALUES (?, ?, ?)")
+          .bind(minted.id, wireId, host.now())
+          .run();
+        await host.hooks.afterMint?.(minted.token);
+        await host.hooks.beforeTokenMask?.();
+        if (!host.addJobTokenMask(ref.task, minted.token)) {
+          await revokeOwn();
+          return this.#tokensFull(wireId, ref, minted.id);
+        }
       }
+      triggeringActor = await this.#triggeringActor(assigned, github);
       await host.hooks.beforeTokenRotation?.();
       const eligible = `id IN (SELECT value FROM json_each(?1)) AND revoked_at IS NULL
         AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?2 AND confirmed_at IS NULL)`;
@@ -331,21 +342,28 @@ export class RunDispatch {
           host.log.warn("job token of a failed assignment not revoked", {
             taskId: wireId,
             task: ref.task,
-            tokenId: minted.id,
+            tokenId: minted?.id,
             error: revocation instanceof Error ? revocation.message : String(revocation),
           });
         }
       }
       throw error;
     }
-    host.log.info("job token minted", { taskId: wireId, task: ref.task, tokenId: minted.id });
+    if (minted)
+      host.log.info("job token minted", { taskId: wireId, task: ref.task, tokenId: minted.id });
+    else host.log.info("task assigned without a job token", { taskId: wireId, task: ref.task });
+    const token = minted?.token ?? "";
     return {
       task: encodeTask({
         id: wireId,
         workflowPayload: assigned.payload,
         context: {
-          ...jsonObject(assigned.github),
-          token: minted.token,
+          ...github,
+          // The attempt's own: a re-run reuses the run's context, whose `actor` stays the
+          // original trigger's.
+          run_attempt: String(assigned.attempt),
+          triggering_actor: triggeringActor,
+          token,
           // Where the runner resolves short-form `uses:` actions: GitHub, as Gitea's default (a
           // runner's own `github_mirror` replaces it). Left empty, the runner resolves them against
           // this forge, which hosts none (runner `run/runner.go` getDefaultActionsURL, v6.0.0 and
@@ -354,8 +372,8 @@ export class RunDispatch {
         },
         // Never empty: the pinned runner writes into this map (measured).
         secrets: new Map([
-          ["GITHUB_TOKEN", minted.token],
-          ["GITEA_TOKEN", minted.token],
+          ["GITHUB_TOKEN", token],
+          ["GITEA_TOKEN", token],
         ]),
         machine: "",
         needs: new Map(
@@ -381,6 +399,30 @@ export class RunDispatch {
       ...(tokenId !== undefined && { tokenId }),
     });
     return { refused: "tokens_exhausted" };
+  }
+
+  /**
+   * The handle of who started the attempt: the context's `actor` when that
+   * is the run's original trigger, else read from the directory (a re-run
+   * by someone else); empty when it cannot be read.
+   */
+  async #triggeringActor(
+    assigned: Extract<AssignAnswer, { ok: true }>,
+    github: Record<string, unknown>,
+  ): Promise<string> {
+    if (assigned.triggeringActorId === assigned.actorId && typeof github.actor === "string")
+      return github.actor;
+    this.#count("ci_triggering_actor");
+    try {
+      const row = await this.host.env.DIRECTORY.prepare(
+        `SELECT ${SHOWN_HANDLE} AS handle FROM principals p WHERE p.id = ?`,
+      )
+        .bind(assigned.triggeringActorId)
+        .first<{ handle: string | null }>();
+      return row?.handle ?? "";
+    } catch {
+      return "";
+    }
   }
 
   /**
@@ -564,14 +606,19 @@ export class RunDispatch {
         writes.push(
           raw
             .prepare(
-              `INSERT OR IGNORE INTO ci_pending_jobs (account_id, run_id, job_id, attempt, labels, queued_at)
+              // The repository and fork flag decide which runner may claim it (none, for a fork job
+              // or a public repository's: the claim reads both).
+              `INSERT OR IGNORE INTO ci_pending_jobs
+                 (account_id, run_id, job_id, attempt, labels, queued_at, repo_id, fork)
                SELECT ?, ?, json_extract(value, '$.jobId'), json_extract(value, '$.attempt'),
-                      json_extract(value, '$.labels'), json_extract(value, '$.queuedAt')
+                      json_extract(value, '$.labels'), json_extract(value, '$.queuedAt'), ?, ?
                FROM json_each(?)`,
             )
             .bind(
               accountId,
               run.run_id,
+              run.repo_id,
+              run.fork === 0 ? 0 : 1,
               JSON.stringify(
                 inserts.map((q) => ({
                   jobId: q.jobId,

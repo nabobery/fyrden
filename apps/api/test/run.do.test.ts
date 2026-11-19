@@ -85,7 +85,11 @@ describe("creating a run", () => {
     const spec = specFor(f, workflow(job("a", ["needs: missing"])));
     const answer = await startRun(env, spec);
     expect(answer).toMatchObject({ ok: true, run: { status: "completed", conclusion: "failure" } });
-    expect((await runStub(spec.runId).get())?.errors.join(" ")).toMatch(/missing/);
+    const errors = (await runStub(spec.runId).get())?.errors ?? [];
+    expect(errors.find((e) => /missing/.test(e.message))).toMatchObject({
+      code: expect.any(String),
+      line: expect.any(Number),
+    });
     expect(await jobsOf(spec.runId)).toEqual([]);
   });
 

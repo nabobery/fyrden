@@ -268,7 +268,9 @@ import {
 } from "../repos/rulesets.js";
 import { issueJobLogTicketOperation } from "../repos/run-logs.js";
 import {
+  approveWorkflowRunOperation,
   cancelWorkflowRunOperation,
+  dispatchWorkflowOperation,
   forceCancelWorkflowRunOperation,
   getWorkflowRunOperation,
   listWorkflowRunJobsOperation,
@@ -722,6 +724,8 @@ export const handlers: Handlers = {
   "actions.runs.cancel": cancelWorkflowRunOperation,
   "actions.runs.force_cancel": forceCancelWorkflowRunOperation,
   "actions.runs.rerun": rerunWorkflowRunOperation,
+  "actions.runs.approve": approveWorkflowRunOperation,
+  "actions.workflows.dispatch": dispatchWorkflowOperation,
   "repos.compare": compareCommitsOperation,
   "repos.contents.get": getContentsOperation,
   "repos.contents.root": getRootContentsOperation,

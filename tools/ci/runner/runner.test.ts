@@ -1,9 +1,10 @@
 // The pinned gitea/runner (RUNNER_VERSION, 6.0.0 by default) against
 // fyrden-api under `wrangler dev`, in Docker, one runner container at a time:
-// it registers with a token minted through the REST operation, takes a job
-// of a run started through the run seam (a test Worker in front of the API),
-// runs it in a job container, streams its log and reports the result. The
-// run's job must succeed with its output, and its log must be stored whole:
+// it registers with a token minted through the REST operation, takes the job
+// of the run a `git push` of the workflow started, runs it in a job container
+// with the github context that push's trigger built (the job prints its
+// GITHUB_* variables), streams its log and reports the result. The run's job
+// must succeed with its output, and its log must be stored whole:
 // R2 chunks, named by the run object's manifest from row 0, holding every row
 // the runner sent (the seam, its instance URL, records each UpdateLog on the
 // way to the API) once and in order, and the final ack covering the final call.
@@ -12,6 +13,8 @@
 // omitted, the runner receives the ack past it (its next call starts there),
 // the lines after it are stored, and the log ends incomplete while the job
 // still succeeds.
+// A fork's pull request job (approved) and a public repository's job, queued
+// before it in the same account with the runner's label, are never assigned.
 //
 // Needs Docker (the daemon's socket is handed to the runner, which starts the
 // job container) and the job image; the binary is downloaded once, checked
@@ -33,7 +36,15 @@ import {
   Result,
 } from "../../../apps/api/src/runner/proto/messages.js";
 import { decodeUpdateLogResponse } from "../../../apps/api/test/helpers/runner-proto.js";
-import { type Account, eventually, type Forge, Git, startForge } from "../e2e/forge.js";
+import {
+  type Account,
+  eventually,
+  type Forge,
+  Git,
+  type StoredRun,
+  startForge,
+  storedRuns,
+} from "../e2e/forge.js";
 import { hostArch, runnerBinary, runnerVersion } from "./binary.js";
 import { storedLogShape } from "./log-accounting.js";
 import { watchLog } from "./log-viewer.js";
@@ -60,6 +71,26 @@ const nonce = randomBytes(4).toString("hex");
 const CONTAINER = `fyrden-runner-${nonce}`;
 const WORKFLOW_NAME = `runner-${nonce}`;
 const BURST = 120;
+/** The variables the runner sets from the run's github context, printed by the job. */
+const CONTEXT_VARS = [
+  "GITHUB_EVENT_NAME",
+  "GITHUB_REF",
+  "GITHUB_REF_NAME",
+  "GITHUB_REF_TYPE",
+  "GITHUB_SHA",
+  "GITHUB_REPOSITORY",
+  "GITHUB_REPOSITORY_OWNER",
+  "GITHUB_REPOSITORY_ID",
+  "GITHUB_ACTOR",
+  "GITHUB_ACTOR_ID",
+  "GITHUB_TRIGGERING_ACTOR",
+  "GITHUB_RUN_ID",
+  "GITHUB_RUN_NUMBER",
+  "GITHUB_WORKFLOW_REF",
+  "GITHUB_WORKFLOW_SHA",
+  "GITHUB_HEAD_REF",
+  "GITHUB_BASE_REF",
+];
 const TRICKLE = 5;
 const WORKFLOW = [
   `name: ${WORKFLOW_NAME}`,
@@ -78,6 +109,8 @@ const WORKFLOW = [
   `        run: for i in $(seq 1 ${TRICKLE}); do echo "trickle $i"; sleep 1; done`,
   "      - id: answer",
   '        run: echo "value=42" >> "$GITHUB_OUTPUT"',
+  "      - name: context",
+  `        run: for v in ${CONTEXT_VARS.join(" ")}; do echo "ctx $v=$(printenv $v)"; done`,
 ].join("\n");
 const PRINTED = [
   ...Array.from({ length: BURST }, (_, i) => `burst ${i + 1}`),
@@ -149,9 +182,62 @@ let forge: Forge;
 let owner: Account;
 let org = "";
 let repoId = "";
-let sha = "";
 let binary = "";
 let data = "";
+/** Runs whose jobs a runner of the organization must never be given, queued before the eligible one. */
+let forkRun = "";
+let publicRun = "";
+const completedRuns = new Set<string>();
+
+/** A workflow of one quick job, for runs no runner may take. */
+const never = (name: string, on: string) =>
+  [
+    `name: ${name}`,
+    `on: ${on}`,
+    "jobs:",
+    "  build:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: echo never",
+    "",
+  ].join("\n");
+
+/** The run of `repo` for `event` at `sha`, once its trigger has started it. */
+async function triggered(repo: string, event: string, sha: string): Promise<StoredRun> {
+  const id = (await owner.api.call("repos.get", { owner: org, repo })).id;
+  const found = await eventually(`a ${event} run of ${org}/${repo} at ${sha}`, async () => {
+    const runs = (await storedRuns(forge, id)).filter((r) => r.event === event && r.sha === sha);
+    return runs.length > 0 ? runs : undefined;
+  });
+  expect(found).toHaveLength(1);
+  return found[0] as StoredRun;
+}
+
+/** The run's pending job rows in the directory, as the claim reads them. */
+async function pending(runId: string) {
+  expect(runId).toMatch(/^[0-9A-Z]{26}$/);
+  return forge.d1(
+    "DIRECTORY",
+    `SELECT p.repo_id, p.fork, p.claimed_by, r.visibility FROM ci_pending_jobs p
+     JOIN repos r ON r.id = p.repo_id WHERE p.run_id = '${runId}'`,
+  );
+}
+
+/** Waits until run `runId` of `repo` has its one job queued and offered to the account's runners. */
+async function queued(repo: string, runId: string) {
+  await eventually(`the job of ${runId} queued`, async () => {
+    const { jobs } = await owner.api.call("actions.runs.jobs.list", {
+      owner: org,
+      repo,
+      run_id: runId,
+    });
+    return jobs.length === 1 && jobs[0]?.status === "queued" ? jobs : undefined;
+  });
+  return eventually(`the job of ${runId} pending`, async () => {
+    const rows = await pending(runId);
+    return rows.length === 1 ? rows : undefined;
+  });
+}
 
 /** Removes this run's runner containers and whatever the runner left of its job container. */
 async function cleanUp(): Promise<void> {
@@ -322,11 +408,64 @@ beforeAll(async () => {
   const repo = await owner.api.call("orgs.repos.create", { org, name: "app" });
   repoId = repo.id;
   const git = new Git(forge, owner);
-  const work = join(forge.scratch, "app");
-  await git.ok(["init", "-q", "-b", "main", work]);
-  await git.ok(["remote", "add", "origin", git.url(org, "app")], work);
-  sha = await git.commit(work, { ".github/workflows/ci.yml": `${WORKFLOW}\n` }, "add the workflow");
-  await git.ok(["push", "-q", "origin", "main"], work);
+  const newRepo = async (name: string, files: Record<string, string>) => {
+    const work = join(forge.scratch, name);
+    await git.ok(["init", "-q", "-b", "main", work]);
+    await git.ok(["remote", "add", "origin", git.url(org, name)], work);
+    const sha = await git.commit(work, files, "first");
+    await git.ok(["push", "-q", "origin", "main"], work);
+    return sha;
+  };
+  await newRepo("app", { "README.md": "runner fixture\n" });
+
+  // A public repository's job: no operation makes a repository public, so the directory is set.
+  const pub = await owner.api.call("orgs.repos.create", { org, name: "pub" });
+  await forge.d1("DIRECTORY", `UPDATE repos SET visibility = 'public' WHERE id = '${pub.id}'`);
+  const pubSha = await newRepo("pub", {
+    ".github/workflows/ci.yml": never(`${WORKFLOW_NAME}-public`, "push"),
+  });
+  publicRun = (await triggered("pub", "push", pubSha)).runId;
+  expect(await queued("pub", publicRun)).toMatchObject([
+    { repo_id: pub.id, fork: 0, claimed_by: null, visibility: "public" },
+  ]);
+
+  // A fork's pull request from a first-time contributor, approved by the owner.
+  const base = await owner.api.call("orgs.repos.create", { org, name: "base" });
+  await newRepo("base", { "README.md": "base\n" });
+  const contributor = await forge.user(`con${nonce}`);
+  await owner.api.call("repos.collaborators.set", {
+    owner: org,
+    repo: "base",
+    username: contributor.handle,
+    permission: "pull",
+  });
+  await contributor.api.call("repos.fork", { owner: org, repo: "base" });
+  const contributorGit = new Git(forge, contributor);
+  const fork = await contributorGit.clone(contributor.handle, "base", "fork");
+  await contributorGit.ok(["checkout", "-q", "-b", "change"], fork);
+  const forkSha = await contributorGit.commit(
+    fork,
+    { ".github/workflows/ci.yml": never(`${WORKFLOW_NAME}-fork`, "pull_request") },
+    "a workflow",
+  );
+  await contributorGit.ok(["push", "-q", "origin", "change"], fork);
+  await contributor.api.call("pulls.create", {
+    owner: org,
+    repo: "base",
+    title: "change",
+    head: `${contributor.handle}:change`,
+    base: "main",
+  });
+  forkRun = (await triggered("base", "pull_request", forkSha)).runId;
+  expect(
+    (await owner.api.call("actions.runs.get", { owner: org, repo: "base", run_id: forkRun }))
+      .approval,
+  ).toMatchObject({ state: "waiting" });
+  await owner.api.call("actions.runs.approve", { owner: org, repo: "base", run_id: forkRun });
+  expect(await queued("base", forkRun)).toMatchObject([
+    { repo_id: base.id, fork: 1, claimed_by: null, visibility: "private" },
+  ]);
+
   data = await mkdtemp(join(tmpdir(), "fyrden-runner-data-"));
   await writeFile(
     join(data, "config.yaml"),
@@ -450,7 +589,7 @@ function register(): Promise<void> {
   return registration;
 }
 
-/** Starts a run of `source` (workflow `name`) and lets the registered runner take its one job. */
+/** Pushes `source` (workflow `name`) and lets the registered runner take its one job. */
 async function runWorkflow(
   name: string,
   source: string,
@@ -459,6 +598,19 @@ async function runWorkflow(
   if (fixtureCleanupFailed)
     throw new Error("The runner fixture was not cleaned up; it cannot be reused.");
   await register();
+  const git = new Git(forge, owner);
+  const work = join(forge.scratch, "app");
+  const sha = await git.commit(
+    work,
+    { ".github/workflows/ci.yml": `${source}\n` },
+    `workflow ${name}`,
+  );
+  await git.ok(["push", "-q", "origin", "main"], work);
+  const pushed = await triggered("app", "push", sha);
+  const runId = pushed.runId;
+  expect(await queued("app", runId)).toMatchObject([
+    { repo_id: repoId, fork: 0, claimed_by: null, visibility: "private" },
+  ]);
   // --once: it polls until it gets a task, runs it, and exits.
   const daemon = exec(
     "docker",
@@ -469,37 +621,6 @@ async function runWorkflow(
     ),
     (line) => note(shown(line).slice(0, 2000)),
   );
-  note(`starting workflow ${name}`);
-  const started = await (
-    await fetch(`${forge.origin}/__runs/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        repoId,
-        sha,
-        ref: "refs/heads/main",
-        event: "push",
-        actor: owner.id,
-        workflow: { path: ".github/workflows/ci.yml", source },
-        // What a push trigger will give: the runner names its workspace after the repository.
-        github: {
-          server_url: forge.origin,
-          repository: `${org}/app`,
-          repository_owner: org,
-          actor: owner.handle,
-          workflow: name,
-          sha,
-          ref: "refs/heads/main",
-          ref_name: "main",
-          ref_type: "branch",
-          event_name: "push",
-          event: {},
-        },
-      }),
-    })
-  ).json();
-  expect(started).toMatchObject({ answer: { ok: true } });
-  const runId = (started as { runId: string }).runId;
   if (afterStart) {
     await runRunnerStep(
       daemon,
@@ -527,7 +648,8 @@ async function runWorkflow(
     repo: "app",
     run_id: runId,
   });
-  return { runId, run, jobs, exit };
+  completedRuns.add(runId);
+  return { runId, run, jobs, exit, sha, pushed };
 }
 
 /** Every object under the run's prefix, and the lines of the chunks the manifest names, in its order. */
@@ -552,8 +674,8 @@ async function storedLines(
 }
 
 describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
-  it("registers, runs a job and stores its whole log", async () => {
-    const { runId, run, jobs } = await runWorkflow(WORKFLOW_NAME, WORKFLOW);
+  it("registers, runs the pushed commit's job with its trigger's context, and stores its whole log", async () => {
+    const { runId, run, jobs, sha, pushed } = await runWorkflow(WORKFLOW_NAME, WORKFLOW);
 
     const db = await runDatabase(runId);
     try {
@@ -644,6 +766,33 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       // Every printed line once, in order; the runner's own lines (step headers, the
       // container's setup) around them.
       expect(rows.map((r) => r.c).filter((c) => /^(burst|trickle) \d+$/.test(c))).toEqual(PRINTED);
+      // The context the push's trigger built, as the job saw it.
+      const printed = Object.fromEntries(
+        rows
+          .map((r) => /^ctx (GITHUB_[A-Z_]+)=(.*)$/.exec(r.c))
+          .filter((m) => m !== null)
+          .map((m) => [m[1], m[2]]),
+      );
+      expect(printed).toEqual({
+        GITHUB_EVENT_NAME: "push",
+        GITHUB_REF: "refs/heads/main",
+        GITHUB_REF_NAME: "main",
+        GITHUB_REF_TYPE: "branch",
+        GITHUB_SHA: sha,
+        GITHUB_REPOSITORY: `${org}/app`,
+        GITHUB_REPOSITORY_OWNER: org,
+        GITHUB_REPOSITORY_ID: repoId,
+        GITHUB_ACTOR: owner.handle,
+        GITHUB_ACTOR_ID: owner.id,
+        GITHUB_TRIGGERING_ACTOR: owner.handle,
+        GITHUB_RUN_ID: runId,
+        GITHUB_RUN_NUMBER: "1",
+        GITHUB_WORKFLOW_REF: `${org}/app/.github/workflows/ci.yml@refs/heads/main`,
+        GITHUB_WORKFLOW_SHA: sha,
+        GITHUB_HEAD_REF: "",
+        GITHUB_BASE_REF: "",
+      });
+      expect(pushed.github).toMatchObject({ run_id: runId, sha, actor: owner.handle });
 
       const acks = manifest.map((c) => c.end_index).join(", ");
       note(
@@ -986,6 +1135,27 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
     } finally {
       viewer?.close();
       await gate.close();
+    }
+  });
+
+  it("never gave it a fork's job, approved, or a public repository's job", async () => {
+    // Each run above polled with both denied jobs queued and took only its own job.
+    const tasks = await forge.d1("DIRECTORY", "SELECT run_id FROM ci_tasks");
+    expect(tasks.map((t) => t.run_id)).not.toContain(forkRun);
+    expect(tasks.map((t) => t.run_id)).not.toContain(publicRun);
+    expect(completedRuns.size).toBe(4);
+    expect(tasks.map((task) => task.run_id).sort()).toEqual([...completedRuns].sort());
+    for (const [repo, runId] of [
+      ["base", forkRun],
+      ["pub", publicRun],
+    ] as const) {
+      const { jobs } = await owner.api.call("actions.runs.jobs.list", {
+        owner: org,
+        repo,
+        run_id: runId,
+      });
+      expect(jobs).toMatchObject([{ status: "queued" }]);
+      expect(await pending(runId)).toMatchObject([{ claimed_by: null }]);
     }
   });
 });

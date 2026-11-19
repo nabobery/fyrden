@@ -12,6 +12,7 @@ import {
   type Scalar,
   type YAMLMap,
 } from "yaml";
+import { parseCron } from "./cron.js";
 import { checkWorkflowExpressions, noExpressions } from "./expression-sites.js";
 import {
   featureOf,
@@ -86,12 +87,64 @@ class Stop extends Error {}
 
 const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
-const CRON_FIELD =
-  /^(?:\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?)(?:\/[0-9]+)?(?:,(?:\*|[0-9A-Za-z]+(?:-[0-9A-Za-z]+)?)(?:\/[0-9]+)?)*$/;
 const REMOTE_ACTION = /^[^\s/@]+\/[^\s/@]+(?:\/[^\s@]+)?@[^\s@]+$/;
 
 /** `path`'s workflow, or every error that stops it running. Never throws on any input. */
 export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
+  const outcome = walkFile(bytes, (walk, root) => {
+    const workflow = readWorkflow(walk, root, path);
+    // Expressions are checked once the structure is valid: a field's site is known only then.
+    if (workflow && walk.errors.length === 0) {
+      for (const e of checkWorkflowExpressions(workflow)) {
+        walk.fail(e.code, e.feature, e.path, { line: e.line, column: e.column }, e.message);
+      }
+    }
+    return workflow;
+  });
+  return outcome.ok ? { ok: true, workflow: outcome.value } : outcome;
+}
+
+export type ParsedTriggers =
+  | { readonly ok: true; readonly triggers: readonly Trigger[] }
+  | { readonly ok: false; readonly errors: readonly WorkflowError[] };
+
+/**
+ * The events `path`'s workflow runs on, read from `on:` alone, so a file
+ * whose other keys or jobs are refused still has its triggers. Errors when
+ * the file cannot be read as YAML or `on:` is missing or invalid. Never
+ * throws on any input.
+ */
+export function parseTriggers(path: string, bytes: Uint8Array): ParsedTriggers {
+  const outcome = walkFile(bytes, (walk, root) => {
+    let triggers: readonly Trigger[] | undefined;
+    mapping(walk, root, "", "", 0, (entries, map) => {
+      const on = entries.find((e) => e.key.value === "on");
+      if (on) triggers = readOn(walk, on);
+      else missing(walk, "on", "", walk.at(map, 0), "on");
+    });
+    // The expression checks `parseWorkflow` applies to `on:`, on a workflow of the triggers alone.
+    if (triggers && walk.errors.length === 0) {
+      for (const e of checkWorkflowExpressions({ path, on: triggers, env: [], jobs: [] })) {
+        walk.fail(e.code, e.feature, e.path, { line: e.line, column: e.column }, e.message);
+      }
+    }
+    return triggers;
+  });
+  return outcome.ok ? { ok: true, triggers: outcome.value } : outcome;
+}
+
+type Walked<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly errors: readonly WorkflowError[] };
+
+/**
+ * Decodes and composes `bytes`, then reads the document's root with `read`:
+ * its value when the walk found no error, else every error.
+ */
+function walkFile<T>(
+  bytes: Uint8Array,
+  read: (walk: Walk, root: Node | null) => T | undefined,
+): Walked<T> {
   if (bytes.length > MAX_WORKFLOW_BYTES) {
     return wholeFile(
       "file_too_large",
@@ -112,24 +165,17 @@ export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
   const walk = new Walk(text, lines);
   try {
     walk.checkStream(tokens);
-    if (walk.errors.length > 0) return walk.result(undefined);
+    if (walk.errors.length > 0) return walk.result<T>(undefined);
     const doc = exhaustible(
       () => [...new Composer(YAML_OPTIONS).compose(tokens, true, text.length)][0],
     );
     if (!doc)
-      return doc === null ? wholeFile("yaml_too_complex", tooComplex()) : walk.result(undefined);
-    if (!walk.checkDiagnostics(doc)) return walk.result(undefined);
-    if (!walk.resolveAnchors(doc)) return walk.result(undefined);
-    const workflow = readWorkflow(walk, doc.contents, path);
-    // Expressions are checked once the structure is valid: a field's site is known only then.
-    if (workflow && walk.errors.length === 0) {
-      for (const e of checkWorkflowExpressions(workflow)) {
-        walk.fail(e.code, e.feature, e.path, { line: e.line, column: e.column }, e.message);
-      }
-    }
-    return walk.result(workflow);
+      return doc === null ? wholeFile("yaml_too_complex", tooComplex()) : walk.result<T>(undefined);
+    if (!walk.checkDiagnostics(doc)) return walk.result<T>(undefined);
+    if (!walk.resolveAnchors(doc)) return walk.result<T>(undefined);
+    return walk.result(read(walk, doc.contents));
   } catch (error) {
-    if (error instanceof Stop) return walk.result(undefined);
+    if (error instanceof Stop) return walk.result<T>(undefined);
     throw error;
   }
 }
@@ -144,7 +190,7 @@ function exhaustible<T>(run: () => T): T | null {
   }
 }
 
-function wholeFile(code: WorkflowErrorCode, message: string): ParsedWorkflow {
+function wholeFile(code: WorkflowErrorCode, message: string): Walked<never> {
   return { ok: false, errors: [{ code, feature: "", path: "", line: 0, column: 0, message }] };
 }
 
@@ -228,8 +274,8 @@ class Walk {
     return undefined;
   }
 
-  result(workflow: Workflow | undefined): ParsedWorkflow {
-    if (this.errors.length === 0 && workflow) return { ok: true, workflow };
+  result<T>(value: T | undefined): Walked<T> {
+    if (this.errors.length === 0 && value !== undefined) return { ok: true, value };
     const limited = this.errors.filter((e) => e.code !== "too_many_errors");
     limited.sort((a, b) => a.line - b.line || a.column - b.column);
     if (this.#full) limited.push(...this.errors.filter((e) => e.code === "too_many_errors"));
@@ -1247,14 +1293,14 @@ function readSchedule(
                   noExpressions("on.schedule[*].cron"),
                 );
               }
-              const fields = cron.value.trim().split(/\s+/);
-              if (fields.length !== 5 || !fields.every((field) => CRON_FIELD.test(field))) {
+              const parsed = parseCron(cron.value);
+              if (!parsed.ok) {
                 return w2.fail(
                   "invalid_value",
                   "on.schedule[*].cron",
                   e.path,
                   cron.at,
-                  `\`${cut(cron.value, 60)}\` is not a five-field cron expression.`,
+                  parsed.message,
                 );
               }
               return { cron };

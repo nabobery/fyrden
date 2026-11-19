@@ -72,6 +72,7 @@ export function reasonOf(kind: FeedKind, reasons: readonly string[]): InboxReaso
     case "assigned":
       return "assign";
     case "ci_failed":
+    case "approval_requested":
       return "ci_activity";
     case "approved":
     case "changes_requested":

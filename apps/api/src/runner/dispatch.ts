@@ -1,7 +1,8 @@
-// FetchTask's work in the Worker: offer a lost answer again, answer an idle
-// poll from the directory alone, or claim the account's oldest eligible
-// pending job and have its run assign it. A pending row is only leased here;
-// its run withdraws it once the job has left the queue.
+// FetchTask's work in the Worker: offer a lost answer again while its job
+// may still be given to a runner, answer an idle poll from the directory
+// alone, or claim the account's oldest eligible pending job and have its run
+// assign it. A pending row is only leased here; its run withdraws it once
+// the job has left the queue.
 
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { AssignTaskAnswer } from "../do/run/dispatch.js";
@@ -14,6 +15,7 @@ import {
   type DispatchView,
   refuseTask,
   releaseClaim,
+  supersedeOffer,
 } from "./registry.js";
 
 /** Pause or fail points for tests. */
@@ -68,9 +70,29 @@ export async function dispatchTask(
 
   // The runner repeats the version its task was offered with: it never read that answer. An
   // ephemeral runner that already holds a task is offered only that task again, never another.
+  let liveOffers = view.liveOffers;
+  if (view.reoffer && !view.reoffer.eligible) {
+    // Its job may no longer be given to any runner (its repository was made public, or it was
+    // written before eligibility was recorded), as the authentication read saw it.
+    const { id, runId, assigned } = view.reoffer;
+    if (!assigned) {
+      // Never assigned: superseded, so the job stays queued in its run and its pending row,
+      // which no claim takes while the job is ineligible, ends with run state's queue deadline.
+      // An assignment that won the race since the read keeps it live.
+      if (await supersedeOffer(db, { taskId: id, now: clock() }, call.metrics)) liveOffers--;
+    }
+    // Assigned (its answer was lost): not delivered, and kept as a live offer, so an ephemeral
+    // runner takes no other job. Nobody runs the task, so run state's heartbeat deadline ends
+    // it, and its end revokes the token and settles the runner as for any vanished runner.
+    call.log.info("task withheld: its job may not be given to a runner", {
+      taskId: id,
+      runId,
+      assigned,
+    });
+  }
   const reoffer =
-    view.reoffer &&
-    !(runner.ephemeral && !view.reoffer.assigned && (runner.taskConfirmed || view.liveOffers > 1))
+    view.reoffer?.eligible &&
+    !(runner.ephemeral && !view.reoffer.assigned && (runner.taskConfirmed || liveOffers > 1))
       ? view.reoffer
       : undefined;
   if (reoffer) {
@@ -101,7 +123,7 @@ export async function dispatchTask(
   // Lapsed claims go first, so a claim of a Worker that died never holds a job, whoever polls.
   if (view.expiredClaims) await clearLapsedClaims(db, runner.accountId, clock(), call.metrics);
   // An ephemeral runner gets one task (the claim enforces it too, for polls that overlap).
-  if (runner.ephemeral && (runner.taskConfirmed || view.liveOffers > 0))
+  if (runner.ephemeral && (runner.taskConfirmed || liveOffers > 0))
     return answer(undefined, requestVersion);
   if (exhausted.length === 0 && !view.expiredClaims && view.tasksVersion === requestVersion)
     return answer(undefined, view.tasksVersion);

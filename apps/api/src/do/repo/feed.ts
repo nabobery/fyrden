@@ -116,6 +116,16 @@ export interface RepoFeedDeps {
     readonly subscribers: readonly FeedPrincipal[];
     readonly overflow: boolean;
   };
+  /**
+   * In an approval event's transaction: whether a CI run of pull request
+   * `number` waits, who holds its approval item open, and who has it
+   * resolved (see `CiApprovals.audience`).
+   */
+  readonly approvalAudience?: (number: number) => {
+    open: boolean;
+    holding: readonly string[];
+    released: readonly string[];
+  };
   readonly metrics: Metrics;
 }
 
@@ -161,6 +171,7 @@ const ACTION_KINDS: ReadonlySet<FeedKind> = new Set([
   "approved",
   "merge_conflict",
   "ci_failed",
+  "approval_requested",
   "assigned",
 ]);
 
@@ -804,6 +815,27 @@ export class RepoFeed {
           ],
         };
       }
+      case "pull_request.approval": {
+        // One item a pull request for its approvers (the feed keeps one item per thread and
+        // kind), so its member names the pull request's approvals, not one run of it: open
+        // while any of its runs waits.
+        const number = data.number as number;
+        if (!this.#pull(number)) return undefined;
+        const told = this.deps.approvalAudience?.(number);
+        if (!told) return undefined;
+        const entry = (id: string, state: "open" | "resolved"): Named => ({
+          ...settledAs({ id, root: id }, "approval_requested", "approver"),
+          state,
+        });
+        return {
+          ...nothing(number, told.open ? "approval_requested" : "approval_settled"),
+          member: `approval/${number}`,
+          direct: [
+            ...told.holding.map((id) => entry(id, "open")),
+            ...told.released.map((id) => entry(id, "resolved")),
+          ],
+        };
+      }
       case "pull_request.mergeability": {
         const state = data.state;
         const conflicting = conflictingState(state);
@@ -1105,7 +1137,10 @@ export function markEmail(audience: FeedRecipient[], action: string): void {
  * reads the repository or not, so an item it was told of is not left open.
  */
 function settlesAction(r: Named): boolean {
-  return (r.kind === "review_requested" || r.kind === "ci_failed") && r.state === "resolved";
+  return (
+    (r.kind === "review_requested" || r.kind === "ci_failed" || r.kind === "approval_requested") &&
+    r.state === "resolved"
+  );
 }
 
 /** The issue's or pull request's author, and the user its agent author acts for. */

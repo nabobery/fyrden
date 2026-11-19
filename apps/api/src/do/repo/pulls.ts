@@ -203,6 +203,18 @@ export class RepoPulls {
        * reopened): its checks worked out again, after its own event.
        */
       readonly checks?: (pull: PullRecord, actor: RefActor | null) => void;
+      /**
+       * In a change's transaction: the pull request's event (`action`, such
+       * as `opened`), with its sequence number and its webhook capture, for
+       * the CI runs it may start.
+       */
+      readonly ci?: (
+        action: string,
+        pull: PullRecord,
+        actor: RefActor | null,
+        sourceSeq: number,
+        capture: () => Record<string, CaptureValue>,
+      ) => void;
     },
   ) {}
 
@@ -947,7 +959,27 @@ export class RepoPulls {
           "maintainer_can_modify" in (data.changes as Record<string, unknown>)))
     )
       this.deps.follow?.(pull);
-    this.deps.events.emitEntity(
+    const capture = (): Record<string, CaptureValue> => ({
+      number: pull.number,
+      pull_request: this.captured(pull),
+      ...(event === "synchronize" && {
+        before: (data?.before as string | null | undefined) ?? null,
+        after: (data?.after as string | null | undefined) ?? null,
+      }),
+      ...(touched?.label && { label: capturable(labelOutput(touched.label)) }),
+      ...(touched?.assignee !== undefined && { assignee: userOf(touched.assignee) }),
+      // The milestone set or left, its counts as the change left them.
+      ...(touched?.milestone && {
+        milestone: capturable(
+          milestoneOutput(
+            this.deps.milestone?.(touched.milestone.number) ?? touched.milestone,
+            ALL_KINDS,
+          ),
+        ),
+      }),
+      ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
+    });
+    const seq = this.deps.events.emitEntity(
       `pull_request.${event}`,
       actor,
       {
@@ -958,27 +990,9 @@ export class RepoPulls {
       },
       data,
       false,
-      () => ({
-        number: pull.number,
-        pull_request: this.captured(pull),
-        ...(event === "synchronize" && {
-          before: (data?.before as string | null | undefined) ?? null,
-          after: (data?.after as string | null | undefined) ?? null,
-        }),
-        ...(touched?.label && { label: capturable(labelOutput(touched.label)) }),
-        ...(touched?.assignee !== undefined && { assignee: userOf(touched.assignee) }),
-        // The milestone set or left, its counts as the change left them.
-        ...(touched?.milestone && {
-          milestone: capturable(
-            milestoneOutput(
-              this.deps.milestone?.(touched.milestone.number) ?? touched.milestone,
-              ALL_KINDS,
-            ),
-          ),
-        }),
-        ...(data?.changes !== undefined && { changes: capturable(data.changes) }),
-      }),
+      capture,
     );
+    this.deps.ci?.(event, pull, actor, seq, capture);
     if (
       event === "opened" ||
       (event === "edited" && data?.changes && "body" in (data.changes as object))

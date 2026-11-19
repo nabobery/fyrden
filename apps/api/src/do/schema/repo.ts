@@ -1791,4 +1791,137 @@ export const repoSchema: readonly DoMigration[] = [
       ) STRICT;
     `,
   },
+  {
+    version: 54,
+    // CI triggers. `ci_events` is the inbox: one row per change that may
+    // start runs, written in the change's transaction (`key` unique, so a
+    // retried change records it once), with what the change knew (`facts`)
+    // and what the trigger resolved once before its first run (`resolved`:
+    // names and commits), its progress over the workflow files (`pass`,
+    // `file`), its retry deadline (`next_at`, `attempts`), the faults that
+    // involved no storage read (`faults`), and why it ended without runs
+    // (`outcome`).
+    // `ci_event_runs` holds the run id and number allocated per event,
+    // trigger kind and workflow path before the run is started, and
+    // `ci_run_specs` its spec (without the workflow source, which is kept
+    // beside it) until the run's start is confirmed. Run numbers
+    // count per workflow path. `ci_trigger_cache` keeps each workflow
+    // blob's `on:` as read. `ci_schedules` holds the cron entries of the
+    // default branch's workflows (`ci_schedule_state`: the inbox event whose
+    // refresh they last took, so an older one never overwrites a newer
+    // one, and whether CI was seen off since they were armed;
+    // `ci_schedule_fires`: each workflow's last fire, which outlives its
+    // entries), and `ci_approvals` the approval of runs
+    // that wait for one: its source event (newer events supersede older
+    // ones), its binding (null for a row the run settled before the
+    // trigger recorded its creation), its state and whether the run object
+    // still has to be told of it (`delivered` 0); `ci_approval_holders`
+    // who holds a pull request's approval item open, and `ci_approval_feed`
+    // the items to tell once the ACL can be read again. The partial index finds
+    // an author's merged pull requests.
+    name: "ci_triggers",
+    sql: `
+      CREATE TABLE ci_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE,
+        kind TEXT NOT NULL CHECK (kind IN ('push', 'pull_request', 'schedule',
+          'workflow_dispatch', 'schedule_refresh')),
+        state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'done')),
+        outcome TEXT,
+        actor_id TEXT,
+        facts TEXT NOT NULL,
+        resolved TEXT,
+        pass INTEGER NOT NULL DEFAULT 0,
+        file INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        faults INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        done_at INTEGER,
+        CHECK ((state = 'done') = (done_at IS NOT NULL))
+      ) STRICT;
+      CREATE INDEX ci_events_pending ON ci_events (id) WHERE state = 'pending';
+      CREATE INDEX ci_events_done ON ci_events (done_at) WHERE state = 'done';
+      CREATE TABLE ci_event_runs (
+        event_id INTEGER NOT NULL,
+        trigger_kind TEXT NOT NULL,
+        workflow_path TEXT NOT NULL,
+        run_id TEXT NOT NULL UNIQUE,
+        run_number INTEGER NOT NULL,
+        workflow_blob TEXT NOT NULL,
+        approval INTEGER NOT NULL DEFAULT 0 CHECK (approval IN (0, 1)),
+        outcome TEXT,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        PRIMARY KEY (event_id, trigger_kind, workflow_path)
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE ci_run_specs (
+        run_id TEXT PRIMARY KEY,
+        spec TEXT NOT NULL,
+        source TEXT NOT NULL
+      ) STRICT;
+      CREATE TABLE ci_run_numbers (
+        workflow_path TEXT PRIMARY KEY,
+        last INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE ci_trigger_cache (
+        blob TEXT PRIMARY KEY,
+        triggers TEXT NOT NULL,
+        used_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX ci_trigger_cache_used ON ci_trigger_cache (used_at);
+      CREATE TABLE ci_schedules (
+        workflow_path TEXT NOT NULL,
+        cron TEXT NOT NULL,
+        idx INTEGER NOT NULL,
+        workflow_blob TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        next_at INTEGER NOT NULL,
+        last_fired_at INTEGER,
+        disabled TEXT CHECK (disabled IN ('inactive', 'actor_lost', 'unreachable')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (workflow_path, cron)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
+      CREATE TABLE ci_schedule_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        refreshed_event INTEGER NOT NULL DEFAULT 0,
+        off_seen INTEGER NOT NULL DEFAULT 0 CHECK (off_seen IN (0, 1))
+      ) STRICT;
+      CREATE TABLE ci_schedule_fires (
+        workflow_path TEXT PRIMARY KEY,
+        last_fired_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE TABLE ci_approvals (
+        run_id TEXT PRIMARY KEY,
+        event_id INTEGER NOT NULL,
+        pull_number INTEGER NOT NULL,
+        trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('pull_request', 'pull_request_target')),
+        workflow_path TEXT NOT NULL,
+        binding TEXT,
+        state TEXT NOT NULL
+          CHECK (state IN ('waiting', 'approved', 'superseded', 'cancelled', 'expired')),
+        decided_by TEXT,
+        decided_at INTEGER,
+        delivered INTEGER NOT NULL DEFAULT 0 CHECK (delivered IN (0, 1)),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX ci_approvals_waiting
+        ON ci_approvals (pull_number, trigger_kind, workflow_path, event_id) WHERE state = 'waiting';
+      CREATE INDEX ci_approvals_undelivered ON ci_approvals (run_id) WHERE delivered = 0;
+      CREATE TABLE ci_approval_feed (
+        pull_number INTEGER PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        actor TEXT
+      ) STRICT;
+      CREATE TABLE ci_approval_holders (
+        pull_number INTEGER NOT NULL,
+        principal TEXT NOT NULL,
+        PRIMARY KEY (pull_number, principal)
+      ) STRICT, WITHOUT ROWID;
+      CREATE INDEX pull_requests_merged_author ON pull_requests (author_root)
+        WHERE state = 'merged';
+    `,
+  },
 ];

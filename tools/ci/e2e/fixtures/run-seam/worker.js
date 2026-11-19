@@ -165,13 +165,21 @@ export default {
       return sealedCall(request, env, url.pathname);
     if (url.pathname === UPDATE_LOG && request.method === "POST")
       return recordUpdateLog(request, env);
+    // A schedule tick through `RepoDO.ciScheduleTick`, which no route of fyrden-api reaches:
+    // body `{ repoId, at }`, `at` by default now and possibly later than the repository's
+    // clock, to fire a tick the repository's alarm has not reached.
+    if (url.pathname === "/__runs/schedule-tick" && request.method === "POST") {
+      const { repoId, at } = await request.json();
+      return json(await env.REPO.getByName(repoId).ciScheduleTick(at ?? Date.now()));
+    }
     const match = /^\/__runs(?:\/([0-9A-Z]{26}))?\/([a-z]+)$/.exec(url.pathname);
     if (!match) return env.API.fetch(request);
     const [, runId, action] = match;
     if (action === "recorded" && !runId) return json(recorded);
     const body = request.method === "POST" ? await request.json() : {};
     if (action === "start") {
-      const spec = { runId: ulid(), ...body };
+      // A same-repository run unless the body says otherwise.
+      const spec = { runId: ulid(), trust: "trusted", fork: false, ...body };
       return json({ runId: spec.runId, answer: await startRun(env, spec) });
     }
     if (!runId) return json({ error: "no run" }, 400);

@@ -19,6 +19,7 @@ export const FEED_KINDS = [
   "approved",
   "merge_conflict",
   "ci_failed",
+  "approval_requested",
   "assigned",
   "mention",
   "activity",

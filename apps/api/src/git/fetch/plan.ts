@@ -16,6 +16,7 @@ import {
   type MaterialisedPackStore,
   type MemoryBudget,
   type MemoryReservation,
+  oidFromHex,
   type PackId,
   PackIdx,
   type PackStore,
@@ -123,6 +124,7 @@ async function plan(
       plan = await planFetch(
         {
           refs,
+          ...(request.extraTips && { extraTips: request.extraTips.map(oidFromHex) }),
           commitGraph: git.commitGraph,
           view: { scope, packs: view },
           packStore: countingStore(git.packStore, calls),

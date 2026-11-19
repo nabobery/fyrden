@@ -52,6 +52,10 @@ export const JOB_KINDS = [
   "run_concurrency",
   "run_reconcile",
   "concurrency",
+  "ci_triggers",
+  "ci_approvals",
+  "run_approval",
+  "ci_schedule",
 ] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 

@@ -17,26 +17,46 @@ export interface WantedObjects {
 /**
  * The ref tips of a snapshot, peeled lazily: commits come from one read of
  * the commit graph, and tag objects are read only when a caller needs
- * their targets.
+ * their targets. Extra commits are tips no ref names, which a caller
+ * vouches for (never advertised): they count as commit tips, so they and
+ * their history are acceptable wants; one without a verified commit row
+ * is ignored.
  */
 export class RefTips {
+  /** What the refs name. */
   readonly oids: readonly Oid[];
+  readonly #extra: readonly Oid[];
   readonly #graph: CommitGraph;
   readonly #reader: PeelReader;
   #commits: Promise<Oid[]> | undefined;
   #peeled: Promise<Map<string, PeeledTip>> | undefined;
 
-  constructor(refs: RefSnapshot, graph: CommitGraph, reader: PeelReader) {
-    this.oids = [...new Map([...refs.refs.values()].map((oid) => [oidToHex(oid), oid])).values()];
+  constructor(
+    refs: RefSnapshot,
+    graph: CommitGraph,
+    reader: PeelReader,
+    extraCommits: readonly Oid[] = [],
+  ) {
+    const byHex = new Map([...refs.refs.values()].map((oid) => [oidToHex(oid), oid]));
+    this.oids = [...byHex.values()];
+    this.#extra = extraCommits.filter((oid) => {
+      const hex = oidToHex(oid);
+      if (byHex.has(hex)) return false;
+      byHex.set(hex, oid);
+      return true;
+    });
     this.#graph = graph;
     this.#reader = reader;
   }
 
-  /** Tips that are commits. */
+  /** Tips that are commits, the extra commits included. */
   commits(): Promise<Oid[]> {
-    this.#commits ??= this.#graph
-      .read(this.oids, "verified")
-      .then((rows) => this.oids.filter((_, i) => rows[i] !== undefined));
+    if (this.#commits === undefined) {
+      const candidates = [...this.oids, ...this.#extra];
+      this.#commits = this.#graph
+        .read(candidates, "verified")
+        .then((rows) => candidates.filter((_, i) => rows[i] !== undefined));
+    }
     return this.#commits;
   }
 
@@ -57,7 +77,8 @@ export class RefTips {
 }
 
 /**
- * Checks that every want is reachable from the current refs: a want equal to a ref tip or to a tag tip's peeled target is
+ * Checks that every want is reachable from the current refs (and the tips'
+ * extra commits): a want equal to a ref tip or to a tag tip's peeled target is
  * accepted; any other want must be a commit reachable from a commit some
  * ref names, found by a bounded walk over verified commit rows. Throws
  * `not our ref` for the first want, in request order, that is not; a walk

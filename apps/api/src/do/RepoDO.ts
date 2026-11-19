@@ -45,6 +45,7 @@ import {
   discretionaryAllowance,
   type ResourceVector,
 } from "../effects/discretionary.js";
+import { publicOrigin } from "../email/notifications.js";
 import { DEFAULT_ORG_SHARD, readModelFor } from "../events/read-model.js";
 import { lsRefsResponse, receivePackAdvertisement } from "../git/advertise.js";
 import type { ObjectAccessAnswer, ObjectAccessRequest } from "../git/cache/object-access.js";
@@ -106,6 +107,7 @@ import {
 import { READ_MODEL_LONE_WRITE } from "../read-model/executor.js";
 import { MAINTENANCE_RETRY_MS, readModelMaintenance } from "../read-model/maintenance.js";
 import { resolveRepo } from "../repos/directory.js";
+import { ciSince, MAX_CUTOFF_LEAD_MS, runnersOn } from "../runner/service.js";
 import { platformSigner } from "../signing/platform-key.js";
 import { secretKeys } from "../webhooks/secrets.js";
 import {
@@ -140,6 +142,13 @@ import {
 } from "./repo/browse.js";
 import { ChangeLists } from "./repo/change-lists.js";
 import { type CheckStart, type CheckUpdate, RepoChecks, type StatusInput } from "./repo/checks.js";
+import {
+  ADMIT_ALL,
+  CI_SCHEDULE_JOB,
+  CiSchedules,
+  type ScheduleAdmission,
+} from "./repo/ci-schedules.js";
+import { CI_TRIGGERS_JOB, CiTriggers, type DispatchAnswer } from "./repo/ci-triggers.js";
 import {
   CODE_OWNER_MERGE_POLICY,
   CodeOwnerFacts,
@@ -265,6 +274,12 @@ import {
 } from "./repo/reviewer-confirmation.js";
 import { RepoReviews } from "./repo/reviews.js";
 import { RepoRulesets, type RuleSuite, type RulesetRecord } from "./repo/rulesets.js";
+import {
+  type ApproveRunAnswer,
+  CI_APPROVALS_JOB,
+  CiApprovals,
+  type SettleAnswer,
+} from "./repo/run-approvals.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -311,6 +326,8 @@ import { repoSchema } from "./schema/repo.js";
 const ALARM_BUDGET_MS = 5_000;
 /** When an alarm that could not take the restore generation tries again. Proposed. */
 const EPOCH_RETRY_MS = 60_000;
+/** Approvers one approval item tells at most: the feed's audience pages. Proposed. */
+const MAX_APPROVERS = 1_000;
 /** How long an archive request builds before it answers "building". Proposed. */
 const ARCHIVE_REQUEST_BUDGET_MS = 5_000;
 
@@ -496,6 +513,14 @@ export class RepoDO extends MigratingDO {
   /** Releases: drafts, and published tags and commits kept as roots. */
   readonly releases: RepoReleases;
   readonly checks: RepoChecks;
+  /** CI runs started from this repository's pushes and pull request events. */
+  readonly ciTriggers: CiTriggers;
+  /** Approvals of held fork runs. */
+  readonly ciApprovals: CiApprovals;
+  /** Scheduled workflows on this object's alarm. */
+  readonly ciSchedules: CiSchedules;
+  /** Whether a due schedule tick fires (a seam for a later budget). */
+  scheduleAdmission: ScheduleAdmission = ADMIT_ALL;
   /** Release assets: upload sessions, assets, retained objects, and the account's total. */
   readonly releaseAssets: RepoReleaseAssets;
   /** Where release assets are stored. Tests may wrap it. */
@@ -664,6 +689,65 @@ export class RepoDO extends MigratingDO {
       repoId: () => this.#repoId(),
       epochGen: () => this.events.epochGen(),
     });
+    this.ciApprovals = new CiApprovals({
+      git: this.git,
+      events: this.events,
+      acl: () => this.acl,
+      runs: () => this.env.RUN,
+      log: () => this.#log(),
+    });
+    this.ciSchedules = new CiSchedules({
+      git: this.git,
+      enabled: () => runnersOn(this.env),
+      since: () => this.#ciSince(),
+      repoId: () => this.#repoId(),
+      aclKnown: async () => {
+        await this.acl.pullForWrite();
+        return this.acl.basis() !== "unknown";
+      },
+      prepareWrite: async (principal) => {
+        const ceilings = await this.#authority.rolesPulled(principal, null);
+        return () => {
+          if (this.acl.basis() === "unknown") return "unknown";
+          return atLeast(this.#authority.roleNow(principal, ceilings), "write")
+            ? "allowed"
+            : "denied";
+        };
+      },
+      actorActive: (principal) => this.#authority.principalActive(principal),
+      record: (key, actor, facts) => this.ciTriggers.recordSchedule(key, actor, facts),
+      admission: () => this.scheduleAdmission,
+      log: () => this.#log(),
+    });
+    this.ciTriggers = new CiTriggers({
+      git: this.git,
+      memoryBlocks: () => this.#memoryBlocks(),
+      enabled: () => runnersOn(this.env),
+      since: () => this.#ciSince(),
+      repoId: () => this.#repoId(),
+      roleOf: (principalId) => this.acl.roleOf(principalId, "write"),
+      rootOf: async (principalId, grantId) =>
+        rootIdentity({
+          principalId,
+          grantId,
+          ceilingIds: await this.#authority.rolesPulled(principalId, grantId),
+        }),
+      registrar: this,
+      requestApproval: (request) => this.ciApprovals.request(request),
+      supersedeOlder: (run) => this.ciApprovals.supersedeOlder(run),
+      applySchedules: (eventId, files, actor, headChange) =>
+        this.ciSchedules.apply(eventId, files, actor, headChange),
+      skipSchedules: (eventId) => this.ciSchedules.skip(eventId),
+      noteSchedulesOff: () => this.ciSchedules.noteOff(),
+      resumeSchedules: () => this.ciSchedules.resume(),
+      refreshAccess: () => this.acl.pullForWrite(),
+      origin: () => publicOrigin(this.env),
+      log: () => this.#log(),
+    });
+    this.ciTriggers.bindings = { RUN: env.RUN, DIRECTORY: env.DIRECTORY };
+    this.events.onPushed = (refs, actor, sourceSeq) =>
+      this.ciTriggers.recordPush(refs, actor, sourceSeq);
+    this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
@@ -706,6 +790,8 @@ export class RepoDO extends MigratingDO {
       view: (pull) => this.#viewed(pull),
       milestone: (number) => this.subjectMeta.milestone(number),
       checks: (pull, actor) => this.checks.reconcile(pull, actor),
+      ci: (action, pull, actor, sourceSeq, capture) =>
+        this.ciTriggers.recordPull(action, pull, actor, sourceSeq, capture),
     });
     this.pullSource = new PullSource({
       git: this.git,
@@ -776,6 +862,8 @@ export class RepoDO extends MigratingDO {
           });
       },
       subscribers: (number) => this.threads.subscribers(number),
+      approvalAudience: (number) =>
+        this.ciApprovals.audience(number, this.acl.usersAtLeast("write", MAX_APPROVERS)),
       metrics: this.git.context.metrics,
     });
     this.webhookBlobStore = new RepoWebhookBlobs({
@@ -1090,7 +1178,7 @@ export class RepoDO extends MigratingDO {
       this.pulls.onCommit(context);
       this.pullSource.onCommit(context);
     };
-    this.git.refStore.onHeadChanged = () => this.events.onHeadChanged();
+    this.git.refStore.onHeadChanged = (head, actor) => this.events.onHeadChanged(head, actor);
     // Every commit (push, import, merge) schedules the maintenance it calls
     // for and records the repository's pack count and storage.
     this.git.refStore.afterCommit = ({ nonFastForward }) => {
@@ -2479,6 +2567,86 @@ export class RepoDO extends MigratingDO {
     });
   }
 
+  /**
+   * A maintainer's approval of a held fork run (see `CiApprovals.approve`):
+   * the binding to tell the run object, or why not.
+   */
+  approveRun(input: {
+    readonly runId: string;
+    readonly approver: string;
+  }): Promise<ApproveRunAnswer> {
+    return this.#measured("approveRun", async () => {
+      const refused = this.#writeRefusal();
+      if (refused) return { ok: false, code: "run_not_found" };
+      return this.ciApprovals.approve(input.runId, input.approver);
+    });
+  }
+
+  /**
+   * A `workflow_dispatch` by API (see `CiTriggers.dispatch`): `key` is the
+   * request's idempotency claim, or a fresh id for a request without a key.
+   */
+  dispatchWorkflow(input: {
+    readonly file: string;
+    readonly ref: string;
+    readonly inputs: unknown;
+    readonly actor: string;
+    readonly key: string;
+  }): Promise<DispatchAnswer> {
+    return this.#measured("dispatchWorkflow", () =>
+      this.ciTriggers.dispatch({
+        ...input,
+        // Being generated, transferred or deleted, or without an identity yet: not now.
+        refusal: () =>
+          this.#writeRefusal() || !this.events.hasIdentity()
+            ? { ok: false, code: "repo_not_ready" }
+            : undefined,
+      }),
+    );
+  }
+
+  /**
+   * For tests and the evidence run only (no route of fyrden-api reaches
+   * it): fires the schedule entries due at `at`, then decides the inbox as
+   * the alarm would. `at` may be later than this object's clock, so a test
+   * fires a tick the alarm has not reached. Refused while the CI cutoff is
+   * ahead of the clock: the tick's event would carry the clock's time, be
+   * closed as before the cutoff, and its occurrence be lost.
+   */
+  ciScheduleTick(
+    at: number,
+  ): Promise<{ ok: true } | { ok: false; code: "ci_off" | "cutoff_ahead" }> {
+    return this.#measured("ciScheduleTick", async () => {
+      if (!runnersOn(this.env)) return { ok: false, code: "ci_off" };
+      const since = this.#ciSince();
+      if (since !== null && since > this.git.context.now()) {
+        return { ok: false, code: "cutoff_ahead" };
+      }
+      await this.ciSchedules.fire(at);
+      await this.git.jobs.runJob(
+        CI_TRIGGERS_JOB,
+        this.ciTriggers.handler(),
+        this.git.memory,
+        this.git.context.now() + ALARM_BUDGET_MS,
+      );
+      return { ok: true };
+    });
+  }
+
+  /** A held run ended unapproved (cancelled, expired): told by its run object (see `CiApprovals.settle`). */
+  settleApproval(input: {
+    readonly runId: string;
+    readonly outcome: "cancelled" | "expired";
+  }): Promise<SettleAnswer> {
+    return this.#measured("settleApproval", async () => {
+      const refused = this.#writeRefusal();
+      if (refused) throw new Error(`${refused.code}: ${refused.error}`);
+      // The approvers the item is resolved for are read from a fresh ACL (else told later).
+      await this.acl.pullForWrite();
+      return this.ciApprovals.settle(input.runId, input.outcome);
+    });
+  }
+
   acquireConcurrency(requests: readonly ConcurrencyRequest[]) {
     return this.#ciChange("acquireConcurrency", "acquire", (coordinator) =>
       coordinator.acquire(requests),
@@ -3485,6 +3653,30 @@ export class RepoDO extends MigratingDO {
     return [...this.pulls.recordedBases(), ...this.releases.roots()];
   }
 
+  /**
+   * The deployment's CI cutoff (see `ciSince`). An unreadable one applies
+   * none, and says so; so does one more than {@link MAX_CUTOFF_LEAD_MS}
+   * ahead of the clock: it names when CI was switched on, so one that far
+   * ahead is a mistake, and applying it would close every event and move
+   * every schedule past it, the moved ones staying so once it is put right.
+   * A cutoff less far ahead applies: work before it stays closed, and the
+   * rest waits for the clock.
+   */
+  #ciSince(): number | null {
+    const since = ciSince(this.env);
+    if (since === "unreadable") {
+      this.#log().warn("FYRDEN_CI_SINCE is not a time: no CI cutoff applies");
+      return null;
+    }
+    if (since !== null && since > this.git.context.now() + MAX_CUTOFF_LEAD_MS) {
+      this.#log().warn(
+        "FYRDEN_CI_SINCE is more than 5 minutes ahead of the clock: no CI cutoff applies",
+      );
+      return null;
+    }
+    return since;
+  }
+
   #log() {
     return createLogger({
       do: "RepoDO",
@@ -3851,6 +4043,9 @@ export class RepoDO extends MigratingDO {
       import: this.#imports().handler(),
       archive: this.#archives().handler(),
       audit_archive: this.#auditArchiver(),
+      [CI_TRIGGERS_JOB]: this.ciTriggers.handler(),
+      [CI_APPROVALS_JOB]: this.ciApprovals.handler(),
+      [CI_SCHEDULE_JOB]: this.ciSchedules.handler(),
       review_teams: {
         runSlice: async () => {
           await this.checkEpoch();
