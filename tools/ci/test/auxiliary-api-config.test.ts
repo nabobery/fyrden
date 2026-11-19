@@ -2,8 +2,23 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expect, it } from "vitest";
-import { unstable_getVarsForDev, unstable_readConfig } from "wrangler";
+import {
+  unstable_getMiniflareWorkerOptions,
+  unstable_getVarsForDev,
+  unstable_readConfig,
+} from "wrangler";
 import { auxiliaryApiConfig } from "../e2e/auxiliary-api-config.js";
+
+it("shares the API's local directory database with the run seam", () => {
+  const root = resolve(import.meta.dirname, "../../..");
+  const api = unstable_getMiniflareWorkerOptions(join(root, "apps/api/wrangler.jsonc"));
+  const seam = unstable_getMiniflareWorkerOptions(
+    join(root, "tools/ci/e2e/fixtures/run-seam/wrangler.jsonc"),
+  );
+  const directory = Reflect.get(api.workerOptions.d1Databases ?? {}, "DIRECTORY");
+  expect(directory).toBeDefined();
+  expect(Reflect.get(seam.workerOptions.d1Databases ?? {}, "DIRECTORY")).toEqual(directory);
+});
 
 it("loads generated auxiliary secrets despite a conflicting developer file and preserves source paths", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "fyrden-aux-config-"));

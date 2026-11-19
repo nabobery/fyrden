@@ -157,6 +157,13 @@ async function sealedCall(request, env, method) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === "/__runs/d1" && request.method === "POST") {
+      const { sql, params } = await request.json();
+      const result = await env.DIRECTORY.prepare(sql)
+        .bind(...params)
+        .all();
+      return json({ results: result.results, changes: result.meta.changes });
+    }
     if (
       sealedLog &&
       request.method === "POST" &&

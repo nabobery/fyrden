@@ -13,7 +13,14 @@ import {
   encodeUpdateLogRequest,
   encodeUpdateTaskRequest,
 } from "../../../apps/api/test/helpers/runner-proto.js";
-import { type Account, eventually, type Forge, Git, startForge } from "../e2e/forge.js";
+import {
+  type Account,
+  eventually,
+  type Forge,
+  Git,
+  queryDirectory,
+  startForge,
+} from "../e2e/forge.js";
 
 const nonce = randomBytes(5).toString("hex");
 const org = `logs${nonce}`;
@@ -78,10 +85,9 @@ async function takeTask(runId: string, attempt = 1) {
     return answer.task;
   });
   expect(task.id > 0).toBe(true);
-  const [routed] = await forge.d1(
-    "DIRECTORY",
-    `SELECT run_id, job_id FROM ci_tasks WHERE id = ${task.id}`,
-  );
+  const {
+    results: [routed],
+  } = await queryDirectory(forge, "SELECT run_id, job_id FROM ci_tasks WHERE id = ?", [task.id]);
   expect(routed).toEqual({ run_id: runId, job_id: job.id });
   return { runId, jobId: job.id, task };
 }

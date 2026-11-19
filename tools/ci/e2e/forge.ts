@@ -90,12 +90,6 @@ export interface Forge {
   client(token: string, dpop?: DpopKey): FyrdenClient;
   /** Runs the Worker's cron once, as the platform would on `schedule`. */
   cron(schedule: string): Promise<void>;
-  /**
-   * Runs one statement on the local D1 database `database` (`wrangler d1
-   * execute --local`, beside the running server): its result rows. For
-   * state no operation sets, such as a repository's visibility.
-   */
-  d1(database: "DIRECTORY", sql: string): Promise<Record<string, unknown>[]>;
   /** What the servers printed so far: the Workers' logs and wrangler's access log. */
   output(): string;
   /** Stops the server; fails if its output (the Worker's logs, the access log) shows a token. */
@@ -212,27 +206,6 @@ export async function startForge(
         });
         expect(res.status).toBe(200);
       },
-      async d1(database, sql) {
-        const executed = await run(
-          process.execPath,
-          [
-            wranglerBin,
-            "d1",
-            "execute",
-            database,
-            "--local",
-            "--persist-to",
-            persist,
-            "--json",
-            "--command",
-            sql,
-          ],
-          { cwd: apiDir, env: { NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" } },
-        );
-        expect(executed.code, executed.stdout + executed.stderr).toBe(0);
-        const [result] = JSON.parse(executed.stdout) as { results: Record<string, unknown>[] }[];
-        return result?.results ?? [];
-      },
       output: () => output,
       stop,
     };
@@ -240,6 +213,22 @@ export async function startForge(
     await stop().catch(() => undefined);
     throw error;
   }
+}
+
+/** Runs one statement through the run-seam test Worker's DIRECTORY binding. Requires that primary. */
+export async function queryDirectory(
+  forge: Forge,
+  sql: string,
+  params: readonly (string | number | null)[] = [],
+): Promise<{ results: Record<string, unknown>[]; changes: number }> {
+  const response = await fetch(`${forge.origin}/__runs/d1`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sql, params }),
+    signal: AbortSignal.timeout(DEADLINE_MS),
+  });
+  expect(response.status, "run-seam directory query status").toBe(200);
+  return (await response.json()) as { results: Record<string, unknown>[]; changes: number };
 }
 
 /** A run as its run object stores it in the forge's local state. */
