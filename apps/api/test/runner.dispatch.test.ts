@@ -1341,74 +1341,82 @@ describe("a job token", () => {
     expect((await uploadPack(f, token)).status).toBe(401);
   });
 
-  it("does not hand out a task cancelled during the triggering actor lookup", async () => {
-    const f = await orgRepo();
-    const runId = await started(f, one);
-    const runner = await registerRunner(f.org.login, f.owner);
-    const held = gate();
-    let original!: D1Database;
-    await inRun(runId, (r) => {
-      const host = r as unknown as { env: Env };
-      original = host.env.DIRECTORY;
-      const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
-        new Proxy(statement, {
-          get(target, key) {
-            if (key === "bind") return (...values: unknown[]) => wrap(target.bind(...values));
-            if (key === "first")
-              return async () => {
-                await held.hold();
-                return target.first();
-              };
-            const value = Reflect.get(target, key);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        });
-      Object.defineProperty(host.env, "DIRECTORY", {
-        configurable: true,
-        value: new Proxy(original, {
-          get(target, key) {
-            if (key === "prepare")
-              return (sql: string) => {
-                const statement = target.prepare(sql);
-                return sql.includes("AS handle FROM principals p WHERE p.id")
-                  ? wrap(statement)
-                  : statement;
-              };
-            const value = Reflect.get(target, key);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        }),
-      });
-    });
-    const fetching = fetchTask(runner, 0);
-    let answer: Awaited<typeof fetching> | undefined;
-    try {
-      await Promise.race([
-        held.started,
-        fetching.then(() => {
-          throw new Error("assignment finished before the triggering actor lookup");
-        }),
-      ]);
-      await runStub(runId).cancel(f.owner.principalId, "force");
-    } finally {
-      held.release();
-      try {
-        answer = await fetching;
-      } finally {
-        await inRun(runId, (r) => {
-          Object.defineProperty((r as unknown as { env: Env }).env, "DIRECTORY", {
-            configurable: true,
-            value: original,
+  it.each(["cancel", "lookup failure"] as const)(
+    "handles %s during the triggering actor lookup",
+    async (mode) => {
+      const f = await orgRepo();
+      const runId = await started(f, one);
+      const runner = await registerRunner(f.org.login, f.owner);
+      const held = gate();
+      let original!: D1Database;
+      await inRun(runId, (r) => {
+        const host = r as unknown as { env: Env };
+        original = host.env.DIRECTORY;
+        const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+          new Proxy(statement, {
+            get(target, key) {
+              if (key === "bind") return (...values: unknown[]) => wrap(target.bind(...values));
+              if (key === "first")
+                return async () => {
+                  await held.hold();
+                  if (mode === "lookup failure") throw new Error("display lookup unavailable");
+                  return target.first();
+                };
+              const value = Reflect.get(target, key);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
           });
+        Object.defineProperty(host.env, "DIRECTORY", {
+          configurable: true,
+          value: new Proxy(original, {
+            get(target, key) {
+              if (key === "prepare")
+                return (sql: string) => {
+                  const statement = target.prepare(sql);
+                  return sql.includes("AS handle FROM principals p WHERE p.id")
+                    ? wrap(statement)
+                    : statement;
+                };
+              const value = Reflect.get(target, key);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }),
         });
+      });
+      const fetching = fetchTask(runner, 0);
+      let answer: Awaited<typeof fetching> | undefined;
+      try {
+        await Promise.race([
+          held.started,
+          fetching.then(() => {
+            throw new Error("assignment finished before the triggering actor lookup");
+          }),
+        ]);
+        if (mode === "cancel") await runStub(runId).cancel(f.owner.principalId, "force");
+      } finally {
+        held.release();
+        try {
+          answer = await fetching;
+        } finally {
+          await inRun(runId, (r) => {
+            Object.defineProperty((r as unknown as { env: Env }).env, "DIRECTORY", {
+              configurable: true,
+              value: original,
+            });
+          });
+        }
       }
-    }
-    expect(answer?.task === undefined).toBe(true);
-    const [row] = await tasksOfRun(runId);
-    const [minted] = await jobTokensOf(row?.id ?? 0);
-    expect(minted).toBeDefined();
-    expect(typeof minted?.revoked_at).toBe("number");
-  });
+      expect(answer?.task === undefined).toBe(mode === "cancel");
+      const [row] = await tasksOfRun(runId);
+      const [minted] = await jobTokensOf(row?.id ?? 0);
+      expect(minted).toBeDefined();
+      if (mode === "cancel") expect(typeof minted?.revoked_at).toBe("number");
+      else {
+        expect(minted?.revoked_at).toBeNull();
+        expect(answer?.task?.context?.triggering_actor).toBe("");
+      }
+    },
+  );
 
   it("whose task is force-cancelled after the final ownership lookup, is never handed out", async () => {
     const f = await orgRepo();

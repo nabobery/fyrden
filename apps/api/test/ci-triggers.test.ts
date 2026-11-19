@@ -411,8 +411,12 @@ describe("push triggers", () => {
     const spent = await inRepo(f.stub, (r: RepoDO) => ({ ...r.ciTriggers.work }));
     expect(spent.blobs).toBeLessThanOrEqual(TRIGGER_WORK.blobs);
     let rounds = 0;
-    while ((await runTriggers(f.stub)).state !== "done" && rounds++ < 5);
-    expect(await eventRunsOf(f.stub)).toHaveLength(TRIGGER_WORK.blobs + 1);
+    let result = await runTriggers(f.stub);
+    while (result.state !== "done" && rounds++ < 5) result = await runTriggers(f.stub);
+    expect(result.state).toBe("done");
+    const runs = await eventRunsOf(f.stub);
+    expect(runs).toHaveLength(TRIGGER_WORK.blobs + 1);
+    expect(runs.every((r) => r.started_at !== null)).toBe(true);
   });
 
   it("start nothing new on a duplicate run of the job; retry a failed start without exhausting the job", async () => {

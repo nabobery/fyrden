@@ -413,12 +413,16 @@ export class RunDispatch {
     if (assigned.triggeringActorId === assigned.actorId && typeof github.actor === "string")
       return github.actor;
     this.#count("ci_triggering_actor");
-    const row = await this.host.env.DIRECTORY.prepare(
-      `SELECT ${SHOWN_HANDLE} AS handle FROM principals p WHERE p.id = ?`,
-    )
-      .bind(assigned.triggeringActorId)
-      .first<{ handle: string | null }>();
-    return row?.handle ?? "";
+    try {
+      const row = await this.host.env.DIRECTORY.prepare(
+        `SELECT ${SHOWN_HANDLE} AS handle FROM principals p WHERE p.id = ?`,
+      )
+        .bind(assigned.triggeringActorId)
+        .first<{ handle: string | null }>();
+      return row?.handle ?? "";
+    } catch {
+      return "";
+    }
   }
 
   /**

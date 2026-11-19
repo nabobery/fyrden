@@ -86,8 +86,10 @@ describe("creating a run", () => {
     const answer = await startRun(env, spec);
     expect(answer).toMatchObject({ ok: true, run: { status: "completed", conclusion: "failure" } });
     const errors = (await runStub(spec.runId).get())?.errors ?? [];
-    expect(errors.map((e) => e.message).join(" ")).toMatch(/missing/);
-    expect(errors[0]).toMatchObject({ code: expect.any(String), line: expect.any(Number) });
+    expect(errors.find((e) => /missing/.test(e.message))).toMatchObject({
+      code: expect.any(String),
+      line: expect.any(Number),
+    });
     expect(await jobsOf(spec.runId)).toEqual([]);
   });
 

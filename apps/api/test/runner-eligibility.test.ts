@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { approvalBinding } from "../src/ci/approval.js";
 import type { RunSpec } from "../src/do/run/spec.js";
 import { dispatchHooks } from "../src/runner/dispatch.js";
+import { Result } from "../src/runner/proto/messages.js";
 import { api, json } from "./helpers/api.js";
 import { encodeFetchTaskRequest } from "./helpers/runner-proto.js";
 import {
@@ -25,6 +26,7 @@ import {
   runnerCall,
   tasksOfRun,
   tasksVersionOf,
+  updateTask,
 } from "./helpers/runners.js";
 import {
   advance,
@@ -192,6 +194,62 @@ describe("job eligibility", () => {
     const runId = await started(f, spec.workflow.source, spec);
     expect(await pendingOf(runId)).toMatchObject([{ fork: 1 }]);
     await noRunnerGetsIt(runners, runId);
+  });
+
+  it("retires a real queued job whose directory row has pre-0053 defaults", async () => {
+    const f = await orgRepo();
+    const runner = await registerRunner(f.org.login, f.owner);
+    const runId = await started(f, one);
+    await env.DIRECTORY.prepare(
+      "UPDATE ci_pending_jobs SET repo_id = '', fork = 1 WHERE run_id = ?",
+    )
+      .bind(runId)
+      .run();
+    expect((await fetchTask(runner, 0)).task).toBeUndefined();
+    await advance(runId, 24 * 60 * MIN + 1);
+    expect((await jobsOf(runId)).map((j) => [j.status, j.conclusion])).toEqual([
+      ["completed", "cancelled"],
+    ]);
+    expect(await pendingOf(runId)).toEqual([]);
+    expect(await tasksOfRun(runId)).toEqual([]);
+  });
+
+  it("lets a delivered legacy task finish but denies dependent jobs and reruns with unknown origin", async () => {
+    const f = await orgRepo();
+    const runner = await registerRunner(f.org.login, f.owner);
+    const runId = await started(f, workflow([job("a"), job("b", ["needs: a"])].join("\n")));
+    const task = (await fetchTask(runner, 0)).task;
+    if (!task) throw new Error("no task");
+    await updateTask(runner, task.id);
+    await inRun(runId, (r) => r.engine.exec("UPDATE runs SET trust = 'untrusted', fork = 1"));
+    await env.DIRECTORY.prepare("UPDATE ci_tasks SET repo_id = '', fork = 1 WHERE id = ?")
+      .bind(task.id)
+      .run();
+    await updateTask(runner, task.id);
+    await updateTask(runner, task.id, Result.SUCCESS);
+    await drain(runId);
+    expect((await jobsOf(runId)).map((j) => [j.status, j.conclusion])).toEqual([
+      ["completed", "success"],
+      ["queued", null],
+    ]);
+    expect((await tasksOfRun(runId))[0]?.ended_at).not.toBeNull();
+    expect((await jobTokensOf(task.id))[0]?.revoked_at).not.toBeNull();
+    const pending = await env.DIRECTORY.prepare(
+      "SELECT repo_id, fork FROM ci_pending_jobs WHERE run_id = ?",
+    )
+      .bind(runId)
+      .all();
+    expect(pending.results).toEqual([{ repo_id: f.repo.id, fork: 1 }]);
+    expect((await fetchTask(runner, 0)).task).toBeUndefined();
+    await advance(runId, 24 * 60 * MIN + 1);
+    expect((await jobsOf(runId)).map((j) => j.conclusion)).toEqual(["success", "cancelled"]);
+    expect(await pendingOf(runId)).toEqual([]);
+    expect(await runStub(runId).rerun(f.owner.principalId)).toMatchObject({ ok: true, attempt: 2 });
+    await drain(runId);
+    expect(await inRun(runId, (r) => r.engine.rows("SELECT trust, fork FROM runs"))).toEqual([
+      { trust: "untrusted", fork: 1 },
+    ]);
+    expect((await fetchTask(runner, 0)).task).toBeUndefined();
   });
 
   it("rows written before the eligibility columns existed are never offered", async () => {

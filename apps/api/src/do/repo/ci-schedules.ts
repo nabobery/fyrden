@@ -75,11 +75,11 @@ export interface CiSchedulesDeps {
   /** Pulls the ACL unless one within the write window is stored; whether one can be read now. */
   readonly aclKnown: () => Promise<boolean>;
   /**
-   * Whether `principal` may write now (its effective role, an agent's
-   * owner's included) and is active (neither it nor an agent's owner
-   * suspended or disabled).
+   * Checks that the principal and its owner are active, then pulls their
+   * roles. The returned check reads current local authority synchronously
+   * in the transaction recording the tick.
    */
-  readonly mayWrite: (principal: string) => Promise<boolean>;
+  readonly prepareWrite: (principal: string) => Promise<() => boolean>;
   /** In the caller's transaction: records a `schedule` event in the trigger inbox. */
   readonly record: (key: string, actor: string, facts: object) => void;
   readonly admission: () => ScheduleAdmission;
@@ -272,12 +272,12 @@ export class CiSchedules {
       const pushed = this.#pushedAt();
       for (const row of due) {
         let disable: Disabled | null = null;
+        let mayWrite: (() => boolean) | undefined;
         if (pushed === null || at - pushed > INACTIVE_MS) disable = "inactive";
         else {
-          let writes: boolean;
           try {
             await this.hooks.beforeRoleCheck?.(row.workflow_path);
-            writes = await this.deps.mayWrite(row.actor_id);
+            mayWrite = await this.deps.prepareWrite(row.actor_id);
             await this.hooks.afterRoleCheck?.(row.workflow_path);
           } catch (error) {
             // The directory or the account unreachable: neither fired nor disabled, retried.
@@ -285,13 +285,9 @@ export class CiSchedules {
             return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
           }
           // A denial is believed only from an ACL that could be read (it may have lapsed since).
-          if (!writes && !(await this.deps.aclKnown()))
+          if (!mayWrite() && !(await this.deps.aclKnown()))
             return { done: false, cursor: null, runAfterMs: ACL_RETRY_MS };
-          if (!writes) disable = "actor_lost";
         }
-        const admitted =
-          disable === null &&
-          this.deps.admission().allowTick(this.deps.repoId(), row.workflow_path) === "fire";
         this.deps.git.context.storage.transactionSync(() => {
           // Read again with no await before the write: another fire (the alarm and the test
           // hook) or a refresh may have moved the entry since.
@@ -312,6 +308,7 @@ export class CiSchedules {
             now.workflow_blob !== row.workflow_blob
           )
             return;
+          if (mayWrite && !mayWrite()) disable = "actor_lost";
           if (disable) {
             this.#sql().exec(
               "UPDATE ci_schedules SET disabled = ?, updated_at = ? WHERE workflow_path = ? AND cron = ?",
@@ -338,7 +335,7 @@ export class CiSchedules {
             );
             return;
           }
-          if (admitted)
+          if (this.deps.admission().allowTick(this.deps.repoId(), row.workflow_path) === "fire")
             this.deps.record(`schedule:${row.workflow_path}:${row.cron}:${tick}`, row.actor_id, {
               path: row.workflow_path,
               cron: row.cron,

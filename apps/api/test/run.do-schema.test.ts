@@ -31,6 +31,28 @@ const versions: Record<number, string> = {
 };
 
 describe("RunDO schema", () => {
+  it("migrates a pre-v6 run to unknown, ineligible origin without inferring trust", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const migrated = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      state.storage.sql.exec(runV5);
+      state.storage.sql.exec(
+        `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
+        workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
+        VALUES (1, 'old-run', 'old-repo', ?, 'refs/heads/main', 'push', 'usr_old',
+        '.github/workflows/ci.yml', '', '{}', 'original-digest', 1, 0, 0)`,
+        "a".repeat(40),
+      );
+      state.storage.sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)",
+      );
+      state.storage.sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 5)");
+      applyDoMigrations(state.storage, runSchema);
+      return state.storage.sql.exec("SELECT trust, fork FROM runs").toArray();
+    });
+    expect(migrated).toEqual([{ trust: "untrusted", fork: 1 }]);
+  });
+
   it("binds an existing v1 run to its repository and original spec", async () => {
     const stub = env.RUN.getByName(uniqueId("run"));
     const identity = await runInDurableObject(stub, async (_, state) => {

@@ -865,42 +865,58 @@ export class CiTriggers {
         const found = await reads((r) => discoverIn(row.tree, (oid) => r.readTree(oid)));
         return found.ok ? found.files.find((f) => f.name === input.file) : undefined;
       };
-      if (!(await fileAt(defaultTip))) return { ok: false, code: "workflow_not_found" };
-      const file = await fileAt(sha);
+      const defaultFile = await fileAt(defaultTip);
+      if (!defaultFile) return { ok: false, code: "workflow_not_found" };
+      const file = sha === defaultTip ? defaultFile : await fileAt(sha);
       if (!file) return { ok: false, code: "workflow_not_found" };
-      const bytes = await reads((r) => r.readBlob(oidFromHex(file.oid) as Oid, MAX_WORKFLOW_BYTES));
-      if (!bytes)
-        return {
-          ok: false,
-          code: "invalid_workflow",
-          errors: [
-            {
-              code: "file_too_large",
-              feature: "",
-              path: "",
-              line: 0,
-              column: 0,
-              message: `The workflow file is larger than ${MAX_WORKFLOW_BYTES} bytes.`,
-            },
-          ],
-        };
-      const parsed = parseTriggers(file.path, bytes);
-      if (!parsed.ok)
-        return {
-          ok: false,
-          code: "invalid_workflow",
-          errors: parsed.errors.map(({ code, feature, path, line, column, message }) => ({
-            code,
-            feature,
-            path,
-            line,
-            column,
-            message,
-          })),
-        };
-      const trigger = parsed.triggers.find((t) => t.event === "workflow_dispatch");
-      if (trigger?.event !== "workflow_dispatch")
-        return { ok: false, code: "workflow_not_dispatchable" };
+      const dispatchSource = async (
+        file: WorkflowFile,
+      ): Promise<
+        | { ok: true; bytes: Uint8Array; trigger: Extract<Trigger, { event: "workflow_dispatch" }> }
+        | Extract<DispatchAnswer, { ok: false }>
+      > => {
+        const bytes = await reads((r) =>
+          r.readBlob(oidFromHex(file.oid) as Oid, MAX_WORKFLOW_BYTES),
+        );
+        if (!bytes)
+          return {
+            ok: false,
+            code: "invalid_workflow",
+            errors: [
+              {
+                code: "file_too_large",
+                feature: "",
+                path: "",
+                line: 0,
+                column: 0,
+                message: `The workflow file is larger than ${MAX_WORKFLOW_BYTES} bytes.`,
+              },
+            ],
+          };
+        const parsed = parseTriggers(file.path, bytes);
+        if (!parsed.ok)
+          return {
+            ok: false,
+            code: "invalid_workflow",
+            errors: parsed.errors.map(({ code, feature, path, line, column, message }) => ({
+              code,
+              feature,
+              path,
+              line,
+              column,
+              message,
+            })),
+          };
+        const trigger = parsed.triggers.find((t) => t.event === "workflow_dispatch");
+        if (trigger?.event !== "workflow_dispatch")
+          return { ok: false, code: "workflow_not_dispatchable" };
+        return { ok: true, bytes, trigger };
+      };
+      const defaultSource = await dispatchSource(defaultFile);
+      if (!defaultSource.ok) return defaultSource;
+      const selected = file.oid === defaultFile.oid ? defaultSource : await dispatchSource(file);
+      if (!selected.ok) return selected;
+      const { bytes, trigger } = selected;
       const checked = validateDispatchInputs(trigger.inputs, input.inputs);
       if (!checked.ok)
         return {

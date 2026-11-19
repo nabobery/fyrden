@@ -482,6 +482,46 @@ describe("runs held for approval", () => {
     expect(await approvalItems(h)).toEqual([]);
   });
 
+  it("keeps an older held run waiting until the newer allocation actually starts", async () => {
+    const h = await forkPull();
+    const clock = { now: Date.now() };
+    const blocked = new Set<string>();
+    await inRepo(h.base.stub, (r: RepoDO) => {
+      (r.git.context as { now: () => number }).now = () => clock.now;
+      r.ciTriggers.hooks = {
+        beforeStart: (id) => {
+          blocked.add(id);
+          throw new Error("run unavailable");
+        },
+      };
+    });
+    await runTriggers(h.base.stub);
+    await synchronize(h, { "new.txt": "new\n" });
+    await runTriggers(h.base.stub);
+    const [older, newer] = await pullRuns(h);
+    expect(older?.started_at).toBeNull();
+    expect(newer?.started_at).toBeNull();
+    expect(blocked.size).toBe(2);
+    await inRepo(h.base.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {
+        beforeStart: (id) => {
+          if (id === newer?.run_id) throw new Error("newer run unavailable");
+        },
+      };
+    });
+    clock.now += 60 * 60_000;
+    await runTriggers(h.base.stub);
+    expect((await pullRuns(h))[0]?.started_at).not.toBeNull();
+    expect(await approvalRow(h, older?.run_id ?? "")).toMatchObject([{ state: "waiting" }]);
+    await inRepo(h.base.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {};
+    });
+    clock.now += 60 * 60_000;
+    await runTriggers(h.base.stub);
+    expect((await pullRuns(h))[1]?.started_at).not.toBeNull();
+    expect(await approvalRow(h, older?.run_id ?? "")).toMatchObject([{ state: "superseded" }]);
+  });
+
   it("never let a delayed older event supersede a newer waiting run; it is superseded itself", async () => {
     const h = await forkPull();
     const opened = await newestRun(h);
@@ -714,6 +754,40 @@ describe("approval items when the account cannot be reached, and supersede by an
     expect(await approvalItems(h)).toEqual([expectedItems(h, "open")]);
   });
 
+  it("does not replay a stale opening after an approval lands during ACL refresh", async () => {
+    const h = await forkPull();
+    await aclOutage(h, true);
+    const runId = await newestRun(h);
+    expect(await approvalItems(h)).toEqual([]);
+    await aclOutage(h, false);
+    await inRepo(h.base.stub, async (r: RepoDO) => {
+      const deps = (r.ciApprovals as unknown as { deps: CiApprovalsDeps }).deps;
+      const acl = r.acl;
+      const refreshing = new Proxy(acl, {
+        get(target, key) {
+          if (key === "pullForWrite")
+            return async () => {
+              await target.pullForWrite();
+              expect(await r.ciApprovals.approve(runId, h.writer.principalId)).toMatchObject({
+                ok: true,
+              });
+            };
+          const value = Reflect.get(target, key);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const approvals = new CiApprovals({ ...deps, acl: () => refreshing });
+      await approvals.handler().runSlice(undefined as never);
+      expect(r.git.context.storage.sql.exec("SELECT 1 FROM ci_approval_feed").toArray()).toEqual(
+        [],
+      );
+    });
+    expect(await approvalItems(h)).toEqual([expectedItems(h, "resolved")]);
+    expect(await approvalRow(h, runId)).toMatchObject([
+      { state: "approved", decided_by: h.writer.principalId },
+    ]);
+  });
+
   it("keep the item's holders while the account cannot be reached and another run still waits", async () => {
     const h = await forkPull(workflowFile("pull_request"), "pull", {
       ".github/workflows/other.yml": workflowFile("pull_request", "other"),
@@ -814,9 +888,21 @@ describe("approval deliveries", () => {
           clock - 1000 + i,
         );
       }
+      const synthetic = new Set(failing);
+      const retried: { id: string; binding: string; approver: string }[] = [];
       const unreachable = { approve: () => Promise.reject(new Error("run unreachable")) };
       const runs = {
-        getByName: (id: string) => (failing.has(id) ? unreachable : env.RUN.getByName(id)),
+        getByName: (id: string) =>
+          failing.has(id)
+            ? unreachable
+            : synthetic.has(id)
+              ? {
+                  approve: async (binding: string, approver: string) => {
+                    retried.push({ id, binding, approver });
+                    return { ok: true };
+                  },
+                }
+              : env.RUN.getByName(id),
       } as unknown as DurableObjectNamespace<RunDO>;
       const deps = (r.ciApprovals as unknown as { deps: CiApprovalsDeps }).deps;
       const approvals = new CiApprovals({ ...deps, runs: () => runs });
@@ -836,11 +922,22 @@ describe("approval deliveries", () => {
       const failingLeft = undelivered().length;
       failing.clear();
       const results = [await slice(), await slice()];
-      return { healthyLeft, failingLeft, results, left: undelivered() };
+      return {
+        healthyLeft,
+        failingLeft,
+        results,
+        left: undelivered(),
+        retried,
+        expected: [...synthetic].sort(),
+      };
     });
     expect(delivered.healthyLeft).toBe(false);
     expect(delivered.failingLeft).toBe(DELIVERIES_PER_SLICE + 1);
     expect(delivered.left).toEqual([]);
+    expect(delivered.retried.map((r) => r.id).sort()).toEqual(delivered.expected);
+    expect(
+      delivered.retried.every((r) => r.binding === "b" && r.approver === h.writer.principalId),
+    ).toBe(true);
     expect(delivered.results.at(-1)).toEqual({ done: true });
     expect((await viewOf(runId)).approval).toMatchObject({
       state: "approved",

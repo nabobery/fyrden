@@ -116,6 +116,7 @@ export class CiApprovals {
         .exec(
           `SELECT 1 FROM ci_event_runs r JOIN ci_events e ON e.id = r.event_id
            WHERE r.trigger_kind = ? AND r.workflow_path = ? AND r.event_id > ?
+             AND r.started_at IS NOT NULL
              AND e.kind = 'pull_request' AND json_extract(e.facts, '$.number') = ? LIMIT 1`,
           input.kind,
           input.path,
@@ -374,16 +375,17 @@ export class CiApprovals {
    * left.
    */
   async #tellDeferred(): Promise<"done" | "later"> {
-    const owed = this.#sql()
-      .exec<{ pull_number: number; run_id: string; actor: string | null }>(
-        "SELECT pull_number, run_id, actor FROM ci_approval_feed ORDER BY pull_number LIMIT ?",
-        DELIVERIES_PER_SLICE,
-      )
-      .toArray();
-    if (owed.length === 0) return "done";
+    if (this.#sql().exec("SELECT 1 FROM ci_approval_feed LIMIT 1").toArray().length === 0)
+      return "done";
     await this.deps.acl().pullForWrite();
     if (this.deps.acl().basis() === "unknown") return "later";
     this.deps.git.context.storage.transactionSync(() => {
+      const owed = this.#sql()
+        .exec<{ pull_number: number; run_id: string; actor: string | null }>(
+          "SELECT pull_number, run_id, actor FROM ci_approval_feed ORDER BY pull_number LIMIT ?",
+          DELIVERIES_PER_SLICE,
+        )
+        .toArray();
       for (const row of owed) this.#told(row.pull_number, row.run_id, row.actor);
     });
     return this.#sql().exec("SELECT 1 FROM ci_approval_feed LIMIT 1").toArray().length > 0

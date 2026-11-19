@@ -705,11 +705,10 @@ export class RepoDO extends MigratingDO {
         await this.acl.pullForWrite();
         return this.acl.basis() !== "unknown";
       },
-      mayWrite: async (principal) => {
+      prepareWrite: async (principal) => {
+        if (!(await this.#authority.principalActive(principal))) return () => false;
         const ceilings = await this.#authority.rolesPulled(principal, null);
-        if (!atLeast(this.#authority.roleNow(principal, ceilings), "write")) return false;
-        // A suspended or disabled actor (or an agent's owner) fires nothing on its authority.
-        return this.#authority.principalActive(principal);
+        return () => atLeast(this.#authority.roleNow(principal, ceilings), "write");
       },
       record: (key, actor, facts) => this.ciTriggers.recordSchedule(key, actor, facts),
       admission: () => this.scheduleAdmission,

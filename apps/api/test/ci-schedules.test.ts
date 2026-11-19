@@ -310,6 +310,32 @@ describe("scheduled workflows", () => {
     expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
   });
 
+  it("checks the actor's current role in the transaction that records the tick", async () => {
+    const f = await scheduleRepo({ "b.txt": "b\n" });
+    const writer = await user();
+    expect(
+      (
+        await api("PUT", `${f.path}/collaborators/${writer.handle}`, f.owner.token, {
+          permission: "push",
+        })
+      ).status,
+    ).toBe(200);
+    await commitLive(f, "main", { [CI]: scheduled(["*/5 * * * *"]) }, "add", writer);
+    await runTriggers(f.stub);
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciSchedules.hooks = {
+        afterRoleCheck: () => {
+          r.git.context.storage.sql.exec(
+            "UPDATE acl_snapshot SET roles = '{}', version = version + 1",
+          );
+        },
+      };
+    });
+    await fireAt(f, f.base + 10_000);
+    expect(await scheduleRuns(f)).toEqual([]);
+    expect(await rowsOf(f)).toMatchObject([{ disabled: "actor_lost" }]);
+  });
+
   it("start nothing for a tick whose cron left the file before the trigger read it", async () => {
     const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
     f.clock.now = f.base + 10_000;

@@ -159,6 +159,22 @@ describe("workflow_dispatch", () => {
     });
   });
 
+  it("requires the dispatch trigger on the default branch as well as the selected ref", async () => {
+    const f = await dispatchRepo({
+      ".github/workflows/push.yml":
+        "on: push\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: a\n",
+    });
+    const main = (await json<{ sha: string }>(api("GET", `${f.path}/commits/main`, f.owner.token)))
+      .body.sha;
+    expect(await pushRefs(f, [{ old: ZERO, new: main, ref: "refs/heads/feature" }])).toContain(
+      "ok refs/heads/feature",
+    );
+    await commit(f, "feature", { ".github/workflows/push.yml": DISPATCHABLE });
+    const answer = await dispatch(f, "push.yml", { ref: "feature", inputs: { env: "prod" } });
+    expect(answer).toMatchObject({ status: 422, body: { code: "workflow_not_dispatchable" } });
+    expect(await dispatchRuns(f)).toEqual([]);
+  });
+
   it("refuse bad inputs, a workflow without the trigger, and files or refs it cannot find", async () => {
     const f = await dispatchRepo({
       ".github/workflows/push.yml":
