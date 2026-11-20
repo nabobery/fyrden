@@ -1,3 +1,5 @@
+CREATE INDEX ci_secret_repos_repo ON ci_secret_repos (repo_id);
+CREATE INDEX ci_variable_repos_repo ON ci_variable_repos (repo_id);
 CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
 CREATE INDEX collaborators_principal ON collaborators (principal_id);
 CREATE UNIQUE INDEX default_labels_name ON default_labels (name COLLATE NOCASE);
@@ -9,6 +11,50 @@ CREATE INDEX quota_holds_expiry ON quota_holds (expires_at);
 CREATE INDEX quota_holds_repo ON quota_holds (repo_id);
 CREATE INDEX team_members_principal ON team_members (principal_id);
 CREATE INDEX team_repos_repo ON team_repos (repo_id);
+CREATE TABLE ci_data_keys (
+        generation INTEGER PRIMARY KEY CHECK (generation >= 1),
+        wrapped TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        master_key_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        lost_at INTEGER
+      ) STRICT;
+CREATE TABLE ci_repo_epochs (
+        repo_id TEXT PRIMARY KEY,
+        epoch INTEGER NOT NULL
+      ) STRICT;
+CREATE TABLE ci_secret_repos (
+        name TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        PRIMARY KEY (name, repo_id)
+      ) STRICT;
+CREATE TABLE ci_secrets (
+        scope TEXT NOT NULL,
+        name TEXT NOT NULL,
+        generation INTEGER NOT NULL REFERENCES ci_data_keys (generation),
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        visibility TEXT CHECK (visibility IN ('all', 'private', 'selected')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, name),
+        CHECK ((scope = 'org') = (visibility IS NOT NULL))
+      ) STRICT;
+CREATE TABLE ci_variable_repos (
+        name TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        PRIMARY KEY (name, repo_id)
+      ) STRICT;
+CREATE TABLE ci_variables (
+        scope TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        visibility TEXT CHECK (visibility IN ('all', 'private', 'selected')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, name),
+        CHECK ((scope = 'org') = (visibility IS NOT NULL))
+      ) STRICT;
 CREATE TABLE collaborators (
         repo_id TEXT NOT NULL,
         principal_id TEXT NOT NULL,

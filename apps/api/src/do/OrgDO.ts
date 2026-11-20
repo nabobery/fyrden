@@ -4,6 +4,7 @@ import {
   createMetrics,
   measureInvocation,
 } from "@fyrden/adapters-cloudflare/obs";
+import type { RepoVisibility } from "@fyrden/domain";
 import {
   atLeast,
   GITHUB_DEFAULT_LABELS,
@@ -18,6 +19,16 @@ import {
 } from "@fyrden/domain";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
+import {
+  AccountCi,
+  type CiActor,
+  type CiKind,
+  type CiPage,
+  type CiRepoViewItem,
+  type CiResult,
+  type CiSecretItem,
+  type CiVariableItem,
+} from "./org/ci-secrets.js";
 import {
   AccountQuotas,
   CONFIRMED_KEEP_MS,
@@ -47,6 +58,14 @@ export const accountHooks: {
   afterLifecycleRead?: (account: OrgDO) => Promise<void>;
   /** Before the object reads its restore generation from the directory. */
   beforeEpochRead?: () => Promise<void>;
+  /** After a CI write read its listed repositories from the directory, before it checks them. */
+  ciListed?: (account: OrgDO) => Promise<void>;
+  /** After a CI write is prepared (a secret sealed, listed repositories checked), before its commit. */
+  ciPrepared?: (account: OrgDO) => Promise<void>;
+  /** After a new CI data key generation is prepared, before its commit. */
+  ciKeyPrepared?: (account: OrgDO) => Promise<void>;
+  /** After a CI data key is wrapped again, before its guarded commit. */
+  ciRewrapPrepared?: (account: OrgDO) => Promise<void>;
 } = {};
 
 /** What a user deletion asks of each account object (see `retirePrincipals`). */
@@ -1195,7 +1214,109 @@ export class OrgDO extends MigratingDO {
       this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
       this.#quotas().forgetRepo(repoId);
+      this.#ci.forgetRepo(repoId);
     });
+  }
+
+  #ciOf: AccountCi | undefined;
+  get #ci(): AccountCi {
+    this.#ciOf ??= new AccountCi({
+      storage: this.ctx.storage,
+      env: this.env,
+      now: () => this.#now(),
+      account: () => {
+        const meta = this.#meta();
+        return meta && { id: meta.account_id, kind: meta.kind };
+      },
+      notHere: (repoId) => this.#notHere(repoId),
+      audit: (actor, action, details) => this.#audit(actor, action, details),
+      audited: () => this.#scheduleAudit(),
+      pause: async (point) => {
+        const hook = {
+          listed: accountHooks.ciListed,
+          prepared: accountHooks.ciPrepared,
+          keyPrepared: accountHooks.ciKeyPrepared,
+          rewrapPrepared: accountHooks.ciRewrapPrepared,
+        }[point];
+        await hook?.(this);
+      },
+    });
+    return this.#ciOf;
+  }
+
+  /** The public key secrets of `scope` (`org` or a repository id) are sealed for. */
+  ciPublicKey(actor: CiActor, scope: string): Promise<CiResult<{ keyId: string; key: string }>> {
+    return this.#ci.publicKey(actor, scope);
+  }
+
+  /** Sets a secret from a value sealed for the scope's public key `keyId`. */
+  ciSetSecret(
+    input: Parameters<AccountCi["setSecret"]>[0],
+  ): Promise<CiResult<{ created: boolean }>> {
+    return this.#ci.setSecret(input);
+  }
+
+  /** A page of a scope's secrets by name (`page` from 1), never their values. */
+  ciSecrets(scope: string, page: number, perPage: number): Promise<CiResult<CiPage<CiSecretItem>>> {
+    return this.#ci.secrets(scope, page, perPage);
+  }
+
+  ciSecret(scope: string, name: string): Promise<CiResult<CiSecretItem>> {
+    return this.#ci.secret(scope, name);
+  }
+
+  /** Deletes a secret or a variable of a scope. */
+  ciDelete(actor: CiActor, kind: CiKind, scope: string, name: string): CiResult<null> {
+    return this.#ci.remove(actor, kind, scope, name);
+  }
+
+  ciCreateVariable(input: Parameters<AccountCi["createVariable"]>[0]): Promise<CiResult<null>> {
+    return this.#ci.createVariable(input);
+  }
+
+  ciUpdateVariable(input: Parameters<AccountCi["updateVariable"]>[0]): Promise<CiResult<null>> {
+    return this.#ci.updateVariable(input);
+  }
+
+  /** A page of a scope's variables by name (`page` from 1). */
+  ciVariables(scope: string, page: number, perPage: number): CiResult<CiPage<CiVariableItem>> {
+    return this.#ci.variables(scope, page, perPage);
+  }
+
+  ciVariable(scope: string, name: string): CiResult<CiVariableItem> {
+    return this.#ci.variable(scope, name);
+  }
+
+  /** The repository ids an organization secret or variable of visibility `selected` lists. */
+  ciSelectedRepos(kind: CiKind, name: string): CiResult<string[]> {
+    return this.#ci.selectedRepos(kind, name);
+  }
+
+  ciChangeSelected(
+    actor: CiActor,
+    kind: CiKind,
+    name: string,
+    change: Parameters<AccountCi["changeSelected"]>[3],
+  ): Promise<CiResult<null>> {
+    return this.#ci.changeSelected(actor, kind, name, change);
+  }
+
+  /** A page of the organization secrets or variables that reach repository `repoId`. */
+  ciRepoView(
+    kind: CiKind,
+    repoId: string,
+    visibility: RepoVisibility,
+    page: number,
+    perPage: number,
+  ): Promise<CiResult<CiPage<CiRepoViewItem>>> {
+    return this.#ci.repoView(kind, repoId, visibility, page, perPage);
+  }
+
+  /** Wraps the account's data keys again under the current CI master key. */
+  ciRewrap(
+    expectedKeyId?: string,
+  ): Promise<{ rewrapped: number; remaining: number; unreadable: number }> {
+    return this.#ci.rewrap(expectedKeyId);
   }
 
   #quotas(): AccountQuotas {
@@ -1415,6 +1536,8 @@ export class OrgDO extends MigratingDO {
       // A repository that left before may come back.
       this.ctx.storage.sql.exec("DELETE FROM forgotten_repos WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM released_repos WHERE repo_id = ?", repoId);
+      // A CI write prepared before it left is refused, though it is here again.
+      this.#ci.bumpEpoch(repoId);
       const now = this.#now();
       for (const c of from.collaborators.filter((c) => !this.#gone([c.principalId], remaining)))
         this.ctx.storage.sql.exec(
@@ -1485,6 +1608,8 @@ export class OrgDO extends MigratingDO {
       this.ctx.storage.sql.exec("DELETE FROM collaborators WHERE repo_id = ?", repoId);
       this.ctx.storage.sql.exec("DELETE FROM team_repos WHERE repo_id = ?", repoId);
       this.#quotas().forgetRepo(repoId);
+      // Its Actions secrets and variables stay behind, deleted: the new account sets its own.
+      this.#ci.forgetRepo(repoId);
       this.ctx.storage.sql.exec(
         `INSERT INTO released_repos (repo_id, transfer_id, released_at) VALUES (?, ?, ?)
          ON CONFLICT (repo_id) DO UPDATE SET transfer_id = excluded.transfer_id,

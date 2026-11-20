@@ -230,6 +230,39 @@ export async function findReposById(
   return results.map(entryOf);
 }
 
+/**
+ * A page, by id, of those of `ids` that are active repositories of
+ * `ownerId` now, and how many there are: a list kept elsewhere (an
+ * organization secret's repositories) read as the directory has it, so an
+ * id of a repository being deleted or moved to another owner is neither
+ * listed nor counted.
+ */
+export async function ownedReposPage(
+  env: Env,
+  ownerId: string,
+  ids: readonly string[],
+  page: { readonly page: number; readonly perPage: number },
+  metrics?: Metrics,
+): Promise<{ total: number; repos: RepoEntry[] }> {
+  if (ids.length === 0) return { total: 0, repos: [] };
+  const db = env.DIRECTORY.withSession("first-primary");
+  const owned = `FROM repos r JOIN principals p ON p.id = r.owner_id
+    WHERE r.id IN (SELECT value FROM json_each(?1)) AND r.owner_id = ?2 AND r.state = 'active'
+      AND p.lifecycle IN ('active', 'suspended')`;
+  const list = JSON.stringify(ids);
+  metrics?.count("d1.query", { db: "directory", op: "owned_repos_page" }, 2);
+  const [count, rows] = await db.batch([
+    db.prepare(`SELECT count(*) AS n ${owned}`).bind(list, ownerId),
+    db
+      .prepare(`SELECT ${REPO_COLUMNS} ${owned} ORDER BY r.id LIMIT ?3 OFFSET ?4`)
+      .bind(list, ownerId, page.perPage, (page.page - 1) * page.perPage),
+  ]);
+  return {
+    total: (count?.results[0] as { n: number } | undefined)?.n ?? 0,
+    repos: ((rows?.results ?? []) as RepoRow[]).map(entryOf),
+  };
+}
+
 /** The repositories of one owner in a fork network a pull request's head is looked for among. Proposed. */
 export const MAX_HEAD_CANDIDATES = 10;
 
@@ -630,6 +663,32 @@ export async function renameRepo(
     forgetResolved(repo.ownerHandle, forgotten);
   const row = results[4]?.results[0];
   return row && { value: row.name, gen: row.name_gen };
+}
+
+/**
+ * Who owns `repoId` now, whether a transfer is moving it, and the id of the
+ * last transfer started for it (null when none ever was): a transfer away
+ * and back leaves the owner as it was but not this id.
+ */
+export async function ownershipState(
+  env: Env,
+  repoId: string,
+  metrics?: Metrics,
+): Promise<{ ownerId: string; transferring: boolean; lastTransfer: string | null } | undefined> {
+  metrics?.count("d1.query", { db: "directory", op: "ownership_state" });
+  const row = await env.DIRECTORY.withSession("first-primary")
+    .prepare(
+      `SELECT r.owner_id, t.transfer_id, t.step
+       FROM repos r LEFT JOIN repo_transfers t ON t.repo_id = r.id WHERE r.id = ?`,
+    )
+    .bind(repoId)
+    .first<{ owner_id: string; transfer_id: string | null; step: string | null }>();
+  if (!row) return undefined;
+  return {
+    ownerId: row.owner_id,
+    transferring: row.step !== null && row.step !== "done" && row.step !== "failed",
+    lastTransfer: row.transfer_id,
+  };
 }
 
 /**

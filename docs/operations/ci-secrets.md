@@ -49,10 +49,27 @@ needs to set their secrets again.
    are encrypted with it, and `CI_SECRETS_KEY` still opens the others.
 3. Encrypt every data key again with it: call
    `POST /api/admin/ci/secrets/rewrap` as an instance administrator,
-   passing the `next_cursor` it answers as `cursor`, until a pass ends with
-   `next_cursor` null and `remaining` 0. The answer also counts
-   `unreadable` data keys: those whose master key is already gone (see
-   below). A secret write also encrypts its account's data key again.
+   starting with no `cursor` and passing the `next_cursor` it answers as
+   `cursor`, until `next_cursor` is null. That is one sweep over every
+   account. Add up `remaining` and `unreadable` over **all** the sweep's
+   calls: a call's counts are only for the 25 accounts it visited, so a
+   last call with `remaining` 0 says nothing about earlier ones. Repeat
+   whole sweeps until one adds up to `remaining` 0. An account object
+   still running a version from before `CI_SECRETS_KEY_NEXT` was set (a
+   busy Durable Object keeps its old code for a while after a deployment)
+   wraps nothing and counts all its data keys as `remaining`. `remaining` counts
+   data keys still under another key that open (one
+   changed by a concurrent write is tried again three times, then left for
+   the next sweep). `unreadable` counts data keys whose master key is
+   already gone (see below); check that total too before retiring a key. The call answers 503
+   `ci_key_unavailable` while the key is missing or misconfigured. A secret
+   write also encrypts its account's data key again. An object still on the
+   old code that has no data key yet counts nothing, and can make its first
+   one under the old key after its page has passed. So the sweep that
+   counts is one started after the cutoff of step 4 (the version that set
+   `CI_SECRETS_KEY_NEXT` serving all traffic, plus 5 minutes), while the old
+   key still opens: run a whole sweep then, and go on only if it adds up to
+   `remaining` 0.
 4. If you kept the old key's value, add it to `CI_SECRETS_KEYS_RETIRED`
    (base64 keys, one per line) **before** the next step, and keep it there
    for at least 30 days. Jobs that were already running when you set

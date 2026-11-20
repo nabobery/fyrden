@@ -82,6 +82,24 @@ async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
       detail: "The request body must be a JSON object.",
     };
   }
+  // A body naming another resource than its path (GitHub's variable PATCH renames by `name`;
+  // Fyrden renames nothing this way) is refused, not silently overridden by the path. A string
+  // must match ignoring case, a number must be the path's number; any other value is refused.
+  for (const [key, value] of Object.entries(params)) {
+    if (!Object.hasOwn(body, key)) continue;
+    const sent = (body as Record<string, unknown>)[key];
+    const same =
+      typeof sent === "string"
+        ? sent.toLowerCase() === value.toLowerCase()
+        : typeof sent === "number" && value.trim() !== "" && Number(value) === sent;
+    if (!same)
+      return {
+        ok: false,
+        status: 422,
+        code: "invalid_input",
+        detail: `The body's ${key} is not the path's: it cannot be changed here.`,
+      };
+  }
   return { ok: true, input: { ...body, ...params } };
 }
 

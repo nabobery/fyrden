@@ -2,6 +2,9 @@ export * from "./authz/evaluate.js";
 export * from "./authz/permissions.js";
 export * from "./authz/roles.js";
 export * from "./checks/checks.js";
+// Names, limits and precedence of Actions secrets and variables: no workflow parser, so in the root.
+export * from "./ci/secret-names.js";
+export * from "./ci/secret-precedence.js";
 export * from "./codeowners/match.js";
 export * from "./codeowners/owners.js";
 export * from "./codeowners/parse.js";
