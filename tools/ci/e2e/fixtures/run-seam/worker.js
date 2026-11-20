@@ -179,6 +179,13 @@ export default {
       const { repoId, at } = await request.json();
       return json(await env.REPO.getByName(repoId).ciScheduleTick(at ?? Date.now()));
     }
+    // The run's reserve slice now, through `RunDO.ciReserveNow`, which no route of fyrden-api
+    // reaches: body `{ runId }`. After the verifier moves the CI ledger's day back, a refused job
+    // is asked again as the alarm would at its retry time.
+    if (url.pathname === "/__runs/reserve-now" && request.method === "POST") {
+      const { runId } = await request.json();
+      return json(await env.RUN.getByName(runId).ciReserveNow());
+    }
     const match = /^\/__runs(?:\/([0-9A-Z]{26}))?\/([a-z]+)$/.exec(url.pathname);
     if (!match) return env.API.fetch(request);
     const [, runId, action] = match;

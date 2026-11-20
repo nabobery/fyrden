@@ -57,6 +57,17 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `runs.owner_id`: the account that owned the repository when the run was
  *   created, the only one whose secrets its jobs are given; NULL for a run
  *   created without one (before this version), whose jobs get no secrets.
+ *
+ * v8 (CI minutes and capacity):
+ * - `ci_reservations`: one row a job instance once it is queued, for its
+ *   current reservation (`seq` counts its reservations): its state, and the
+ *   inputs fixed before any store is asked (key, billed account, agent,
+ *   minutes, the ledger's price on Free, span, validity, settlement time),
+ *   its start window, when a refused one asks again and why it waits, the
+ *   times it ran, when it was last found a job no runner may take
+ *   (`ineligible_at`: it asks no store until the run checks again), and
+ *   whether it was made for an account that no longer owns the repository
+ *   (`rebind`: released and made again for the owner). Instances queued before v8 start `wanted`.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -370,6 +381,48 @@ export const runSchema: readonly DoMigration[] = [
       DROP TABLE ci_log_masks;
       ALTER TABLE ci_log_masks_v7 RENAME TO ci_log_masks;
       ALTER TABLE runs ADD COLUMN owner_id TEXT;
+    `,
+  },
+  {
+    version: 8,
+    // A job instance's CI reservation (src/do/run/reservations.ts). `key` and the inputs after it
+    // are written together, before the first call to a store, and cleared when `seq` moves on.
+    // `price` is the ledger's (Free); null when only the account's minutes are reserved.
+    // `asked_for` is the account `refusals` were counted against; a new owner starts them again.
+    name: "ci_reservations",
+    sql: `
+      CREATE TABLE ci_reservations (
+        job_id INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL CHECK (seq >= 1),
+        state TEXT NOT NULL CHECK (state IN
+          ('wanted', 'minutes', 'reserved', 'running', 'refused', 'ending', 'settled')),
+        key TEXT,
+        account_id TEXT,
+        agent_id TEXT,
+        minutes INTEGER CHECK (minutes >= 0),
+        price TEXT CHECK (price IS NULL OR json_valid(price)),
+        span_ms INTEGER CHECK (span_ms > 0),
+        fixed_at INTEGER,
+        valid_until INTEGER,
+        settle_by INTEGER,
+        window_until INTEGER,
+        retry_at INTEGER,
+        refusals INTEGER NOT NULL DEFAULT 0 CHECK (refusals >= 0),
+        waiting_for TEXT CHECK (waiting_for IN ('ci_minutes', 'daily_capacity')),
+        started_at INTEGER,
+        ended_at INTEGER,
+        ineligible_at INTEGER CHECK (ineligible_at IS NULL OR (state = 'wanted' AND key IS NULL)),
+        rebind INTEGER NOT NULL DEFAULT 0 CHECK (rebind IN (0, 1)),
+        asked_for TEXT,
+        CHECK ((key IS NULL) = (account_id IS NULL) AND (key IS NULL) = (minutes IS NULL)
+          AND (key IS NULL) = (span_ms IS NULL) AND (key IS NULL) = (fixed_at IS NULL)
+          AND (key IS NULL) = (valid_until IS NULL) AND (key IS NULL) = (settle_by IS NULL)),
+        CHECK (key IS NOT NULL OR state IN ('wanted', 'ending', 'settled'))
+      ) STRICT;
+      -- Jobs queued before reservations existed reserve too; the run's next dispatch pass
+      -- starts its reserve slice.
+      INSERT INTO ci_reservations (job_id, seq, state)
+        SELECT job_id, 1, 'wanted' FROM run_instances WHERE status = 'queued';
     `,
   },
 ];

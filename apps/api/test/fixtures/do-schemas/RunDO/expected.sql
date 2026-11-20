@@ -42,6 +42,34 @@ CREATE TABLE ci_logs (
         updated_at INTEGER NOT NULL, mask_carry TEXT, ended_at INTEGER, gap_remaining INTEGER NOT NULL DEFAULT 0 CHECK (gap_remaining >= 0), finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)), unmasked INTEGER NOT NULL DEFAULT 0 CHECK (unmasked IN (0, 1)),
         CHECK (state <> 'complete' OR omitted_rows = 0)
       ) STRICT;
+CREATE TABLE ci_reservations (
+        job_id INTEGER PRIMARY KEY,
+        seq INTEGER NOT NULL CHECK (seq >= 1),
+        state TEXT NOT NULL CHECK (state IN
+          ('wanted', 'minutes', 'reserved', 'running', 'refused', 'ending', 'settled')),
+        key TEXT,
+        account_id TEXT,
+        agent_id TEXT,
+        minutes INTEGER CHECK (minutes >= 0),
+        price TEXT CHECK (price IS NULL OR json_valid(price)),
+        span_ms INTEGER CHECK (span_ms > 0),
+        fixed_at INTEGER,
+        valid_until INTEGER,
+        settle_by INTEGER,
+        window_until INTEGER,
+        retry_at INTEGER,
+        refusals INTEGER NOT NULL DEFAULT 0 CHECK (refusals >= 0),
+        waiting_for TEXT CHECK (waiting_for IN ('ci_minutes', 'daily_capacity')),
+        started_at INTEGER,
+        ended_at INTEGER,
+        ineligible_at INTEGER CHECK (ineligible_at IS NULL OR (state = 'wanted' AND key IS NULL)),
+        rebind INTEGER NOT NULL DEFAULT 0 CHECK (rebind IN (0, 1)),
+        asked_for TEXT,
+        CHECK ((key IS NULL) = (account_id IS NULL) AND (key IS NULL) = (minutes IS NULL)
+          AND (key IS NULL) = (span_ms IS NULL) AND (key IS NULL) = (fixed_at IS NULL)
+          AND (key IS NULL) = (valid_until IS NULL) AND (key IS NULL) = (settle_by IS NULL)),
+        CHECK (key IS NOT NULL OR state IN ('wanted', 'ending', 'settled'))
+      ) STRICT;
 CREATE TABLE ci_tasks (
         wire_id INTEGER PRIMARY KEY,
         job_id INTEGER NOT NULL,

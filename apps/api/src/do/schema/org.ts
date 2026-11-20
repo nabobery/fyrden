@@ -26,6 +26,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `quota_assets` (v10): each repository's own statement of the bytes its
  *   release assets hold, with the tuple (`epoch_gen`, `seq`) that orders
  *   its statements; counted in the account's usage.
+ * - `ci_minutes` (v12): the account's CI minutes by reservation key: what
+ *   each job reserved and used, in the UTC month of its grant, against the
+ *   agent that caused it (if any); released keys stay, so a late reserve of
+ *   one grants nothing.
  * - `default_labels` (v7): an organization's default labels, copied into
  *   its new repositories; GitHub's set until `org_meta.default_labels_set`.
  * - `ci_data_keys`, `ci_secrets`, `ci_secret_repos`, `ci_variables`,
@@ -341,6 +345,25 @@ export const orgSchema: readonly DoMigration[] = [
         repo_id TEXT PRIMARY KEY,
         epoch INTEGER NOT NULL
       ) STRICT;
+    `,
+  },
+  {
+    version: 12,
+    // CI minutes held, settled or released by reservation key (src/do/org/ci-minutes.ts). A key
+    // released before it was reserved is a row reserving nothing.
+    name: "ci_minutes",
+    sql: `
+      CREATE TABLE ci_minutes (
+        key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200),
+        agent_id TEXT,
+        month TEXT NOT NULL CHECK (length(month) = 7),
+        reserved INTEGER NOT NULL CHECK (reserved >= 0),
+        used INTEGER NOT NULL DEFAULT 0 CHECK (used BETWEEN 0 AND reserved),
+        state TEXT NOT NULL CHECK (state IN ('held', 'settled', 'released')),
+        settle_by INTEGER CHECK (settle_by IS NOT NULL OR state = 'released'),
+        created_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX ci_minutes_month ON ci_minutes (month, agent_id);
     `,
   },
 ];

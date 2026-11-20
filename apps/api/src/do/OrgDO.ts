@@ -18,8 +18,16 @@ import {
   strongestRole,
 } from "@fyrden/domain";
 import type { SecretReferences } from "@fyrden/domain/ci";
+import { ciEnv } from "../ci/budget.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
+import {
+  CiMinutes,
+  type CiMinutesAnswer,
+  type CiMinutesRequest,
+  type CiMinutesSettlement,
+  ciMinuteLimits,
+} from "./org/ci-minutes.js";
 import {
   AccountCi,
   type CiActor,
@@ -1500,6 +1508,25 @@ export class OrgDO extends MigratingDO {
   /** An upload ended without committing: what it holds is free again. */
   releaseStorage(uploadId: string): void {
     this.#quotas().release(uploadId);
+  }
+
+  #ciMinutes(): CiMinutes {
+    return new CiMinutes(this.ctx.storage, ciMinuteLimits(ciEnv(this.env)), () => this.#now());
+  }
+
+  /** Holds a CI job's minutes by key before it may start (see `CiMinutes.reserve`). */
+  reserveCiMinutes(input: CiMinutesRequest): CiMinutesAnswer {
+    return this.#ciMinutes().reserve(input);
+  }
+
+  /** Settles a CI job's held minutes at what it ran (see `CiMinutes.settle`). */
+  settleCiMinutes(key: string, actualMs: number): CiMinutesSettlement {
+    return this.#ciMinutes().settle(key, actualMs);
+  }
+
+  /** Releases a CI job's minutes by key, held or not (see `CiMinutes.release`). */
+  releaseCiMinutes(key: string): "released" | "settled" {
+    return this.#ciMinutes().release(key);
   }
 
   /**

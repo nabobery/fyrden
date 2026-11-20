@@ -52,14 +52,16 @@ describe("a job token's scope", () => {
     expect(scopesOf(tokens)).toEqual([["contents:read", "metadata:read"]]);
   });
 
-  it("is read only for an approved fork run asking for write-all", async () => {
+  // A fork job is never reserved, so never assigned (runner-eligibility.test.ts); an untrusted
+  // run of the repository's own branch is.
+  it("is read only for an approved untrusted run asking for write-all", async () => {
     const f = await orgRepo();
     const spec = specFor(f, source(["permissions: write-all"], ["permissions: write-all"]), {
       event: "pull_request",
       ref: "refs/pull/1/head",
       github: { event_name: "pull_request", workflow: "ci" },
       trust: "untrusted",
-      fork: true,
+      fork: false,
       approval: { workflowBlob: "c".repeat(40), action: "opened" },
     });
     const { tokens } = await assigned(f, spec);

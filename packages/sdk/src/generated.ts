@@ -8337,6 +8337,8 @@ export type ActionsRunsJobsListOutput = {
     /** Fyrden: whether every log row reached durable storage; null while it runs. */
     log_complete: boolean | null;
     error: string | null;
+    /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
+    waiting_for?: "ci_minutes" | "daily_capacity" | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;

@@ -226,6 +226,29 @@ async function pending(runId: string) {
   return results;
 }
 
+/**
+ * Waits until run `runId` of `repo` has its one job queued, has the run reserve now (as its
+ * alarm would), and answers its reservation: a job no runner may take is never reserved, so
+ * never published.
+ */
+async function queuedUnreserved(repo: string, runId: string) {
+  await eventually(`the job of ${runId} queued`, async () => {
+    const { jobs } = await owner.api.call("actions.runs.jobs.list", {
+      owner: org,
+      repo,
+      run_id: runId,
+    });
+    return jobs.length === 1 && jobs[0]?.status === "queued" ? jobs : undefined;
+  });
+  const res = await fetch(`${forge.origin}/__runs/reserve-now`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ runId }),
+  });
+  expect(res.status).toBe(200);
+  return (await res.json()) as { seq: number; state: string; waitingFor: string | null }[];
+}
+
 /** Waits until run `runId` of `repo` has its one job queued and offered to the account's runners. */
 async function queued(repo: string, runId: string) {
   await eventually(`the job of ${runId} queued`, async () => {
@@ -403,7 +426,12 @@ beforeAll(async () => {
     expect(pulled.code, pulled.output).toBe(0);
   }
   note("starting local forge");
-  forge = await startForge("runner", { primary: seam, vars: { FYRDEN_CI_RUNNERS: "on" } });
+  // Each job is priced at 10 minutes (the runner's own timeout here), so this file's jobs fit
+  // one day of Free's default CI allowance.
+  forge = await startForge("runner", {
+    primary: seam,
+    vars: { FYRDEN_CI_RUNNERS: "on", FYRDEN_CI_MAX_JOB_MINUTES: "10" },
+  });
   note("creating fixture repository");
   owner = await forge.user(`own${nonce}`);
   org = `org${nonce}`;
@@ -433,12 +461,13 @@ beforeAll(async () => {
     ".github/workflows/ci.yml": never(`${WORKFLOW_NAME}-public`, "push"),
   });
   publicRun = (await triggered("pub", "push", pubSha)).runId;
-  expect(await queued("pub", publicRun)).toMatchObject([
-    { repo_id: pub.id, fork: 0, claimed_by: null, visibility: "public" },
+  expect(await queuedUnreserved("pub", publicRun)).toMatchObject([
+    { seq: 1, state: "wanted", waitingFor: null },
   ]);
+  expect(await pending(publicRun)).toEqual([]);
 
   // A fork's pull request from a first-time contributor, approved by the owner.
-  const base = await owner.api.call("orgs.repos.create", { org, name: "base" });
+  await owner.api.call("orgs.repos.create", { org, name: "base" });
   await newRepo("base", { "README.md": "base\n" });
   const contributor = await forge.user(`con${nonce}`);
   await owner.api.call("repos.collaborators.set", {
@@ -470,9 +499,10 @@ beforeAll(async () => {
       .approval,
   ).toMatchObject({ state: "waiting" });
   await owner.api.call("actions.runs.approve", { owner: org, repo: "base", run_id: forkRun });
-  expect(await queued("base", forkRun)).toMatchObject([
-    { repo_id: base.id, fork: 1, claimed_by: null, visibility: "private" },
+  expect(await queuedUnreserved("base", forkRun)).toMatchObject([
+    { seq: 1, state: "wanted", waitingFor: null },
   ]);
+  expect(await pending(forkRun)).toEqual([]);
 
   data = await mkdtemp(join(tmpdir(), "fyrden-runner-data-"));
   await writeFile(
@@ -1162,8 +1192,9 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
         repo,
         run_id: runId,
       });
-      expect(jobs).toMatchObject([{ status: "queued" }]);
-      expect(await pending(runId)).toMatchObject([{ claimed_by: null }]);
+      expect(jobs).toMatchObject([{ status: "queued", waiting_for: null }]);
+      // Never reserved, so never published while the eligible jobs ran.
+      expect(await pending(runId)).toEqual([]);
     }
   });
 });

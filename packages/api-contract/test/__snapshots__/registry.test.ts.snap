@@ -11229,6 +11229,21 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "string",
                           },
+                          "waiting_for": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "ci_minutes",
+                                  "daily_capacity",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
+                          },
                         },
                         "required": [
                           "id",

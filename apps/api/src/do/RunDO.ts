@@ -28,12 +28,14 @@ import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
 import {
   type AssignTaskAnswer,
+  DISPATCH_RESYNC_MS,
   type DispatchHooks,
   type ReportTaskAnswer,
   RunDispatch,
 } from "./run/dispatch.js";
 import {
   type AttemptRow,
+  DEFAULT_TIMEOUT_MINUTES,
   type InstanceRow,
   MAX_RUN_ATTEMPTS,
   type NodeRow,
@@ -53,6 +55,13 @@ import {
   type SecretMasksAnswer,
 } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
+import {
+  type ReservationHooks,
+  type ReservationView,
+  RunReservations,
+  runCiPolicy,
+  type WaitingFor,
+} from "./run/reservations.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -72,6 +81,7 @@ function stringValues(vars: unknown): Record<string, string> {
 }
 
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
+import { ciEnv } from "../ci/budget.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
 import {
   isPrincipalId,
@@ -173,6 +183,8 @@ export interface JobView {
   readonly check: { readonly state: string | null; readonly code: string | null };
   readonly logComplete: boolean | null;
   readonly error: string | null;
+  /** Why a queued job is not offered to runners yet: its CI minutes or the day's capacity; null otherwise. */
+  readonly waitingFor: WaitingFor | null;
 }
 
 export type CreateAnswer =
@@ -221,7 +233,7 @@ export type TaskAnswer<T> =
   | { readonly ok: false; readonly code: "task_finished" | "unknown_task" | "run_not_found" };
 
 /** Pause or fail points around each call to the repository and in the runner protocol's work, for tests. */
-export interface RunHooks extends DispatchHooks, LogHooks {
+export interface RunHooks extends DispatchHooks, LogHooks, ReservationHooks {
   beforeRepoCall?: (op: string) => Promise<void> | void;
   afterRepoCall?: (op: string) => Promise<void> | void;
 }
@@ -254,6 +266,7 @@ export class RunDO extends MigratingDO {
   readonly engine: RunEngine;
   readonly #dispatch: RunDispatch;
   readonly #logs: RunLogs;
+  readonly #reservations: RunReservations;
   /** The job logs' live sockets. */
   readonly viewers: LogViewers;
   /**
@@ -291,6 +304,31 @@ export class RunDO extends MigratingDO {
       logEnded: (task, completedAt) => host.#logs.taskEnded(task, completedAt),
       logComplete: (task) => host.#logs.complete(task),
       jobEnded: (jobId) => host.viewers.jobEnded(jobId),
+      maxJobMinutes: () => host.#ci().maxJobMinutes,
+      reservationWanted: (jobId) => host.#reservations.want(jobId),
+      reservationEnded: (jobId, at) => host.#reservations.end(jobId, at),
+    });
+    this.#reservations = new RunReservations({
+      env,
+      engine: this.engine,
+      get hooks() {
+        return host.hooks;
+      },
+      metrics: this.context.metrics,
+      log: this.#log,
+      get policy() {
+        return host.policy;
+      },
+      now: () => host.context.now(),
+      tx: (fn) => host.#tx(fn),
+      guarded: (job, fn) => host.#current(job, fn),
+      ci: () => host.#ci(),
+      ensureSlice: (runAt) =>
+        host.jobs.ensure("ci_reserve", RUN_JOB.reserve, runAt === undefined ? {} : { runAt }),
+      ensureResync: () =>
+        host.jobs.ensure("ci_dispatch", RUN_JOB.dispatch, {
+          runAt: host.context.now() + DISPATCH_RESYNC_MS,
+        }),
     });
     this.#dispatch = new RunDispatch({
       env,
@@ -305,8 +343,10 @@ export class RunDO extends MigratingDO {
       tx: (fn) => host.#tx(fn),
       guarded: (job, fn) => host.#current(job, fn),
       ensureDispatch: () => host.jobs.ensure("ci_dispatch", RUN_JOB.dispatch),
-      queued: (limit) => host.queued(limit),
-      assign: (jobId, key) => host.assign(jobId, key),
+      queued: (limit, accountId) => host.queued(limit, accountId),
+      ownedBy: (accountId) => host.#reservations.ownedBy(accountId),
+      reservationsWaiting: () => host.#reservations.waiting(),
+      assign: (jobId, key, accountId) => host.assign(jobId, key, accountId),
       taskLive: (ref) => host.taskLive(ref),
       updateTask: (ref) => host.updateTask(ref),
       completeTask: (ref, report) => host.completeTask(ref, report),
@@ -373,6 +413,11 @@ export class RunDO extends MigratingDO {
 
   #erased(): boolean {
     return this.engine.rows("SELECT 1 FROM run_erasure WHERE id = 1").length > 0;
+  }
+
+  /** How the run pays for its jobs, from the deployment's variables. */
+  #ci() {
+    return runCiPolicy(ciEnv(this.env));
   }
 
   #tx<T>(fn: () => T): T {
@@ -713,10 +758,16 @@ export class RunDO extends MigratingDO {
     if (!run) return undefined;
     const n = attempt ?? run.attempt;
     const rows = this.engine.rows<
-      InstanceRow & { check_desired: string | null; parked: string | null }
+      InstanceRow & {
+        check_desired: string | null;
+        parked: string | null;
+        waiting_for: WaitingFor | null;
+      }
     >(
-      `SELECT i.*, c.desired AS check_desired, c.parked AS parked FROM run_instances i
+      `SELECT i.*, c.desired AS check_desired, c.parked AS parked, r.waiting_for AS waiting_for
+       FROM run_instances i
        LEFT JOIN run_checks c ON c.attempt = i.attempt AND c.job_id = i.job_id
+       LEFT JOIN ci_reservations r ON r.job_id = i.job_id
        WHERE i.attempt = ? AND i.job_id > ? ORDER BY i.job_id LIMIT ?`,
       n,
       after,
@@ -736,6 +787,7 @@ export class RunDO extends MigratingDO {
         check: { state: row.check_desired, code: row.parked ?? row.check_code },
         logComplete: row.log_complete === null ? null : row.log_complete === 1,
         error: row.error,
+        waitingFor: row.status === "queued" ? row.waiting_for : null,
       })),
       next: rows.length > limit ? (page.at(-1) as InstanceRow).job_id : null,
     };
@@ -786,14 +838,24 @@ export class RunDO extends MigratingDO {
 
   // ------------------------------------------------------------------ the runner's calls
 
-  /** Instances waiting for a runner, oldest first. */
+  /**
+   * Instances waiting for a runner, oldest first: those whose CI minutes are
+   * reserved, inside their start window, for `accountId` when given.
+   */
   queued(
     limit = 100,
+    accountId?: string,
   ): { jobId: number; attempt: number; name: string; runsOn: string[]; queuedAt: number }[] {
     if (this.#erased()) return [];
     return this.engine
       .rows<InstanceRow>(
-        "SELECT * FROM run_instances WHERE status = 'queued' ORDER BY queued_at, job_id LIMIT ?",
+        `SELECT i.* FROM run_instances i JOIN ci_reservations r ON r.job_id = i.job_id
+         WHERE i.status = 'queued' AND r.state = 'reserved' AND r.window_until > ?
+           AND (? IS NULL OR r.account_id = ?)
+         ORDER BY i.queued_at, i.job_id LIMIT ?`,
+        this.context.now(),
+        accountId ?? null,
+        accountId ?? null,
         Math.min(limit, 256),
       )
       .map((row) => ({
@@ -806,10 +868,13 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * Hands a queued instance to a runner. The same key while its task lives
-   * gets the same answer and writes nothing; after it completed, `task_finished`.
+   * Hands a queued instance to a runner (of account `accountId`, when given).
+   * The same key while its task lives gets the same answer and writes
+   * nothing, whatever its reservation; after it completed, `task_finished`.
+   * A new assignment needs the instance's CI minutes reserved, inside their
+   * start window, for the runner's account.
    */
-  assign(jobId: number, assignKey: string): AssignAnswer {
+  assign(jobId: number, assignKey: string, accountId?: string): AssignAnswer {
     return this.#tx((): AssignAnswer => {
       if (this.#erased()) return { ok: false, code: "run_not_found" };
       const current = this.engine.current();
@@ -824,6 +889,7 @@ export class RunDO extends MigratingDO {
       if (row.status !== "queued") return { ok: false, code: "not_queued" };
       // Nothing starts on a concurrency grant this object cannot vouch for.
       if (!this.engine.instanceReady(row)) return { ok: false, code: "not_queued" };
+      if (!this.#reservations.admits(jobId, accountId)) return { ok: false, code: "not_queued" };
       this.engine.exec("UPDATE runs SET task_seq = task_seq + 1 WHERE id = 1");
       const task = (this.engine.run() as RunRow).task_seq;
       const now = this.context.now();
@@ -836,6 +902,7 @@ export class RunDO extends MigratingDO {
         jobId,
       );
       row = this.engine.instance(jobId) as InstanceRow;
+      this.#reservations.started(jobId, now);
       this.engine.applyInstance(row, { kind: "assign" });
       return this.#assignment(current.run, this.engine.instance(jobId) as InstanceRow);
     });
@@ -844,8 +911,14 @@ export class RunDO extends MigratingDO {
   #assignment(run: RunRow, row: InstanceRow): AssignAnswer {
     const model = this.#loadModel();
     const node = this.engine.node(row.attempt, row.job_key) as NodeRow;
-    const instance = this.engine.decode(row);
-    if (!instance) return { ok: false, code: "not_queued" };
+    const decoded = this.engine.decode(row);
+    if (!decoded) return { ok: false, code: "not_queued" };
+    // A timeout clamped below the job's own (Free) reaches the runner, which enforces it.
+    const timeoutMinutes = Math.round(row.timeout_ms / 60_000);
+    const instance =
+      timeoutMinutes < (decoded.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES)
+        ? { ...decoded, timeoutMinutes }
+        : decoded;
     const declares = node.declares
       ? (JSON.parse(node.declares) as { strategy: boolean; continueOnError: boolean })
       : { strategy: false, continueOnError: false };
@@ -955,6 +1028,7 @@ export class RunDO extends MigratingDO {
         row.queued_at,
         row.job_id,
       );
+      this.#reservations.unassigned(row.job_id);
       this.#logs.taskEnded(ref.task, this.context.now());
       this.engine.ensureDeadlines();
       return true;
@@ -1423,6 +1497,28 @@ export class RunDO extends MigratingDO {
       this.engine.cancel("concurrency", reason === "evicted" ? "force" : "graceful");
   }
 
+  // ------------------------------------------------------------------ CI reservations
+
+  /**
+   * Runs the reserve slice now, every refused reservation asked again as at
+   * its retry time: only what the alarm will do, done early (a local check
+   * that a refused job is admitted after the day turns). Takes no time; no
+   * route of the Worker reaches it. Answers the reservations as they stand.
+   */
+  async ciReserveNow(): Promise<ReservationView[]> {
+    if (this.#erased() || !this.engine.run()) return [];
+    this.#tx(() => this.#reservations.retryNow());
+    const handler = this.#handlers().ci_reserve;
+    if (handler)
+      await this.jobs.runJob(
+        RUN_JOB.reserve,
+        handler,
+        this.memory,
+        this.context.now() + ALARM_BUDGET_MS,
+      );
+    return this.#reservations.views();
+  }
+
   // ------------------------------------------------------------------ erasure
 
   /**
@@ -1452,6 +1548,7 @@ export class RunDO extends MigratingDO {
         "ci_log_masks",
         "ci_log_tickets",
         "run_approval",
+        "ci_reservations",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1568,6 +1665,7 @@ export class RunDO extends MigratingDO {
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
       ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
+      ci_reserve: { runSlice: (job) => this.#reservations.slice(job) },
       ci_log_close: { runSlice: async () => this.#logs.closeSlice() },
       ci_log_viewers: { runSlice: () => this.viewers.slice() },
     };
@@ -1795,7 +1893,7 @@ export class RunDO extends MigratingDO {
       this.jobs.ensure("ci_task_end", RUN_JOB.taskEnd);
       return true;
     }
-    return false;
+    return this.#reservations.owed();
   }
 
   override async alarm(): Promise<void> {

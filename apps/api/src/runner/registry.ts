@@ -337,7 +337,16 @@ function liveOffer(now: string): string {
  * running when its repository goes public.
  */
 function eligible(x: string): string {
-  return `${x}.fork = 0 AND EXISTS (SELECT 1 FROM repos e WHERE e.id = ${x}.repo_id
+  return eligibleJob(`${x}.fork`, `${x}.repo_id`);
+}
+
+/**
+ * `eligible`'s rule for a job of repository `repoId` with fork flag `fork`
+ * (both SQL): what a run checks before it reserves a job, so it reserves
+ * none that no runner may take.
+ */
+export function eligibleJob(fork: string, repoId: string): string {
+  return `${fork} = 0 AND EXISTS (SELECT 1 FROM repos e WHERE e.id = ${repoId}
     AND e.visibility <> 'public' AND e.state = 'active')`;
 }
 

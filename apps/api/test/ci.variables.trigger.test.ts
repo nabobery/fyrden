@@ -16,6 +16,7 @@ import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import { MAX_VARIABLES_REFUSALS } from "../src/do/repo/ci-triggers.js";
 import { exprFromJson } from "../src/do/run/codec.js";
+import type { InstanceRow } from "../src/do/run/engine.js";
 import { loadModel } from "../src/do/run/model.js";
 import {
   MAX_RUN_CONTEXTS_BYTES,
@@ -125,13 +126,23 @@ const runNameOf = (runId: string) =>
     return toExprString(value.value);
   });
 
-/** What planning made of the run's current attempt: the runs-on of each queued job, each job's state. */
+/**
+ * What planning made of the run's current attempt: the runs-on of each queued
+ * job (read from the instance, published or not: a fork's job never is),
+ * each job's state.
+ */
 async function planOf(runId: string) {
   await at(runId, T0);
   await drain(runId);
   const view = await viewOf(runId);
   return {
-    runsOn: (await runStub(runId).queued()).map((q) => q.runsOn),
+    runsOn: await inRun(runId, (r) =>
+      r.engine
+        .rows<InstanceRow>(
+          "SELECT * FROM run_instances WHERE status = 'queued' ORDER BY queued_at, job_id",
+        )
+        .map((row) => [...(r.engine.decode(row)?.runsOn ?? [])]),
+    ),
     jobs: (await jobsOf(runId, view.attempt)).map((j) => ({
       name: j.name,
       status: j.status,

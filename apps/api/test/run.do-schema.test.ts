@@ -20,6 +20,7 @@ import runV4 from "./fixtures/do-schemas/RunDO/v4.sql?raw";
 import runV5 from "./fixtures/do-schemas/RunDO/v5.sql?raw";
 import runV6 from "./fixtures/do-schemas/RunDO/v6.sql?raw";
 import runV7 from "./fixtures/do-schemas/RunDO/v7.sql?raw";
+import runV8 from "./fixtures/do-schemas/RunDO/v8.sql?raw";
 
 const versions: Record<number, string> = {
   0: runV0,
@@ -30,6 +31,7 @@ const versions: Record<number, string> = {
   5: runV5,
   6: runV6,
   7: runV7,
+  8: runV8,
 };
 
 describe("RunDO schema", () => {
@@ -53,6 +55,31 @@ describe("RunDO schema", () => {
       return state.storage.sql.exec("SELECT trust, fork FROM runs").toArray();
     });
     expect(migrated).toEqual([{ trust: "untrusted", fork: 1 }]);
+  });
+
+  it("has a v7 run's queued jobs reserve, and nothing else", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const rows = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      state.storage.sql.exec(runV7);
+      state.storage.sql.exec(
+        `INSERT INTO run_instances (job_id, attempt, job_key, idx, total, name, name_key,
+          status, conclusion, timeout_ms, task, completed_at)
+         VALUES (1, 1, 'queued', 0, 1, 'queued', 'queued', 'queued', NULL, 60000, NULL, NULL),
+           (2, 1, 'running', 0, 1, 'running', 'running', 'in_progress', NULL, 60000, 41, NULL),
+           (3, 1, 'blocked', 0, 1, 'blocked', 'blocked', 'blocked', NULL, 60000, NULL, NULL),
+           (4, 1, 'done', 0, 1, 'done', 'done', 'completed', 'success', 60000, 42, 123)`,
+      );
+      state.storage.sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      state.storage.sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 7)");
+      applyDoMigrations(state.storage, runSchema);
+      return state.storage.sql
+        .exec("SELECT job_id, seq, state, key FROM ci_reservations")
+        .toArray();
+    });
+    expect(rows).toEqual([{ job_id: 1, seq: 1, state: "wanted", key: null }]);
   });
 
   it("binds an existing v1 run to its repository and original spec", async () => {

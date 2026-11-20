@@ -106,6 +106,44 @@ export function ciPollBudget(env: object): number {
   return CI_POLL_BUDGET;
 }
 
+/** The longest a job may run on Free unless `FYRDEN_CI_MAX_JOB_MINUTES` is set: the runner's default timeout. Proposed. */
+export const CI_FREE_MAX_JOB_MINUTES = 180;
+
+/**
+ * On Free, the longest a job may run, in minutes: `FYRDEN_CI_MAX_JOB_MINUTES`
+ * (1 to 7,200, a self-hosted job's limit), else `CI_FREE_MAX_JOB_MINUTES`.
+ * Paid: null, the job's own timeout.
+ */
+export function ciMaxJobMinutes(env: object): number | null {
+  if (workersPlan(env) === "paid") return null;
+  const raw = (env as { FYRDEN_CI_MAX_JOB_MINUTES?: unknown }).FYRDEN_CI_MAX_JOB_MINUTES;
+  if (typeof raw === "string" && /^[1-9][0-9]{0,3}$/.test(raw) && Number(raw) <= 7_200)
+    return Number(raw);
+  return CI_FREE_MAX_JOB_MINUTES;
+}
+
+/** The Worker variables CI's reservations read in the run and account objects. */
+export type CiVariable =
+  | "FYRDEN_PLAN"
+  | "FYRDEN_CI_DAILY"
+  | "FYRDEN_CI_FLEET"
+  | "FYRDEN_CI_MAX_JOB_MINUTES"
+  | "QUOTA_CI_MINUTES"
+  | "QUOTA_CI_AGENT_MINUTES";
+
+/**
+ * Values that replace the Worker's own variables where the run and account
+ * objects read CI's configuration, in this isolate only. Empty in a
+ * deployment; tests set them, since no request's variables reach those
+ * objects' env.
+ */
+export const ciVariableOverrides: Partial<Record<CiVariable, string>> = {};
+
+/** `env` as CI's reservations read it: with `ciVariableOverrides` in place. */
+export function ciEnv(env: object): object {
+  return { ...env, ...ciVariableOverrides };
+}
+
 /** The most runners the deployment holds: `FYRDEN_CI_FLEET`, else Free's default; Paid: none unless set. */
 export function ciFleetCap(env: object): number | null {
   const raw = (env as { FYRDEN_CI_FLEET?: unknown }).FYRDEN_CI_FLEET;

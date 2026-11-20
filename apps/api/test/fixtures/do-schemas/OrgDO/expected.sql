@@ -1,3 +1,4 @@
+CREATE INDEX ci_minutes_month ON ci_minutes (month, agent_id);
 CREATE INDEX ci_secret_repos_repo ON ci_secret_repos (repo_id);
 CREATE INDEX ci_variable_repos_repo ON ci_variable_repos (repo_id);
 CREATE INDEX collaborators_handle ON collaborators (repo_id, handle COLLATE NOCASE);
@@ -18,6 +19,16 @@ CREATE TABLE ci_data_keys (
         master_key_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         lost_at INTEGER
+      ) STRICT;
+CREATE TABLE ci_minutes (
+        key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200),
+        agent_id TEXT,
+        month TEXT NOT NULL CHECK (length(month) = 7),
+        reserved INTEGER NOT NULL CHECK (reserved >= 0),
+        used INTEGER NOT NULL DEFAULT 0 CHECK (used BETWEEN 0 AND reserved),
+        state TEXT NOT NULL CHECK (state IN ('held', 'settled', 'released')),
+        settle_by INTEGER CHECK (settle_by IS NOT NULL OR state = 'released'),
+        created_at INTEGER NOT NULL
       ) STRICT;
 CREATE TABLE ci_repo_epochs (
         repo_id TEXT PRIMARY KEY,

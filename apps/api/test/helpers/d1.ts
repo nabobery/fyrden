@@ -1,6 +1,8 @@
 // A D1 binding that counts what it runs, for tests bounding the queries an
 // invocation makes.
 
+import { env } from "cloudflare:workers";
+
 /**
  * `db` (and its sessions), counting every statement it runs, each of a
  * batch too, and (when `count` has the field) every call it makes: a
@@ -125,4 +127,29 @@ export function clockedD1(
       return typeof value === "function" ? value.bind(target) : value;
     },
   }) as D1Database;
+}
+
+/**
+ * D1's clock, wherever a statement of any binding in this isolate carries
+ * `marker` (a Durable Object's too, which `clockedD1` can't reach), read as
+ * `clock.now` milliseconds when the statement is prepared, until the
+ * returned function is called.
+ */
+export function pinD1Clock(marker: string, clock: { now: number }): () => void {
+  type Preparing = { prepare(query: string): D1PreparedStatement };
+  const rewrite = (query: string) => query.split(marker).join(`(${clock.now})`);
+  const session = env.DIRECTORY.withSession("first-primary");
+  const prototypes = [env.DIRECTORY, session].map((d) => Object.getPrototypeOf(d) as Preparing);
+  const originals = prototypes.map((proto) => proto.prepare);
+  prototypes.forEach((proto, i) => {
+    const original = originals[i] as Preparing["prepare"];
+    proto.prepare = function (this: Preparing, query: string) {
+      return original.call(this, rewrite(query));
+    };
+  });
+  return () => {
+    prototypes.forEach((proto, i) => {
+      proto.prepare = originals[i] as Preparing["prepare"];
+    });
+  };
 }

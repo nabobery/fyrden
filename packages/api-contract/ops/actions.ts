@@ -101,6 +101,13 @@ export const WorkflowJob = z.object({
     .nullable()
     .describe("Fyrden: whether every log row reached durable storage; null while it runs."),
   error: z.string().nullable(),
+  waiting_for: z
+    .enum(["ci_minutes", "daily_capacity"])
+    .nullable()
+    .optional()
+    .describe(
+      "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
+    ),
 });
 
 const COMPATIBILITY =

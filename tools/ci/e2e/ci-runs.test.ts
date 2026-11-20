@@ -71,9 +71,13 @@ async function runJob(runId: string, name: string, result: string) {
   const job = await eventually(`job ${name} queued`, async () =>
     (await jobsOf(runId)).jobs.find((j) => j.name === name && j.status === "queued"),
   );
-  const assigned = await seamCall<{ ok: boolean; task: unknown }>(`/${runId}/assign`, {
-    jobId: job.id,
-    key: `k-${name}`,
+  // Assignable once the run has reserved its CI minutes (its reserve slice runs on the alarm).
+  const assigned = await eventually(`job ${name} assigned`, async () => {
+    const answer = await seamCall<{ ok: boolean; task: unknown; code?: string }>(
+      `/${runId}/assign`,
+      { jobId: job.id, key: `k-${name}` },
+    );
+    return answer.ok || answer.code !== "not_queued" ? answer : undefined;
   });
   expect(assigned.ok).toBe(true);
   const done = await seamCall<{ ok: boolean }>(`/${runId}/complete`, {
@@ -84,7 +88,8 @@ async function runJob(runId: string, name: string, result: string) {
 }
 
 beforeAll(async () => {
-  forge = await startForge("runs", { primary: seam });
+  // Jobs priced at 10 minutes, so this file's jobs fit one day of Free's default CI allowance.
+  forge = await startForge("runs", { primary: seam, vars: { FYRDEN_CI_MAX_JOB_MINUTES: "10" } });
   owner = forge.admin;
   const git = new Git(forge, owner);
   const work = await seededRepo(forge, owner, git, REPO, { "README.md": "one\n" });
