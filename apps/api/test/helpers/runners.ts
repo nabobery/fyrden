@@ -25,7 +25,15 @@ import {
 } from "./runner-proto.js";
 import type { Fixture } from "./runs.js";
 
-export const ON: Partial<Env> = { FYRDEN_CI_RUNNERS: "on" } as Partial<Env>;
+/**
+ * Room for every runner a test file registers: on Free (the test env's
+ * plan) the fleet's cap is deployment-wide, and storage is shared within
+ * a file.
+ */
+export const ROOMY_FLEET: Partial<Env> = { FYRDEN_CI_FLEET: "100000" } as Partial<Env>;
+
+/** Runners on, with room for every runner the file registers. */
+export const ON: Partial<Env> = { FYRDEN_CI_RUNNERS: "on", ...ROOMY_FLEET } as Partial<Env>;
 
 /** Runs the app against the test env with some bindings replaced. */
 export async function call(path: string, init: RequestInit, overrides: Partial<Env> = ON) {

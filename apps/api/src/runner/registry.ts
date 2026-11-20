@@ -2,6 +2,7 @@
 // their credentials (each stored as its SHA-256 only).
 
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { CI_TODAY, servingRunners } from "../ci/budget.js";
 
 /** A runner as its credentials prove it. */
 export interface AuthenticatedRunner {
@@ -28,6 +29,19 @@ export interface ListedRunner {
   readonly createdAt: number;
   readonly declaredAt: number | null;
   readonly revokedAt: number | null;
+  readonly revokedReason: RevokedReason | null;
+}
+
+/** Why a runner was revoked: deleted by an owner, polling past its budget, past the fleet's cap, or spent. */
+export type RevokedReason = "deleted" | "poll_rate" | "fleet_cap" | "spent";
+
+/**
+ * A deployment's limit on runners: at most `cap` may serve, each polling at
+ * most `pollBudget` times a UTC day (D1's).
+ */
+export interface FleetLimit {
+  readonly cap: number;
+  readonly pollBudget: number;
 }
 
 interface RunnerRow {
@@ -42,6 +56,7 @@ interface RunnerRow {
   created_at: number;
   declared_at: number | null;
   revoked_at: number | null;
+  revoked_reason: RevokedReason | null;
   expires_at: number | null;
 }
 
@@ -77,12 +92,89 @@ export async function createRegistration(
 }
 
 /**
+ * SQL summing today's polls (D1's day) of runners that no longer serve:
+ * revoked ones, through their poll-day index, and ephemeral ones past
+ * their end at `now` that the cron has not stamped yet, a range of the
+ * live-runner index.
+ */
+function spentPolls(now: string): string {
+  return `((SELECT coalesce(sum(poll_used), 0) FROM ci_runners INDEXED BY ci_runners_polls
+      WHERE revoked_at IS NOT NULL AND poll_day = ${CI_TODAY})
+    + (SELECT coalesce(sum(poll_used), 0) FROM ci_runners INDEXED BY ci_runners_live
+      WHERE revoked_at IS NULL AND expires_at <= ${now} AND poll_day = ${CI_TODAY}))`;
+}
+
+/**
+ * SQL true while one more runner fits the fleet (`f`, its state; `cap`
+ * and `budget` SQL): fewer than `cap` may serve, and today's polls of
+ * runners that no longer serve fit the slots left besides the new one,
+ * each slot holding a day's budget. Every runner that serves is held to
+ * its budget, so the day's polls stay within `cap × budget` however
+ * runners are deleted and replaced.
+ */
+function fleetHasRoom(cap: string, budget: string): string {
+  return `(f.serving < ${cap} AND f.spent <= (${cap} - f.serving - 1) * ${budget})`;
+}
+
+const fleetState = (now: string, cap: string) =>
+  `(SELECT ${servingRunners(now, cap)} AS serving, ${spentPolls(now)} AS spent)`;
+
+/** Registration's insert under a fleet limit: `?1`-`?9` the runner and token, `?10` cap, `?11` budget. */
+export const REGISTER_RUNNER_SQL = registerRunnerSql(true);
+
+function registerRunnerSql(capped: boolean): string {
+  return `INSERT INTO ci_runners (uuid, account_id, token_hash, name, version, labels, ephemeral, created_at)
+         SELECT ?1, account_id, ?2, ?3, ?4, ?5, ?6, ?7 FROM ci_runner_registrations
+         ${capped ? `, ${fleetState("?7", "?10")} f` : ""}
+         WHERE token_hash = ?8 AND consume_nonce = ?9
+         ${capped ? `AND ${fleetHasRoom("?10", "?11")}` : ""}
+         RETURNING id, account_id`;
+}
+
+/** Whether another runner fits the fleet; the reason when not. */
+export type FleetRoom = "room" | "fleet_full" | "polls_spent";
+
+const FLEET_ROOM_SQL = `SELECT f.serving, f.spent FROM ${fleetState("?1", "?2")} f`;
+
+function roomOf(fleet: FleetLimit, row: { serving: number; spent: number }): FleetRoom {
+  if (row.serving >= fleet.cap) return "fleet_full";
+  return row.spent <= (fleet.cap - row.serving - 1) * fleet.pollBudget ? "room" : "polls_spent";
+}
+
+/**
+ * Whether another runner fits `fleet` at `now`, as registration decides it:
+ * advisory, since registration's own batch decides.
+ */
+export async function fleetRoom(
+  db: D1Database,
+  fleet: FleetLimit,
+  now: number,
+  metrics?: Metrics,
+): Promise<FleetRoom> {
+  count(metrics, "runner_fleet_room");
+  const row = await db
+    .prepare(FLEET_ROOM_SQL)
+    .bind(now, fleet.cap)
+    .first<{ serving: number; spent: number }>();
+  if (!row) throw new Error("fleet room: no answer");
+  return roomOf(fleet, row);
+}
+
+export type Registration =
+  | { readonly status: "registered"; readonly id: number; readonly accountId: string }
+  /** The token was unknown, spent or expired. */
+  | { readonly status: "refused" }
+  /** The token was good but the fleet had no room: it may be used again. */
+  | { readonly status: "fleet_full" | "polls_spent" };
+
+/**
  * Consumes the registration token whose hash is `registrationHash`, if it is
  * unused and unexpired at `now`, and registers the runner for its account,
  * in one batch: the consumption stamps the registration with `nonce`, and the
  * runner is inserted only from the row bearing it, so a batch that lost a race
- * for the token inserts nothing. Undefined when the token was unknown, spent
- * or expired.
+ * for the token inserts nothing. Under a `fleet` limit, the runner is
+ * inserted only while the fleet has room, read in the same statement; when
+ * it has none, the same batch gives the token back.
  */
 export async function registerRunner(
   db: D1Database,
@@ -96,38 +188,129 @@ export async function registerRunner(
     version: string;
     labels: readonly string[];
     ephemeral: boolean;
+    fleet: FleetLimit | null;
   },
   metrics?: Metrics,
-): Promise<{ id: number; accountId: string } | undefined> {
+): Promise<Registration> {
   count(metrics, "runner_register");
-  const [, inserted] = await db.batch([
+  const { fleet } = runner;
+  const insert = db
+    .prepare(registerRunnerSql(fleet !== null))
+    .bind(
+      runner.uuid,
+      runner.tokenHash,
+      runner.name,
+      runner.version,
+      JSON.stringify(runner.labels),
+      runner.ephemeral ? 1 : 0,
+      runner.now,
+      runner.registrationHash,
+      runner.nonce,
+      ...(fleet ? [fleet.cap, fleet.pollBudget] : []),
+    );
+  const consume = db
+    .prepare(
+      `UPDATE ci_runner_registrations SET consumed_at = ?1, consume_nonce = ?2
+       WHERE token_hash = ?3 AND consumed_at IS NULL AND expires_at > ?1`,
+    )
+    .bind(runner.now, runner.nonce, runner.registrationHash);
+  if (!fleet) {
+    const [, inserted] = await db.batch([consume, insert]);
+    const row = inserted?.results[0] as { id: number; account_id: string } | undefined;
+    return row
+      ? { status: "registered", id: row.id, accountId: row.account_id }
+      : { status: "refused" };
+  }
+  const [, inserted, givenBack, room] = await db.batch([
+    consume,
+    insert,
     db
       .prepare(
-        `UPDATE ci_runner_registrations SET consumed_at = ?1, consume_nonce = ?2
-         WHERE token_hash = ?3 AND consumed_at IS NULL AND expires_at > ?1`,
+        `UPDATE ci_runner_registrations SET consumed_at = NULL, consume_nonce = NULL
+         WHERE token_hash = ?1 AND consume_nonce = ?2
+           AND NOT EXISTS (SELECT 1 FROM ci_runners WHERE uuid = ?3)
+         RETURNING token_hash`,
       )
-      .bind(runner.now, runner.nonce, runner.registrationHash),
-    db
-      .prepare(
-        `INSERT INTO ci_runners (uuid, account_id, token_hash, name, version, labels, ephemeral, created_at)
-         SELECT ?1, account_id, ?2, ?3, ?4, ?5, ?6, ?7 FROM ci_runner_registrations
-         WHERE token_hash = ?8 AND consume_nonce = ?9
-         RETURNING id, account_id`,
-      )
-      .bind(
-        runner.uuid,
-        runner.tokenHash,
-        runner.name,
-        runner.version,
-        JSON.stringify(runner.labels),
-        runner.ephemeral ? 1 : 0,
-        runner.now,
-        runner.registrationHash,
-        runner.nonce,
-      ),
+      .bind(runner.registrationHash, runner.nonce, runner.uuid),
+    db.prepare(FLEET_ROOM_SQL).bind(runner.now, fleet.cap),
   ]);
   const row = inserted?.results[0] as { id: number; account_id: string } | undefined;
-  return row && { id: row.id, accountId: row.account_id };
+  if (row) return { status: "registered", id: row.id, accountId: row.account_id };
+  if ((givenBack?.results.length ?? 0) === 0) return { status: "refused" };
+  const state = room?.results[0] as { serving: number; spent: number } | undefined;
+  // Given back for want of room; when the room read shows some, a slot freed in between.
+  return { status: state && roomOf(fleet, state) === "polls_spent" ? "polls_spent" : "fleet_full" };
+}
+
+/**
+ * Leases `?4` polls for runner `?1` at `?2` (the isolate's clock, for
+ * expiry), in one statement: today's count (D1's day; a new day starts
+ * from 0) grows by the block while the runner may serve, ranks below the
+ * cap `?3` among runners that may serve (oldest first), and stays within
+ * the budget `?5`; otherwise the same statement revokes it, past the cap
+ * first. No row: the runner no longer serves.
+ */
+export const LEASE_POLLS_SQL = `UPDATE ci_runners SET
+    poll_day = c.today,
+    poll_used = CASE WHEN c.past_cap OR c.over THEN c.used ELSE c.used + ?4 END,
+    revoked_at = CASE WHEN c.past_cap OR c.over THEN ?2 END,
+    revoked_reason = CASE WHEN c.past_cap THEN 'fleet_cap' WHEN c.over THEN 'poll_rate' END
+  FROM (SELECT id, today, used, used + ?4 > ?5 AS over, past_cap
+        FROM (SELECT r.id, d.today,
+                CASE WHEN r.poll_day = d.today THEN r.poll_used ELSE 0 END AS used,
+                ${servingRunners("?2", "?3", "r.id")} >= ?3 AS past_cap
+              FROM ci_runners r, (SELECT ${CI_TODAY} AS today) d
+              WHERE r.id = ?1 AND r.revoked_at IS NULL
+                AND (r.expires_at IS NULL OR r.expires_at > ?2))) c
+  WHERE ci_runners.id = c.id
+  RETURNING revoked_reason`;
+
+export type Lease =
+  | { readonly status: "leased" }
+  | { readonly status: "revoked"; readonly reason: "poll_rate" | "fleet_cap" }
+  | { readonly status: "gone" };
+
+/** Leases a block of `block` polls for runner `id` at `now` under `fleet` (`LEASE_POLLS_SQL`). */
+export async function leasePolls(
+  db: D1Database,
+  lease: { id: number; now: number; block: number; fleet: FleetLimit },
+  metrics?: Metrics,
+): Promise<Lease> {
+  count(metrics, "runner_poll_lease");
+  const row = await db
+    .prepare(LEASE_POLLS_SQL)
+    .bind(lease.id, lease.now, lease.fleet.cap, lease.block, lease.fleet.pollBudget)
+    .first<{ revoked_reason: "poll_rate" | "fleet_cap" | null }>();
+  if (!row) return { status: "gone" };
+  return row.revoked_reason === null
+    ? { status: "leased" }
+    : { status: "revoked", reason: row.revoked_reason };
+}
+
+/** Ephemeral runners past their end the cron stamps at once at most. */
+export const SPENT_RUNNER_PAGE = 256;
+
+/**
+ * Stamps up to `limit` ephemeral runners past their end at `now` revoked
+ * (`spent`, at their end), oldest end first. Authentication refuses them at
+ * their end already; stamped, they leave the live-runner index.
+ */
+export async function stampSpentRunners(
+  db: D1Database,
+  now: number,
+  limit = SPENT_RUNNER_PAGE,
+  metrics?: Metrics,
+): Promise<number> {
+  count(metrics, "runner_spent_stamp");
+  const result = await db
+    .prepare(
+      `UPDATE ci_runners SET revoked_at = expires_at, revoked_reason = 'spent'
+       WHERE id IN (SELECT id FROM ci_runners INDEXED BY ci_runners_live
+                    WHERE revoked_at IS NULL AND expires_at <= ?1 ORDER BY expires_at LIMIT ?2)`,
+    )
+    .bind(now, limit)
+    .run();
+  return result.meta.changes;
 }
 
 /**
@@ -340,7 +523,7 @@ export async function listRunners(
   const { results } = await db
     .withSession("first-primary")
     .prepare(
-      `SELECT id, name, labels, version, ephemeral, created_at, declared_at, revoked_at
+      `SELECT id, name, labels, version, ephemeral, created_at, declared_at, revoked_at, revoked_reason
        FROM ci_runners WHERE account_id = ? AND id > ? ORDER BY id LIMIT ?`,
     )
     .bind(page.accountId, page.afterId, page.limit)
@@ -354,12 +537,14 @@ export async function listRunners(
     createdAt: row.created_at,
     declaredAt: row.declared_at,
     revokedAt: row.revoked_at,
+    revokedReason: row.revoked_reason,
   }));
 }
 
 /**
- * Revokes the account's runner `id` at `now` (a runner revoked already keeps
- * its first time). False when the account has no such runner.
+ * Revokes the account's runner `id` at `now`, as deleted (a runner revoked
+ * already keeps its first time and reason). False when the account has no
+ * such runner.
  */
 export async function revokeRunner(
   db: D1Database,
@@ -369,7 +554,9 @@ export async function revokeRunner(
   count(metrics, "runner_revoke");
   const result = await db
     .prepare(
-      "UPDATE ci_runners SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ? AND account_id = ?",
+      `UPDATE ci_runners SET revoked_at = COALESCE(revoked_at, ?1),
+         revoked_reason = CASE WHEN revoked_at IS NULL THEN 'deleted' ELSE revoked_reason END
+       WHERE id = ?2 AND account_id = ?3`,
     )
     .bind(revoked.now, revoked.id, revoked.accountId)
     .run();

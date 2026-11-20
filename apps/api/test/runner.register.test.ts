@@ -21,11 +21,10 @@ import {
   encodeUpdateLogRequest,
   encodeUpdateTaskRequest,
 } from "./helpers/runner-proto.js";
-import { stateOf } from "./helpers/runners.js";
+import { ON, ROOMY_FLEET, stateOf } from "./helpers/runners.js";
 import { logs } from "./setup/log-capture.js";
 
 const ORIGIN = "https://fyrden.test";
-const ON: Partial<Env> = { FYRDEN_CI_RUNNERS: "on" } as Partial<Env>;
 
 type Who = { principalId: string; token: string; handle: string };
 
@@ -217,7 +216,7 @@ describe("the deployment switch", () => {
 
     // A token minted while the switch was on is refused once it is off.
     const token = await registrationToken(org.login, owner);
-    const res = await runnerCall("Register", registerBody(token), { overrides: {} });
+    const res = await runnerCall("Register", registerBody(token), { overrides: ROOMY_FLEET });
     expect(await connectError(res, "failed_precondition", 400)).toBe(
       "runner registration is turned off on this deployment",
     );
@@ -226,7 +225,7 @@ describe("the deployment switch", () => {
 
   it("Ping answers with the switch off", async () => {
     const res = await rpc("ping.v1.PingService/Ping", encodePingRequest({ data: "my-runner" }), {
-      overrides: {},
+      overrides: ROOMY_FLEET,
     });
     expect(decodePingResponse(await proto(res))).toEqual({ data: "Hello, my-runner!" });
   });
@@ -237,7 +236,7 @@ describe("the deployment switch", () => {
     const runner = await register(org.login, owner);
     const res = await runnerCall("FetchTask", encodeFetchTaskRequest({ tasksVersion: 7 }), {
       credentials: runner,
-      overrides: {},
+      overrides: ROOMY_FLEET,
     });
     expect(decodeFetchTaskResponse(await proto(res))).toEqual({ tasksVersion: 7 });
   });
@@ -575,6 +574,7 @@ describe("the runner operations", () => {
         created_at: expect.any(Number),
         declared_at: expect.any(Number),
         revoked_at: null,
+        revoked_reason: null,
       },
     ]);
     const page2 = await rest(

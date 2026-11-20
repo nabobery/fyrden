@@ -104,3 +104,25 @@ export function rowCountingD1(
     },
   }) as D1Database;
 }
+
+/**
+ * `db` (and its sessions) with D1's clock, wherever a statement carries
+ * `marker` (`CI_NOW`), read as `clock.now` milliseconds instead.
+ */
+export function clockedD1(
+  db: D1Database | D1DatabaseSession,
+  marker: string,
+  clock: { now: number },
+): D1Database {
+  const rewrite = (query: string) => query.split(marker).join(`(${clock.now})`);
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === "prepare") return (query: string) => target.prepare(rewrite(query));
+      if (prop === "withSession")
+        return (constraint?: D1SessionConstraint | D1SessionBookmark) =>
+          clockedD1((target as D1Database).withSession(constraint), marker, clock);
+      const value = Reflect.get(target, prop);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as D1Database;
+}

@@ -35,6 +35,7 @@ import {
   ON,
   orgRepo,
   pendingOf,
+  ROOMY_FLEET,
   registerRunner,
   runnerCall,
   taskRow,
@@ -424,7 +425,7 @@ describe("FetchTask", () => {
     const f = await orgRepo();
     await started(f, one);
     const runner = await registerRunner(f.org.login, f.owner);
-    expect(await fetchTask(runner, 3, { overrides: {} })).toEqual({ tasksVersion: 3 });
+    expect(await fetchTask(runner, 3, { overrides: ROOMY_FLEET })).toEqual({ tasksVersion: 3 });
   });
 });
 

@@ -107,8 +107,15 @@ async function everyRunner(f: OrgFixture): Promise<RegisteredRunner[]> {
   ];
 }
 
+/** Each runner polls with dispatch on, under Free's poll meter, and is given nothing. */
 async function noRunnerGetsIt(runners: readonly RegisteredRunner[], runId: string) {
-  for (const runner of runners) expect((await fetchTask(runner, 0)).task).toBeUndefined();
+  for (const runner of runners) {
+    expect((await fetchTask(runner, 0)).task).toBeUndefined();
+    const metered = await env.DIRECTORY.prepare("SELECT poll_used FROM ci_runners WHERE id = ?")
+      .bind(runner.id)
+      .first<number>("poll_used");
+    expect(metered).toBeGreaterThan(0);
+  }
   expect(await tasksOfRun(runId)).toEqual([]);
 }
 

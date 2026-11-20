@@ -25,6 +25,12 @@ export const REGISTRATION_OFF = "runner registration is turned off on this deplo
 export const REGISTRATION_REFUSED =
   "the registration token is not valid: it is unknown, expired or already used";
 
+export const FLEET_FULL =
+  "this deployment's runner fleet is full; delete a runner before registering another";
+
+export const FLEET_POLLS_SPENT =
+  "this deployment's runners have used today's polling; register again after 00:00 UTC";
+
 export const NAME_REQUIRED = "a runner name is required";
 
 export const FIELD_TOO_LONG = "a runner name, version or label is too long";
@@ -32,6 +38,14 @@ export const FIELD_TOO_LONG = "a runner name, version or label is too long";
 export const TOO_MANY_LABELS = "a runner may declare at most 64 labels";
 
 export const CREDENTIALS_REFUSED = "the runner's credentials are not valid";
+
+export const RUNNER_POLLED_TOO_OFTEN =
+  "this runner was revoked: it asked for work more often than this deployment allows";
+
+export const RUNNER_PAST_FLEET = "this runner is past this deployment's fleet size";
+
+export const POLLS_UNACCOUNTED =
+  "this deployment could not account for this runner's polling; restart the runner";
 
 export const RUNNER_SPENT = "this ephemeral runner has had its task and may only report on it";
 

@@ -20,6 +20,7 @@ import {
   ciAllowance,
   ciFleetCap,
   ciJobPrice,
+  ciPollBudget,
   ciViewerPrice,
   fleetReservation,
   grantCi,
@@ -30,6 +31,7 @@ import {
 import { MAINTENANCE_OBJECT } from "../src/cron/maintenance.js";
 import { discretionaryAllowance, FREE_DAILY } from "../src/effects/discretionary.js";
 import { LIVE_DAILY } from "../src/live/budget.js";
+import { REGISTER_RUNNER_SQL } from "../src/runner/registry.js";
 
 const DAY = 86_400_000;
 const MINUTE = 60_000;
@@ -687,12 +689,17 @@ describe("the CI allowance", () => {
     expect(fleetReservation(0)).toEqual(vector());
   });
 
+  it("takes a lower poll budget when set, never a higher one", () => {
+    expect(ciPollBudget({})).toBe(CI_POLL_BUDGET);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "120" })).toBe(120);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "99999" })).toBe(CI_POLL_BUDGET);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "0" })).toBe(CI_POLL_BUDGET);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "1e3" })).toBe(CI_POLL_BUDGET);
+  });
+
   it("indexes inactive runners by their poll day, for registration's sum of today's polls", async () => {
-    const { results } = await env.DIRECTORY.prepare(
-      `EXPLAIN QUERY PLAN SELECT coalesce(sum(poll_used), 0) FROM ci_runners
-       WHERE revoked_at IS NOT NULL AND poll_day = ?`,
-    )
-      .bind(testDay(15))
+    const { results } = await env.DIRECTORY.prepare(`EXPLAIN QUERY PLAN ${REGISTER_RUNNER_SQL}`)
+      .bind(...Array.from({ length: 11 }, () => 1))
       .all<{ detail: string }>();
     expect(results.map((r) => r.detail).join("\n")).toMatch(
       /USING INDEX ci_runners_polls \(poll_day=\?\)/,

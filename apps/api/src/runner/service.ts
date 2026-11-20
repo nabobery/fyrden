@@ -8,7 +8,7 @@ import type { AppEnv } from "../app.js";
 import type { ReportTaskAnswer } from "../do/run/dispatch.js";
 import type { AppendLogAnswer } from "../do/run/logs.js";
 import { clock } from "../services.js";
-import { admitEveryRunner, type RunnerAdmission } from "./admission.js";
+import { type FetchAdmission, type RunnerAdmission, runnerAdmissionFor } from "./admission.js";
 import {
   type ConnectCode,
   checkConnectRequest,
@@ -24,11 +24,16 @@ import {
   BODY_TOO_LARGE,
   CREDENTIALS_REFUSED,
   FIELD_TOO_LONG,
+  FLEET_FULL,
+  FLEET_POLLS_SPENT,
   INVALID_MESSAGE,
   NAME_REQUIRED,
+  POLLS_UNACCOUNTED,
   RATE_LIMITED,
   REGISTRATION_OFF,
   REGISTRATION_REFUSED,
+  RUNNER_PAST_FLEET,
+  RUNNER_POLLED_TOO_OFTEN,
   RUNNER_SPENT,
   TASK_ID_MISSING,
   TASK_NOT_FOUND,
@@ -158,7 +163,7 @@ async function serve(c: Context<AppEnv>): Promise<Response> {
     c,
     env: c.env,
     metrics: c.get("metrics"),
-    admission: admitEveryRunner,
+    admission: runnerAdmissionFor(c.env, c.get("metrics")),
     now: clock(),
     log: c.get("log"),
   };
@@ -221,11 +226,16 @@ async function register(call: CallContext): Promise<Response> {
       version: request.version,
       labels: request.labels,
       ephemeral: request.ephemeral,
+      fleet: call.admission.fleet,
     },
     call.metrics,
   );
-  if (!registered) throw new Refusal("permission_denied", REGISTRATION_REFUSED);
-  await call.admission.onRegister(registered.accountId);
+  if (registered.status === "refused") throw new Refusal("permission_denied", REGISTRATION_REFUSED);
+  if (registered.status !== "registered")
+    throw new Refusal(
+      "resource_exhausted",
+      registered.status === "fleet_full" ? FLEET_FULL : FLEET_POLLS_SPENT,
+    );
   call.log.info("runner registered", {
     runnerId: registered.id,
     runnerUuid: uuid,
@@ -331,10 +341,15 @@ async function fetchTask(call: CallContext): Promise<Response> {
   }
   const { runner, dispatch } = await authenticate(call, { fetchVersion: request.tasksVersion });
   notSpent(runner);
+  // Metered whether or not the switch is on: runners poll either way.
+  const admitted = await call.admission.onFetch(runner, call.now, call.log);
+  if (admitted !== "ok") {
+    call.log.warn("runner poll refused", { reason: admitted });
+    throw new Refusal("unauthenticated", FETCH_REFUSALS[admitted]);
+  }
   // Off: no task, with the runner's own version, so it keeps polling idle.
   if (!runnersOn(call.env) || !dispatch)
     return protoResponse(encodeFetchTaskResponse({ tasksVersion: request.tasksVersion }));
-  await call.admission.onFetch(runner, call.now);
   return protoResponse(
     await dispatchTask(
       {
@@ -350,6 +365,18 @@ async function fetchTask(call: CallContext): Promise<Response> {
     ),
   );
 }
+
+/**
+ * What a FetchTask refused by admission answers. Every one is
+ * `unauthenticated`, the only answer that stops the runner (measured):
+ * any other leaves it polling unmetered.
+ */
+const FETCH_REFUSALS: Readonly<Record<Exclude<FetchAdmission, "ok">, string>> = {
+  poll_rate: RUNNER_POLLED_TOO_OFTEN,
+  fleet_cap: RUNNER_PAST_FLEET,
+  unaccounted: POLLS_UNACCOUNTED,
+  gone: CREDENTIALS_REFUSED,
+};
 
 /** The task a report names, as the directory has it: refused unless it is the runner's, assigned and not superseded. */
 function reportedTask(

@@ -93,6 +93,19 @@ export function fleetReservation(cap: number): CiVector {
   };
 }
 
+/**
+ * A runner's daily poll budget: `FYRDEN_CI_POLL_BUDGET` when it lowers
+ * the default (an operator's check that revocation works, in minutes
+ * rather than hours), else `CI_POLL_BUDGET`. Never above it, so the
+ * fleet's reservation still covers it.
+ */
+export function ciPollBudget(env: object): number {
+  const raw = (env as { FYRDEN_CI_POLL_BUDGET?: unknown }).FYRDEN_CI_POLL_BUDGET;
+  if (typeof raw === "string" && /^[1-9][0-9]{0,5}$/.test(raw))
+    return Math.min(Number(raw), CI_POLL_BUDGET);
+  return CI_POLL_BUDGET;
+}
+
 /** The most runners the deployment holds: `FYRDEN_CI_FLEET`, else Free's default; Paid: none unless set. */
 export function ciFleetCap(env: object): number | null {
   const raw = (env as { FYRDEN_CI_FLEET?: unknown }).FYRDEN_CI_FLEET;
@@ -214,7 +227,9 @@ export function ciViewerPrice({ storedBytes, spanMs }: { storedBytes: number; sp
 /** D1's clock in milliseconds (tests replace the marked expression). */
 export const CI_NOW = "/*CI_NOW*/(unixepoch() * 1000)";
 const N = CI_NOW;
-const TODAY = `CAST(${N} / ${DAY} AS INTEGER)`;
+/** Today's UTC day by D1's clock. */
+export const CI_TODAY = `CAST(${N} / ${DAY} AS INTEGER)`;
+const TODAY = CI_TODAY;
 
 /** The longest validity a grant may carry, which is how long a bare tombstone lasts. Proposed. */
 export const CI_MAX_VALIDITY_MS = 60 * MINUTE;
@@ -317,16 +332,24 @@ function statement(
 }
 
 /**
- * SQL true while at most `cap` runners may serve at `now`: long-lived ones
- * and ephemeral ones before their expiry, each counted as a range of the
- * live-runner index, a page past the cap at most.
+ * SQL counting the runners that may serve at `now`: long-lived ones and
+ * ephemeral ones before their expiry, each a range of the live-runner
+ * index, so expired history is never read; each range counts at most
+ * `limit`. With `olderThan`, only runners whose id is below it (a runner's
+ * rank). Every argument is SQL.
  */
-function fleetWithin(cap: number | null, now: string): string {
-  if (cap === null) return "1";
+export function servingRunners(now: string, limit: string, olderThan?: string): string {
+  const older = olderThan === undefined ? "" : ` AND id < ${olderThan}`;
   const count = (range: string) =>
     `(SELECT count(*) FROM (SELECT 1 FROM ci_runners INDEXED BY ci_runners_live
-      WHERE revoked_at IS NULL AND ${range} LIMIT ${cap + 1}))`;
-  return `(${count("expires_at IS NULL")} + ${count(`expires_at > ${now}`)} <= ${cap})`;
+      WHERE revoked_at IS NULL AND ${range}${older} LIMIT ${limit}))`;
+  return `(${count("expires_at IS NULL")} + ${count(`expires_at > ${now}`)})`;
+}
+
+/** SQL true while at most `cap` runners may serve at `now`. */
+function fleetWithin(cap: number | null, now: string): string {
+  if (cap === null) return "1";
+  return `(${servingRunners(now, String(cap + 1))} <= ${cap})`;
 }
 
 const perMinute = (column: string, r: CiResource) =>

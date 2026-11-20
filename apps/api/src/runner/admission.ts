@@ -1,17 +1,126 @@
-// Where a deployment's limits on runners will plug in: a cap on an account's
-// runners at registration, and a meter on each runner's polling. Neither
-// limits anything yet, so both admit everything.
+// A deployment's limits on its runners. On Free, the fleet is capped at
+// registration (registerRunner decides it in its own batch), and each
+// runner's polling is paid for before it is served: an isolate leases a
+// block of polls from the directory and answers that many from it. A lease
+// that would pass the runner's daily budget, or finds it ranked past the
+// cap, revokes it in the same statement. Paid admits every runner.
 
-import type { AuthenticatedRunner } from "./registry.js";
+import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { CI_POLL_LEASE, ciFleetCap, ciPollBudget } from "../ci/budget.js";
+import { workersPlan } from "../git/fetch/mode.js";
+import { type AuthenticatedRunner, type FleetLimit, leasePolls } from "./registry.js";
+
+/**
+ * A FetchTask's admission: `ok`; revoked by this call for its polling rate
+ * or for the fleet's cap; `unaccounted` when its lease could not be
+ * recorded (the runner is not revoked, and resumes once restarted); or
+ * `gone` when the runner stopped serving since it was authenticated.
+ */
+export type FetchAdmission = "ok" | "poll_rate" | "fleet_cap" | "unaccounted" | "gone";
 
 export interface RunnerAdmission {
-  /** Called once a runner is registered for `accountId`. */
-  onRegister(accountId: string): Promise<"ok">;
-  /** Called on every FetchTask after the runner is authenticated, at `now` (milliseconds). */
-  onFetch(runner: AuthenticatedRunner, now: number): Promise<"ok">;
+  /** The fleet's limit, read before registration's batch; null: none. */
+  readonly fleet: FleetLimit | null;
+  /**
+   * Called on every FetchTask once the runner is authenticated, at `now`
+   * (the isolate's milliseconds); `log` is the request's, for a lease that
+   * could not be recorded.
+   */
+  onFetch(
+    runner: Pick<AuthenticatedRunner, "id">,
+    now: number,
+    log?: Logger,
+  ): Promise<FetchAdmission>;
 }
 
 export const admitEveryRunner: RunnerAdmission = {
-  onRegister: async () => "ok",
+  fleet: null,
   onFetch: async () => "ok",
 };
+
+const DAY = 86_400_000;
+
+/**
+ * An isolate's leased blocks: per runner, the UTC day (the isolate's
+ * clock) the block was leased on and the polls it still pays for. Unbounded,
+ * a few bytes a runner; blocks of past days are dropped when a day turns.
+ */
+export class PollBlocks {
+  readonly #blocks = new Map<number, { day: number; left: number }>();
+  #day = 0;
+
+  get size(): number {
+    return this.#blocks.size;
+  }
+
+  /** Spends one poll of runner `id`'s block for `day`; false when it holds none. */
+  take(id: number, day: number): boolean {
+    if (day > this.#day) {
+      this.#day = day;
+      for (const [runner, block] of this.#blocks) if (block.day < day) this.#blocks.delete(runner);
+    }
+    const block = this.#blocks.get(id);
+    if (!block || block.day !== day || block.left === 0) return false;
+    block.left--;
+    return true;
+  }
+
+  /** Holds `left` polls for runner `id` on `day`. */
+  hold(id: number, day: number, left: number): void {
+    if (day === this.#day) this.#blocks.set(id, { day, left });
+  }
+
+  forget(id: number): void {
+    this.#blocks.delete(id);
+  }
+}
+
+const isolateBlocks = new PollBlocks();
+
+/**
+ * Free's admission: registration under `fleet`, and every FetchTask served
+ * from a block leased from `db`. The block is charged before any poll of
+ * it is served, so a lost answer or an evicted isolate can only overcharge.
+ * A block is used only on the day (the isolate's clock) the call that
+ * leased it began.
+ */
+export function freeRunnerAdmission(
+  db: D1Database,
+  fleet: FleetLimit,
+  blocks: PollBlocks = isolateBlocks,
+  metrics?: Metrics,
+): RunnerAdmission {
+  return {
+    fleet,
+    async onFetch(runner, now, log) {
+      const day = Math.floor(now / DAY);
+      if (blocks.take(runner.id, day)) return "ok";
+      let lease: Awaited<ReturnType<typeof leasePolls>>;
+      try {
+        lease = await leasePolls(db, { id: runner.id, now, block: CI_POLL_LEASE, fleet }, metrics);
+      } catch (error) {
+        log?.warn("runner poll lease failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return "unaccounted";
+      }
+      if (lease.status === "leased") {
+        blocks.hold(runner.id, day, CI_POLL_LEASE - 1);
+        return "ok";
+      }
+      blocks.forget(runner.id);
+      return lease.status === "revoked" ? lease.reason : "gone";
+    },
+  };
+}
+
+/** The deployment's runner admission: Free's limits, or Paid's none. */
+export function runnerAdmissionFor(env: Env, metrics?: Metrics): RunnerAdmission {
+  if (workersPlan(env) === "paid") return admitEveryRunner;
+  return freeRunnerAdmission(
+    env.DIRECTORY,
+    { cap: ciFleetCap(env) ?? 0, pollBudget: ciPollBudget(env) },
+    isolateBlocks,
+    metrics,
+  );
+}

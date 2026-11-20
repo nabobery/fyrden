@@ -9407,8 +9407,10 @@ export type OrgsRunnersListOutput = {
     created_at: number;
     /** Unix time in milliseconds: when its daemon last started; null when it never has (a registration whose answer was lost: delete it). */
     declared_at: number | null;
-    /** Unix time in milliseconds: when it was deleted; its credential stopped working then. */
+    /** Unix time in milliseconds: when it was deleted or revoked, or when an ephemeral runner's report window ended (set automatically); its credential stopped working then. */
     revoked_at: number | null;
+    /** Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while it serves. */
+    revoked_reason: "deleted" | "poll_rate" | "fleet_cap" | "spent" | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
@@ -10448,7 +10450,7 @@ export interface Operations {
   "orgs.teams.repos.set": { input: OrgsTeamsReposSetInput; output: OrgsTeamsReposSetOutput };
   /** Take a team's role on a repository away. Takes a team's role on a repository away; its members keep the roles they have otherwise (members of the organization read). Repositories told of the change stop counting it at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Owners only. */
   "orgs.teams.repos.remove": { input: OrgsTeamsReposRemoveInput; output: OrgsTeamsReposRemoveOutput };
-  /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner serves every repository of the organization whose jobs its labels match. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. */
+  /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner serves every repository of the organization whose jobs its labels match. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. On Free, a registration token is refused with 409 `runner_fleet_full` while the deployment's runner fleet is full (`FYRDEN_CI_FLEET`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused. */
   "orgs.runners.registration_tokens.create": { input: OrgsRunnersRegistrationTokensCreateInput; output: OrgsRunnersRegistrationTokensCreateOutput };
   /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too; never their credentials. Owners only. */
   "orgs.runners.list": { input: OrgsRunnersListInput; output: OrgsRunnersListOutput };
