@@ -26,6 +26,7 @@ import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { type LogRow, Result } from "../src/runner/proto/messages.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user, type Who } from "./helpers/api.js";
+import { insertPlainMask } from "./helpers/log-masks.js";
 import { testSession } from "./helpers/oauth.js";
 import {
   decodeUpdateLogResponse,
@@ -1065,13 +1066,7 @@ describe("delivery", () => {
     expect(live.map((l) => l.c)).toEqual(["::add-mask::***", "one *** two", "plain"]);
     // A new job token registered meanwhile (a re-offer), then a reset.
     await inRun(t.runId, (r) =>
-      r.engine.exec(
-        `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
-         VALUES (?, (SELECT MAX(seq) + 1 FROM ci_log_masks WHERE task = ?), 'job_token', 0, ?)`,
-        t.number,
-        t.number,
-        `fyrden_job_${"Z".repeat(36)}`,
-      ),
+      insertPlainMask(r, t.number, "job_token", 0, `fyrden_job_${"Z".repeat(36)}`),
     );
     await evictDurableObject(runStub(t.runId));
     await at(t.runId, now(t.runId));

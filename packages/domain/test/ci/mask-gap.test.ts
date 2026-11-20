@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { type LogMask, MASK_WHOLE_MAX_BYTES, maskGapLength, maskRows } from "../../src/ci/mask.js";
+import {
+  type LogMask,
+  MASK_WHOLE_MAX_BYTES,
+  maskCrossLength,
+  maskGapLength,
+  maskRows,
+} from "../../src/ci/mask.js";
 
 const masks: readonly LogMask[] = [{ value: "abcdefgh", fromIndex: 0 }];
 
@@ -38,6 +44,31 @@ describe("maskGapLength", () => {
   it("applies the whole-value cap in UTF-8 bytes rather than UTF-16 units", () => {
     const value = "😀".repeat(MASK_WHOLE_MAX_BYTES / 4 + 1);
     expect(maskGapLength([{ value, fromIndex: 0 }], 1)).toBe(value.length - 1);
+  });
+});
+
+describe("maskGapLength over stored crossing lengths", () => {
+  it("is each value's crossing length, from the same variants", () => {
+    for (const value of ["abcdefgh", "abcdefg", "&&&", "é😀\u0000x-y-z", ""]) {
+      expect(maskCrossLength(value)).toBe(maskGapLength([{ value, fromIndex: 0 }], 0));
+    }
+  });
+
+  it("takes the longest stored length of the masks in effect at the omitted position", () => {
+    const stored = [
+      { fromIndex: 0, crossLen: 11 },
+      { fromIndex: 3, crossLen: 40 },
+      { fromIndex: 5, crossLen: 90 },
+    ];
+    expect(maskGapLength(stored, 2)).toBe(11);
+    expect(maskGapLength(stored, 3)).toBe(40);
+    expect(maskGapLength(stored, 5)).toBe(90);
+    expect(maskGapLength([], 5)).toBe(0);
+  });
+
+  it("mixes stored lengths with masks given by value", () => {
+    expect(maskGapLength([{ fromIndex: 0, crossLen: 3 }, ...masks], 1)).toBe(11);
+    expect(maskGapLength([{ fromIndex: 0, crossLen: 30 }, ...masks], 1)).toBe(30);
   });
 });
 

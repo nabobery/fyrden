@@ -5,6 +5,7 @@
 // the job has left the queue.
 
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { ciSecretKeys } from "../ci/envelope.js";
 import type { AssignTaskAnswer } from "../do/run/dispatch.js";
 import { clock } from "../services.js";
 import { encodeFetchTaskAnswer } from "./proto/messages.js";
@@ -95,6 +96,20 @@ export async function dispatchTask(
     !(runner.ephemeral && !view.reoffer.assigned && (runner.taskConfirmed || liveOffers > 1))
       ? view.reoffer
       : undefined;
+  // Without a CI master key no task's masks can be sealed, so no task is handed out: nothing is
+  // claimed, re-offered or released (a lapsed claim, which any poll clears, waits too), and the
+  // caller's own version keeps it searching once there is a key. The run checks again before it
+  // assigns, for a key that goes after this check.
+  const searches =
+    !(runner.ephemeral && (runner.taskConfirmed || liveOffers > 0)) &&
+    view.tasksVersion !== requestVersion;
+  if ((reoffer || searches || view.expiredClaims) && !(await ciSecretKeys(call.env)).current) {
+    call.log.warn("no task searched for: there is no CI master key", {
+      runnerId: runner.id,
+      ...(reoffer && { taskId: reoffer.id, runId: reoffer.runId }),
+    });
+    return answer(undefined, requestVersion);
+  }
   if (reoffer) {
     // No time left to answer: nothing is touched, and the runner asks again with the same version.
     if (clock() >= deadline) return answer(undefined, requestVersion);
@@ -105,7 +120,19 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
-    if (assigned.refused === "tokens_exhausted")
+    // The key went after the check above: the offer stands (a runner may be running it on an
+    // earlier answer) and nothing else can be handed out either, so no task now and the same
+    // version again.
+    if (assigned.refused === "ci_key_unavailable") {
+      keyUnavailable(call, offered.id, offered.runId);
+      return answer(undefined, requestVersion);
+    }
+    // The task's stored masks do not open: the offer and its earlier token stand, and the runner
+    // searches for other work, as when its tokens are exhausted.
+    if (assigned.refused === "masks_unreadable") {
+      masksUnreadable(call, offered.id, offered.runId);
+      exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+    } else if (assigned.refused === "tokens_exhausted")
       exhausted.push({ runId: offered.runId, jobId: offered.jobId });
     else
       await refuseTask(
@@ -165,6 +192,24 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
+    // The key went after the check above. A claim never assigned is given up, so the job is free
+    // at once for any poll, a poll at version 0 too (which is never re-offered a claim). One the
+    // run assigned before the key went is kept by the release's fence: it is a live offer, made
+    // again at its version.
+    if (assigned.refused === "ci_key_unavailable") {
+      keyUnavailable(call, claimed.taskId, claimed.runId);
+      await releaseClaim(
+        db,
+        { ...claimed, now: clock(), accountId: runner.accountId },
+        call.metrics,
+      );
+      return answer(undefined, requestVersion);
+    }
+    if (assigned.refused === "masks_unreadable") {
+      masksUnreadable(call, claimed.taskId, claimed.runId);
+      exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      continue;
+    }
     if (assigned.refused === "tokens_exhausted") {
       exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
       continue;
@@ -188,6 +233,14 @@ export async function dispatchTask(
   }
   // Out of claims or time: the runner's own version, so it searches again.
   return answer(undefined, requestVersion);
+}
+
+function keyUnavailable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out: there is no CI master key", { taskId, runId });
+}
+
+function masksUnreadable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out: its stored masks do not open", { taskId, runId });
 }
 
 async function assignTask(

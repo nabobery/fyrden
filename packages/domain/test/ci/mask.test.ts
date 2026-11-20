@@ -4,10 +4,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildVariants,
+  checkSecretMasks,
   type LogMask,
   MASK_MAX_TEXT_BYTES,
   MASK_MAX_VALUES,
+  MASK_MIN_LENGTH,
+  MASK_SECRET_MAX_TEXT_BYTES,
+  MASK_SECRET_MAX_VALUES,
+  MASK_SECRET_MAX_VARIANT_BYTES,
   maskRows,
+  maskVariantBytes,
   parseAddMask,
 } from "../../src/ci/index.js";
 
@@ -525,9 +531,143 @@ describe("mask caps", () => {
     }
   });
 
+  it("never counts secret masks toward the caps or the reserve", () => {
+    const reserve = { values: 8, bytes: 8 * TOKEN.length };
+    const secrets = fullSecretBudget();
+    expect(secrets.length).toBeGreaterThan(8);
+    const fits = "a".repeat(MASK_MAX_TEXT_BYTES - reserve.bytes);
+    const rows = [`::add-mask::${fits}`, `v=${fits}`];
+    const result = mask(secrets, rows, { reserve });
+    expect(result.added).toEqual([{ value: fits, index: 0 }]);
+    expect(result.dropped).toEqual([]);
+    expect(result.lines).toEqual(["::add-mask::***", "v=***"]);
+    const many = Array.from({ length: 248 }, (_, i) => `::add-mask::row-value-${i}`);
+    expect(mask(secrets, many, { reserve }).added).toHaveLength(248);
+  });
+
   it("registers only the lines of a value over 4 KiB", () => {
     const big = `${"Z".repeat(4096)}-tail`;
     const result = mask([{ value: big, fromIndex: 0 }], [big, b64(big)]);
     expect(result.lines).toEqual(["***", b64(big)]);
+  });
+});
+
+/** As many secret masks as one task may have: values added until the next one is refused. */
+function fullSecretBudget(): LogMask[] {
+  const values: string[] = [];
+  for (let i = 0; ; i++) {
+    const value = `secret-${String(i).padStart(4, "0")}-${"k".repeat(24)}`;
+    if (!checkSecretMasks(values, [{ name: `S${i}`, value }]).ok) break;
+    values.push(value);
+  }
+  return values.map((value) => ({ value, fromIndex: 0, secret: true }));
+}
+
+describe("the secret mask budget", () => {
+  const offer = (values: readonly string[]) =>
+    values.map((value, i) => ({ name: `SECRET_${i}`, value }));
+
+  it("is 200 values, 256 KiB of value text and 32 KiB of variant text", () => {
+    expect(MASK_SECRET_MAX_VALUES).toBe(200);
+    expect(MASK_SECRET_MAX_TEXT_BYTES).toBe(256 * 1024);
+    expect(MASK_SECRET_MAX_VARIANT_BYTES).toBe(32 * 1024);
+  });
+
+  it("counts the UTF-8 bytes of every variant the masker builds, lines only past 4 KiB", () => {
+    const value = "pässwörd-0123456789";
+    expect(maskVariantBytes(value)).toBe(
+      texts(value).reduce((n, text) => n + utf8.encode(text).length, 0),
+    );
+    const big = `${"Z".repeat(4096)}\n  tail-line  `;
+    expect(maskVariantBytes(big)).toBe(4096 + "tail-line".length);
+    expect(maskVariantBytes("x")).toBe(0);
+  });
+
+  it("adds the values new to the task, in order, once each", () => {
+    expect(
+      checkSecretMasks(["kept-value"], offer(["kept-value", "new-one", "new-one", "x"])),
+    ).toEqual({ ok: true, added: ["new-one"] });
+  });
+
+  it("refuses the 201st value, naming the offered secrets and their sizes", () => {
+    const stored = Array.from({ length: 199 }, (_, i) => `v${i}`);
+    expect(checkSecretMasks(stored, offer(["last"]))).toMatchObject({ ok: true });
+    const refused = checkSecretMasks(stored, offer(["last", "over"]));
+    expect(refused).toEqual({
+      ok: false,
+      limit: "values",
+      secrets: [
+        { name: "SECRET_0", bytes: 4, variantBytes: maskVariantBytes("last") },
+        { name: "SECRET_1", bytes: 4, variantBytes: maskVariantBytes("over") },
+      ],
+    });
+    expect(JSON.stringify(refused)).not.toContain('"over"');
+  });
+
+  it("refuses past 256 KiB of value text, counted across re-offers", () => {
+    // Values over 4 KiB are masked by their trimmed lines only, and a one-char line has no
+    // variant, so these cost no variant allowance; each is still a value, counted in full.
+    const spaces = (tail: string) => `${" ".repeat(128 * 1024 - 2)}${tail}`;
+    const [a, b] = [spaces("0"), spaces("1")];
+    expect(maskVariantBytes(a)).toBe(0);
+    // Stored as registration stores them: each accepted on its own offer.
+    expect(checkSecretMasks([], offer([a]))).toEqual({ ok: true, added: [a] });
+    expect(checkSecretMasks([a], offer([b]))).toEqual({ ok: true, added: [b] });
+    const stored = [a, b];
+    expect(MASK_SECRET_MAX_TEXT_BYTES - 2 * (128 * 1024 - 1)).toBe(2);
+    expect(checkSecretMasks(stored, offer(["bb"]))).toEqual({ ok: true, added: ["bb"] });
+    expect(checkSecretMasks(stored, offer(["bbb"]))).toMatchObject({ ok: false, limit: "bytes" });
+  });
+
+  it("counts every value of at least the masker's minimum length, whatever its variants", () => {
+    // Distinct values of whitespace around one char: no variant, 300 KiB of value text.
+    const values = Array.from({ length: 5 }, (_, k) => `${" ".repeat(60 * 1024)}${k}`);
+    for (const value of values) expect(maskVariantBytes(value)).toBe(0);
+    expect(checkSecretMasks([], offer(values.slice(0, 4)))).toEqual({
+      ok: true,
+      added: values.slice(0, 4),
+    });
+    expect(checkSecretMasks(values.slice(0, 4), offer(values.slice(4)))).toMatchObject({
+      ok: false,
+      limit: "bytes",
+    });
+    expect(checkSecretMasks([], offer(values))).toMatchObject({ ok: false, limit: "bytes" });
+    // A value made only of line breaks has no variant either, and counts too.
+    const breaks = Array.from({ length: 200 }, (_, k) => "\n".repeat(k + 2));
+    expect(checkSecretMasks([], offer([...breaks, "zz"]))).toMatchObject({
+      ok: false,
+      limit: "values",
+    });
+  });
+
+  it("gives a value under the masker's minimum length no slot, though it has variants", () => {
+    // One char is never masked, yet "%" has the workflow-command variant "%25".
+    expect(maskVariantBytes("%")).toBeGreaterThan(0);
+    expect(MASK_MIN_LENGTH).toBe(2);
+    expect(checkSecretMasks([], offer(["%", "é", "x"]))).toEqual({ ok: true, added: [] });
+    const stored = Array.from({ length: 200 }, (_, i) => `v${i}`);
+    expect(checkSecretMasks(stored, offer(["%"]))).toEqual({ ok: true, added: [] });
+    // Counted in UTF-16 units, as the masker counts: one astral char is two.
+    expect(checkSecretMasks([], offer(["😀"]))).toEqual({ ok: true, added: ["😀"] });
+  });
+
+  it("refuses past 32 KiB of variant text, a single-line value over the allowance included", () => {
+    const line = "q".repeat(MASK_SECRET_MAX_VARIANT_BYTES + 1);
+    expect(checkSecretMasks([], offer([line]))).toMatchObject({ ok: false, limit: "variants" });
+    const stored = ["first-secret-value"];
+    const left = MASK_SECRET_MAX_VARIANT_BYTES - maskVariantBytes(stored[0] as string);
+    expect(checkSecretMasks(stored, offer(["r".repeat(left)]))).toMatchObject({ ok: true });
+    expect(checkSecretMasks(stored, offer(["r".repeat(left + 1)]))).toMatchObject({
+      ok: false,
+      limit: "variants",
+    });
+  });
+
+  it("never stops an ::add-mask:: value registering when full", () => {
+    const secrets = fullSecretBudget();
+    const value = `added-${"m".repeat(40)}`;
+    const result = mask(secrets, [`::add-mask::${value}`, `printed ${value}`]);
+    expect(result.added).toEqual([{ value, index: 0 }]);
+    expect(result.lines).toEqual(["::add-mask::***", "printed ***"]);
   });
 });

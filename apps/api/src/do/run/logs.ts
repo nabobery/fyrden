@@ -2,16 +2,29 @@ import type { DoMemoryBudget, SliceResult } from "@fyrden/adapters-cloudflare/gi
 import { countSubrequests, type Logger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { tokenLength } from "@fyrden/domain";
 import {
+  checkSecretMasks,
   decideLogFlush,
   LOG_ROW_TOO_LARGE,
   type LogMask,
   type LogMaskCarry,
+  type LogMaskReach,
   type MaskRowsResult,
+  maskCrossLength,
   maskGapLength,
   maskRows,
+  type SecretMaskCheck,
+  type SecretMaskOffer,
   type StoredLogLine,
   settleFlush,
 } from "@fyrden/domain/ci";
+import {
+  type CiKeyring,
+  ciSecretKeys,
+  type MaskAdditionalData,
+  openMask,
+  sealMask,
+} from "../../ci/envelope.js";
+import { hex } from "../../crypto/bytes.js";
 import { type ConnectCode, UPDATE_LOG_PREFIX_BYTES } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
@@ -40,14 +53,16 @@ import { type LogLine, logLine, viewerHooks } from "./viewers.js";
  * and sent again. The ack is durable before it is sent, so a reset loses
  * nothing that was acked.
  *
- * Rows are masked before they are stored: the task's job tokens and the
- * values its rows register with `::add-mask::` become `***`, whole or split
- * across rows. Rows whose masked text a later row could still change are
- * left unacked for the runner to resend (a few, for a while); the partial
- * match in progress at the ack is stored with it, so a resend after a reset
- * masks the same. The values are kept until the log closes: when it
+ * Rows are masked before they are stored: the task's job tokens, the
+ * secrets delivered to it and the values its rows register with
+ * `::add-mask::` become `***`, whole or split across rows. Rows whose masked
+ * text a later row could still change are left unacked for the runner to
+ * resend (a few, for a while); the partial match in progress at the ack is
+ * stored with it, so a resend after a reset masks the same. The values are
+ * kept, sealed under the CI master key, until the log closes: when it
  * completes, or `LOG_LATE_MS` after its task ended incomplete, after which its
- * rows are refused.
+ * rows are refused. They are opened for each request that masks rows, and
+ * never kept open between requests.
  *
  * While a job is watched live, each request's rows that are final as masked
  * (stored now, or settled and left unacked) are published to its sockets:
@@ -74,6 +89,71 @@ const TOKEN_RESERVE = {
 } as const;
 /** Closed logs whose masks one pass of the close job deletes. */
 const CLOSE_PAGE = 256;
+/** Times a mask write prepared outside its transaction is prepared again when the task's masks changed meanwhile. */
+const MASK_WRITE_ATTEMPTS = 4;
+
+export type MaskKind = "job_token" | "add_mask" | "secret";
+
+/**
+ * The additional data a mask row's value is sealed with: its run, task,
+ * random id and kind, and the master key's id. Bound to the id, not the
+ * row's `seq`, which is assigned when the row commits.
+ */
+export function maskAdditionalData(
+  runId: string,
+  task: number,
+  maskId: string,
+  kind: MaskKind,
+): MaskAdditionalData {
+  return (keyId) => `fyrden-ci-mask:v1:${runId}:${task}:${maskId}:${kind}:${keyId}`;
+}
+
+/** A `ci_log_masks` row. */
+interface MaskRow {
+  kind: MaskKind;
+  from_index: number;
+  mask_id: string;
+  key_id: string | null;
+  value: string;
+}
+
+/** A mask value sealed for its row, before the row is written. */
+interface SealedMaskRow {
+  readonly maskId: string;
+  readonly keyId: string;
+  /** `nonce.ciphertext`, base64. */
+  readonly value: string;
+  readonly crossLen: number;
+}
+
+/**
+ * What `addMask` answers: registered (or there already), the task is out of token masks,
+ * there is no current key to seal with, or the task's stored masks do not open while there
+ * is one (their key gone from the keyring).
+ */
+export type AddMaskAnswer = "added" | "full" | "key_unavailable" | "masks_unreadable";
+
+/** What `addSecretMasks` answers. */
+export type SecretMasksAnswer =
+  | { readonly ok: true }
+  | ({ readonly ok: false; readonly code: "secrets_unmaskable" } & Omit<
+      Extract<SecretMaskCheck, { ok: false }>,
+      "ok"
+    >)
+  | { readonly ok: false; readonly code: "ci_key_unavailable" }
+  /** The task's secret masks do not open, though a current key exists. */
+  | { readonly ok: false; readonly code: "masks_unreadable" }
+  /** The task's run is untrusted: it is never given secrets, and its log request reserves for none. */
+  | { readonly ok: false; readonly code: "untrusted_run" };
+
+/**
+ * Room a log request reserves beside its body for its task's masks, opened
+ * and sealed: a constant, so masks added while the request runs are covered.
+ * A trusted run's tasks may have secrets (up to 256 KiB of value text, about
+ * 350 KiB sealed, and its opened copy), an untrusted run's only job tokens
+ * and `::add-mask::` values (16 KiB). Proposed.
+ */
+export const MASK_HEADROOM_BYTES = { trusted: 1024 * 1024, untrusted: 64 * 1024 } as const;
 
 /**
  * More values to mask a task's rows with, fetched again on every request
@@ -103,6 +183,10 @@ export interface LogHooks {
   afterLogPut?: (key: string) => Promise<void> | void;
   /** After the manifest and the ack are committed, before the answer. */
   afterLogCommit?: () => Promise<void> | void;
+  /** After a log request confirmed its task, before its masks are read. */
+  afterLogConfirm?: () => Promise<void> | void;
+  /** After a mask write is sealed against the masks it read, before its transaction. */
+  beforeMaskCommit?: (kind: MaskKind) => Promise<void> | void;
 }
 
 /** Where a request's final rows go: the job's live sockets (`viewers.ts`). */
@@ -172,12 +256,18 @@ interface Store {
   readonly lines: readonly StoredLogLine[];
   readonly rows: number;
   readonly omitted: number;
-  readonly gapRemaining: number | ((storedMasks: readonly LogMask[]) => number);
+  readonly gapRemaining: number | ((storedMasks: readonly LogMaskReach[]) => number);
   readonly final: boolean;
   /** `::add-mask::` values the stored rows registered, in order, with their rows. */
   readonly added: readonly { readonly value: string; readonly index: number }[];
   /** The carry at `end`, given the number of stored masks when it commits (null: none). */
   readonly carry: (storedMasks: number) => LogMaskCarry | null;
+}
+
+/** What the log work reads of its run: never the whole record (its workflow and contexts are large). */
+interface RunFacts {
+  readonly run_id: string;
+  readonly trust: "trusted" | "untrusted";
 }
 
 /** Whether a log is sealed or past its late window. */
@@ -240,29 +330,202 @@ export class RunLogs {
    * (masks only ever append, so a stored carry's position never moves), at
    * most `MAX_JOB_TOKEN_MASKS` of them, room the caps on `::add-mask::`
    * values keep free. A finalized log takes no more rows, so it gets none.
-   * False when the task has its last token already: that token must not be
-   * handed out.
+   * `full` when the task has its last token already, `key_unavailable`
+   * when there is no CI master key to seal it with, and `masks_unreadable`
+   * when there is one but the task's stored tokens do not open: either way
+   * that token must not be handed out.
    */
-  addMask(task: number, value: string): boolean {
+  async addMask(task: number, value: string): Promise<AddMaskAnswer> {
     const { host } = this;
-    return host.tx(() => {
-      if (host.erased() || this.#log(task)?.finalized === 1) return true;
-      const tokens = host.engine.rows<{ value: string }>(
-        "SELECT value FROM ci_log_masks WHERE task = ? AND kind = 'job_token'",
+    const taken = () => host.erased() || this.#log(task)?.finalized === 1;
+    let sealed: SealedMaskRow | undefined;
+    let runId: string | undefined;
+    for (let attempt = 1; ; attempt++) {
+      if (taken()) return "added";
+      runId ??= this.#runFacts().run_id;
+      const tokens = this.#maskRows(task, "job_token");
+      const keys = await ciSecretKeys(host.env);
+      const values = await this.#open(keys, runId, task, tokens);
+      if (!values) return keys.current ? "masks_unreadable" : "key_unavailable";
+      if (values.includes(value)) return "added";
+      if (tokens.length >= MAX_JOB_TOKEN_MASKS) return "full";
+      sealed ??= await this.#seal(keys, runId, task, "job_token", value);
+      if (!sealed) return "key_unavailable";
+      const row = sealed;
+      const hook = host.hooks.beforeMaskCommit;
+      if (hook) await hook("job_token");
+      const outcome = host.tx((): AddMaskAnswer | "changed" => {
+        if (taken()) return "added";
+        // Sealed outside: committed only over the tokens it was checked against.
+        if (this.#maskCount(task, "job_token") !== tokens.length) return "changed";
+        this.#insertMask(task, "job_token", 0, row);
+        // A task that ended meanwhile still has its masks deleted.
+        this.#closeLater(task);
+        return "added";
+      });
+      if (outcome !== "changed") return outcome;
+      if (attempt === MASK_WRITE_ATTEMPTS) throw new Error("the task's job tokens kept changing");
+    }
+  }
+
+  /**
+   * Registers the secrets delivered to task `task` to be masked in every
+   * row, in one transaction, within the task's secret budget over every
+   * secret it has had (`checkSecretMasks`): a value it has already adds
+   * nothing. Over the budget nothing is added and the answer names the
+   * offered secrets and their sizes, never their values; without a CI master
+   * key nothing is added (`ci_key_unavailable`), nor when the task's secret
+   * masks do not open though there is one (`masks_unreadable`). A task of an
+   * untrusted run gets none (`untrusted_run`), whatever its log's state: its
+   * log requests reserve room for job tokens and `::add-mask::` values only.
+   * A finalized log takes no more rows, so it gets none.
+   */
+  async addSecretMasks(
+    task: number,
+    offered: readonly SecretMaskOffer[],
+  ): Promise<SecretMasksAnswer> {
+    const { host } = this;
+    const sealed = new Map<string, SealedMaskRow>();
+    let run: RunFacts | undefined;
+    for (let attempt = 1; ; attempt++) {
+      // An erased run may have no record left to read its trust from.
+      if (host.erased()) return { ok: true };
+      run ??= this.#runFacts();
+      if (run.trust !== "trusted") return { ok: false, code: "untrusted_run" };
+      if (this.#log(task)?.finalized === 1) return { ok: true };
+      const stored = this.#maskRows(task, "secret");
+      const keys = await ciSecretKeys(host.env);
+      const values = await this.#open(keys, run.run_id, task, stored);
+      if (!values)
+        return { ok: false, code: keys.current ? "masks_unreadable" : "ci_key_unavailable" };
+      const check = checkSecretMasks(values, offered);
+      if (!check.ok)
+        return {
+          ok: false,
+          code: "secrets_unmaskable",
+          limit: check.limit,
+          secrets: check.secrets,
+        };
+      for (const value of check.added) {
+        if (sealed.has(value)) continue;
+        const row = await this.#seal(keys, run.run_id, task, "secret", value);
+        if (!row) return { ok: false, code: "ci_key_unavailable" };
+        sealed.set(value, row);
+      }
+      const hook = host.hooks.beforeMaskCommit;
+      if (hook) await hook("secret");
+      const outcome = host.tx((): "added" | "changed" => {
+        if (host.erased() || this.#log(task)?.finalized === 1) return "added";
+        if (this.#maskCount(task, "secret") !== stored.length) return "changed";
+        for (const value of check.added)
+          this.#insertMask(task, "secret", 0, sealed.get(value) as SealedMaskRow);
+        this.#closeLater(task);
+        return "added";
+      });
+      if (outcome === "added") return { ok: true };
+      if (attempt === MASK_WRITE_ATTEMPTS) throw new Error("the task's secret masks kept changing");
+    }
+  }
+
+  /** The task's mask rows (of `kind` only, when given), in the order they were added. */
+  #maskRows(task: number, kind?: MaskKind): MaskRow[] {
+    return this.host.engine.rows<MaskRow>(
+      `SELECT kind, from_index, mask_id, key_id, value FROM ci_log_masks
+       WHERE task = ?1 AND (?2 IS NULL OR kind = ?2) ORDER BY seq`,
+      task,
+      kind ?? null,
+    );
+  }
+
+  #maskCount(task: number, kind: MaskKind): number {
+    return (
+      this.host.engine.rows<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM ci_log_masks WHERE task = ? AND kind = ?",
         task,
-      );
-      if (tokens.some((t) => t.value === value)) return true;
-      if (tokens.length >= MAX_JOB_TOKEN_MASKS) return false;
-      host.engine.exec(
-        `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
-         VALUES (?1, COALESCE((SELECT MAX(seq) + 1 FROM ci_log_masks WHERE task = ?1), 0), 'job_token', 0, ?2)`,
-        task,
-        value,
-      );
-      // A task that ended meanwhile still has its masks deleted.
-      this.#closeLater(task);
-      return true;
-    });
+        kind,
+      )[0]?.n ?? 0
+    );
+  }
+
+  /** Appends a sealed mask row; call in a transaction. */
+  #insertMask(task: number, kind: MaskKind, fromIndex: number, row: SealedMaskRow): void {
+    this.host.engine.exec(
+      `INSERT INTO ci_log_masks (task, seq, kind, from_index, mask_id, cross_len, key_id, value)
+       VALUES (?1, COALESCE((SELECT MAX(seq) + 1 FROM ci_log_masks WHERE task = ?1), 0),
+         ?2, ?3, ?4, ?5, ?6, ?7)`,
+      task,
+      kind,
+      fromIndex,
+      row.maskId,
+      row.crossLen,
+      row.keyId,
+      row.value,
+    );
+  }
+
+  /** The run's id and trust, read alone; once per operation. */
+  #readRun(): RunFacts | undefined {
+    return this.host.engine.rows<RunFacts>("SELECT run_id, trust FROM runs WHERE id = 1")[0];
+  }
+
+  #runFacts(): RunFacts {
+    const run = this.#readRun();
+    if (!run) throw new Error("the task's run is gone");
+    return run;
+  }
+
+  /** `value` sealed for a new row of task `task` of run `runId` under the current master key; undefined without one. */
+  async #seal(
+    keys: CiKeyring,
+    runId: string,
+    task: number,
+    kind: MaskKind,
+    value: string,
+  ): Promise<SealedMaskRow | undefined> {
+    const maskId = hex(crypto.getRandomValues(new Uint8Array(16)));
+    const sealed = await sealMask(keys, maskAdditionalData(runId, task, maskId, kind), value);
+    if (!sealed) return undefined;
+    return {
+      maskId,
+      keyId: sealed.masterKeyId,
+      value: `${sealed.nonce}.${sealed.ciphertext}`,
+      crossLen: maskCrossLength(value),
+    };
+  }
+
+  /** The rows' values, opened (a row with no key id is plain); undefined when one does not open. */
+  async #open(
+    keys: CiKeyring | undefined,
+    runId: string,
+    task: number,
+    rows: readonly MaskRow[],
+  ): Promise<string[] | undefined> {
+    if (rows.every((row) => row.key_id === null)) return rows.map((row) => row.value);
+    const ring = keys ?? (await ciSecretKeys(this.host.env));
+    const values = await Promise.all(
+      rows.map(async (row) => {
+        if (row.key_id === null) return row.value;
+        const dot = row.value.indexOf(".");
+        if (dot === -1) return undefined;
+        return openMask(ring, maskAdditionalData(runId, task, row.mask_id, row.kind), {
+          masterKeyId: row.key_id,
+          nonce: row.value.slice(0, dot),
+          ciphertext: row.value.slice(dot + 1),
+        });
+      }),
+    );
+    return values.every((value) => value !== undefined) ? values : undefined;
+  }
+
+  /**
+   * Whether task `task`'s stored job tokens open under the deployment's keys, as `addMask` opens
+   * them: true with none sealed, and for a task whose log takes no more masks.
+   */
+  async jobTokensOpen(task: number): Promise<boolean> {
+    if (this.host.erased() || this.#log(task)?.finalized === 1) return true;
+    const tokens = this.#maskRows(task, "job_token");
+    if (tokens.every((row) => row.key_id === null)) return true;
+    return (await this.#open(undefined, this.#runFacts().run_id, task, tokens)) !== undefined;
   }
 
   /** Whether task `task` holds `MAX_JOB_TOKEN_MASKS` job tokens already. */
@@ -328,18 +591,24 @@ export class RunLogs {
     )[0];
   }
 
-  /** The task's stored masks, in the order they were added; its job tokens count inside `TOKEN_RESERVE`. */
-  #masks(task: number): LogMask[] {
-    return this.host.engine
-      .rows<{ value: string; from_index: number; kind: string }>(
-        "SELECT value, from_index, kind FROM ci_log_masks WHERE task = ? ORDER BY seq",
-        task,
-      )
-      .map((m) => ({
-        value: m.value,
-        fromIndex: m.from_index,
-        reserved: m.kind === "job_token",
-      }));
+  /**
+   * The task's masks, opened, in the order they were added; its job tokens
+   * count inside `TOKEN_RESERVE`, its secrets in their own budget. Undefined
+   * when one does not open (its master key is gone): nothing can be masked.
+   */
+  async #masks(runId: string, task: number): Promise<LogMask[] | undefined> {
+    const rows = this.#maskRows(task);
+    const values = await this.#open(undefined, runId, task, rows);
+    if (!values) {
+      this.host.log.error("log masks do not open: the task's rows are not stored", { task });
+      return undefined;
+    }
+    return rows.map((m, k) => ({
+      value: values[k] as string,
+      fromIndex: m.from_index,
+      reserved: m.kind === "job_token",
+      secret: m.kind === "secret",
+    }));
   }
 
   /**
@@ -347,6 +616,8 @@ export class RunLogs {
    * a longer one). A request for a task that already has one in progress,
    * or that the memory pool cannot take now, is answered with the stored ack
    * before it is decoded: the runner keeps the rows and sends them again.
+   * A request reserves its body's work and `MASK_HEADROOM_BYTES` for the
+   * task's masks.
    */
   async append(
     wireId: number,
@@ -361,6 +632,8 @@ export class RunLogs {
       wireId,
     )[0];
     if (!map) return notFound();
+    const run = this.#readRun();
+    if (!run) return notFound();
     const ref: TaskRef = { jobId: map.job_id, task: map.task };
     if (this.#busy.has(ref.task)) {
       host.log.debug("log request answered while another is in progress", {
@@ -373,7 +646,11 @@ export class RunLogs {
     const priority = host.viewers.beginUpload();
     let reservation: ReturnType<DoMemoryBudget["tryReserve"]>;
     try {
-      const bytes = Math.max(1, MEMORY_PER_BODY_BYTE * body.byteLength);
+      // One reservation for the body's work and its task's masks, before anything is decoded or
+      // opened: no request holds part of one while waiting for the rest.
+      const headroom =
+        run.trust === "trusted" ? MASK_HEADROOM_BYTES.trusted : MASK_HEADROOM_BYTES.untrusted;
+      const bytes = MEMORY_PER_BODY_BYTE * body.byteLength + headroom;
       const fits = bytes <= host.memory.stats().totalBytes;
       reservation = fits ? host.memory.tryReserve(bytes) : undefined;
       if (!reservation && fits) {
@@ -393,7 +670,14 @@ export class RunLogs {
         });
         return acked(this.ackOf(ref.task));
       }
-      return await this.#append(wireId, ref, map.confirmed_at === null, body, truncated, runnerId);
+      return await this.#append(
+        wireId,
+        { ...ref, runId: run.run_id },
+        map.confirmed_at === null,
+        body,
+        truncated,
+        runnerId,
+      );
     } finally {
       this.#busy.delete(ref.task);
       reservation?.release();
@@ -403,7 +687,7 @@ export class RunLogs {
 
   async #append(
     wireId: number,
-    ref: TaskRef,
+    ref: LogRef,
     unconfirmed: boolean,
     body: Uint8Array,
     truncated: boolean,
@@ -424,7 +708,11 @@ export class RunLogs {
     if (request.taskId !== wireId) return invalid(TASK_ID_MISMATCH);
     if (request.oversizedFirstRow && !(truncated && body.byteLength >= UPDATE_LOG_PREFIX_BYTES))
       delete request.oversizedFirstRow;
-    if (unconfirmed) await host.confirm(wireId, runnerId);
+    if (unconfirmed) {
+      await host.confirm(wireId, runnerId);
+      const hook = host.hooks.afterLogConfirm;
+      if (hook) await hook();
+    }
     // A heartbeat too. Rows for a finished task are still taken: a cancelled job's last rows,
     // or a final call that lands after the runner reported its result.
     const beat = host.updateTask(ref);
@@ -459,13 +747,13 @@ export class RunLogs {
       const fresh = request.rows.slice(ackIndex - request.index).map((row) => row.content);
       if (fresh.length > 0 && host.viewers.watched(ref.jobId)) {
         const settled = await this.#settled(ref, log, ackIndex, fresh);
-        await this.#publish(ref, ackIndex, settled.map(lineAt(ackIndex)));
+        // Masks that do not open publish nothing: an empty batch would drop the job's cache.
+        if (settled) await this.#publish(ref, ackIndex, settled.map(lineAt(ackIndex)));
       }
       return acked(decision.ackIndex);
     }
-    const stored = this.#masks(ref.task);
     const fetched = await host.masks.masksFor(ref);
-    const masks = [...stored, ...fetched.map((value) => ({ value, fromIndex: 0 }))];
+    const fetchedMasks = fetched.map((value) => ({ value, fromIndex: 0 }));
     if (decision.kind === "omit") {
       host.log.warn("log row omitted: too large for any request", {
         taskId: wireId,
@@ -484,17 +772,20 @@ export class RunLogs {
         final: false,
         added: [],
         carry: () => null,
-        gapRemaining: (current) =>
-          maskGapLength(
-            [...current, ...fetched.map((value) => ({ value, fromIndex: 0 }))],
-            decision.index,
-          ),
+        // From the masks present at the commit, by their stored crossing lengths: no value is
+        // opened, and one added while the chunk was written counts too.
+        gapRemaining: (current) => maskGapLength([...current, ...fetchedMasks], decision.index),
       });
       if (ack === "erased" || ack === "closed") return notFound();
+      if (ack === "unsealed") return acked(this.ackOf(ref.task));
       this.#firstSeen.delete(ref.task);
       await host.hooks.afterLogCommit?.();
       return acked(ack);
     }
+    const stored = await this.#masks(ref.runId, ref.task);
+    // Rows that cannot be masked are not stored: the runner sends them again.
+    if (!stored) return acked(ackIndex);
+    const masks = [...stored, ...fetchedMasks];
     const carry = parseCarry(log?.mask_carry ?? null);
     const mask = (force: boolean): MaskRowsResult =>
       maskRows(masks, carry, decision.lines, {
@@ -538,6 +829,7 @@ export class RunLogs {
       carry: (storedMasks) => storedCarry(boundary, stored.length, fetched.length, storedMasks),
     });
     if (ack === "erased" || ack === "closed") return notFound();
+    if (ack === "unsealed") return acked(this.ackOf(ref.task));
     if (ack === settle.end) {
       if (settle.firstUnackedSeenAt === undefined) this.#firstSeen.delete(ref.task);
       else this.#firstSeen.set(ref.task, settle.firstUnackedSeenAt);
@@ -552,15 +844,17 @@ export class RunLogs {
    * that no later row can change, exactly as a store would mask them: the
    * stored masks and those fetched, the carry stored with the ack, unforced.
    * Nothing is committed: values the rows register count within these rows
-   * only, and none is reported dropped (their store reports them).
+   * only, and none is reported dropped (their store reports them). Undefined
+   * when the task's masks do not open: nothing can be published.
    */
   async #settled(
-    ref: TaskRef,
+    ref: LogRef,
     log: LogRow | undefined,
     start: number,
     fresh: readonly string[],
-  ): Promise<readonly string[]> {
-    const stored = this.#masks(ref.task);
+  ): Promise<readonly string[] | undefined> {
+    const stored = await this.#masks(ref.runId, ref.task);
+    if (!stored) return undefined;
     const fetched = await this.host.masks.masksFor(ref);
     const masked = maskRows(
       [...stored, ...fetched.map((value) => ({ value, fromIndex: 0 }))],
@@ -578,16 +872,16 @@ export class RunLogs {
   }
 
   /** Publishes final rows to the job's sockets (a test may pause first). */
-  async #publish(ref: TaskRef, base: number, rows: readonly LogLine[]): Promise<void> {
+  async #publish(ref: LogRef, base: number, rows: readonly LogLine[]): Promise<void> {
     const hook = viewerHooks.beforePublish;
-    if (hook) await hook(this.host.engine.run()?.run_id ?? "");
+    if (hook) await hook(ref.runId);
     if (this.host.erased()) return;
     this.host.viewers.publish(ref.jobId, ref.task, base, rows);
   }
 
   /** Reports the `::add-mask::` values of stored rows that the caps kept from being registered. */
-  #dropped(wireId: number, ref: TaskRef, masked: MaskRowsResult, end: number): void {
-    const runId = this.host.engine.run()?.run_id ?? "";
+  #dropped(wireId: number, ref: LogRef, masked: MaskRowsResult, end: number): void {
+    const { runId } = ref;
     for (const { index, reason } of masked.dropped) {
       if (index >= end) continue;
       this.host.log.warn("mask value not registered", {
@@ -608,12 +902,36 @@ export class RunLogs {
    * only if the ack is still `start`, the log still takes rows and the run
    * was not erased meanwhile. A final store seals ingestion and deletes its
    * masks and carry; omissions keep the sealed log incomplete. A store that loses, or whose run or log closed, deletes
-   * its own object (its key is its alone). The stored ack, `erased` or
-   * `closed`.
+   * its own object (its key is its alone). The added values are sealed
+   * first, outside the transaction (their `seq` is still assigned in it);
+   * with no master key to seal them nothing is written (`unsealed`). The
+   * stored ack, `erased`, `closed` or `unsealed`.
    */
-  async #store(wireId: number, ref: TaskRef, flush: Store): Promise<number | "erased" | "closed"> {
+  async #store(
+    wireId: number,
+    ref: LogRef,
+    flush: Store,
+  ): Promise<number | "erased" | "closed" | "unsealed"> {
     const { host } = this;
     const { start, end, lines, final } = flush;
+    // A final store deletes the task's masks: what its rows added is never written.
+    const added: { readonly index: number; readonly row: SealedMaskRow }[] = [];
+    if (!final && flush.added.length > 0) {
+      const keys = await ciSecretKeys(host.env);
+      for (const { value, index } of flush.added) {
+        const row = await this.#seal(keys, ref.runId, ref.task, "add_mask", value);
+        if (!row) {
+          host.log.warn("log rows not stored: no CI master key seals their masks", {
+            taskId: wireId,
+            task: ref.task,
+            start,
+            end,
+          });
+          return "unsealed";
+        }
+        added.push({ index, row });
+      }
+    }
     let chunk: { key: string; bytes: number } | undefined;
     if (lines.length > 0) {
       const text = lines.map((line) => JSON.stringify(line)).join("\n");
@@ -660,20 +978,20 @@ export class RunLogs {
           )[0]?.n ?? 0;
         // Added values take the positions after the masks stored now, in order.
         carry = flush.carry(count);
-        for (const { value, index } of flush.added)
-          host.engine.exec(
-            `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
-             VALUES (?1, COALESCE((SELECT MAX(seq) + 1 FROM ci_log_masks WHERE task = ?1), 0), 'add_mask', ?2, ?3)`,
-            ref.task,
-            index,
-            value,
-          );
+        for (const { index, row } of added) this.#insertMask(ref.task, "add_mask", index, row);
       }
       const gapRemaining = final
         ? 0
         : typeof flush.gapRemaining === "number"
           ? flush.gapRemaining
-          : flush.gapRemaining(this.#masks(ref.task));
+          : flush.gapRemaining(
+              host.engine
+                .rows<{ from_index: number; cross_len: number }>(
+                  "SELECT from_index, cross_len FROM ci_log_masks WHERE task = ?",
+                  ref.task,
+                )
+                .map((m) => ({ fromIndex: m.from_index, crossLen: m.cross_len })),
+            );
       host.engine.exec(
         `UPDATE ci_logs SET ack_index = ?1, rows = rows + ?2, bytes = bytes + ?3,
            omitted_rows = omitted_rows + ?4,
@@ -736,19 +1054,21 @@ export class RunLogs {
   }
 
   /** `runs/<run>/<attempt>/<job>/<task>/<start>-<end>-<write id>.ndjson`: a key no other flush uses. */
-  #key(ref: TaskRef, start: number, end: number): string {
-    const run = this.host.engine.run();
+  #key(ref: LogRef, start: number, end: number): string {
     const instance = this.host.engine.instance(ref.jobId);
-    if (!run || !instance) throw new Error("the task's run or instance is gone");
+    if (!instance) throw new Error("the task's instance is gone");
     const writeId = [...crypto.getRandomValues(new Uint8Array(16))]
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
     const range = `${pad(start)}-${pad(end)}`;
-    return `runs/${run.run_id}/${instance.attempt}/${ref.jobId}/${ref.task}/${range}-${writeId}.ndjson`;
+    return `runs/${ref.runId}/${instance.attempt}/${ref.jobId}/${ref.task}/${range}-${writeId}.ndjson`;
   }
 }
 
 const pad = (n: number) => String(n).padStart(10, "0");
+
+/** A task a log request is for, with its run's id, read once at the request's admission. */
+type LogRef = TaskRef & { readonly runId: string };
 
 /** A stored carry, or null when it is missing or not one (a partial match is then only lost). */
 function parseCarry(text: string | null): LogMaskCarry | null {

@@ -2,6 +2,7 @@ import type { Job, SliceResult } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { NeedResult, RunnerResult } from "@fyrden/domain/ci";
 import { SHOWN_HANDLE } from "../../accounts/handles.js";
+import { ciSecretKeys } from "../../ci/envelope.js";
 import type { ConnectCode } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
@@ -39,6 +40,13 @@ export type AssignTaskAnswer =
        * given up by its poll before the assignment could be recorded; `confirmed`: a report
        * made the stale offer no longer replayable. `tokens_exhausted`: the offer cannot be
        * repeated, but its last token and an in-flight answer remain valid.
+       * `ci_key_unavailable`: no CI master key seals the task's masks. Refused before anything
+       * is assigned or minted, or, when the key went while the token was masked, with that
+       * token revoked; either way the offer stands, to be made again once there is a key.
+       * `masks_unreadable`: there is a key, but the task's stored masks do not open (their key
+       * gone from the keyring): refused before a token is minted, or, when the keys changed
+       * while the token was masked, with that token revoked; the offer and its earlier tokens
+       * stand, and the runner may be given other work.
        */
       readonly refused:
         | Extract<AssignAnswer, { ok: false }>["code"]
@@ -46,7 +54,9 @@ export type AssignTaskAnswer =
         | "repo_transferring"
         | "released"
         | "confirmed"
-        | "tokens_exhausted";
+        | "tokens_exhausted"
+        | "ci_key_unavailable"
+        | "masks_unreadable";
     };
 
 /** What `reportTask` answers: an encoded UpdateTaskResponse, or a Connect error. */
@@ -108,12 +118,22 @@ export interface DispatchHost {
   /** Whether the task's stored log is complete. */
   logComplete(task: number): boolean;
   /**
-   * Registers the task's job token to be masked in its log rows; false when
-   * the task has had as many tokens as its log keeps.
+   * Registers the task's job token to be masked in its log rows, sealed:
+   * `full` when the task has had as many tokens as its log keeps,
+   * `key_unavailable` when there is no CI master key to seal it with,
+   * `masks_unreadable` when there is one but the task's stored tokens do not open.
    */
-  addJobTokenMask(task: number, token: string): boolean;
+  addJobTokenMask(
+    task: number,
+    token: string,
+  ): Promise<"added" | "full" | "key_unavailable" | "masks_unreadable">;
   /** Whether the task has had as many job tokens as its log keeps: no more may be minted. */
   jobTokensFull(task: number): boolean;
+  /**
+   * Whether the task's stored job tokens open under the deployment's keys (true with none): a
+   * new token is masked with them, so none is minted while they do not.
+   */
+  jobTokenMasksOpen(task: number): Promise<boolean>;
 }
 
 /** A job token outlives its job's timeout by this. Proposed. */
@@ -194,12 +214,31 @@ export class RunDispatch {
         return { refused };
       }
     }
+    // Without a CI master key no mask can be sealed: refused before the job is assigned or a
+    // token minted, so the job stays queued and an earlier answer's token stays valid.
+    if (!(await ciSecretKeys(host.env)).current) {
+      host.log.warn("task withheld: there is no CI master key to seal its masks", {
+        taskId: wireId,
+        jobId,
+      });
+      return { refused: "ci_key_unavailable" };
+    }
     const assigned = host.assign(jobId, `t${wireId}`);
     if (!assigned.ok) return { refused: assigned.code };
     const ref = assigned.task;
     // A task out of token masks is never given another: refused before anything is written or
     // minted. Overlapping re-offers can both pass this; registering the token decides.
     if (host.jobTokensFull(ref.task)) return this.#tokensFull(wireId, ref);
+    // A re-offer whose stored tokens do not open could not mask a new one: refused before anything
+    // is written or minted, so its earlier token stays valid. Registering the token checks again,
+    // for keys that change in between.
+    if (assigned.tokenScopes.length > 0 && !(await host.jobTokenMasksOpen(ref.task))) {
+      host.log.warn("task withheld: its stored masks do not open", {
+        taskId: wireId,
+        task: ref.task,
+      });
+      return { refused: "masks_unreadable" };
+    }
     host.tx(() =>
       host.engine.exec(
         `INSERT INTO ci_tasks (wire_id, job_id, task, runner_id) VALUES (?, ?, ?, ?)
@@ -277,9 +316,32 @@ export class RunDispatch {
           .run();
         await host.hooks.afterMint?.(minted.token);
         await host.hooks.beforeTokenMask?.();
-        if (!host.addJobTokenMask(ref.task, minted.token)) {
+        const masked = await host.addJobTokenMask(ref.task, minted.token);
+        if (masked === "full") {
           await revokeOwn();
           return this.#tokensFull(wireId, ref, minted.id);
+        }
+        // A token that cannot be masked is never handed out. The key went after the check above;
+        // the earlier tokens are not rotated, so an answer in flight stays valid.
+        if (masked === "key_unavailable") {
+          await revokeOwn();
+          host.log.warn("job token withheld: no CI master key seals the task's masks", {
+            taskId: wireId,
+            task: ref.task,
+            tokenId: minted.id,
+          });
+          return { refused: "ci_key_unavailable" };
+        }
+        // The task's stored tokens do not open under any key there is: this token could not be
+        // masked with them, so it is revoked; the earlier tokens and the offer are kept.
+        if (masked === "masks_unreadable") {
+          await revokeOwn();
+          host.log.warn("job token withheld: the task's stored masks do not open", {
+            taskId: wireId,
+            task: ref.task,
+            tokenId: minted.id,
+          });
+          return { refused: "masks_unreadable" };
         }
       }
       triggeringActor = await this.#triggeringActor(assigned, github);

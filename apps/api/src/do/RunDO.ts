@@ -15,6 +15,7 @@ import {
   type NeedResult,
   nodeOutcome,
   type RunnerResult,
+  type SecretMaskOffer,
   type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
@@ -47,6 +48,7 @@ import {
   type MaskSource,
   NO_MASK_SOURCE,
   RunLogs,
+  type SecretMasksAnswer,
 } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
@@ -230,8 +232,11 @@ export class RunDO extends MigratingDO {
   readonly #logs: RunLogs;
   /** The job logs' live sockets. */
   readonly viewers: LogViewers;
-  /** The object's memory pool (NetworkDO's size, proposed): job slices and log requests reserve from it. */
-  readonly memory = createDoMemoryBudget(16 * 1024 * 1024);
+  /**
+   * The object's memory pool (NetworkDO's size and a full-size log request's mask headroom,
+   * proposed): job slices and log requests reserve from it.
+   */
+  readonly memory = createDoMemoryBudget(17 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
   #model: { source: string; model: RunModel } | undefined;
 
@@ -284,6 +289,7 @@ export class RunDO extends MigratingDO {
       logComplete: (task) => host.#logs.complete(task),
       addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
       jobTokensFull: (task) => host.#logs.jobTokensFull(task),
+      jobTokenMasksOpen: (task) => host.#logs.jobTokensOpen(task),
     });
     this.viewers = new LogViewers({
       env,
@@ -980,6 +986,16 @@ export class RunDO extends MigratingDO {
     runnerId: number,
   ): Promise<AppendLogAnswer> {
     return this.#logs.append(wireId, body, truncated, runnerId);
+  }
+
+  /**
+   * Registers the secrets delivered to task `task` to be masked in its log,
+   * sealed, in one transaction, within the task's secret budget; called at
+   * assignment before the task is answered. Refused for a task of an
+   * untrusted run, which gets no secrets.
+   */
+  addSecretMasks(task: number, secrets: readonly SecretMaskOffer[]): Promise<SecretMasksAnswer> {
+    return this.#logs.addSecretMasks(task, secrets);
   }
 
   // ------------------------------------------------------------------ live log sockets
