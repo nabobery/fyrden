@@ -22,6 +22,56 @@ CREATE TABLE audit_segments (
   archived_at INTEGER
 ) STRICT;
 
+-- table ci_budget_days
+CREATE TABLE ci_budget_days (
+  day INTEGER PRIMARY KEY CHECK (day >= 0),
+  do_requests INTEGER NOT NULL DEFAULT 0 CHECK (do_requests BETWEEN 0 AND 9007199254740991),
+  do_rows_read INTEGER NOT NULL DEFAULT 0 CHECK (do_rows_read BETWEEN 0 AND 9007199254740991),
+  do_rows_written INTEGER NOT NULL DEFAULT 0 CHECK (do_rows_written BETWEEN 0 AND 9007199254740991),
+  do_duration_ms INTEGER NOT NULL DEFAULT 0 CHECK (do_duration_ms BETWEEN 0 AND 9007199254740991),
+  d1_rows_read INTEGER NOT NULL DEFAULT 0 CHECK (d1_rows_read BETWEEN 0 AND 9007199254740991),
+  d1_rows_written INTEGER NOT NULL DEFAULT 0 CHECK (d1_rows_written BETWEEN 0 AND 9007199254740991),
+  queue_ops INTEGER NOT NULL DEFAULT 0 CHECK (queue_ops BETWEEN 0 AND 9007199254740991),
+  worker_requests INTEGER NOT NULL DEFAULT 0 CHECK (worker_requests BETWEEN 0 AND 9007199254740991),
+  r2_class_b INTEGER NOT NULL DEFAULT 0 CHECK (r2_class_b BETWEEN 0 AND 9007199254740991),
+  viewer_do_requests INTEGER NOT NULL DEFAULT 0 CHECK (viewer_do_requests BETWEEN 0 AND do_requests),
+  viewer_do_rows_read INTEGER NOT NULL DEFAULT 0 CHECK (viewer_do_rows_read BETWEEN 0 AND do_rows_read),
+  viewer_do_rows_written INTEGER NOT NULL DEFAULT 0 CHECK (viewer_do_rows_written BETWEEN 0 AND do_rows_written),
+  viewer_do_duration_ms INTEGER NOT NULL DEFAULT 0 CHECK (viewer_do_duration_ms BETWEEN 0 AND do_duration_ms),
+  viewer_d1_rows_read INTEGER NOT NULL DEFAULT 0 CHECK (viewer_d1_rows_read BETWEEN 0 AND d1_rows_read),
+  viewer_d1_rows_written INTEGER NOT NULL DEFAULT 0 CHECK (viewer_d1_rows_written BETWEEN 0 AND d1_rows_written),
+  viewer_queue_ops INTEGER NOT NULL DEFAULT 0 CHECK (viewer_queue_ops BETWEEN 0 AND queue_ops),
+  viewer_worker_requests INTEGER NOT NULL DEFAULT 0 CHECK (viewer_worker_requests BETWEEN 0 AND worker_requests),
+  viewer_r2_class_b INTEGER NOT NULL DEFAULT 0 CHECK (viewer_r2_class_b BETWEEN 0 AND r2_class_b)
+) STRICT;
+
+-- table ci_budget_receipts
+CREATE TABLE ci_budget_receipts (
+  key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200),
+  kind TEXT CHECK (kind IN ('job', 'viewer')),
+  account_id TEXT,
+  first_day INTEGER,
+  last_day INTEGER,
+  span_from INTEGER,
+  span_until INTEGER,
+  fixed TEXT CHECK (fixed IS NULL OR (json_valid(fixed) AND json_type(fixed) = 'object')),
+  per_minute TEXT CHECK (per_minute IS NULL OR (json_valid(per_minute) AND json_type(per_minute) = 'object')),
+  minutes INTEGER CHECK (minutes IS NULL OR minutes BETWEEN 0 AND 10080),
+  mint TEXT,
+  valid_until INTEGER CHECK (valid_until IS NULL OR valid_until >= 0),
+  expires_at INTEGER NOT NULL CHECK (expires_at >= coalesce(valid_until, 0)),
+  state TEXT NOT NULL CHECK (state IN ('granted', 'settled', 'released')),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  CHECK (
+    (kind IS NULL AND state = 'released' AND account_id IS NULL AND first_day IS NULL
+      AND last_day IS NULL AND span_from IS NULL AND span_until IS NULL AND fixed IS NULL
+      AND per_minute IS NULL AND minutes IS NULL AND mint IS NULL)
+    OR (kind IS NOT NULL AND account_id IS NOT NULL AND valid_until IS NOT NULL
+      AND first_day >= 0 AND last_day >= first_day AND span_from >= 0 AND span_until > span_from
+      AND fixed IS NOT NULL AND per_minute IS NOT NULL AND minutes IS NOT NULL AND mint IS NOT NULL)
+  )
+) STRICT;
+
 -- table ci_dispatch
 CREATE TABLE ci_dispatch (account_id TEXT PRIMARY KEY, tasks_version INTEGER NOT NULL) STRICT;
 
@@ -53,7 +103,8 @@ CREATE TABLE ci_runners (
   created_at INTEGER NOT NULL, declared_at INTEGER, revoked_at INTEGER,
   task_confirmed_at INTEGER,             -- an ephemeral runner's one task was confirmed
   expires_at INTEGER                     -- a spent ephemeral runner's end: its task's completion + 10 min
-) STRICT;
+, poll_day INTEGER NOT NULL DEFAULT 0 CHECK (poll_day >= 0), poll_used INTEGER NOT NULL DEFAULT 0 CHECK (poll_used >= 0), revoked_reason TEXT
+  CHECK (revoked_reason IN ('deleted', 'poll_rate', 'fleet_cap', 'spent'))) STRICT;
 
 -- table ci_tasks
 CREATE TABLE ci_tasks (
@@ -835,6 +886,9 @@ CREATE INDEX audit_segments_pending ON audit_segments (from_seq) WHERE state = '
 -- index audit_segments_to
 CREATE INDEX audit_segments_to ON audit_segments (to_seq);
 
+-- index ci_budget_receipts_expiry
+CREATE INDEX ci_budget_receipts_expiry ON ci_budget_receipts (expires_at);
+
 -- index ci_job_tokens_task
 CREATE INDEX ci_job_tokens_task ON ci_job_tokens (task_id);
 
@@ -849,6 +903,12 @@ CREATE INDEX ci_pending_nonce ON ci_pending_jobs (claim_nonce) WHERE claim_nonce
 
 -- index ci_runners_account
 CREATE INDEX ci_runners_account ON ci_runners (account_id, id);
+
+-- index ci_runners_live
+CREATE INDEX ci_runners_live ON ci_runners (expires_at, id) WHERE revoked_at IS NULL;
+
+-- index ci_runners_polls
+CREATE INDEX ci_runners_polls ON ci_runners (poll_day) WHERE revoked_at IS NOT NULL;
 
 -- index ci_tasks_runner_open
 CREATE INDEX ci_tasks_runner_open ON ci_tasks (runner_id) WHERE confirmed_at IS NULL AND superseded_at IS NULL AND ended_at IS NULL;

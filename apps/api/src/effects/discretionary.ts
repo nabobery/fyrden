@@ -48,23 +48,34 @@ export type Allowance = Readonly<Record<DiscretionaryResource, number | null>>;
 const ENTRY = /^([a-z0-9_]+)=(0|[1-9][0-9]{0,14})$/;
 
 /**
- * `FYRDEN_DISCRETIONARY_DAILY` (`resource=n,…`) read whole, or null when
- * unset or not readable whole (a resource unknown or named twice, a value
- * not a whole number): treated as unset, as `internalCallLimit` treats
- * its variable; `fyrden deploy` refuses such a value before it is set.
+ * A daily allowance variable (`resource=n,…`) read whole, or null when
+ * unset or not readable whole (a resource not in `resources` or named
+ * twice, a value not a whole number): treated as unset, as
+ * `internalCallLimit` treats its variable; `fyrden deploy` refuses such a
+ * value before it is set.
  */
-function setValues(env: object): Partial<Record<DiscretionaryResource, number>> | null {
-  const raw = (env as { FYRDEN_DISCRETIONARY_DAILY?: unknown }).FYRDEN_DISCRETIONARY_DAILY;
+export function dailyValues<R extends string>(
+  raw: unknown,
+  resources: readonly R[],
+): Partial<Record<R, number>> | null {
   if (typeof raw !== "string" || raw.trim() === "") return null;
-  const values: Partial<Record<DiscretionaryResource, number>> = {};
+  const values: Partial<Record<R, number>> = {};
   for (const part of raw.split(",")) {
     const match = ENTRY.exec(part.trim());
-    const resource = match?.[1] as DiscretionaryResource | undefined;
-    if (!match || !resource || !DISCRETIONARY_RESOURCES.includes(resource)) return null;
+    const resource = match?.[1] as R | undefined;
+    if (!match || !resource || !resources.includes(resource)) return null;
     if (resource in values) return null;
     values[resource] = Number(match[2]);
   }
   return values;
+}
+
+/** `FYRDEN_DISCRETIONARY_DAILY` read whole (see `dailyValues`). */
+function setValues(env: object): Partial<Record<DiscretionaryResource, number>> | null {
+  return dailyValues(
+    (env as { FYRDEN_DISCRETIONARY_DAILY?: unknown }).FYRDEN_DISCRETIONARY_DAILY,
+    DISCRETIONARY_RESOURCES,
+  );
 }
 
 /**

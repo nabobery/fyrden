@@ -5,11 +5,14 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   asksForHelp,
+  CI_RESOURCES,
   checkEmailKey,
+  DISCRETIONARY_RESOURCES,
   emailDeploy,
   envDeployOptions,
   main,
   parseDeployArgs,
+  validAllowance,
 } from "../src/index.ts";
 
 describe("command line", () => {
@@ -343,6 +346,23 @@ describe("envDeployOptions", () => {
       "do_rows_written=5,do_rows_written=6",
     ])
       expect(parseDeployArgs(["--discretionary", bad]), bad).toBeUndefined();
+  });
+
+  it("reads a CI daily allowance as the API does: discretionary work's resources, Worker requests and R2 reads", () => {
+    expect(validAllowance("worker_requests=15000,do_requests=0,r2_class_b=5", CI_RESOURCES)).toBe(
+      true,
+    );
+    expect(validAllowance("worker_requests=15000", DISCRETIONARY_RESOURCES)).toBe(false);
+    for (const bad of [
+      "",
+      "rows=5",
+      "worker_requests=",
+      "worker_requests=1e4",
+      "worker_requests=-1",
+      "worker_requests=5;do_requests=1",
+      "worker_requests=5,worker_requests=6",
+    ])
+      expect(validAllowance(bad, CI_RESOURCES), bad).toBe(false);
   });
 });
 

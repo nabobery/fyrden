@@ -195,7 +195,8 @@ export function parseDeployArgs(args: readonly string[]):
   const plan = given.get("--plan") ?? "paid";
   if (plan !== "free" && plan !== "paid") return undefined;
   const discretionary = given.get("--discretionary");
-  if (discretionary !== undefined && !validAllowance(discretionary)) return undefined;
+  if (discretionary !== undefined && !validAllowance(discretionary, DISCRETIONARY_RESOURCES))
+    return undefined;
   const watch = given.get("--watch-audiences");
   if (watch !== undefined && watch !== "on" && watch !== "off") return undefined;
   const maintenance = given.get("--read-model-maintenance");
@@ -301,7 +302,8 @@ function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | nu
   return { sockets: Number(sockets) };
 }
 
-const DISCRETIONARY_RESOURCES = new Set([
+/** The resources `FYRDEN_DISCRETIONARY_DAILY` names (apps/api/src/effects/discretionary.ts). */
+export const DISCRETIONARY_RESOURCES: ReadonlySet<string> = new Set([
   "do_requests",
   "do_rows_read",
   "do_rows_written",
@@ -311,13 +313,20 @@ const DISCRETIONARY_RESOURCES = new Set([
   "queue_ops",
 ]);
 
-/** Whether the API reads `value` whole: `resource=n,…`, each resource known and once. */
-function validAllowance(value: string): boolean {
+/** The resources `FYRDEN_CI_DAILY` names (apps/api/src/ci/budget.ts): discretionary work's, Worker requests and R2 reads. */
+export const CI_RESOURCES: ReadonlySet<string> = new Set([
+  ...DISCRETIONARY_RESOURCES,
+  "worker_requests",
+  "r2_class_b",
+]);
+
+/** Whether the API reads `value` whole: `resource=n,…`, each resource in `resources` and once. */
+export function validAllowance(value: string, resources: ReadonlySet<string>): boolean {
   const seen = new Set<string>();
   for (const part of value.split(",")) {
     const match = /^([a-z0-9_]+)=(0|[1-9][0-9]{0,14})$/.exec(part.trim());
     const resource = match?.[1];
-    if (!resource || !DISCRETIONARY_RESOURCES.has(resource) || seen.has(resource)) return false;
+    if (!resource || !resources.has(resource) || seen.has(resource)) return false;
     seen.add(resource);
   }
   return seen.size > 0;

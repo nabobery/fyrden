@@ -1,5 +1,6 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { reapEmails } from "../accounts/emails.js";
+import { pruneCiBudget } from "../ci/budget.js";
 import { reapOAuth } from "../oauth/reaper.js";
 import { pruneFailedEvents } from "../queues/events-dlq.js";
 import { readModelMaintenance, reapExpiredLeases } from "../read-model/maintenance.js";
@@ -17,7 +18,8 @@ export const MAINTENANCE_OBJECT = "instance";
  * The five-minute maintenance: archives the directory's audit log, expires
  * repositories and settles abandoned generations (then advances deletions),
  * reaps idempotency keys, OAuth leftovers, the read model's expired writer
- * leases and failed envelopes kept their time, and advances transfers;
+ * leases and failed envelopes kept their time, prunes CI's ledger (whatever
+ * watched activity or live hints are doing), and advances transfers;
  * while the read model's maintenance holds ordinary work back, not the
  * tasks that write it (deletions' cleanups, abandoned generations'
  * settling, transfers' fences, pruning failed envelopes). Each
@@ -53,6 +55,10 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
     (async () => {
       metrics.count("d1.query", { db: "directory", op: "read_model_lease_reap" });
       await reapExpiredLeases(env);
+    })(),
+    (async () => {
+      metrics.count("d1.query", { db: "directory", op: "ci_budget_prune" });
+      await pruneCiBudget(env.DIRECTORY);
     })(),
   ]);
   const failed = results.filter((r) => r.status === "rejected");
