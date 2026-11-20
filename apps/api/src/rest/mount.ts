@@ -1,6 +1,6 @@
 import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
 import type { Context, Hono, MiddlewareHandler } from "hono";
-import type { ContentfulStatusCode } from "hono/utils/http-status";
+import type { ContentfulStatusCode, StatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
 import { NO_STORE, notModified } from "../http/cache.js";
 import { problem, problemResponse } from "../http/problem.js";
@@ -126,7 +126,8 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
   // Nothing to answer: no body (a replay of it too).
-  if (answersNothing(op)) return c.body(null, op.successStatus === 205 ? 205 : 204, headers);
+  if (answersNothing(op))
+    return c.body(null, (result.status ?? op.successStatus ?? 204) as StatusCode, headers);
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
@@ -168,36 +169,44 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     ),
   );
 
-  for (const op of registry as readonly OperationDef[]) {
-    const path =
-      API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
-    app.on(
-      op.method,
-      path,
-      caching(op),
-      requireAuth("by-method", "api", gitTransport(op)),
-      async (c) => {
-        // Before the body or its key are looked at (as the executor would, after them).
-        const refused = sessionRefusal(op, c.get("auth"));
-        if (refused) return problem(c, 403, refused.code, refused.detail);
-        const read = await readInput(c, op);
-        if (!read.ok) return problem(c, read.status, read.code, read.detail);
-        const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;
-        if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
-          return problem(
-            c,
-            422,
-            "invalid_idempotency_key",
-            "An Idempotency-Key is 1-255 printable ASCII characters.",
-          );
-        return respond(
+  for (const op of registry as readonly OperationDef[])
+    mountOperation(app, op, operationHandler(op));
+}
+
+/** Registers one operation's REST route under /api. */
+export function mountOperation(
+  app: Hono<{ Bindings: Env; Variables: AuthVariables }>,
+  op: OperationDef,
+  handler: OpHandler<OperationDef>,
+): void {
+  const path =
+    API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
+  app.on(
+    op.method,
+    path,
+    caching(op),
+    requireAuth("by-method", "api", gitTransport(op)),
+    async (c) => {
+      // Before the body or its key are looked at (as the executor would, after them).
+      const refused = sessionRefusal(op, c.get("auth"));
+      if (refused) return problem(c, 403, refused.code, refused.detail);
+      const read = await readInput(c, op);
+      if (!read.ok) return problem(c, read.status, read.code, read.detail);
+      const key = op.idempotency === "key" ? c.req.header("Idempotency-Key") : undefined;
+      if (key !== undefined && !IDEMPOTENCY_KEY.test(key))
+        return problem(
           c,
-          op,
-          await executeOperation(op, operationHandler(op), opContext(c), read.input, {
-            ...(key !== undefined && { idempotencyKey: key }),
-          }),
+          422,
+          "invalid_idempotency_key",
+          "An Idempotency-Key is 1-255 printable ASCII characters.",
         );
-      },
-    );
-  }
+      return respond(
+        c,
+        op,
+        await executeOperation(op, handler, opContext(c), read.input, {
+          ...(key !== undefined && { idempotencyKey: key }),
+        }),
+      );
+    },
+  );
 }

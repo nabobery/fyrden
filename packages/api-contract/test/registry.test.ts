@@ -7,6 +7,7 @@ import {
   AUTHENTICATED,
   defineOperation,
   defineRegistry,
+  NoContent,
   type OperationDef,
   openApiPath,
   pathParams,
@@ -72,6 +73,105 @@ describe("defineOperation", () => {
     ],
   ])("rejects %s", (_, change, message) => {
     expect(() => defineOperation({ ...base, ...change } as OperationDef)).toThrow(message);
+  });
+});
+
+describe("operations that answer nothing", () => {
+  const write = {
+    ...base,
+    id: "repo.secret.put",
+    method: "PUT",
+    idempotency: "key",
+    output: NoContent,
+    mcp: false,
+  } satisfies OperationDef;
+
+  it.each([
+    ["201 or 204 as the outcome decides", { successStatuses: [201, 204] }],
+    ["a fixed 201", { successStatus: 201 }],
+    ["a fixed 204", { successStatus: 204 }],
+    ["a fixed 205", { successStatus: 205 }],
+  ])("accepts %s", (_, change) => {
+    const op = defineOperation({ ...write, ...change } as OperationDef);
+    expect(op.successStatuses ?? op.successStatus).toEqual(
+      "successStatuses" in change ? change.successStatuses : change.successStatus,
+    );
+  });
+
+  it.each([
+    [
+      "successStatuses with a body",
+      { output: z.object({ id: z.string() }), successStatuses: [201, 204] },
+      /only an operation whose output is NoContent has successStatuses/,
+    ],
+    [
+      "successStatuses beside successStatus",
+      { successStatus: 204, successStatuses: [201, 204] },
+      /successStatuses replaces successStatus/,
+    ],
+    [
+      "successStatuses on a GET",
+      { method: "GET", idempotency: "none", successStatuses: [201, 204] },
+      /a GET operation answers one status/,
+    ],
+    ["one status listed", { successStatuses: [204] }, /two or more distinct/],
+    ["an empty list", { successStatuses: [] }, /two or more distinct/],
+    ["a status listed twice", { successStatuses: [204, 204] }, /two or more distinct/],
+    ["a status with a body listed", { successStatuses: [200, 204] }, /cannot list 200/],
+    [
+      "a secret response with no body",
+      { successStatuses: [201, 204], secretResponse: true },
+      /answering nothing has no secret response/,
+    ],
+    [
+      "a fixed no-body status with a secret response",
+      { successStatus: 204, secretResponse: true },
+      /answering nothing has no secret response/,
+    ],
+    ["NoContent without a status", {}, /NoContent answers 201, 204 or 205/],
+    ["NoContent answering 200", { successStatus: 200 }, /NoContent answers 201, 204 or 205/],
+    ["NoContent answering 202", { successStatus: 202 }, /NoContent answers 201, 204 or 205/],
+    [
+      "204 with a body",
+      { output: z.object({ id: z.string() }), successStatus: 204 },
+      /204 or 205 only when its output is NoContent/,
+    ],
+  ])("rejects %s", (_, change, message) => {
+    expect(() => defineOperation({ ...write, ...change } as OperationDef)).toThrow(message);
+  });
+
+  it("types an operation as listing statuses only when it lists them", () => {
+    // @ts-expect-error: a fixed status cannot be typed as a list of statuses.
+    defineOperation<string, typeof write.input, typeof NoContent, readonly [201, 204]>({
+      ...write,
+      successStatus: 201,
+    });
+    const listed = defineOperation({ ...write, successStatuses: [201, 204] });
+    const statuses: readonly [201, 204] = listed.successStatuses;
+    expect(statuses).toEqual([201, 204]);
+  });
+
+  it("are documented with each status, none with a body", () => {
+    const either = defineOperation({ ...write, successStatuses: [201, 204] });
+    const created = defineOperation({
+      ...write,
+      id: "repo.variable.create",
+      method: "POST",
+      successStatus: 201,
+    });
+    const doc = openApiDocument(defineRegistry([either, created]), { version: "0.0.0" }) as {
+      paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+    };
+    const ops = doc.paths["/repos/{owner}/{repo}"];
+    expect(ops?.put?.responses).toEqual({
+      "201": { description: "Created" },
+      "204": { description: "No Content" },
+      default: expect.anything(),
+    });
+    expect(ops?.post?.responses).toEqual({
+      "201": { description: "Created" },
+      default: expect.anything(),
+    });
   });
 });
 

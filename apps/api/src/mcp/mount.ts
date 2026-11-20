@@ -31,7 +31,7 @@ import {
   rememberedRefusal,
 } from "../live/routes.js";
 import { type AuthVariables, requireAuth } from "../middleware/auth.js";
-import { executeOperation, type OpContext, rateLimitKey } from "../ops/execute.js";
+import { executeOperation, type OpContext, type OpHandler, rateLimitKey } from "../ops/execute.js";
 import { API_VERSION, opContext, operationHandler } from "../rest/mount.js";
 import { clock, newId } from "../services.js";
 import {
@@ -50,9 +50,14 @@ export const MCP_PATH = "/mcp";
  * result carrying the raw message, past Hono's onError, so unexpected errors
  * are caught here: logged through the redacting logger, answered generically.
  */
-async function runTool(op: OperationDef, ctx: OpContext, args: unknown): Promise<CallToolResult> {
+export async function runTool(
+  op: OperationDef,
+  handler: OpHandler<OperationDef>,
+  ctx: OpContext,
+  args: unknown,
+): Promise<CallToolResult> {
   try {
-    return toolResult(await executeOperation(op, operationHandler(op), ctx, args));
+    return toolResult(await executeOperation(op, handler, ctx, args));
   } catch (error) {
     ctx.log.error("unhandled error", { error, operation: op.id });
     return toolResult({
@@ -320,7 +325,7 @@ function buildServer(ctx: OpContext, era: "modern" | "legacy"): McpServer {
         ...(!answersNothing(op) && { outputSchema: withConvertedJsonSchema(op.output) }),
         annotations: mcpAnnotations(op),
       },
-      (args: unknown) => runTool(op, ctx, args),
+      (args: unknown) => runTool(op, operationHandler(op), ctx, args),
     );
   }
   return server;
