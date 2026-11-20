@@ -334,6 +334,9 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   // The key webhook secrets are sealed with: made once, never shown; replace
   // it only as docs/operations/webhooks.md says, or every hook's secret is lost.
   if (!existing?.has("WEBHOOKS_KEY")) upload.WEBHOOKS_KEY = signingKey();
+  // The master key CI secrets are kept under: made once, never shown; replace
+  // it only as docs/operations/ci-secrets.md says, or stored secrets are lost.
+  if (!existing?.has("CI_SECRETS_KEY")) upload.CI_SECRETS_KEY = signingKey();
   // The key unsubscribe links are signed with: made once, kept across deploys (replacing it
   // breaks every link already sent).
   if (!existing?.has("EMAIL_KEY")) upload.EMAIL_KEY = base64urlKey();

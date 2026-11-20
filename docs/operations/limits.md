@@ -1246,7 +1246,8 @@ and the default applies.
 | `AGENT_REPO_TTL_DAYS` | 7 | 1 | Days until a repository an agent creates expires, unless it gives an expiry |
 
 `fyrden-api` also needs the secrets `BOOTSTRAP_SECRET`, `SIGNING_KEY`,
-`WEBHOOKS_KEY` and `EMAIL_KEY` (unsubscribe links' key), which `fyrden deploy`
+`WEBHOOKS_KEY`, `CI_SECRETS_KEY` (see [CI secrets](ci-secrets.md)) and
+`EMAIL_KEY` (unsubscribe links' key), which `fyrden deploy`
 makes once each when missing and keeps; with email, `RESEND_API_KEY` and
 `RESEND_WEBHOOK_SECRET` come from its secrets file. The `fyrden` CLI reads `FYRDEN_TOKEN` (the token for `fyrden push`),
 `FYRDEN_PUSH_BODY_LIMIT` (its body limit) and `FYRDEN_GIT_BINARY` (the `git`

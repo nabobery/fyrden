@@ -10,6 +10,11 @@ catalog:
   "@cloudflare/vitest-plugin": 1.4.12
   "@modelcontextprotocol/server": 2.4.0
   "@msw/cloudflare": 0.2.0
+  # Opening libsodium sealed boxes (XSalsa20-Poly1305, HSalsa20, BLAKE2b) for CI
+  # secrets: Workers WebCrypto has X25519 but none of these (verified:
+  # https://developers.cloudflare.com/workers/runtime-apis/web-crypto/).
+  "@noble/ciphers": 2.4.0
+  "@noble/hashes": 2.4.0
   # Not 1.64 yet: its Chromium (156.0.8078.4) reports a script-src-attr refusal
   # for an on* attribute that is only parsed into an inert DOMParser document,
   # which nothing runs (measured 2026-11-04: Chromium 153.0.8010.12, Playwright

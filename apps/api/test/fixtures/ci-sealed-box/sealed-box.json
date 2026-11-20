@@ -1,0 +1,7 @@
+{
+  "comment": "Test data made by main.go in this directory (golang.org/x/crypto/nacl/box.SealAnonymous); not a secret.",
+  "privateKey": "VbtbQnSpsFTJy5Qr5gKf8nmGqQAjbvVtM/U7H+4SAjk=",
+  "publicKey": "OIgPLBS/yWES7wgnrrDokB4ApjBsnD4KNPZO0NqhSTM=",
+  "plaintext": "fyrden sealed-box fixture: ünïcödé ✓, a tab\tand a newline\n",
+  "sealed": "5TZseCPckwOlkmJXQkR2SI0qTw4RKheTt2qHEjB7akxHMYCmdwLUFYzlFatkqNnH6Yl14lvo0qT1w7bOxYGrq55R1VGLcY2TCTviMTkSCfMytKOyjK4OKAAzLcso6csSz8xtIiJmGwNnEq0yuwqXSA=="
+}
