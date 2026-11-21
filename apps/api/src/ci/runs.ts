@@ -7,15 +7,21 @@ export type StartRunAnswer =
   | CreateAnswer
   | {
       readonly ok: false;
-      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
     };
 
 type RegisterAnswer =
   | { readonly ok: true }
   | {
       readonly ok: false;
-      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
     };
+
+/** The owner (and owner generation) a spec was built under, which its first registration needs. */
+export interface BuiltUnder {
+  readonly owner: string;
+  readonly ownerGen?: number;
+}
 
 /** What records a run in its repository (the repository object's `registerRun`). */
 export interface RunRegistrar {
@@ -23,6 +29,7 @@ export interface RunRegistrar {
     readonly runId: string;
     readonly sha: string;
     readonly path: string;
+    readonly builtUnder?: BuiltUnder;
   }): Promise<RegisterAnswer>;
 }
 
@@ -44,6 +51,7 @@ export async function startRunFrom(
   repo: RunRegistrar,
   env: { readonly RUN: DurableObjectNamespace<RunDO> },
   spec: RunSpec,
+  builtUnder?: BuiltUnder,
 ): Promise<StartRunAnswer> {
   const reserved = await env.RUN.getByName(spec.runId).reserve(spec);
   if (!reserved.ok) return reserved;
@@ -51,6 +59,7 @@ export async function startRunFrom(
     runId: spec.runId,
     sha: spec.sha,
     path: spec.workflow.path,
+    ...(builtUnder && { builtUnder }),
   });
   if (!registered.ok) return registered;
   // The RPC stub's type of a union answer is not assignable to the union; it is the union.

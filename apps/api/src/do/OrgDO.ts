@@ -1312,6 +1312,11 @@ export class OrgDO extends MigratingDO {
     return this.#ci.repoView(kind, repoId, visibility, page, perPage);
   }
 
+  /** The variables a run of repository `repoId` gets now (a trigger's snapshot). */
+  ciVariablesFor(repoId: string): Promise<CiResult<Record<string, string>>> {
+    return this.#ci.variablesFor(repoId);
+  }
+
   /** Wraps the account's data keys again under the current CI master key. */
   ciRewrap(
     expectedKeyId?: string,

@@ -723,7 +723,7 @@ export class RepoDO extends MigratingDO {
       origin: () => publicOrigin(this.env),
       log: () => this.#log(),
     });
-    this.ciTriggers.bindings = { RUN: env.RUN, DIRECTORY: env.DIRECTORY };
+    this.ciTriggers.bindings = { RUN: env.RUN, DIRECTORY: env.DIRECTORY, ORG: env.ORG };
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
@@ -2500,17 +2500,22 @@ export class RepoDO extends MigratingDO {
    * Records a CI run of this repository before its run object is created, so
    * erasing the repository erases the run. Repeating it changes nothing. Runs
    * also call it to learn whether the repository is deleted: `repo_not_found`
-   * means deleted, never a repository still being generated.
+   * means deleted, never a repository still being generated. A trigger
+   * gives `builtUnder`, the owner (and owner generation) its spec was built
+   * under: a first registration under another answers `owner_changed`, so a
+   * transfer that landed meanwhile never starts a run with the former
+   * owner's variables; a run already recorded is answered as before.
    */
   registerRun(input: {
     readonly runId: string;
     readonly sha: string;
     readonly path: string;
+    readonly builtUnder?: { readonly owner: string; readonly ownerGen?: number };
   }): Promise<
     | { readonly ok: true }
     | {
         readonly ok: false;
-        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
       }
   > {
     return this.#measured("registerRun", async () => {
@@ -2525,6 +2530,18 @@ export class RepoDO extends MigratingDO {
       if (refused)
         return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
       if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };
+      const built = input.builtUnder;
+      if (built) {
+        const account = this.events.account();
+        const moved =
+          account?.ownerId !== built.owner ||
+          (built.ownerGen !== undefined && account.ownerGen !== built.ownerGen);
+        const recorded =
+          this.git.context.storage.sql
+            .exec("SELECT 1 FROM ci_runs WHERE run_id = ?", input.runId)
+            .toArray().length > 0;
+        if (moved && !recorded) return { ok: false, code: "owner_changed" };
+      }
       this.git.context.storage.sql.exec(
         `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
         input.runId,
@@ -2553,7 +2570,9 @@ export class RepoDO extends MigratingDO {
 
   /**
    * A `workflow_dispatch` by API (see `CiTriggers.dispatch`): `key` is the
-   * request's idempotency claim, or a fresh id for a request without a key.
+   * request's idempotency claim, or a fresh id for a request without a key;
+   * `authorized`, the directory entry's owner and name generation the
+   * request was authorized with.
    */
   dispatchWorkflow(input: {
     readonly file: string;
@@ -2561,6 +2580,7 @@ export class RepoDO extends MigratingDO {
     readonly inputs: unknown;
     readonly actor: string;
     readonly key: string;
+    readonly authorized: { readonly ownerId: string; readonly nameGen: number };
   }): Promise<DispatchAnswer> {
     return this.#measured("dispatchWorkflow", () =>
       this.ciTriggers.dispatch({

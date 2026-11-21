@@ -692,6 +692,80 @@ export async function ownershipState(
 }
 
 /**
+ * Why the repository may not be used now: a transfer is moving it
+ * (`transferring` says so), it moved from the owner `entry` names, or
+ * (`since` given) a transfer started after `since` was read, even one that
+ * has since brought it back.
+ */
+function ownershipRefusal(
+  now: Ownership,
+  entry: RepoEntry,
+  notFound: () => OperationError,
+  transferring: string,
+  since?: Ownership,
+): OperationError | undefined {
+  if (now?.transferring || (since && now?.lastTransfer !== since.lastTransfer))
+    return new OperationError(409, "repo_transferring", transferring);
+  if (!now || now.ownerId !== entry.ownerId) return notFound();
+  return undefined;
+}
+
+type Ownership = Awaited<ReturnType<typeof ownershipState>>;
+
+/**
+ * The repository `owner/repo`, if `auth` may use `permission` there, with
+ * the decision bound to settled ownership: until a transfer completes, the
+ * repository object can decide access for one account while the directory
+ * already names the other. So ownership is read before and after the
+ * decision, and the decision is used only if no transfer was under way
+ * before it, none started after (the last transfer's id is unchanged,
+ * which a transfer away and back also changes), and the owner is still the
+ * one found. Missing and forbidden look the same (404 `repo_not_found`); a
+ * transfer under way is said (409 `repo_transferring`, with `transferring`
+ * as its detail) only to a caller the repository object lets in.
+ */
+export async function settledRepo(
+  env: Env,
+  auth: Caller,
+  owner: string,
+  repo: string,
+  permission: RepoPermission,
+  options: {
+    readonly transferring: string;
+    readonly metrics?: Metrics;
+    /** A test seam: between the access decision and the second ownership read. */
+    readonly afterAuthorize?: () => Promise<void>;
+  },
+): Promise<RepoEntry> {
+  const { metrics, transferring } = options;
+  const notFound = () =>
+    new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
+  const entry = await resolveRepo(env, owner, repo, {
+    consistency: PERMISSIONS[permission].writes ? "primary" : "cached",
+    ...(metrics && { metrics }),
+  });
+  if (!entry) throw notFound();
+  const first = await ownershipState(env, entry.id, metrics);
+  const before = ownershipRefusal(first, entry, notFound, transferring);
+  if (before) {
+    if (before.status !== 409 || !(await authorize(env, auth, entry, permission, metrics)))
+      throw notFound();
+    throw before;
+  }
+  if (!(await authorize(env, auth, entry, permission, metrics))) throw notFound();
+  await options.afterAuthorize?.();
+  const after = ownershipRefusal(
+    await ownershipState(env, entry.id, metrics),
+    entry,
+    notFound,
+    transferring,
+    first,
+  );
+  if (after) throw after;
+  return entry;
+}
+
+/**
  * Why a change authorized for `ownerId` was not made to `repoId`: a
  * transfer is moving it, it moved to another owner since, or neither.
  */

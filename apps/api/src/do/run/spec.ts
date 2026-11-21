@@ -36,8 +36,16 @@ export interface RunSpec {
   /** The `github` context, as plain JSON data. */
   readonly github?: unknown;
   readonly inputs?: unknown;
+  /** The variables snapshot taken when the trigger built the spec; `{}` for an untrusted run. */
   readonly vars?: unknown;
+  /**
+   * Set when the variables were left out because the contexts' JSON would
+   * pass `MAX_RUN_CONTEXTS_BYTES` with them: the run fails at creation.
+   */
+  readonly varsError?: VarsError;
 }
+
+export type VarsError = "variables_too_large";
 
 /** The contexts' stored size, as JSON text. Proposed. */
 export const MAX_RUN_CONTEXTS_BYTES = 1024 * 1024;
@@ -46,6 +54,28 @@ const MAX_REF_LENGTH = 1024;
 const MAX_EVENT_LENGTH = 64;
 
 const utf8 = new TextEncoder();
+
+/** The contexts as they are stored and measured. */
+const contextsJson = (github: unknown, inputs: unknown, vars: unknown) =>
+  JSON.stringify({ github: github ?? null, inputs: inputs ?? null, vars: vars ?? null });
+
+/**
+ * The variables a spec carries: `vars` while the contexts' JSON with them
+ * (escaping included: a NUL takes six bytes) fits `MAX_RUN_CONTEXTS_BYTES`,
+ * otherwise none, named. `github` is the run's own (its id and number).
+ */
+export function snapshotVariables(
+  vars: Readonly<Record<string, string>>,
+  github: unknown,
+  inputs: unknown,
+): { readonly vars: Record<string, string>; readonly varsError?: VarsError } {
+  if (
+    Object.keys(vars).length === 0 ||
+    utf8.encode(contextsJson(github, inputs, vars)).length <= MAX_RUN_CONTEXTS_BYTES
+  )
+    return { vars: { ...vars } };
+  return { vars: {}, varsError: "variables_too_large" };
+}
 
 /** A principal id: one of the known type prefixes and a body (`usr_…`, `agt_…`). */
 export function isPrincipalId(value: unknown): value is string {
@@ -85,11 +115,8 @@ export function validateRunSpec(spec: RunSpec): string {
   if (typeof path !== "string" || path.length === 0 || path.length > MAX_PATH_LENGTH) fail("path");
   if (typeof source !== "string" || utf8.encode(source).length > MAX_WORKFLOW_BYTES)
     fail(`workflow source must be a string of at most ${MAX_WORKFLOW_BYTES} bytes`);
-  const contexts = JSON.stringify({
-    github: spec.github ?? null,
-    inputs: spec.inputs ?? null,
-    vars: spec.vars ?? null,
-  });
+  if (spec.varsError !== undefined && spec.varsError !== "variables_too_large") fail("varsError");
+  const contexts = contextsJson(spec.github, spec.inputs, spec.vars);
   if (utf8.encode(contexts).length > MAX_RUN_CONTEXTS_BYTES)
     fail(`contexts exceed ${MAX_RUN_CONTEXTS_BYTES} bytes`);
   return contexts;
@@ -110,6 +137,8 @@ export async function specDigest(spec: RunSpec, contexts: string): Promise<strin
     spec.trust,
     spec.fork,
     spec.approval ?? null,
+    // Only when set, so a spec without one keeps the digest it had before the field existed.
+    ...(spec.varsError ? [spec.varsError] : []),
   ]);
   const hash = await crypto.subtle.digest("SHA-256", utf8.encode(canonical));
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");

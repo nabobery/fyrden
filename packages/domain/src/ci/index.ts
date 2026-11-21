@@ -19,6 +19,7 @@ export * from "./parse.js";
 export * from "./payload.js";
 export * from "./run-state.js";
 export * from "./runner.js";
+export * from "./secret-references.js";
 export * from "./support-matrix.js";
 export * from "./triggers.js";
 export * from "./trust.js";

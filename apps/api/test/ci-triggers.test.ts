@@ -86,7 +86,11 @@ describe("push triggers", () => {
     expect(recorded).toEqual({ events: 2, job: "queued" });
     const spent = await inRepo(f.stub, async (r: RepoDO) => {
       const count = { runs: 0, d1: 0 };
-      r.ciTriggers.bindings = { RUN: countingRuns(count), DIRECTORY: countingDirectory(count) };
+      r.ciTriggers.bindings = {
+        RUN: countingRuns(count),
+        DIRECTORY: countingDirectory(count),
+        ORG: env.ORG,
+      };
       const before = { ...r.ciTriggers.work };
       const ran = await r.git.jobs.runJob(
         CI_TRIGGERS_JOB,
@@ -796,7 +800,7 @@ describe("failures while deciding an event", () => {
           };
         },
       } as unknown as typeof env.RUN;
-      r.ciTriggers.bindings = { RUN: runs, DIRECTORY: env.DIRECTORY };
+      r.ciTriggers.bindings = { RUN: runs, DIRECTORY: env.DIRECTORY, ORG: env.ORG };
     });
     await runTriggers(f.stub);
     const [allocated] = await eventRunsOf(f.stub);

@@ -60,7 +60,7 @@ const RENEW_EVERY_MS = 3 * 60_000;
 
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
-import { type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
+import { MAX_RUN_CONTEXTS_BYTES, type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
 
 /** How long one alarm runs job slices. */
@@ -408,8 +408,30 @@ export class RunDO extends MigratingDO {
         spec.fork ? 1 : 0,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
+      // Variables too large for the contexts fail the run as a workflow that does not plan does.
+      const errors: readonly RunError[] | undefined = !loaded.ok
+        ? loaded.errors.map(({ code, feature, path, line, column, message }) => ({
+            code,
+            feature,
+            path,
+            line,
+            column,
+            message,
+          }))
+        : spec.varsError
+          ? [
+              {
+                code: spec.varsError,
+                feature: "vars",
+                path: "",
+                line: 0,
+                column: 0,
+                message: `The run's variables, encoded as JSON with its other contexts, would exceed ${MAX_RUN_CONTEXTS_BYTES} bytes; values with many characters JSON escapes (control characters) take up to six bytes each.`,
+              },
+            ]
+          : undefined;
       // A workflow that fails to plan runs nothing: it needs no approval, and fails at once.
-      if (binding !== null && loaded.ok) {
+      if (binding !== null && !errors) {
         // Held: no attempt is admitted (no concurrency group, no job, no check) until approved.
         const expires = now + APPROVAL_EXPIRY_MS;
         this.engine.exec(
@@ -419,21 +441,12 @@ export class RunDO extends MigratingDO {
         );
         this.jobs.ensure("run_deadlines", RUN_JOB.deadlines, { runAt: expires });
       }
-      this.engine.insertAttempt(1, spec.actor, loaded.ok ? loaded.model : undefined);
+      this.engine.insertAttempt(1, spec.actor, loaded.ok && !errors ? loaded.model : undefined);
       const attempt = this.engine.attempt(1) as AttemptRow;
-      if (!loaded.ok) {
+      if (errors) {
         this.engine.exec(
           "UPDATE run_attempts SET errors = ? WHERE attempt = 1",
-          JSON.stringify(
-            loaded.errors.map(({ code, feature, path, line, column, message }) => ({
-              code,
-              feature,
-              path,
-              line,
-              column,
-              message,
-            })),
-          ),
+          JSON.stringify(errors),
         );
         this.engine.advanceAttempt(attempt, { kind: "plan_failed" });
         this.#publishPlanFailure(spec.runId, planCheck);

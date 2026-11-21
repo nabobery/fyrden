@@ -25,9 +25,11 @@ import {
   MAX_ORG_VARIABLES,
   MAX_REPO_SECRETS,
   MAX_REPO_VARIABLES,
+  MAX_RUN_VARIABLES_BYTES,
   MAX_SELECTED_REPOS,
   type OrgVisibility,
   type RepoVisibility,
+  runVariables,
 } from "@fyrden/domain";
 import {
   boxKey,
@@ -180,6 +182,24 @@ const wrappedOf = (row: DataKeyRow): WrappedDataKey => ({
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const KEY_ID = /^([1-9][0-9]{0,8})\.[0-9a-f]{16}$/;
+
+/**
+ * The names of `rows` (in their order) while their running total of bytes
+ * stays within `cap`, and that total: the first that does not fit ends it.
+ */
+function keptPrefix(
+  rows: readonly { readonly name: string; readonly bytes: number }[],
+  cap: number,
+): { names: string[]; bytes: number } {
+  const names: string[] = [];
+  let bytes = 0;
+  for (const r of rows) {
+    if (bytes + r.bytes > cap) break;
+    bytes += r.bytes;
+    names.push(r.name);
+  }
+  return { names, bytes };
+}
 
 export class AccountCi {
   constructor(private readonly host: CiHost) {}
@@ -791,6 +811,85 @@ export class AccountCi {
       )
       .toArray()[0];
     return row ? ok(variableItem(row)) : notFound("variable", stored);
+  }
+
+  /**
+   * The variables a run of repository `repoId` gets now, by name: its own
+   * over the organization's that reach it (by the repository's visibility in
+   * the directory now), within `MAX_RUN_VARIABLES_BYTES` as `runVariables`
+   * takes them. The kept prefix is chosen from names and sizes alone
+   * (`octet_length` of a column reads no content: verified,
+   * https://www.sqlite.org/lang_corefunc.html#octet_length), and only the
+   * kept values are read. Refused for a repository the account does not hold.
+   */
+  async variablesFor(repoId: string): Promise<CiResult<Record<string, string>>> {
+    if (this.host.notHere(repoId)) return REPO_GONE;
+    const account = this.host.account();
+    // An account never recorded holds no variables.
+    if (!account) return ok({});
+    const row = await this.host.env.DIRECTORY.withSession("first-primary")
+      .prepare("SELECT visibility FROM repos WHERE id = ? AND owner_id = ? AND state = 'active'")
+      .bind(repoId, account.id)
+      .first<{ visibility: RepoVisibility }>();
+    if (!row || this.host.notHere(repoId)) return REPO_GONE;
+    // No await from here: the sizes and the values are of the same rows.
+    const sized = "e.name, octet_length(e.name) + octet_length(e.value) AS bytes";
+    const ownNames = keptPrefix(
+      this.#sql
+        .exec<{ name: string; bytes: number }>(
+          `SELECT ${sized} FROM ci_variables e WHERE e.scope = ? ORDER BY e.name`,
+          repoId,
+        )
+        .toArray(),
+      MAX_RUN_VARIABLES_BYTES,
+    );
+    const own = ownNames.names.length
+      ? this.#sql
+          .exec<{ name: string; value: string }>(
+            "SELECT name, value FROM ci_variables WHERE scope = ? AND name <= ? ORDER BY name",
+            repoId,
+            ownNames.names.at(-1) as string,
+          )
+          .toArray()
+      : [];
+    const orgNames =
+      account.kind === "org"
+        ? keptPrefix(
+            this.#sql
+              .exec<{ name: string; bytes: number }>(
+                `SELECT ${sized} FROM ci_variables e
+                 WHERE e.scope = 'org' AND (e.visibility = 'all'
+                   OR (e.visibility = 'private' AND ?1 <> 'public')
+                   OR (e.visibility = 'selected' AND EXISTS (
+                     SELECT 1 FROM ci_variable_repos r WHERE r.name = e.name AND r.repo_id = ?2)))
+                   AND NOT EXISTS (
+                     SELECT 1 FROM ci_variables o WHERE o.scope = ?2 AND o.name = e.name)
+                 ORDER BY e.name`,
+                row.visibility,
+                repoId,
+              )
+              .toArray(),
+            MAX_RUN_VARIABLES_BYTES - ownNames.bytes,
+          ).names
+        : [];
+    const org = orgNames.length
+      ? this.#sql
+          .exec<{ name: string; value: string }>(
+            // Looked up by key, one name at a time: no other organization row is read.
+            `SELECT name, value FROM ci_variables
+             WHERE scope = 'org' AND name IN (SELECT value FROM json_each(?)) ORDER BY name`,
+            JSON.stringify(orgNames),
+          )
+          .toArray()
+      : [];
+    // The rows read already reach the repository; `runVariables` keeps the rule's last word.
+    return ok(
+      runVariables(
+        org.map((v) => ({ name: v.name, value: v.value, visibility: "all", selected: false })),
+        own,
+        row.visibility,
+      ),
+    );
   }
 
   // --- An organization entry's selected repositories --------------------------

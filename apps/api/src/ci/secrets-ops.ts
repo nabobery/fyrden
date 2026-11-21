@@ -38,19 +38,13 @@ import type {
   updateOrgVariable,
   updateRepoVariable,
 } from "@fyrden/api-contract";
-import { PERMISSIONS, type Permission, type RepoPermission } from "@fyrden/domain";
+import type { Permission, RepoPermission } from "@fyrden/domain";
 import { type Account, findAccount, orgFor } from "../accounts/account.js";
 import { recordedAccount } from "../accounts/grants.js";
 import type { OrgDO } from "../do/OrgDO.js";
 import type { CiKind, CiResult, CiSecretItem, CiVariableItem } from "../do/org/ci-secrets.js";
 import { type OpContext, OperationError, statusResult } from "../ops/execute.js";
-import {
-  authorize,
-  ownedReposPage,
-  ownershipState,
-  type RepoEntry,
-  resolveRepo,
-} from "../repos/directory.js";
+import { ownedReposPage, type RepoEntry, settledRepo } from "../repos/directory.js";
 import { ciSecretKeys } from "./envelope.js";
 
 const ORG = "org";
@@ -70,39 +64,11 @@ const actorOf = (ctx: OpContext) => ({
 /** Test seams: between the access decision and the second ownership check. */
 export const ciScopeHooks: { afterAuthorize?: () => Promise<void> } = {};
 
-type Ownership = Awaited<ReturnType<typeof ownershipState>>;
-
-/**
- * Why the repository may not be used now: a transfer is moving it, it
- * moved from the owner `entry` names, or (`since` given) a transfer started
- * after `since` was read, even one that has since brought it back.
- */
-function ownershipRefusal(
-  now: Ownership,
-  entry: RepoEntry,
-  owner: string,
-  repo: string,
-  since?: Ownership,
-): OperationError | undefined {
-  if (now?.transferring || (since && now?.lastTransfer !== since.lastTransfer))
-    return new OperationError(
-      409,
-      "repo_transferring",
-      "The repository is being transferred; its secrets and variables can be used once it lands.",
-    );
-  if (!now || now.ownerId !== entry.ownerId)
-    return new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
-  return undefined;
-}
-
 /**
  * The repository, if the caller may use `permission` there, and its account
- * object. Ownership is read before and after the access decision: until a
- * transfer completes, the repository object can decide access for one
- * account while the directory already names the other. So a decision is
- * used only if no transfer was under way before it, none started after
- * (the last transfer's id is unchanged, which a transfer away and back
- * also changes), and the owner is still the one found.
+ * object. The access decision is bound to settled ownership (see
+ * `settledRepo`): a transfer under way, or one started across it, answers
+ * 409 `repo_transferring`; an owner changed since, 404.
  */
 async function repoScope(
   ctx: OpContext,
@@ -111,34 +77,12 @@ async function repoScope(
   permission: RepoPermission,
   record = false,
 ): Promise<{ repo: RepoEntry; stub: DurableObjectStub<OrgDO> }> {
-  const notFound = () =>
-    new OperationError(404, "repo_not_found", `No repository ${owner}/${repo} was found.`);
-  const entry = await resolveRepo(ctx.env, owner, repo, {
-    consistency: PERMISSIONS[permission].writes ? "primary" : "cached",
+  const entry = await settledRepo(ctx.env, ctx.auth, owner, repo, permission, {
+    transferring:
+      "The repository is being transferred; its secrets and variables can be used once it lands.",
     metrics: ctx.metrics,
+    afterAuthorize: () => ciScopeHooks.afterAuthorize?.() ?? Promise.resolve(),
   });
-  if (!entry) throw notFound();
-  const first = await ownershipState(ctx.env, entry.id, ctx.metrics);
-  const before = ownershipRefusal(first, entry, owner, repo);
-  if (before) {
-    // A transfer under way is said only to a caller the repository object lets in.
-    if (
-      before.status !== 409 ||
-      !(await authorize(ctx.env, ctx.auth, entry, permission, ctx.metrics))
-    )
-      throw notFound();
-    throw before;
-  }
-  if (!(await authorize(ctx.env, ctx.auth, entry, permission, ctx.metrics))) throw notFound();
-  await ciScopeHooks.afterAuthorize?.();
-  const after = ownershipRefusal(
-    await ownershipState(ctx.env, entry.id, ctx.metrics),
-    entry,
-    owner,
-    repo,
-    first,
-  );
-  if (after) throw after;
   ctx.metrics.count("do.request", { class: "OrgDO", method: "ci" });
   const stub = record
     ? await recordedAccount(ctx.env, { id: entry.ownerId, handle: entry.ownerHandle }, ctx.metrics)
