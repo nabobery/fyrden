@@ -4,6 +4,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
+import { registerSecretValue } from "@fyrden/testing/log-capture";
 import { hsalsa, xsalsa20poly1305 } from "@noble/ciphers/salsa.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { expect } from "vitest";
@@ -59,8 +60,16 @@ export async function sealFor(publicKey: string, value: string | Uint8Array): Pr
   return toBase64(sealed);
 }
 
-/** A value no log line or stored row may hold. */
-export const secretValue = () => `sv-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+/**
+ * A value no log line or stored row may hold, `length` characters long when
+ * given; registered, so a log line holding it fails the test.
+ */
+export const secretValue = (length?: number) => {
+  const unit = `sv-${crypto.randomUUID()}-${crypto.randomUUID()}`;
+  return registerSecretValue(
+    length === undefined ? unit : unit.repeat(Math.ceil(length / unit.length)).slice(0, length),
+  );
+};
 
 /** A new organization owned by `owner`, made by the instance administrator `admin`. */
 export async function newOrg(admin: Who, owner: Who): Promise<{ login: string; id: string }> {

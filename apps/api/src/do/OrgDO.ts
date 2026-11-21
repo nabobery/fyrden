@@ -17,6 +17,7 @@ import {
   type RepoRole,
   strongestRole,
 } from "@fyrden/domain";
+import type { SecretReferences } from "@fyrden/domain/ci";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
 import {
@@ -27,6 +28,7 @@ import {
   type CiRepoViewItem,
   type CiResult,
   type CiSecretItem,
+  type CiSecretsDelivery,
   type CiVariableItem,
 } from "./org/ci-secrets.js";
 import {
@@ -66,6 +68,8 @@ export const accountHooks: {
   ciKeyPrepared?: (account: OrgDO) => Promise<void>;
   /** After a CI data key is wrapped again, before its guarded commit. */
   ciRewrapPrepared?: (account: OrgDO) => Promise<void>;
+  /** When a run asks for a job's secrets, before anything is read. */
+  ciSecretsRead?: (account: OrgDO) => Promise<void>;
 } = {};
 
 /** What a user deletion asks of each account object (see `retirePrincipals`). */
@@ -1237,6 +1241,7 @@ export class OrgDO extends MigratingDO {
           prepared: accountHooks.ciPrepared,
           keyPrepared: accountHooks.ciKeyPrepared,
           rewrapPrepared: accountHooks.ciRewrapPrepared,
+          secretsRead: accountHooks.ciSecretsRead,
         }[point];
         await hook?.(this);
       },
@@ -1315,6 +1320,38 @@ export class OrgDO extends MigratingDO {
   /** The variables a run of repository `repoId` gets now (a trigger's snapshot). */
   ciVariablesFor(repoId: string): Promise<CiResult<Record<string, string>>> {
     return this.#ci.variablesFor(repoId);
+  }
+
+  /**
+   * The secrets a job of repository `repoId` gets now, of those `refs` names:
+   * sealed, with the wrapped data keys that open them, for its run to open;
+   * none when their values are more than `maxBytes` of text together
+   * (`oversize`).
+   * Never throws: whatever fails while the secrets are read is answered as
+   * the stable refusal `secrets_read_failed`, so no exception carrying what
+   * was being read leaves the object (an exception escaping an RPC is
+   * printed with its text by the runtime).
+   */
+  async ciSecretsFor(
+    repoId: string,
+    refs: SecretReferences,
+    maxBytes: number,
+  ): Promise<CiResult<CiSecretsDelivery>> {
+    try {
+      return await this.#ci.secretsFor(repoId, refs, maxBytes);
+    } catch {
+      // The error's text is not logged: it may hold what was being read.
+      createLogger({ op: "org.ci_secrets", doClass: "OrgDO" }).warn(
+        "a run's secrets were not read",
+        { repoId },
+      );
+      return {
+        ok: false,
+        status: 503,
+        code: "secrets_read_failed",
+        error: "The secrets could not be read.",
+      };
+    }
   }
 
   /** Wraps the account's data keys again under the current CI master key. */

@@ -52,6 +52,11 @@ export type InstanceEvent =
   | { readonly kind: "queue" }
   /** A runner took it. */
   | { readonly kind: "assign" }
+  /**
+   * Its assignment was never recorded for a runner (the offer was given up
+   * first), so no runner was given it: it waits for another.
+   */
+  | { readonly kind: "unassign" }
   /** Graceful: an instance that has not started ends; a running one is told to stop. */
   | { readonly kind: "cancel"; readonly reason: CancelReason }
   | { readonly kind: "complete"; readonly result: RunnerResult }
@@ -91,6 +96,10 @@ export function advanceInstance(state: InstanceState, event: InstanceEvent): Ins
     case "assign":
       return status === "queued"
         ? { ok: true, state: { ...state, status: "in_progress" } }
+        : refused;
+    case "unassign":
+      return status === "in_progress"
+        ? { ok: true, state: { ...state, status: "queued" } }
         : refused;
     case "cancel":
       if (unstarted) return completed(state, "cancelled", event.reason);

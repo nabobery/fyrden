@@ -29,8 +29,10 @@ import {
   MAX_SELECTED_REPOS,
   type OrgVisibility,
   type RepoVisibility,
+  runSecrets,
   runVariables,
 } from "@fyrden/domain";
+import type { SecretReferences } from "@fyrden/domain/ci";
 import {
   boxKey,
   type CiKeyring,
@@ -89,6 +91,25 @@ export interface CiPage<T> {
   readonly items: T[];
 }
 
+/** The secrets a job gets, as stored: sealed values and the wrapped data keys that open them. */
+export interface CiSecretsDelivery {
+  /** The wrapped data key of each generation the entries use; one whose row is gone is absent. */
+  readonly dataKeys: readonly (WrappedDataKey & { readonly generation: number })[];
+  /** By name; `scope` is `org` or the repository id. */
+  readonly entries: readonly {
+    readonly scope: string;
+    readonly name: string;
+    readonly generation: number;
+    readonly nonce: string;
+    readonly ciphertext: string;
+  }[];
+  /**
+   * Set instead of the entries when their sealed text is past the bound the
+   * run asked with: each secret's name and value size in bytes.
+   */
+  readonly oversize?: readonly { readonly name: string; readonly bytes: number }[];
+}
+
 export interface CiActor {
   readonly principalId: string;
   readonly requestId?: string;
@@ -107,7 +128,9 @@ export interface CiHost {
   /** After a transaction that wrote an audit row. */
   audited(): void;
   /** A test's pause point (see `accountHooks`). */
-  pause(point: "listed" | "prepared" | "keyPrepared" | "rewrapPrepared"): Promise<void>;
+  pause(
+    point: "listed" | "prepared" | "keyPrepared" | "rewrapPrepared" | "secretsRead",
+  ): Promise<void>;
 }
 
 /** How often a guarded data key change reads its row again after losing to another. */
@@ -144,6 +167,14 @@ const fail = (status: CiFailure["status"], code: string, error: string): CiFailu
   error,
 });
 const ok = <T>(value: T): CiResult<T> => ({ ok: true, value });
+
+/**
+ * The value bytes a sealed value's base64 text of `chars` characters, `pad` of them `=`, holds:
+ * the decoded bytes less AES-GCM's 16-byte tag (the nonce is stored apart). Exact for the padded
+ * base64 a write stores, and never less for other text.
+ */
+const sealedBytes = (chars: number, pad: number) =>
+  Math.max(0, Math.ceil((chars * 3) / 4) - pad - 16);
 
 const NOT_AN_ORG = fail(404, "not_an_org", "The account is not an organization.");
 const REPO_GONE = fail(404, "repo_not_found", "The repository is not this account's any more.");
@@ -890,6 +921,103 @@ export class AccountCi {
         row.visibility,
       ),
     );
+  }
+
+  // --- Delivery ------------------------------------------------------------
+
+  /**
+   * The secrets a job of repository `repoId` gets, sealed, for its run to
+   * open: the first `MAX_RUN_ORG_SECRETS` organization secrets that reach the
+   * repository (by its visibility in the directory now), by name, with the
+   * repository's own overriding them, then those `refs` names (every one for
+   * `all`). With them, the wrapped data key of each generation they use.
+   * Never a value. Refused for a repository the account does not hold.
+   * When their values are more than `maxBytes` of text together (each
+   * value's exact size, from its stored sealed text's length, before any
+   * ciphertext is read), none is sent: the answer names them and their sizes
+   * (`oversize`). The bound counts each secret, equal values too: they are
+   * sealed apart, so which are equal is known only once they are opened, and
+   * the run's masks cap distinct ones.
+   */
+  async secretsFor(
+    repoId: string,
+    refs: SecretReferences,
+    maxBytes: number,
+  ): Promise<CiResult<CiSecretsDelivery>> {
+    await this.host.pause("secretsRead");
+    if (this.host.notHere(repoId)) return REPO_GONE;
+    const account = this.host.account();
+    // An account never recorded holds no secrets.
+    if (!account) return ok({ dataKeys: [], entries: [] });
+    const row = await this.host.env.DIRECTORY.withSession("first-primary")
+      .prepare("SELECT visibility FROM repos WHERE id = ? AND owner_id = ? AND state = 'active'")
+      .bind(repoId, account.id)
+      .first<{ visibility: RepoVisibility }>();
+    if (!row || this.host.notHere(repoId)) return REPO_GONE;
+    // No await from here: the names chosen and the rows read are of one state.
+    const org =
+      account.kind === "org"
+        ? this.#sql
+            .exec<{ name: string; visibility: OrgVisibility; selected: number }>(
+              `SELECT e.name, e.visibility, EXISTS (
+                 SELECT 1 FROM ci_secret_repos r WHERE r.name = e.name AND r.repo_id = ?) AS selected
+               FROM ci_secrets e WHERE e.scope = 'org'`,
+              repoId,
+            )
+            .toArray()
+            .map((s) => ({
+              name: s.name,
+              visibility: s.visibility,
+              selected: s.selected === 1,
+              scope: ORG_SCOPE,
+            }))
+        : [];
+    const own = this.#sql
+      .exec<{ name: string }>("SELECT name FROM ci_secrets WHERE scope = ?", repoId)
+      .toArray()
+      .map((s) => ({ name: s.name, scope: repoId }));
+    const eligible = runSecrets(org, own, row.visibility);
+    const chosen =
+      refs.kind === "all"
+        ? [...eligible.values()]
+        : refs.names.flatMap((name) => eligible.get(name) ?? []);
+    // Their sizes first, from the stored text's length: past the bound, no ciphertext is read.
+    const sized = chosen.map((s) => {
+      const size = this.#sql
+        .exec<{ chars: number; pad: number }>(
+          `SELECT length(ciphertext) AS chars,
+             CASE WHEN substr(ciphertext, -2) = '==' THEN 2
+                  WHEN substr(ciphertext, -1) = '=' THEN 1 ELSE 0 END AS pad
+           FROM ci_secrets WHERE scope = ? AND name = ?`,
+          s.scope,
+          s.name,
+        )
+        .one();
+      return { ...s, ...size };
+    });
+    let bytes = 0;
+    for (const s of sized) bytes += sealedBytes(s.chars, s.pad);
+    if (bytes > maxBytes)
+      return ok({
+        dataKeys: [],
+        entries: [],
+        oversize: sized.map((s) => ({ name: s.name, bytes: sealedBytes(s.chars, s.pad) })),
+      });
+    const entries = chosen.map((s) => {
+      const sealed = this.#sql
+        .exec<{ generation: number; nonce: string; ciphertext: string }>(
+          "SELECT generation, nonce, ciphertext FROM ci_secrets WHERE scope = ? AND name = ?",
+          s.scope,
+          s.name,
+        )
+        .one();
+      return { scope: s.scope, name: s.name, ...sealed };
+    });
+    const dataKeys = [...new Set(entries.map((e) => e.generation))].flatMap((generation) => {
+      const key = this.#generation(generation);
+      return key ? [{ generation, ...wrappedOf(key) }] : [];
+    });
+    return ok({ dataKeys, entries });
   }
 
   // --- An organization entry's selected repositories --------------------------

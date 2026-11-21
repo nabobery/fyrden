@@ -1,6 +1,11 @@
-import type { Job, SliceResult } from "@fyrden/adapters-cloudflare/git";
+import type { DoMemoryBudget, Job, SliceResult } from "@fyrden/adapters-cloudflare/git";
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
-import type { NeedResult, RunnerResult } from "@fyrden/domain/ci";
+import type {
+  NeedResult,
+  RunnerResult,
+  SecretMaskOffer,
+  SecretReferences,
+} from "@fyrden/domain/ci";
 import { SHOWN_HANDLE } from "../../accounts/handles.js";
 import { ciSecretKeys } from "../../ci/envelope.js";
 import type { ConnectCode } from "../../runner/connect.js";
@@ -22,6 +27,15 @@ import { ProtoError } from "../../runner/proto/wire.js";
 import { tokenStore } from "../../services.js";
 import type { AssignAnswer, TaskAnswer, TaskRef } from "../RunDO.js";
 import type { InstanceRow, RunEngine, RunRow } from "./engine.js";
+import type { SecretMasksAnswer } from "./logs.js";
+import {
+  deliveryMemory,
+  oversizeError,
+  type ReadSecrets,
+  readSecrets,
+  unavailableError,
+  unmaskableError,
+} from "./secrets.js";
 
 /*
  * The runner protocol inside a run's object: the run's queued jobs published
@@ -47,6 +61,15 @@ export type AssignTaskAnswer =
        * gone from the keyring): refused before a token is minted, or, when the keys changed
        * while the token was masked, with that token revoked; the offer and its earlier tokens
        * stand, and the runner may be given other work.
+       * `secrets_unreachable`: the repository's account object did not answer for the job's
+       * secrets, or the run object had no memory to read them now: refused before anything is
+       * assigned or minted; the offer stands, to be made again.
+       * `secrets_undeliverable`: a re-offer (its task recorded in the directory, or a token minted
+       * for it) whose secrets no longer open or no longer fit the job's mask budget, or an offer
+       * whose end could not be written: an earlier answer may be running, so the job is not
+       * failed; nothing is minted, the offer and its earlier tokens stand, and the runner may be
+       * given other work. On a first offer the run ends the offer in the directory, unrecorded,
+       * and fails the job instead, and the answer is `task_finished`.
        */
       readonly refused:
         | Extract<AssignAnswer, { ok: false }>["code"]
@@ -56,7 +79,9 @@ export type AssignTaskAnswer =
         | "confirmed"
         | "tokens_exhausted"
         | "ci_key_unavailable"
-        | "masks_unreadable";
+        | "masks_unreadable"
+        | "secrets_unreachable"
+        | "secrets_undeliverable";
     };
 
 /** What `reportTask` answers: an encoded UpdateTaskResponse, or a Connect error. */
@@ -80,6 +105,12 @@ export interface DispatchHooks {
   afterTaskEndCommit?: () => Promise<void> | void;
   /** After the run has recorded an assigned task, before its task number is written to the directory. */
   beforeTaskRecord?: () => Promise<void> | void;
+  /** Before a delivery's secrets are registered to be masked, before the task is recorded. */
+  beforeSecretMasks?: () => Promise<void> | void;
+  /** When a delivery has failed, before the directory ends its offer or answers it was recorded. */
+  beforeDeliveryFailure?: () => Promise<void> | void;
+  /** When a delivery has failed, after the directory answered, before the job is failed or kept. */
+  afterDeliveryFailure?: () => Promise<void> | void;
   /** After a job token is minted and mapped to its task, before liveness is checked again. */
   afterMint?: (token: string) => Promise<void> | void;
   beforeTokenRotation?: () => Promise<void> | void;
@@ -134,7 +165,34 @@ export interface DispatchHost {
    * new token is masked with them, so none is minted while they do not.
    */
   jobTokenMasksOpen(task: number): Promise<boolean>;
+  /** Which secrets job `jobId` would be given, and whether its run is trusted; undefined for an unknown job. */
+  secretsRequest(jobId: number): { trusted: boolean; refs: SecretReferences } | undefined;
+  /** Registers the secrets delivered to the task to be masked in its log, sealed, within its budget. */
+  addSecretMasks(task: number, secrets: readonly SecretMaskOffer[]): Promise<SecretMasksAnswer>;
+  /**
+   * Ends the task's instance as failed with `error`, before any runner was given it, once the run
+   * has ended its offer in the directory unrecorded.
+   */
+  failTask(ref: TaskRef, error: string): boolean;
+  /**
+   * Puts the task's instance back in the queue: its offer was given up before this assignment
+   * was recorded, so no runner was given it.
+   */
+  requeueTask(ref: TaskRef): boolean;
+  /** The object's memory pool: reading a job's secrets reserves from it. */
+  readonly memory: DoMemoryBudget;
 }
+
+type MemoryReservation = NonNullable<ReturnType<DoMemoryBudget["tryReserve"]>>;
+
+/**
+ * Records an offer's task in the directory (?1 the task, ?2 the offer): only on an offer still
+ * standing. One given up (superseded: its poll's deadline, a release, a lapsed claim) or ended
+ * unrecorded (its secrets could not be delivered, `#deliveryFailed`) is never recorded: those
+ * writes and this one exclude each other through `task`.
+ */
+export const RECORD_TASK_SQL = `UPDATE ci_tasks SET task = ?1
+  WHERE id = ?2 AND superseded_at IS NULL AND confirmed_at IS NULL AND ended_at IS NULL`;
 
 /** A job token outlives its job's timeout by this. Proposed. */
 const JOB_TOKEN_GRACE_MS = 10 * 60_000;
@@ -198,6 +256,22 @@ export class RunDispatch {
     runnerId: number,
     accountId: string,
   ): Promise<AssignTaskAnswer> {
+    // The memory reserved for the job's secrets is held until the answer is made, whatever it is.
+    const held: { reservation?: MemoryReservation | undefined } = {};
+    try {
+      return await this.#assignTask(wireId, jobId, runnerId, accountId, held);
+    } finally {
+      held.reservation?.release();
+    }
+  }
+
+  async #assignTask(
+    wireId: number,
+    jobId: number,
+    runnerId: number,
+    accountId: string,
+    held: { reservation?: MemoryReservation | undefined },
+  ): Promise<AssignTaskAnswer> {
     const { host } = this;
     // Runners serve their own account's repositories. The index can lag a transfer, so the
     // repository's owner decides, read before the assignment and again before the answer.
@@ -216,12 +290,46 @@ export class RunDispatch {
     }
     // Without a CI master key no mask can be sealed: refused before the job is assigned or a
     // token minted, so the job stays queued and an earlier answer's token stays valid.
-    if (!(await ciSecretKeys(host.env)).current) {
+    const keys = await ciSecretKeys(host.env);
+    if (!keys.current) {
       host.log.warn("task withheld: there is no CI master key to seal its masks", {
         taskId: wireId,
         jobId,
       });
       return { refused: "ci_key_unavailable" };
+    }
+    // A trusted run's job that names secrets has them read and opened before anything is assigned
+    // or minted: an account object that does not answer leaves the job as it was. An untrusted
+    // run's job gets none, and its account object is never asked.
+    const request = run ? host.secretsRequest(jobId) : undefined;
+    let delivery: ReadSecrets | undefined;
+    if (run && request?.trusted && (request.refs.kind === "all" || request.refs.names.length > 0)) {
+      // Bounded before the account is asked: the answer and the opened values fit what is
+      // reserved, so jobs of one run assigned at once cannot together outgrow the object.
+      held.reservation = host.memory.tryReserve(deliveryMemory(request.refs));
+      if (!held.reservation) {
+        host.log.warn("task withheld: the run has no memory free to read its secrets", {
+          taskId: wireId,
+          jobId,
+        });
+        return { refused: "secrets_unreachable" };
+      }
+      delivery = await readSecrets(
+        host.env,
+        keys,
+        accountId,
+        run.repo_id,
+        request.refs,
+        host.metrics,
+      );
+      if (!delivery.ok && delivery.code === "unreachable") {
+        host.log.warn("task withheld: its repository's account did not answer for its secrets", {
+          taskId: wireId,
+          jobId,
+          reason: delivery.reason,
+        });
+        return { refused: "secrets_unreachable" };
+      }
     }
     const assigned = host.assign(jobId, `t${wireId}`);
     if (!assigned.ok) return { refused: assigned.code };
@@ -239,6 +347,53 @@ export class RunDispatch {
       });
       return { refused: "masks_unreadable" };
     }
+    // Secrets that do not open, or that could not all be masked, are never handed out: the job
+    // never runs with a secret missing or unmasked. Decided before anything of this assignment
+    // reaches the directory and before any token is minted. A first offer fails the job; a
+    // re-offer (an answer of it may have left) is only refused.
+    const secrets = delivery?.ok ? delivery.secrets : [];
+    const undeliverable = (code: string, error: string, names: readonly string[]) =>
+      this.#deliveryFailed(wireId, ref, code, error, names);
+    if (delivery && !delivery.ok && delivery.code === "secrets_unavailable")
+      return undeliverable("secrets_unavailable", unavailableError(delivery.names), delivery.names);
+    if (delivery && !delivery.ok && delivery.code === "secrets_oversize")
+      return undeliverable(
+        "secrets_unmaskable",
+        oversizeError(delivery.secrets),
+        delivery.secrets.map((s) => s.name),
+      );
+    if (secrets.length > 0) {
+      await host.hooks.beforeSecretMasks?.();
+      const masked = await host.addSecretMasks(ref.task, secrets);
+      if (!masked.ok) {
+        if (masked.code === "secrets_unmaskable")
+          return undeliverable(
+            "secrets_unmaskable",
+            unmaskableError(masked),
+            masked.secrets.map((s) => s.name),
+          );
+        if (masked.code === "ci_key_unavailable") {
+          host.log.warn("task withheld: no CI master key seals its secrets' masks", {
+            taskId: wireId,
+            task: ref.task,
+          });
+          return { refused: "ci_key_unavailable" };
+        }
+        if (masked.code === "masks_unreadable") {
+          host.log.warn("task withheld: its stored masks do not open", {
+            taskId: wireId,
+            task: ref.task,
+          });
+          return { refused: "masks_unreadable" };
+        }
+        // `untrusted_run`: a run's trust never changes, so this is not reached.
+        throw new Error("secrets were read for an untrusted run");
+      }
+    }
+    // Checked last before the record: a task that ended (a failing attempt of the same offer ended
+    // it) is not recorded. The directory decides between this record and a failing attempt's end
+    // of the offer (`RECORD_TASK_SQL`, `#deliveryFailed`).
+    if (!host.taskLive(ref)) return { refused: "task_finished" };
     host.tx(() =>
       host.engine.exec(
         `INSERT INTO ci_tasks (wire_id, job_id, task, runner_id) VALUES (?, ?, ?, ?)
@@ -253,21 +408,31 @@ export class RunDispatch {
     const db = host.env.DIRECTORY;
     this.#count("ci_task_assigned", 3);
     const [recorded, earlier, offer] = await db.batch([
-      // Only on an offer still standing: one given up at its poll's deadline is not assigned
-      // (that release and this write exclude each other through `superseded_at` and `task`).
-      db
-        .prepare(
-          "UPDATE ci_tasks SET task = ? WHERE id = ? AND superseded_at IS NULL AND confirmed_at IS NULL",
-        )
-        .bind(ref.task, wireId),
+      db.prepare(RECORD_TASK_SQL).bind(ref.task, wireId),
       db.prepare("SELECT token_id FROM ci_job_tokens WHERE task_id = ?").bind(wireId),
-      db.prepare("SELECT confirmed_at FROM ci_tasks WHERE id = ?").bind(wireId),
+      db.prepare("SELECT confirmed_at, task, ended_at FROM ci_tasks WHERE id = ?").bind(wireId),
     ]);
     if ((recorded?.meta.changes ?? 0) === 0) {
-      const row = offer?.results[0] as { confirmed_at: number | null } | undefined;
-      return { refused: row && row.confirmed_at !== null ? "confirmed" : "released" };
+      const row = offer?.results[0] as
+        | { confirmed_at: number | null; task: number | null; ended_at: number | null }
+        | undefined;
+      if (row && row.confirmed_at !== null) return { refused: "confirmed" };
+      if (row && row.task === null) {
+        // Ended unrecorded: a failing attempt of the same offer ends the instance.
+        if (row.ended_at !== null) return { refused: "task_finished" };
+        // Given up unrecorded (superseded): no answer of this offer ever left, and none can, so
+        // the instance assigned for it waits in the queue again for another offer.
+        if (host.requeueTask(ref))
+          host.log.info("task never recorded: its job is queued again", {
+            taskId: wireId,
+            task: ref.task,
+          });
+      }
+      return { refused: "released" };
     }
     const previous = ((earlier?.results ?? []) as { token_id: string }[]).map((r) => r.token_id);
+    // The task may have ended while it was recorded: no token is minted for it.
+    if (!host.taskLive(ref)) return { refused: "task_finished" };
 
     const store = this.#store();
     const minted =
@@ -432,8 +597,10 @@ export class RunDispatch {
           // v5.4.1; measured with a real runner).
           gitea_default_actions_url: DEFAULT_ACTIONS_URL,
         },
-        // Never empty: the pinned runner writes into this map (measured).
+        // Never empty: the pinned runner writes into this map (measured). The job token entries
+        // come last, so a secret of either name never replaces the token.
         secrets: new Map([
+          ...secrets.map((s): [string, string] => [s.name, s.value]),
           ["GITHUB_TOKEN", token],
           ["GITEA_TOKEN", token],
         ]),
@@ -444,9 +611,73 @@ export class RunDispatch {
             { result: NEED_RESULT[need.result], outputs: new Map(Object.entries(need.outputs)) },
           ]),
         ),
-        vars: new Map(),
+        vars: new Map(Object.entries(assigned.vars)),
       }),
     };
+  }
+
+  /**
+   * Answers an assignment whose secrets cannot be delivered. The directory decides, in one batch
+   * that ends the offer only while it was never recorded (no task, no token): a re-offer, for
+   * which an answer may already have left (its task recorded or a token minted for it), is
+   * refused retryably: an earlier answer may be running the job, so it is not failed, nothing is
+   * minted, and the offer and its earlier tokens stand. A first offer is ended there, so no
+   * attempt can record it after (`RECORD_TASK_SQL`), and its job fails: nothing was recorded or
+   * handed out, and no runner's credential is spent. An end that could not be written is refused
+   * retryably too: the offer stands and is made again.
+   */
+  async #deliveryFailed(
+    wireId: number,
+    ref: TaskRef,
+    code: string,
+    error: string,
+    names: readonly string[],
+  ): Promise<{ readonly refused: "task_finished" | "secrets_undeliverable" }> {
+    const { host } = this;
+    const db = host.env.DIRECTORY;
+    const withheld = (reason: string) => {
+      host.log.warn("task withheld: its secrets cannot be delivered", {
+        taskId: wireId,
+        task: ref.task,
+        code,
+        reason,
+        secrets: names.slice(0, 10),
+      });
+      return { refused: "secrets_undeliverable" } as const;
+    };
+    this.#count("ci_task_undeliverable", 3);
+    let offer: { task: number | null } | undefined;
+    let tokens: number;
+    try {
+      await host.hooks.beforeDeliveryFailure?.();
+      const [, read, minted] = await db.batch([
+        db
+          .prepare(
+            `UPDATE ci_tasks SET ended_at = ?1 WHERE id = ?2 AND task IS NULL AND ended_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM ci_job_tokens WHERE task_id = ?2)`,
+          )
+          .bind(host.now(), wireId),
+        db.prepare("SELECT task FROM ci_tasks WHERE id = ?").bind(wireId),
+        db.prepare("SELECT 1 FROM ci_job_tokens WHERE task_id = ? LIMIT 1").bind(wireId),
+      ]);
+      offer = read?.results[0] as { task: number | null } | undefined;
+      tokens = minted?.results.length ?? 0;
+    } catch {
+      return withheld("offer_not_ended");
+    }
+    await host.hooks.afterDeliveryFailure?.();
+    // Recorded, or a token minted: an answer may have left.
+    if ((offer?.task ?? null) !== null || tokens > 0) return withheld("answered_before");
+    // Ended unrecorded, by this attempt or an earlier one: no answer of it ever leaves.
+    const failed = host.failTask(ref, error);
+    host.log.warn("job failed: its secrets cannot be delivered", {
+      taskId: wireId,
+      task: ref.task,
+      code,
+      secrets: names.slice(0, 10),
+      failed,
+    });
+    return { refused: "task_finished" };
   }
 
   /** Keeps the last offered token valid while the Worker searches for other work. */
@@ -776,9 +1007,17 @@ export class RunDispatch {
         ...tasks.map((t) =>
           db
             .prepare(
-              "UPDATE ci_runners SET expires_at = COALESCE(expires_at, ?) WHERE id = ? AND ephemeral = 1",
+              // Only for an offer the directory recorded, or minted a token for: one never
+              // recorded was never answered, so the runner was given nothing.
+              `UPDATE ci_runners SET expires_at = COALESCE(expires_at, ?1) WHERE id = ?2 AND ephemeral = 1
+                 AND (EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?3 AND task IS NOT NULL)
+                   OR EXISTS (SELECT 1 FROM ci_job_tokens WHERE task_id = ?3))`,
             )
-            .bind((completedAt.get(t.task) ?? host.now()) + EPHEMERAL_REPORT_MS, t.runner_id),
+            .bind(
+              (completedAt.get(t.task) ?? host.now()) + EPHEMERAL_REPORT_MS,
+              t.runner_id,
+              t.wire_id,
+            ),
         ),
       ];
       this.#count("ci_task_end", writes.length);

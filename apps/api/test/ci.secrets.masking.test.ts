@@ -12,9 +12,19 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { buildVariants, maskCrossLength, type StoredLogLine } from "@fyrden/domain/ci";
+import {
+  buildVariants,
+  checkSecretMasks,
+  type LogMask,
+  MASK_SECRET_MAX_VARIANT_BYTES,
+  maskCrossLength,
+  maskRows,
+  maskVariantBytes,
+  type StoredLogLine,
+} from "@fyrden/domain/ci";
 import { uniqueId } from "@fyrden/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { registerSecretValue } from "@fyrden/testing/log-capture";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { ciSecretKeys, openMask } from "../src/ci/envelope.js";
 import { type MaskKind, maskAdditionalData } from "../src/do/run/logs.js";
@@ -62,17 +72,11 @@ const one = workflow(job("a"));
 
 // ------------------------------------------------------------------ generated values
 
-/** Every value this file made up to be masked: none may appear in any log line. */
-const generated: string[] = [];
-const fresh = (label: string): string => {
-  const value = `${label}-${crypto.randomUUID()}-${crypto.randomUUID()}`;
-  generated.push(value);
-  return value;
-};
+/** A value made up to be masked, registered: no log line may hold it. */
+const fresh = (label: string): string =>
+  registerSecretValue(`${label}-${crypto.randomUUID()}-${crypto.randomUUID()}`);
 
 afterEach(() => {
-  const leaked = logs.lines.filter((line) => generated.some((value) => line.includes(value)));
-  expect(leaked, "a log line contains a mask value").toEqual([]);
   for (const key of Object.keys(viewerHooks)) delete viewerHooks[key as keyof typeof viewerHooks];
   installCounters();
 });
@@ -89,7 +93,7 @@ async function withTask(source = one) {
   const number = (await taskRow(task.id))?.task;
   if (typeof number !== "number") throw new Error("the task was not recorded");
   const token = jobTokenOf(task);
-  generated.push(token);
+  registerSecretValue(token);
   return { f, runId, runner, wire: task.id, number, token };
 }
 
@@ -679,7 +683,7 @@ describe("masks added while a flush writes its chunk", () => {
   it("a re-offer's token committed during the R2 write, and the flush's own value, both open after a reset", async () => {
     const { runId, runner, lost, number, version } = await lostAnswer();
     const first = jobTokenOf(lost);
-    generated.push(first);
+    registerSecretValue(first);
     const added = fresh("added");
     const minted = hold(runId);
     const put = hold(runId);
@@ -699,7 +703,7 @@ describe("masks added while a flush writes its chunk", () => {
       const reoffer = fetchTask(runner, version);
       pending.push(reoffer);
       await minted.reached(reoffer);
-      generated.push(second);
+      registerSecretValue(second);
       const storing = ackOf(runner, {
         taskId: lost.id,
         index: 0,
@@ -932,7 +936,7 @@ describe("without a CI master key that seals", () => {
       const next = who === "another runner" ? await registerRunner(f.org.login, f.owner) : runner;
       const task = (await fetchTask(next, 0)).task;
       if (!task) throw new Error("no task once the key is back");
-      generated.push(jobTokenOf(task));
+      registerSecretValue(jobTokenOf(task));
       expect(task.id).not.toBe(refused.id);
       expect((await taskRow(task.id))?.run_id).toBe(runId);
     });
@@ -972,7 +976,7 @@ describe("without a CI master key that seals", () => {
     if (!first) throw new Error("no runner");
     const task = (await fetchTask(first, asked[0] as number)).task;
     if (!task) throw new Error("no task once the key is back");
-    generated.push(jobTokenOf(task));
+    registerSecretValue(jobTokenOf(task));
     expect((await taskRow(task.id))?.run_id).toBe(runId);
   });
 
@@ -983,7 +987,7 @@ describe("without a CI master key that seals", () => {
     await started(f, one);
     const taken = (await fetchTask(ephemeral, 0)).task;
     if (!taken) throw new Error("no task");
-    generated.push(jobTokenOf(taken));
+    registerSecretValue(jobTokenOf(taken));
     await updateTask(ephemeral, taken.id);
     // Another runner's claim of a second run's job, whose Worker died: the claim lapses.
     const runId = await started(f, one);
@@ -1012,7 +1016,7 @@ describe("without a CI master key that seals", () => {
     // The key back, an eligible runner gets the job.
     const task = (await fetchTask(other, 0)).task;
     if (!task) throw new Error("no task once the key is back");
-    generated.push(jobTokenOf(task));
+    registerSecretValue(jobTokenOf(task));
     expect((await taskRow(task.id))?.run_id).toBe(runId);
   });
 
@@ -1020,7 +1024,7 @@ describe("without a CI master key that seals", () => {
     it(`a re-offer while the first answer is in flight keeps the task the runner holds: key gone ${gone}`, async () => {
       const { runId, runner, lost, number, version } = await lostAnswer();
       const first = jobTokenOf(lost);
-      generated.push(first);
+      registerSecretValue(first);
       const seen = workerKey(gone === "after the poll's own check" ? env.CI_SECRETS_KEY : "");
       await withVars(runId, { CI_SECRETS_KEY: undefined }, async () => {
         expect((await fetchTask(runner, version, { overrides: seen })).task).toBeUndefined();
@@ -1037,12 +1041,12 @@ describe("without a CI master key that seals", () => {
   it("a key gone between the check and the seal revokes the new token and keeps the task offered", async () => {
     const { runId, runner, lost, number, version } = await lostAnswer();
     const first = jobTokenOf(lost);
-    generated.push(first);
+    registerSecretValue(first);
     await withVars(runId, { CI_SECRETS_KEY: env.CI_SECRETS_KEY }, async () => {
       await inRun(runId, (r) => {
         r.hooks = {
           afterMint: (token) => {
-            generated.push(token);
+            registerSecretValue(token);
           },
           beforeTokenMask: () => {
             (r as unknown as { env: MutableEnv }).env.CI_SECRETS_KEY = undefined;
@@ -1112,7 +1116,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
   it("keys rotated after the check, before the mask: the new token is revoked, the offer and its token kept, and another queued job given in the same poll", async () => {
     const { f, runId, runner, lost, version } = await lostAnswer();
     const first = jobTokenOf(lost);
-    generated.push(first);
+    registerSecretValue(first);
     const otherRun = await started(f, one);
     let task: Awaited<ReturnType<typeof fetchTask>>["task"];
     const keys = rotated();
@@ -1120,7 +1124,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
       await inRun(runId, (r) => {
         r.hooks = {
           afterMint: (token) => {
-            generated.push(token);
+            registerSecretValue(token);
           },
           beforeTokenMask: () => {
             (r as unknown as { env: MutableEnv }).env.CI_SECRETS_KEY = keys.CI_SECRETS_KEY;
@@ -1136,7 +1140,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
       }
     });
     if (!task) throw new Error("no other job was offered");
-    generated.push(jobTokenOf(task));
+    registerSecretValue(jobTokenOf(task));
     expect((await taskRow(task.id))?.run_id).toBe(otherRun);
     // The offer stands, its first token valid; only the token minted for the refusal is revoked.
     const offer = await taskRow(lost.id);
@@ -1154,7 +1158,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
 
   it("re-offered again on later polls, mints no token, and the runner is given other work each time", async () => {
     const { f, runId, runner, lost, version } = await lostAnswer();
-    generated.push(jobTokenOf(lost));
+    registerSecretValue(jobTokenOf(lost));
     const others = [await started(f, one), await started(f, one), await started(f, one)];
     const tokensBefore = await repoTokenCounts(f.repo.id);
     const given: string[] = [];
@@ -1162,7 +1166,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
       await inRun(runId, (r) => {
         r.hooks = {
           afterMint: (token) => {
-            generated.push(token);
+            registerSecretValue(token);
           },
         };
       });
@@ -1172,7 +1176,7 @@ describe("with a current CI master key, but the task's stored masks sealed under
           // task given before is confirmed, so it is no longer a live offer.
           const task = (await fetchTask(runner, version)).task;
           if (!task) throw new Error(`no other job on poll ${poll}`);
-          generated.push(jobTokenOf(task));
+          registerSecretValue(jobTokenOf(task));
           given.push((await taskRow(task.id))?.run_id as string);
           await updateTask(runner, task.id);
         }
@@ -1285,7 +1289,7 @@ describe("admission with mask headroom", () => {
       const runner = await registerRunner(f.org.login, f.owner);
       const task = (await fetchTask(runner, 0)).task;
       if (!task) throw new Error(`no task ${k}`);
-      generated.push(jobTokenOf(task));
+      registerSecretValue(jobTokenOf(task));
       await updateTask(runner, task.id);
       const number = (await taskRow(task.id))?.task as number;
       const secret = fresh(`secret${k}`);
@@ -1389,3 +1393,82 @@ async function recordQueries(runId: string, fn: () => Promise<unknown>): Promise
   }
   return queries;
 }
+
+/*
+ * What the masker costs in workerd at a job's full secret allowance (32 KiB of
+ * masked forms), beside a job with no secret: the time to mask 100 rows of 200
+ * characters, which is what each log request does with its rows, and the heap
+ * the process reports around it. It asserts nothing about time, so it runs
+ * only on request:
+ *
+ *   FYRDEN_BENCH=1 pnpm --filter @fyrden/api exec vitest run test/ci.secrets.masking.test.ts -t "masker bench" --silent=false
+ */
+const benchLines: string[] = [];
+afterAll(() => {
+  // After the log capture has given console back.
+  for (const line of benchLines) console.log(line);
+});
+
+describe.runIf((env as { FYRDEN_BENCH?: string }).FYRDEN_BENCH)("masker bench", () => {
+  it("prints the time and heap of masking 100 rows at the secret allowance", async () => {
+    // biome-ignore lint/style/noRestrictedGlobals: a benchmark run on request; it asserts nothing on time.
+    const clock = () => performance.now();
+    // workerd's `process.memoryUsage` may be a stub that answers 0: then it is not reported.
+    const heap = () => {
+      const used = (
+        globalThis as { process?: { memoryUsage?: () => { heapUsed: number } } }
+      ).process?.memoryUsage?.().heapUsed;
+      return used ? used : undefined;
+    };
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const random = (n: number) =>
+      Array.from(crypto.getRandomValues(new Uint8Array(n)), (b) => alphabet[b % 62]).join("");
+    // 1 KiB secrets, as many as the allowance takes.
+    const secrets: string[] = [];
+    for (;;) {
+      const next = random(1024);
+      const check = checkSecretMasks(secrets, [{ name: "S", value: next }]);
+      if (!check.ok) break;
+      secrets.push(next);
+    }
+    const variantBytes = secrets.reduce((n, s) => n + maskVariantBytes(s), 0);
+    const rows = Array.from({ length: 100 }, () => random(200));
+    // A job token and a few `::add-mask::` values, as any job has.
+    const base: LogMask[] = [
+      { value: `fyrden_job_${random(40)}`, fromIndex: 0, reserved: true },
+      ...Array.from({ length: 4 }, () => ({ value: random(32), fromIndex: 0 })),
+    ];
+    const withSecrets: LogMask[] = [
+      ...base,
+      ...secrets.map((value) => ({ value, fromIndex: 0, secret: true })),
+    ];
+    // A Workers clock may advance only across I/O, so each batch ends with one, timed alone too.
+    const io = () => fetch("data:,");
+    const runs = 50;
+    const measure = async (masks: LogMask[]) => {
+      maskRows(masks, null, rows, { start: 0, reserve: { values: 8, bytes: 1024 } });
+      let start = clock();
+      await io();
+      const ioTime = clock() - start;
+      const before = heap();
+      let high = before ?? 0;
+      start = clock();
+      for (let i = 0; i < runs; i++) {
+        maskRows(masks, null, rows, { start: 0, reserve: { values: 8, bytes: 1024 } });
+        high = Math.max(high, heap() ?? 0);
+      }
+      await io();
+      const ms = (clock() - start - ioTime) / runs;
+      return { ms, heap: before === undefined ? undefined : (high - before) / 1024 / 1024 };
+    };
+    const none = await measure(base);
+    const full = await measure(withSecrets);
+    const mib = (v: number | undefined) =>
+      v === undefined ? "not reported" : `${v.toFixed(2)} MiB above the start`;
+    benchLines.push(
+      `masker, 100 rows of 200 chars, mean of ${runs}: no secrets ${none.ms.toFixed(3)} ms (heap ${mib(none.heap)}); ` +
+        `${secrets.length} secrets, ${variantBytes} bytes of masked forms ${full.ms.toFixed(3)} ms (heap ${mib(full.heap)})`,
+    );
+    expect(variantBytes).toBeLessThanOrEqual(MASK_SECRET_MAX_VARIANT_BYTES);
+  });
+});

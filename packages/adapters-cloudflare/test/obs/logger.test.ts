@@ -1,3 +1,4 @@
+import { registerSecretValue } from "@fyrden/testing/log-capture";
 import { describe, expect, it } from "vitest";
 import { createFakeDataset } from "../../src/obs/fake-dataset.js";
 import { createLogger, type LogLevel, requestMeta } from "../../src/obs/logger.js";
@@ -51,5 +52,13 @@ describe("createMetrics", () => {
     const { dataset, points } = createFakeDataset();
     createMetrics(dataset).count("r2.class_a", { op: "put", bucket: "fyrden-git" }, 2);
     expect(points).toEqual([{ name: "r2.class_a", blobs: ["fyrden-git", "put"], value: 2 }]);
+  });
+});
+
+describe("the log capture's registered values, through the logger", () => {
+  // A line is JSON, so a value's line breaks and quotes reach it escaped.
+  it.fails("fails a test that logs a registered multiline value", () => {
+    const value = registerSecretValue(`-----BEGIN KEY-----\n${crypto.randomUUID()}\n"end"`);
+    createLogger().warn("read failed", { detail: `x${value}y` });
   });
 });

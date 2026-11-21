@@ -1,6 +1,6 @@
 import { generateToken, secureRandomBytes } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
-import { installLogCapture } from "../src/log-capture.js";
+import { installLogCapture, registerSecretValue } from "../src/log-capture.js";
 
 const logs = installLogCapture();
 
@@ -48,5 +48,38 @@ describe("installLogCapture", () => {
   });
   it.fails("fails a test that logs a percent-encoded token", () => {
     console.log([...token].map((c) => `%${c.charCodeAt(0).toString(16)}`).join(""));
+  });
+});
+
+describe("registerSecretValue", () => {
+  // A secret value has no token shape, so only the registry can catch it.
+  const value = registerSecretValue(`secret-${crypto.randomUUID()}`);
+
+  it("returns the value it registers", () => {
+    expect(value).toMatch(/^secret-/);
+  });
+
+  it("allows lines that do not hold a registered value", () => {
+    console.log("masked: ***");
+    console.log(value.slice(0, 10));
+  });
+
+  it.fails("fails a test that logs a registered value", () => {
+    console.log(`env ${value}`);
+  });
+  it.fails("fails a test that logs a registered value inside an object", () => {
+    console.warn({ detail: { text: `x${value}y` } });
+  });
+  it.fails("fails a test that logs a registered value JSON-escaped", () => {
+    const multiline = registerSecretValue(`line-${crypto.randomUUID()}\n"quoted"`);
+    console.log(JSON.stringify({ msg: "x", detail: multiline }));
+  });
+  it.fails("fails a test that logs a registered value escaped twice, as JSON within JSON", () => {
+    const multiline = registerSecretValue(`twice-${crypto.randomUUID()}\n"quoted"`);
+    console.log(JSON.stringify({ msg: "x", detail: JSON.stringify({ inner: multiline }) }));
+  });
+  it.fails("fails a test that logs a value registered during the test", () => {
+    const late = registerSecretValue(`late-${crypto.randomUUID()}`);
+    console.error(new Error(late));
   });
 });

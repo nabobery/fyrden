@@ -16,6 +16,8 @@ import {
   nodeOutcome,
   type RunnerResult,
   type SecretMaskOffer,
+  type SecretReferences,
+  secretReferences,
   type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
@@ -57,6 +59,17 @@ import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 const LEASE_MARGIN_MS = 60_000;
 /** How often an owner renews its grant and a pending scope reads its receipt. Proposed. */
 const RENEW_EVERY_MS = 3 * 60_000;
+
+/** A stored variables snapshot as a task's map of strings (a value of another type, never stored, as its JSON). */
+function stringValues(vars: unknown): Record<string, string> {
+  if (vars === null || typeof vars !== "object" || Array.isArray(vars)) return {};
+  return Object.fromEntries(
+    Object.entries(vars).map(([name, value]) => [
+      name,
+      typeof value === "string" ? value : JSON.stringify(value),
+    ]),
+  );
+}
 
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
@@ -181,6 +194,8 @@ export type AssignAnswer =
        * principal's full rights).
        */
       readonly tokenScopes: readonly TokenScope[];
+      /** The task's variables: the run's snapshot, none for an untrusted run. */
+      readonly vars: Readonly<Record<string, string>>;
     }
   | {
       readonly ok: false;
@@ -290,6 +305,13 @@ export class RunDO extends MigratingDO {
       addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
       jobTokensFull: (task) => host.#logs.jobTokensFull(task),
       jobTokenMasksOpen: (task) => host.#logs.jobTokensOpen(task),
+      secretsRequest: (jobId) => host.secretsRequest(jobId),
+      addSecretMasks: (task, secrets) => host.#logs.addSecretMasks(task, secrets),
+      failTask: (ref, error) => host.failTask(ref, error),
+      requeueTask: (ref) => host.requeueTask(ref),
+      get memory() {
+        return host.memory;
+      },
     });
     this.viewers = new LogViewers({
       env,
@@ -833,6 +855,7 @@ export class RunDO extends MigratingDO {
       };
     }
     const attempt = this.engine.attempt(row.attempt) as AttemptRow;
+    const contexts = JSON.parse(run.contexts) as { github: unknown; vars?: unknown };
     return {
       ok: true,
       task: { jobId: row.job_id, task: row.task as number },
@@ -842,14 +865,76 @@ export class RunDO extends MigratingDO {
       repoId: run.repo_id,
       actorId: run.actor_id,
       triggeringActorId: attempt.triggering_actor_id,
-      github: JSON.parse(run.contexts).github,
+      github: contexts.github,
       timeoutMinutes: Math.round(row.timeout_ms / 60_000),
       tokenScopes: effectiveScope({
         workflowPermissions: model.workflow.permissions,
         jobPermissions: model.workflow.jobs.find((j) => j.id.value === row.job_key)?.permissions,
         trust: run.trust,
       }),
+      vars: run.trust === "trusted" ? stringValues(contexts.vars) : {},
     };
+  }
+
+  /**
+   * Read only: which secrets job `jobId` would be given, read from the
+   * immutable workflow, and whether its run is trusted (an untrusted run's
+   * jobs get none); undefined for a job the run does not have.
+   */
+  secretsRequest(jobId: number): { trusted: boolean; refs: SecretReferences } | undefined {
+    if (this.#erased()) return undefined;
+    const run = this.engine.run();
+    const row = this.engine.instance(jobId);
+    if (!run || !row) return undefined;
+    if (run.trust !== "trusted") return { trusted: false, refs: { kind: "names", names: [] } };
+    return { trusted: true, refs: secretReferences(this.#loadModel().workflow, row.job_key) };
+  }
+
+  /**
+   * Ends task `ref`'s instance as failed with `error`, before any runner was
+   * given it (its secrets could not be delivered, and the run ended its offer
+   * in the directory while it was never recorded); false when the task is
+   * not current or has ended. Its local mapping, if any, is kept, and the
+   * task's end spends no runner's credential for an offer the directory
+   * never recorded.
+   */
+  failTask(ref: TaskRef, error: string): boolean {
+    return this.#tx(() => {
+      const found = this.#task(ref);
+      if (!("row" in found) || found.row.status === "completed") return false;
+      return this.engine.applyInstance(
+        found.row,
+        { kind: "complete", result: "failure" },
+        { error },
+      );
+    });
+  }
+
+  /**
+   * Puts task `ref`'s instance back in the queue: its offer was given up in
+   * the directory before this assignment was recorded there, so no runner
+   * was given it, and none ever can be. It keeps the time it was first
+   * queued (its queue deadline does not move); the task, never handed out,
+   * is dropped and its log closed. False when the task is not current or
+   * not in progress.
+   */
+  requeueTask(ref: TaskRef): boolean {
+    return this.#tx(() => {
+      const found = this.#task(ref);
+      if (!("row" in found) || found.row.status !== "in_progress") return false;
+      const { row } = found;
+      if (!this.engine.applyInstance(row, { kind: "unassign" })) return false;
+      this.engine.exec(
+        `UPDATE run_instances SET task = NULL, assign_key = NULL, started_at = NULL,
+           heartbeat_at = NULL, queued_at = ?
+         WHERE job_id = ?`,
+        row.queued_at,
+        row.job_id,
+      );
+      this.#logs.taskEnded(ref.task, this.context.now());
+      this.engine.ensureDeadlines();
+      return true;
+    });
   }
 
   #task(
