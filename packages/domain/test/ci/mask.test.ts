@@ -536,13 +536,17 @@ describe("mask caps", () => {
     const secrets = fullSecretBudget();
     expect(secrets.length).toBeGreaterThan(8);
     const fits = "a".repeat(MASK_MAX_TEXT_BYTES - reserve.bytes);
-    const rows = [`::add-mask::${fits}`, `v=${fits}`];
+    const rows = [`::add-mask::${fits}`, `v=${fits}`, "::add-mask::one-byte-too-many"];
     const result = mask(secrets, rows, { reserve });
     expect(result.added).toEqual([{ value: fits, index: 0 }]);
-    expect(result.dropped).toEqual([]);
-    expect(result.lines).toEqual(["::add-mask::***", "v=***"]);
-    const many = Array.from({ length: 248 }, (_, i) => `::add-mask::row-value-${i}`);
-    expect(mask(secrets, many, { reserve }).added).toHaveLength(248);
+    expect(result.dropped).toEqual([{ index: 2, reason: "bytes" }]);
+    expect(result.lines.slice(0, 2)).toEqual(["::add-mask::***", "v=***"]);
+    const overBy = mask(secrets, [`::add-mask::${fits}!`], { reserve });
+    expect(overBy.dropped).toEqual([{ index: 0, reason: "bytes" }]);
+    const many = Array.from({ length: 249 }, (_, i) => `::add-mask::row-value-${i}`);
+    const counted = mask(secrets, many, { reserve });
+    expect(counted.added).toHaveLength(248);
+    expect(counted.dropped).toEqual([{ index: 248, reason: "values" }]);
   });
 
   it("registers only the lines of a value over 4 KiB", () => {
@@ -552,14 +556,33 @@ describe("mask caps", () => {
   });
 });
 
-/** As many secret masks as one task may have: values added until the next one is refused. */
+/**
+ * As many secret masks as one task may hold by count: the budget accepts them all and refuses one
+ * more. Short values keep the matcher small, since each `::add-mask::` value registered rebuilds it.
+ */
 function fullSecretBudget(): LogMask[] {
+  const secretValue = (i: number) => `s${String(i).padStart(4, "0")}`;
+  const values = Array.from({ length: MASK_SECRET_MAX_VALUES }, (_, i) => secretValue(i));
+  return secretMasksRefusingMore(values, secretValue(values.length));
+}
+
+/** Secret masks whose variant text is full: the budget accepts them all and refuses one more. */
+function variantFullSecretBudget(): LogMask[] {
+  const secretValue = (i: number) => `secret-${String(i).padStart(4, "0")}-${"k".repeat(24)}`;
   const values: string[] = [];
+  let variants = 0;
   for (let i = 0; ; i++) {
-    const value = `secret-${String(i).padStart(4, "0")}-${"k".repeat(24)}`;
-    if (!checkSecretMasks(values, [{ name: `S${i}`, value }]).ok) break;
-    values.push(value);
+    variants += maskVariantBytes(secretValue(i));
+    if (variants > MASK_SECRET_MAX_VARIANT_BYTES) break;
+    values.push(secretValue(i));
   }
+  return secretMasksRefusingMore(values, secretValue(values.length));
+}
+
+function secretMasksRefusingMore(values: readonly string[], next: string): LogMask[] {
+  const offer = (vs: readonly string[]) => vs.map((value, i) => ({ name: `S${i}`, value }));
+  expect(checkSecretMasks([], offer(values)).ok).toBe(true);
+  expect(checkSecretMasks(values, offer([next])).ok).toBe(false);
   return values.map((value) => ({ value, fromIndex: 0, secret: true }));
 }
 
@@ -663,8 +686,11 @@ describe("the secret mask budget", () => {
     });
   });
 
-  it("never stops an ::add-mask:: value registering when full", () => {
-    const secrets = fullSecretBudget();
+  it.each([
+    ["by count", fullSecretBudget],
+    ["by variant text", variantFullSecretBudget],
+  ])("never stops an ::add-mask:: value registering when full %s", (_, full) => {
+    const secrets = full();
     const value = `added-${"m".repeat(40)}`;
     const result = mask(secrets, [`::add-mask::${value}`, `printed ${value}`]);
     expect(result.added).toEqual([{ value, index: 0 }]);
