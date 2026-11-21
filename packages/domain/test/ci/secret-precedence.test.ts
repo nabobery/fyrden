@@ -96,7 +96,8 @@ describe("runSecrets", () => {
           const fromOrg = [...got.values()].filter((s) => s.from === "org").map((s) => s.name);
           expect(fromOrg.length).toBeLessThanOrEqual(MAX_RUN_ORG_SECRETS);
           const first = [...orgNames].sort(codeUnits).slice(0, MAX_RUN_ORG_SECRETS);
-          for (const n of fromOrg) expect(first).toContain(n);
+          // Exactly the first 100 the repository does not override.
+          expect([...fromOrg].sort(codeUnits)).toEqual(first.filter((n) => !repoNames.includes(n)));
         },
       ),
     );

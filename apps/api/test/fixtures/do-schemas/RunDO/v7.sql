@@ -204,7 +204,7 @@ CREATE TABLE runs (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       , trust TEXT NOT NULL DEFAULT 'untrusted'
-        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1))) STRICT;
+        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1)), owner_id TEXT) STRICT;
 CREATE INDEX ci_log_tickets_expiry ON ci_log_tickets (expires_at);
 CREATE INDEX ci_tasks_task ON ci_tasks (task);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);

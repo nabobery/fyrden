@@ -47,10 +47,17 @@ export interface OpContext {
  * (`successStatuses`): the status and the output, apart.
  */
 export class StatusResult<S extends number = number, O = unknown> {
+  // Private, so a plain object of the same shape does not satisfy the type; `is` checks it.
+  readonly #brand = true;
+
   constructor(
     readonly status: S,
     readonly output: O,
   ) {}
+
+  static is(value: unknown): value is StatusResult {
+    return typeof value === "object" && value !== null && #brand in value;
+  }
 }
 
 export const statusResult = <const S extends number, O>(status: S, output: O): StatusResult<S, O> =>
@@ -197,11 +204,11 @@ export async function reverified(
  */
 function success(op: OperationDef, answer: unknown): OpResult {
   if (op.successStatuses === undefined) {
-    if (answer instanceof StatusResult)
+    if (StatusResult.is(answer))
       throw new Error(`${op.id} answered status ${answer.status} but declares no successStatuses`);
     return { ok: true, output: op.output.parse(answer) };
   }
-  if (!(answer instanceof StatusResult))
+  if (!StatusResult.is(answer))
     throw new Error(`${op.id} declares successStatuses but answered without a status`);
   if (!op.successStatuses.some((status) => status === answer.status))
     throw new Error(`${op.id} answered status ${answer.status}, which it does not declare`);

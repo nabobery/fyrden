@@ -17,7 +17,11 @@ type RegisterAnswer =
       readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
     };
 
-/** The owner (and owner generation) a spec was built under, which its first registration needs. */
+/**
+ * The owner (and owner generation) a spec was built under: its first
+ * registration needs it, and the run is bound to that owner, whose secrets
+ * alone its jobs are given.
+ */
 export interface BuiltUnder {
   readonly owner: string;
   readonly ownerGen?: number;
@@ -39,8 +43,12 @@ export interface RunRegistrar {
  * run; then the run object is created. All steps are idempotent per run id, so a trigger retries the
  * whole call with the same spec after any failure.
  */
-export async function startRun(env: Env, spec: RunSpec): Promise<StartRunAnswer> {
-  return startRunFrom(env.REPO.getByName(spec.repoId), env, spec);
+export async function startRun(
+  env: Env,
+  spec: RunSpec,
+  builtUnder?: BuiltUnder,
+): Promise<StartRunAnswer> {
+  return startRunFrom(env.REPO.getByName(spec.repoId), env, spec, builtUnder);
 }
 
 /**
@@ -63,5 +71,8 @@ export async function startRunFrom(
   });
   if (!registered.ok) return registered;
   // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-  return (await env.RUN.getByName(spec.runId).create(spec)) as unknown as CreateAnswer;
+  return (await env.RUN.getByName(spec.runId).create(
+    spec,
+    builtUnder?.owner,
+  )) as unknown as CreateAnswer;
 }

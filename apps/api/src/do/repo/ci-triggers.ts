@@ -380,6 +380,9 @@ interface SnapshotOwner {
   readonly gen?: number;
 }
 
+/** The key of an event's facts that holds the owner it was recorded under (absent on older rows). */
+const RECORDED_OWNER = "recorded_owner";
+
 const snapshotOwner = (names: Names): SnapshotOwner => ({
   id: names.ownerId,
   ...(names.ownerGen !== undefined && { gen: names.ownerGen }),
@@ -671,6 +674,9 @@ export class CiTriggers {
     now: number,
     done?: { outcome: string },
   ): void {
+    // An event that may start runs keeps the owner it was recorded under: its runs start only
+    // while the repository is still that owner's (`#ownerMoved`).
+    const owner = done || kind === "schedule_refresh" ? undefined : this.owner()?.recorded;
     const cursor = this.#sql().exec(
       `INSERT OR IGNORE INTO ci_events (key, kind, state, outcome, actor_id, facts, created_at, done_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -679,7 +685,7 @@ export class CiTriggers {
       done ? "done" : "pending",
       done?.outcome ?? null,
       actorId,
-      JSON.stringify(facts),
+      JSON.stringify(owner ? { ...facts, [RECORDED_OWNER]: owner } : facts),
       now,
       done ? now : null,
     );
@@ -1435,6 +1441,24 @@ export class CiTriggers {
     return this.deps.git.context.storage.sql;
   }
 
+  /**
+   * The repository's owner now, as an event records it, and whether a
+   * transfer is moving the repository; undefined before it has one.
+   * @internal
+   */
+  owner(): { readonly recorded: SnapshotOwner; readonly moving: boolean } | undefined {
+    const meta = this.#sql()
+      .exec<{ owner_id: string | null; owner_gen: number; transfer_id: string | null }>(
+        "SELECT owner_id, owner_gen, transfer_id FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    if (!meta?.owner_id) return undefined;
+    return {
+      recorded: { id: meta.owner_id, gen: meta.owner_gen },
+      moving: meta.transfer_id !== null,
+    };
+  }
+
   #now(): number {
     return this.deps.git.context.now();
   }
@@ -2034,6 +2058,12 @@ class Evaluation {
       this.#outcome = "workflow_too_large";
       return undefined;
     }
+    // An event an earlier version recorded without its owner starts no run: which owner it was
+    // recorded under cannot be told.
+    const recorded = this.#recordedOwner();
+    if (!recorded) return "owner_changed";
+    const moved = this.#ownerMoved(recorded);
+    if (moved) return moved;
     const names = await this.#unlessUnreachable(() => this.#names());
     if ("kind" in names) return names;
     const read = await this.#unlessUnreachable(async () => {
@@ -2057,7 +2087,7 @@ class Evaluation {
     );
     let spec: RunSpec;
     try {
-      spec = this.#allocate(pass.kind, file.path, file.oid, snapshotOwner(names), build);
+      spec = this.#allocate(pass.kind, file.path, file.oid, recorded, build);
     } catch (error) {
       if (!(error instanceof InvalidSpec)) throw error;
       // Nothing was allocated (the transaction rolled back).
@@ -2068,7 +2098,28 @@ class Evaluation {
       this.#outcome = "invalid_spec";
       return undefined;
     }
-    return this.#launch(pass.kind, file.path, spec, snapshotOwner(names));
+    return this.#launch(pass.kind, file.path, spec, recorded);
+  }
+
+  /** The owner the event was recorded under; absent on rows an older version recorded. */
+  #recordedOwner(): SnapshotOwner | undefined {
+    return this.#facts<{ [RECORDED_OWNER]?: SnapshotOwner }>()[RECORDED_OWNER];
+  }
+
+  /**
+   * Read before the event's names, so none of another owner are kept: a
+   * retry while a transfer moves the repository (it may be called off), and
+   * `owner_changed` once it is no longer the owner the event was recorded
+   * under (or another generation of it).
+   */
+  #ownerMoved(recorded: SnapshotOwner): Stopped | Closed | undefined {
+    const now = this.#t.owner();
+    if (!now || now.moving)
+      return { kind: "retry", afterMs: backoff(this.#row.attempts), counted: true };
+    const { id, gen } = now.recorded;
+    if (id !== recorded.id || (recorded.gen !== undefined && gen !== recorded.gen))
+      return "owner_changed";
+    return undefined;
   }
 
   /**

@@ -301,3 +301,16 @@ export function gate() {
     },
   };
 }
+
+/** Job tokens minted for the repository's runs, revoked or not, and how many are revoked. */
+export async function repoTokenCounts(
+  repoId: string,
+): Promise<{ minted: number; revoked: number }> {
+  const row = await env.DIRECTORY.prepare(
+    `SELECT COUNT(*) AS minted, COUNT(revoked_at) AS revoked FROM tokens
+     WHERE type = 'job' AND repo_ids LIKE ?`,
+  )
+    .bind(`%${repoId}%`)
+    .first<{ minted: number; revoked: number }>();
+  return { minted: row?.minted ?? 0, revoked: row?.revoked ?? 0 };
+}

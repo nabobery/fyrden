@@ -234,7 +234,7 @@ export async function findReposById(
  * A page, by id, of those of `ids` that are active repositories of
  * `ownerId` now, and how many there are: a list kept elsewhere (an
  * organization secret's repositories) read as the directory has it, so an
- * id of a repository being deleted or moved to another owner is neither
+ * id of a repository being deleted, or moved to another owner, is neither
  * listed nor counted.
  */
 export async function ownedReposPage(
@@ -666,26 +666,44 @@ export async function renameRepo(
 }
 
 /**
- * Who owns `repoId` now, whether a transfer is moving it, and the id of the
- * last transfer started for it (null when none ever was): a transfer away
- * and back leaves the owner as it was but not this id.
+ * Who owns `repoId` now, its visibility and name generation now, whether a
+ * transfer is moving it, and the id of the last transfer started for it
+ * (null when none ever was): a transfer away and back leaves the owner as it
+ * was but not this id.
  */
 export async function ownershipState(
   env: Env,
   repoId: string,
   metrics?: Metrics,
-): Promise<{ ownerId: string; transferring: boolean; lastTransfer: string | null } | undefined> {
+): Promise<
+  | {
+      ownerId: string;
+      visibility: RepoEntry["visibility"];
+      nameGen: number;
+      transferring: boolean;
+      lastTransfer: string | null;
+    }
+  | undefined
+> {
   metrics?.count("d1.query", { db: "directory", op: "ownership_state" });
   const row = await env.DIRECTORY.withSession("first-primary")
     .prepare(
-      `SELECT r.owner_id, t.transfer_id, t.step
+      `SELECT r.owner_id, r.visibility, r.name_gen, t.transfer_id, t.step
        FROM repos r LEFT JOIN repo_transfers t ON t.repo_id = r.id WHERE r.id = ?`,
     )
     .bind(repoId)
-    .first<{ owner_id: string; transfer_id: string | null; step: string | null }>();
+    .first<{
+      owner_id: string;
+      visibility: RepoEntry["visibility"];
+      name_gen: number;
+      transfer_id: string | null;
+      step: string | null;
+    }>();
   if (!row) return undefined;
   return {
     ownerId: row.owner_id,
+    visibility: row.visibility,
+    nameGen: row.name_gen,
     transferring: row.step !== null && row.step !== "done" && row.step !== "failed",
     lastTransfer: row.transfer_id,
   };
@@ -722,7 +740,8 @@ type Ownership = Awaited<ReturnType<typeof ownershipState>>;
  * which a transfer away and back also changes), and the owner is still the
  * one found. Missing and forbidden look the same (404 `repo_not_found`); a
  * transfer under way is said (409 `repo_transferring`, with `transferring`
- * as its detail) only to a caller the repository object lets in.
+ * as its detail) only to a caller the repository object lets in. The entry
+ * answered carries the visibility of the second read.
  */
 export async function settledRepo(
   env: Env,
@@ -733,6 +752,8 @@ export async function settledRepo(
   options: {
     readonly transferring: string;
     readonly metrics?: Metrics;
+    /** Refuse, as `transferring`, a rename since the repository was looked up too. */
+    readonly sameName?: boolean;
     /** A test seam: between the access decision and the second ownership read. */
     readonly afterAuthorize?: () => Promise<void>;
   },
@@ -754,15 +775,12 @@ export async function settledRepo(
   }
   if (!(await authorize(env, auth, entry, permission, metrics))) throw notFound();
   await options.afterAuthorize?.();
-  const after = ownershipRefusal(
-    await ownershipState(env, entry.id, metrics),
-    entry,
-    notFound,
-    transferring,
-    first,
-  );
-  if (after) throw after;
-  return entry;
+  const now = await ownershipState(env, entry.id, metrics);
+  const after = ownershipRefusal(now, entry, notFound, transferring, first);
+  if (after || !now) throw after ?? notFound();
+  if (options.sameName && now.nameGen !== entry.nameGen)
+    throw new OperationError(409, "repo_transferring", transferring);
+  return { ...entry, visibility: now.visibility };
 }
 
 /**

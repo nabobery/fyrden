@@ -73,8 +73,17 @@ function stringValues(vars: unknown): Record<string, string> {
 
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
-import { MAX_RUN_CONTEXTS_BYTES, type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
+import {
+  isPrincipalId,
+  MAX_RUN_CONTEXTS_BYTES,
+  type RunSpec,
+  specDigest,
+  validateRunSpec,
+} from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
+
+/** The secret names a task's job token fills, as references fold them. */
+const JOB_TOKEN_NAMES: ReadonlySet<string> = new Set(["GITHUB_TOKEN", "GITEA_TOKEN"]);
 
 /** How long one alarm runs job slices. */
 const ALARM_BUDGET_MS = 5_000;
@@ -395,8 +404,14 @@ export class RunDO extends MigratingDO {
     return this.#tx(() => this.#reserve(spec, digest));
   }
 
-  /** Creates the run from `spec`; the same spec again returns it, another is refused. */
-  async create(spec: RunSpec): Promise<CreateAnswer> {
+  /**
+   * Creates the run from `spec`; the same spec again returns it, another is
+   * refused. `ownerId`, the account that owned the repository when the spec
+   * was built, is kept with a new run: only that account's secrets are ever
+   * delivered to its jobs. A run created without one is given no secrets.
+   */
+  async create(spec: RunSpec, ownerId?: string): Promise<CreateAnswer> {
+    if (ownerId !== undefined && !isPrincipalId(ownerId)) throw new TypeError("invalid run owner");
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
     const planCheck = await workflowFileCheckName(spec.workflow.path);
@@ -412,8 +427,9 @@ export class RunDO extends MigratingDO {
       const now = this.context.now();
       this.engine.exec(
         `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
-           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork,
+           owner_id)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
         spec.runId,
         spec.repoId,
         spec.sha,
@@ -428,6 +444,7 @@ export class RunDO extends MigratingDO {
         now,
         spec.trust,
         spec.fork ? 1 : 0,
+        ownerId ?? null,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
       // Variables too large for the contexts fail the run as a workflow that does not plan does.
@@ -887,7 +904,14 @@ export class RunDO extends MigratingDO {
     const row = this.engine.instance(jobId);
     if (!run || !row) return undefined;
     if (run.trust !== "trusted") return { trusted: false, refs: { kind: "names", names: [] } };
-    return { trusted: true, refs: secretReferences(this.#loadModel().workflow, row.job_key) };
+    const refs = secretReferences(this.#loadModel().workflow, row.job_key);
+    // The job token's names are always the minted token, never a stored secret (a write refuses
+    // both names), so a job reading only them reads no secret of its account.
+    if (refs.kind === "all") return { trusted: true, refs };
+    return {
+      trusted: true,
+      refs: { kind: "names", names: refs.names.filter((name) => !JOB_TOKEN_NAMES.has(name)) },
+    };
   }
 
   /**

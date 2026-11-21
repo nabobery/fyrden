@@ -31,11 +31,13 @@ export async function openedMasksOf(
     (await storedMasksOf(runId, task)).map(async (m) => {
       const opened = async () => {
         if (m.key_id === null) return m.value;
-        const [nonce = "", ciphertext = ""] = m.value.split(".");
+        // Split at the first dot, as the run does: anything after the ciphertext stays in it.
+        const dot = m.value.indexOf(".");
+        if (dot === -1) return undefined;
         return openMask(keys, maskAdditionalData(runId, task, m.mask_id, m.kind), {
           masterKeyId: m.key_id,
-          nonce,
-          ciphertext,
+          nonce: m.value.slice(0, dot),
+          ciphertext: m.value.slice(dot + 1),
         });
       };
       return { seq: m.seq, kind: m.kind, from_index: m.from_index, value: await opened() };

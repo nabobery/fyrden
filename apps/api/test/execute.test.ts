@@ -83,6 +83,13 @@ describe("Handlers (checked by tsc)", () => {
     };
     expect([missing, wrongOutput, extra]).toHaveLength(3);
   });
+
+  it("takes a status result only as made by statusResult, never a plain object of its shape", () => {
+    const made: StatusResult<201, null> = statusResult(201, null);
+    // @ts-expect-error a plain object is not a StatusResult, which the executor checks at run time
+    const plain: StatusResult<201, null> = { status: 201, output: null };
+    expect([made, plain]).toHaveLength(2);
+  });
 });
 
 describe("executeOperation", () => {

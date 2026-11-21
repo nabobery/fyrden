@@ -117,10 +117,20 @@ export async function advance(runId: string, ms: number): Promise<void> {
 }
 
 /** Starts a run at clock `t0` and runs its first steps. */
+/** The account that owns repository `repoId` now, as the directory has it. */
+export async function ownerOf(repoId: string): Promise<string> {
+  const row = await env.DIRECTORY.prepare("SELECT owner_id FROM repos WHERE id = ?")
+    .bind(repoId)
+    .first<{ owner_id: string }>();
+  if (!row) throw new Error(`no repository ${repoId}`);
+  return row.owner_id;
+}
+
+/** Starts a run of `source`, bound to the repository's owner as a trigger binds it, and plans it. */
 export async function started(f: Fixture, source: string, extra: Partial<RunSpec> = {}) {
   const spec = specFor(f, source, extra);
   await at(spec.runId, T0);
-  const answer: StartRunAnswer = await startRun(env, spec);
+  const answer: StartRunAnswer = await startRun(env, spec, { owner: await ownerOf(f.repo.id) });
   expect(answer.ok).toBe(true);
   await at(spec.runId, T0);
   await drain(spec.runId);

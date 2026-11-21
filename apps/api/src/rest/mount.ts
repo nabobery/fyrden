@@ -50,6 +50,28 @@ const utf8 = new TextDecoder();
  * body. An empty body is an empty object; any other body must be a JSON
  * object, so a malformed request never runs with every field defaulted.
  */
+/**
+ * Path parameters every operation compares ignoring the case of ASCII
+ * letters: handles (accounts, agents, owners, organizations, users),
+ * repository names, Actions secret and variable names (ASCII only), and
+ * label names, which keep other letters' case (`É` and `é` are two labels).
+ * File paths, refs, tags, workflow files and the rest compare exactly.
+ */
+const CASE_INSENSITIVE_PARAMS: ReadonlySet<string> = new Set([
+  "account",
+  "agent",
+  "owner",
+  "repo",
+  "org",
+  "username",
+  "template_owner",
+  "template_repo",
+  "name",
+  "secret_name",
+]);
+
+const foldAscii = (text: string) => text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
 async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   const params = c.req.param() as Record<string, string>;
   if (op.method === "GET") return { ok: true, input: { ...c.req.query(), ...params } };
@@ -84,13 +106,16 @@ async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   }
   // A body naming another resource than its path (GitHub's variable PATCH renames by `name`;
   // Fyrden renames nothing this way) is refused, not silently overridden by the path. A string
-  // must match ignoring case, a number must be the path's number; any other value is refused.
+  // must match exactly, or ignoring ASCII case for a parameter every operation compares so; a number
+  // must be the path's number; any other value is refused.
   for (const [key, value] of Object.entries(params)) {
     if (!Object.hasOwn(body, key)) continue;
     const sent = (body as Record<string, unknown>)[key];
     const same =
       typeof sent === "string"
-        ? sent.toLowerCase() === value.toLowerCase()
+        ? CASE_INSENSITIVE_PARAMS.has(key)
+          ? foldAscii(sent) === foldAscii(value)
+          : sent === value
         : typeof sent === "number" && value.trim() !== "" && Number(value) === sent;
     if (!same)
       return {

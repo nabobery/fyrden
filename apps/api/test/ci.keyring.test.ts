@@ -69,6 +69,37 @@ describe("keyring", () => {
     );
   });
 
+  it("opens with a new key staged in the retired list before it seals, and through every later step", async () => {
+    const old = newKey();
+    const next = newKey();
+    const where = at();
+    const dataKey = newDataKey();
+    // Staged: the new key opens only; the old one still seals.
+    const staged = await ciSecretKeys({ CI_SECRETS_KEY: old, CI_SECRETS_KEYS_RETIRED: next });
+    expect(staged.current?.id).toBe(await idOf(old));
+    // Sealing with it (in both lists): opened by an object still on the staged keyring.
+    const rotating = await ciSecretKeys({
+      CI_SECRETS_KEY: old,
+      CI_SECRETS_KEY_NEXT: next,
+      CI_SECRETS_KEYS_RETIRED: next,
+    });
+    expect(rotating.current?.id).toBe(await idOf(next));
+    expect([...rotating.byId.keys()].sort()).toEqual([await idOf(old), await idOf(next)].sort());
+    const sealed = await wrapDataKey(rotating, where, dataKey);
+    if (!sealed) throw new Error("not wrapped");
+    expect(await unwrapDataKey(staged, where, sealed)).toEqual(dataKey);
+    // Promoted, still in the retired list, then out of it: it seals and opens as the current key.
+    for (const promoted of [
+      { CI_SECRETS_KEY: next, CI_SECRETS_KEYS_RETIRED: `${old}\n${next}` },
+      { CI_SECRETS_KEY: next, CI_SECRETS_KEYS_RETIRED: old },
+    ]) {
+      const keys = await ciSecretKeys(promoted);
+      expect(keys.current?.id).toBe(await idOf(next));
+      expect(keys.misconfigured).toBeUndefined();
+      expect(await unwrapDataKey(keys, where, sealed)).toEqual(dataKey);
+    }
+  });
+
   it("only opens with a retired key", async () => {
     const old = newKey();
     const current = newKey();

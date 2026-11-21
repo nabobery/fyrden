@@ -74,6 +74,18 @@ describe("registerSecretValue", () => {
     const multiline = registerSecretValue(`line-${crypto.randomUUID()}\n"quoted"`);
     console.log(JSON.stringify({ msg: "x", detail: multiline }));
   });
+  it.fails("fails a test that logs a registered value with a line break and quotes inside an object", () => {
+    const multiline = registerSecretValue(`inspected-${crypto.randomUUID()}\n"quoted"`);
+    console.warn({ detail: multiline });
+  });
+  it.fails("fails a test that logs a long registered value with a line break inside an object", () => {
+    const long = registerSecretValue(`long-${"x".repeat(80)}\n"quoted"${crypto.randomUUID()}`);
+    console.warn({ detail: long });
+  });
+  it.fails("fails a test that logs a registered value with every kind of quote inside an object", () => {
+    const quoted = registerSecretValue(`quotes-${crypto.randomUUID()}'"\`\\`);
+    console.warn({ detail: quoted });
+  });
   it.fails("fails a test that logs a registered value escaped twice, as JSON within JSON", () => {
     const multiline = registerSecretValue(`twice-${crypto.randomUUID()}\n"quoted"`);
     console.log(JSON.stringify({ msg: "x", detail: JSON.stringify({ inner: multiline }) }));

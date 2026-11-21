@@ -307,6 +307,7 @@ export async function dispatchWorkflowOperation(
   // owner while the directory named the new one is never sent on under the new one's identity.
   const entry = await settledRepo(ctx.env, ctx.auth, input.owner, input.repo, "actions:write", {
     transferring: DISPATCH_TRANSFERRING,
+    sameName: true,
     metrics: ctx.metrics,
     afterAuthorize: () => dispatchHooks.afterAuthorize?.() ?? Promise.resolve(),
   });

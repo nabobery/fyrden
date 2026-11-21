@@ -35,7 +35,6 @@ const two = (aLines = "", aStep = "", top = "", bStep = "") =>
   ].join("\n");
 
 const refs = (text: string, job = "a") => secretReferences(workflowOf(text), job);
-const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 describe("secretReferences", () => {
   it("takes names from secrets.NAME and secrets['NAME'], uppercased and once each", () => {
@@ -58,7 +57,7 @@ describe("secretReferences", () => {
           "        env:\n          A: \"${{ secrets['ß'] }} ${{ secrets['ı'] }} ${{ secrets['é'] }} ${{ secrets['ﬀ'] }}\"\n",
         ),
       ),
-    ).toEqual({ kind: "names", names: ["ß", "ı", "É", "ﬀ"].map(foldCase).sort(byCodeUnit) });
+    ).toEqual({ kind: "names", names: ["É", "ß", "ı", "ﬀ"] });
     expect(refs(two("", "        env:\n          A: \"${{ secrets['ß'] }}\"\n"))).toEqual({
       kind: "names",
       names: ["ß"],
@@ -394,9 +393,13 @@ describe("secretReferences properties", () => {
     fc.assert(
       fc.property(placedArb, fc.array(refArb, { maxLength: 3 }), (placed, wide) => {
         const got = secretReferences(workflowOf(build(placed, wide)), "a");
+        const refs = [...placed.filter((p) => p.job === "a").flatMap((p) => p.refs), ...wide];
+        if (refs.some((r) => r.form === "dynamic")) {
+          expect(got.kind).toBe("all");
+          return;
+        }
         if (got.kind === "all") return;
-        for (const r of [...placed.filter((p) => p.job === "a").flatMap((p) => p.refs), ...wide])
-          if (named(r)) expect(got.names).toContain(foldCase(r.name));
+        for (const r of refs) if (named(r)) expect(got.names).toContain(foldCase(r.name));
       }),
     );
   });

@@ -501,16 +501,36 @@ describe("the snapshot", () => {
     } finally {
       delete transferHooks.afterGeneration;
     }
-    // The user let the repository go; while the transfer moves it, the event waits.
+    // The user let the repository go; while the transfer moves it, the event waits, and no
+    // account is asked for its variables.
     later();
     await runTriggers(f.stub);
-    expect(asked).toHaveLength(2);
+    expect(asked).toHaveLength(1);
     expect(await eventsOf(f.stub)).toMatchObject([{ kind: "push", state: "pending" }]);
-    // Landed in another account: the event is closed, nothing allocated.
+    // Landed in another account: the event is closed, nothing allocated or asked.
     expect(await advanceTransfer(env, f.repo.id)).toMatchObject({ state: "transferred" });
     later();
     await runTriggers(f.stub);
-    expect(asked).toHaveLength(3);
+    expect(asked).toHaveLength(1);
+    expect(await eventsOf(f.stub)).toMatchObject([
+      { kind: "push", state: "done", outcome: "owner_changed" },
+    ]);
+    expect(await eventRunsOf(f.stub)).toEqual([]);
+  });
+
+  it("closes an event an earlier version recorded without its owner, reading no variables, though nothing moved", async () => {
+    const f = await varsRepo("push");
+    await withoutRecordedOwner(f);
+    const asked: string[] = [];
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.bindings = {
+        RUN: env.RUN,
+        DIRECTORY: env.DIRECTORY,
+        ORG: countingOrg(asked),
+      };
+    });
+    await runTriggers(f.stub);
+    expect(asked).toEqual([]);
     expect(await eventsOf(f.stub)).toMatchObject([
       { kind: "push", state: "done", outcome: "owner_changed" },
     ]);
@@ -548,7 +568,7 @@ describe("the snapshot", () => {
     ).toMatchObject([{ event: (event as { id: number }).id, repoId: f.repo.id }]);
   });
 
-  it("keeps retrying a refusal while a transfer moves the repository, however often", async () => {
+  it("keeps retrying an event while a transfer moves the repository, however often", async () => {
     const f = await varsRepo("push");
     const later = await frozen(f);
     await inRepo(f.stub, (r: RepoDO) => {
@@ -661,6 +681,27 @@ describe("the snapshot", () => {
     expect(await registeredRuns(f)).toEqual([]);
     // Refused at the first ownership read: the transfer never had to land.
     expect(landed.state).toBeUndefined();
+  });
+
+  it("refuses a dispatch when the directory renames the repository before the call, whatever the repository object knows yet", async () => {
+    const f = await varsRepo("workflow_dispatch");
+    await runTriggers(f.stub);
+    // A rename the directory committed after the decision; the repository object not told yet.
+    dispatchHooks.afterAuthorize = async () => {
+      delete dispatchHooks.afterAuthorize;
+      await env.DIRECTORY.prepare("UPDATE repos SET name_gen = name_gen + 1 WHERE id = ?")
+        .bind(f.repo.id)
+        .run();
+    };
+    try {
+      expect(await dispatch(f)).toMatchObject({
+        status: 409,
+        body: { code: "repo_transferring" },
+      });
+    } finally {
+      delete dispatchHooks.afterAuthorize;
+    }
+    expect((await eventsOf(f.stub)).filter((e) => e.kind === "workflow_dispatch")).toEqual([]);
   });
 
   it("refuses a dispatch authorized while ownership was settled, when a transfer starts before the call", async () => {
@@ -1131,6 +1172,14 @@ const registeredRuns = (f: CiRepo) =>
       .toArray()
       .map((row) => row.run_id),
   );
+
+/** The pending events' facts as an earlier version recorded them: without the owner. */
+const withoutRecordedOwner = (f: CiRepo) =>
+  inRepo(f.stub, (r: RepoDO) => {
+    r.git.context.storage.sql.exec(
+      "UPDATE ci_events SET facts = json_remove(facts, '$.recorded_owner') WHERE state = 'pending'",
+    );
+  });
 
 /** POST …/transfer of the repository to account `login`. */
 const transferTo = (f: CiRepo, login: string) =>

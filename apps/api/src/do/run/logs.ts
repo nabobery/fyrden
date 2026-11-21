@@ -932,6 +932,8 @@ export class RunLogs {
         added.push({ index, row });
       }
     }
+    // Erased while the request waited or sealed: its instance is gone, so there is no key to write.
+    if (host.erased()) return "erased";
     let chunk: { key: string; bytes: number } | undefined;
     if (lines.length > 0) {
       const text = lines.map((line) => JSON.stringify(line)).join("\n");

@@ -6677,7 +6677,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "put": {
-        "description": "Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility \`selected\`, \`selected_repository_ids\` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 \`unknown_repository\`. \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility \`selected\`, \`selected_repository_ids\` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 \`unknown_repository\`. \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.secrets.set",
         "parameters": [
           {
@@ -6912,7 +6912,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "put": {
-        "description": "Replaces the repositories an organization secret lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Replaces the repositories an organization secret lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.secrets.repos.set",
         "parameters": [
           {
@@ -7062,7 +7062,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "put": {
-        "description": "Adds a repository to an organization secret's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Adds a repository to an organization secret's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.secrets.repos.add",
         "parameters": [
           {
@@ -7261,7 +7261,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Creates a variable of the organization (1,000 at most; 422 \`too_many_variables\`) and chooses the repositories it reaches (\`selected_repository_ids\` with visibility \`selected\`; 422 \`unknown_repository\` for an id that is not a repository of the organization); 409 \`variable_exists\` when it has one of the name, 422 \`invalid_variable_name\`. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Creates a variable of the organization (1,000 at most; 422 \`too_many_variables\`) and chooses the repositories it reaches (\`selected_repository_ids\` with visibility \`selected\`; 422 \`unknown_repository\` for an id that is not a repository of the organization); 409 \`variable_exists\` when it has one of the name, 422 \`invalid_variable_name\`. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.variables.create",
         "parameters": [
           {
@@ -7510,7 +7510,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Changes a variable's value or the repositories it reaches (a new visibility; with \`selected\`, \`selected_repository_ids\` replaces the list, absent: kept; \`selected_repository_ids\` alone replaces the list of a variable already \`selected\`, and answers 409 \`visibility_not_selected\` for any other). A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Changes a variable's value or the repositories it reaches (a new visibility; with \`selected\`, \`selected_repository_ids\` replaces the list, absent: kept; \`selected_repository_ids\` alone replaces the list of a variable already \`selected\`, and answers 409 \`visibility_not_selected\` for any other). A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.variables.update",
         "parameters": [
           {
@@ -7735,7 +7735,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "put": {
-        "description": "Replaces the repositories an organization variable lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Replaces the repositories an organization variable lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.variables.repos.set",
         "parameters": [
           {
@@ -7885,7 +7885,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "put": {
-        "description": "Adds a repository to an organization variable's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "description": "Adds a repository to an organization variable's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
         "operationId": "orgs.actions.variables.repos.add",
         "parameters": [
           {
@@ -11831,7 +11831,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "put": {
-        "description": "Sets a secret of the repository (100 at most). \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "description": "Sets a secret of the repository (100 at most). \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
         "operationId": "repos.actions.secrets.set",
         "parameters": [
           {
@@ -12052,7 +12052,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Creates a variable of the repository (500 at most; 422 \`too_many_variables\`); 409 \`variable_exists\` when it has one of the name (update it instead), 422 \`invalid_variable_name\`. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "description": "Creates a variable of the repository (500 at most; 422 \`too_many_variables\`); 409 \`variable_exists\` when it has one of the name (update it instead), 422 \`invalid_variable_name\`. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
         "operationId": "repos.actions.variables.create",
         "parameters": [
           {
@@ -12297,7 +12297,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Changes a variable's value. A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 409 \`repository_changed\` when the repository moved or was deleted meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "description": "Changes a variable's value. A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
         "operationId": "repos.actions.variables.update",
         "parameters": [
           {

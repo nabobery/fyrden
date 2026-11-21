@@ -230,6 +230,54 @@ describe("a repository a transfer is moving", () => {
   });
 });
 
+describe("a repository made public across the access decision", () => {
+  it("is shown no private organization variable or secret", async () => {
+    const owner = await user();
+    const org = await newOrg(admin, owner);
+    const repo = await orgRepoOf(owner, org.login, "private");
+    const path = `/repos/${org.login}/${repo.name}`;
+    const orgPath = `/orgs/${org.login}`;
+    for (const [name, visibility] of [
+      ["PRIV", "private"],
+      ["EVERY", "all"],
+    ] as const) {
+      expect(
+        (
+          await api("POST", `${orgPath}/actions/variables`, owner.token, {
+            name,
+            value: "v",
+            visibility,
+          })
+        ).status,
+      ).toBe(201);
+      expect((await putSecret(owner, orgPath, name, secretValue(), { visibility })).status).toBe(
+        201,
+      );
+    }
+    const madePublic = () => {
+      ciScopeHooks.afterAuthorize = async () => {
+        delete ciScopeHooks.afterAuthorize;
+        await env.DIRECTORY.prepare("UPDATE repos SET visibility = 'public' WHERE id = ?")
+          .bind(repo.id)
+          .run();
+      };
+    };
+    madePublic();
+    const variables = await json<{ variables: { name: string }[] }>(
+      api("GET", `${path}/actions/organization-variables`, owner.token),
+    );
+    expect(variables.body.variables.map((v) => v.name)).toEqual(["EVERY"]);
+    await env.DIRECTORY.prepare("UPDATE repos SET visibility = 'private' WHERE id = ?")
+      .bind(repo.id)
+      .run();
+    madePublic();
+    const secrets = await json<{ secrets: { name: string }[] }>(
+      api("GET", `${path}/actions/organization-secrets`, owner.token),
+    );
+    expect(secrets.body.secrets.map((s) => s.name)).toEqual(["EVERY"]);
+  });
+});
+
 describe("a write whose listed repository leaves during the directory lookup", () => {
   it("answers 409 repository_changed, not 422; an id unknown from the start stays 422", async () => {
     const owner = await user();

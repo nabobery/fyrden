@@ -167,6 +167,8 @@ export interface RunRow {
   updated_at: number;
   trust: "trusted" | "untrusted";
   fork: number;
+  /** The account that owned the repository when the run was created; null: given no secrets. */
+  owner_id: string | null;
 }
 
 export interface AttemptRow {

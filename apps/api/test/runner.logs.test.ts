@@ -629,6 +629,26 @@ describe("UpdateLog fencing", () => {
     expect(await objectsOf(runId, number)).toEqual([]);
   });
 
+  it("a flush whose run is erased before its object is written answers not_found and writes nothing", async () => {
+    const { f, runId, runner, task, number } = await withTask();
+    await hook(runId, (r) => ({
+      beforeLogStore: async () => {
+        await r.erase(f.repo.id);
+      },
+    }));
+    await connectError(
+      await sendLog(runner, {
+        taskId: task.id,
+        index: 0,
+        rows: rowsAt(0, 50, (i) => (i === 0 ? "::add-mask::an-added-value" : `line ${i}`)),
+      }),
+      "not_found",
+      404,
+    );
+    expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_logs"))).toEqual([]);
+    expect(await objectsOf(runId, number)).toEqual([]);
+  });
+
   it("a failed object write moves no ack and gives back its memory", async () => {
     const { runId, runner, task, number } = await withTask();
     const before = await inRun(runId, (r) => r.memory.stats().reservedBytes);

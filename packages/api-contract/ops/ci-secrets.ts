@@ -64,8 +64,10 @@ const ADMIN =
 const OWNER =
   "Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`.";
 const SEALING = `\`encrypted_value\` is the value (UTF-8, at most ${MAX_CI_VALUE_BYTES} bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it.`;
-const FENCE =
-  " 409 `repository_changed` when the repository moved or was deleted meanwhile: send it again.";
+const REPO_FENCE =
+  " 404 `repo_not_found` when the repository is no longer the account's when the write commits; 409 `repository_changed` when it left and came back meanwhile: send it again.";
+const ORG_FENCE =
+  " 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`.";
 
 const PublicKey = z.object({
   key_id: z.string().describe("Which key: pass it with `encrypted_value`."),
@@ -192,7 +194,7 @@ export const setRepoSecret = defineOperation({
   method: "PUT",
   path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}",
   summary: "Create or update a repository secret",
-  description: `Sets a secret of the repository (100 at most). ${SEALING}${FENCE} ${ADMIN}`,
+  description: `Sets a secret of the repository (100 at most). ${SEALING}${REPO_FENCE} ${ADMIN}`,
   input: z.object({
     ...RepoInput,
     secret_name: SecretName,
@@ -315,7 +317,7 @@ export const setOrgSecret = defineOperation({
   method: "PUT",
   path: "/orgs/{org}/actions/secrets/{secret_name}",
   summary: "Create or update an organization secret",
-  description: `Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility \`selected\`, \`selected_repository_ids\` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 \`unknown_repository\`. ${SEALING}${FENCE} ${OWNER}`,
+  description: `Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility \`selected\`, \`selected_repository_ids\` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 \`unknown_repository\`. ${SEALING}${ORG_FENCE} ${OWNER}`,
   input: z.object({
     ...OrgInput,
     secret_name: SecretName,
@@ -383,7 +385,7 @@ export const setOrgSecretRepos = defineOperation({
   method: "PUT",
   path: "/orgs/{org}/actions/secrets/{secret_name}/repositories",
   summary: "Set selected repositories for an organization secret",
-  description: `Replaces the repositories an organization secret lists. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization.${FENCE} ${OWNER}`,
+  description: `Replaces the repositories an organization secret lists. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization.${ORG_FENCE} ${OWNER}`,
   input: z.object({ ...OrgInput, secret_name: SecretName, selected_repository_ids: SelectedIds }),
   output: NoContent,
   successStatus: 204,
@@ -403,7 +405,7 @@ export const addOrgSecretRepo = defineOperation({
   method: "PUT",
   path: "/orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}",
   summary: "Add selected repository to an organization secret",
-  description: `Adds a repository to an organization secret's list. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past ${MAX_SELECTED_REPOS} listed.${FENCE} ${OWNER}`,
+  description: `Adds a repository to an organization secret's list. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past ${MAX_SELECTED_REPOS} listed.${ORG_FENCE} ${OWNER}`,
   input: z.object({ ...OrgInput, secret_name: SecretName, repository_id: RepositoryId }),
   output: NoContent,
   successStatus: 204,
@@ -470,7 +472,7 @@ export const createRepoVariable = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/actions/variables",
   summary: "Create a repository variable",
-  description: `Creates a variable of the repository (500 at most; 422 \`too_many_variables\`); 409 \`variable_exists\` when it has one of the name (update it instead), 422 \`invalid_variable_name\`.${FENCE} ${ADMIN}`,
+  description: `Creates a variable of the repository (500 at most; 422 \`too_many_variables\`); 409 \`variable_exists\` when it has one of the name (update it instead), 422 \`invalid_variable_name\`.${REPO_FENCE} ${ADMIN}`,
   input: z.object({ ...RepoInput, name: VariableName, value: VariableValue }),
   output: NoContent,
   successStatus: 201,
@@ -509,7 +511,7 @@ export const updateRepoVariable = defineOperation({
   method: "PATCH",
   path: "/repos/{owner}/{repo}/actions/variables/{name}",
   summary: "Update a repository variable",
-  description: `Changes a variable's value. A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames.${FENCE} ${ADMIN}`,
+  description: `Changes a variable's value. A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames.${REPO_FENCE} ${ADMIN}`,
   input: z.object({
     ...RepoInput,
     name: VariableName,
@@ -593,7 +595,7 @@ export const createOrgVariable = defineOperation({
   method: "POST",
   path: "/orgs/{org}/actions/variables",
   summary: "Create an organization variable",
-  description: `Creates a variable of the organization (1,000 at most; 422 \`too_many_variables\`) and chooses the repositories it reaches (\`selected_repository_ids\` with visibility \`selected\`; 422 \`unknown_repository\` for an id that is not a repository of the organization); 409 \`variable_exists\` when it has one of the name, 422 \`invalid_variable_name\`.${FENCE} ${OWNER}`,
+  description: `Creates a variable of the organization (1,000 at most; 422 \`too_many_variables\`) and chooses the repositories it reaches (\`selected_repository_ids\` with visibility \`selected\`; 422 \`unknown_repository\` for an id that is not a repository of the organization); 409 \`variable_exists\` when it has one of the name, 422 \`invalid_variable_name\`.${ORG_FENCE} ${OWNER}`,
   input: z.object({
     ...OrgInput,
     name: VariableName,
@@ -638,7 +640,7 @@ export const updateOrgVariable = defineOperation({
   method: "PATCH",
   path: "/orgs/{org}/actions/variables/{name}",
   summary: "Update an organization variable",
-  description: `Changes a variable's value or the repositories it reaches (a new visibility; with \`selected\`, \`selected_repository_ids\` replaces the list, absent: kept; \`selected_repository_ids\` alone replaces the list of a variable already \`selected\`, and answers 409 \`visibility_not_selected\` for any other). A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames.${FENCE} ${OWNER}`,
+  description: `Changes a variable's value or the repositories it reaches (a new visibility; with \`selected\`, \`selected_repository_ids\` replaces the list, absent: kept; \`selected_repository_ids\` alone replaces the list of a variable already \`selected\`, and answers 409 \`visibility_not_selected\` for any other). A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames.${ORG_FENCE} ${OWNER}`,
   input: z.object({
     ...OrgInput,
     name: VariableName,
@@ -703,7 +705,7 @@ export const setOrgVariableRepos = defineOperation({
   method: "PUT",
   path: "/orgs/{org}/actions/variables/{name}/repositories",
   summary: "Set selected repositories for an organization variable",
-  description: `Replaces the repositories an organization variable lists. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization.${FENCE} ${OWNER}`,
+  description: `Replaces the repositories an organization variable lists. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization.${ORG_FENCE} ${OWNER}`,
   input: z.object({ ...OrgInput, name: VariableName, selected_repository_ids: SelectedIds }),
   output: NoContent,
   successStatus: 204,
@@ -723,7 +725,7 @@ export const addOrgVariableRepo = defineOperation({
   method: "PUT",
   path: "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}",
   summary: "Add selected repository to an organization variable",
-  description: `Adds a repository to an organization variable's list. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past ${MAX_SELECTED_REPOS} listed.${FENCE} ${OWNER}`,
+  description: `Adds a repository to an organization variable's list. ${NOT_SELECTED} 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past ${MAX_SELECTED_REPOS} listed.${ORG_FENCE} ${OWNER}`,
   input: z.object({ ...OrgInput, name: VariableName, repository_id: RepositoryId }),
   output: NoContent,
   successStatus: 204,

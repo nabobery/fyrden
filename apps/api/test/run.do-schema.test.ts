@@ -356,6 +356,29 @@ describe("RunDO schema", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("leaves a run from v6 bound to no owner", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const owners = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      const sql = state.storage.sql;
+      sql.exec(runV6);
+      sql.exec(
+        `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
+         VALUES (1, 'old-run', 'old-repo', ?, 'refs/heads/main', 'push', 'usr_old',
+           '.github/workflows/ci.yml', '', '{}', 'original-digest', 1, 0, 0)`,
+        "a".repeat(40),
+      );
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 6)");
+      applyDoMigrations(state.storage, runSchema);
+      return sql.exec("SELECT owner_id FROM runs").toArray();
+    });
+    expect(owners).toEqual([{ owner_id: null }]);
+  });
+
   it("takes secret masks from v7", async () => {
     const stub = env.RUN.getByName(uniqueId("run"));
     const kinds = await runInDurableObject(stub, (_, state) => {

@@ -44,10 +44,25 @@ new master key. The secrets themselves are not encrypted again, and no one
 needs to set their secrets again.
 
 1. Make a new key and keep it: `openssl rand -base64 32`.
-2. Set it as `CI_SECRETS_KEY_NEXT` on `fyrden-api`
+2. Add the new key to `CI_SECRETS_KEYS_RETIRED` (base64 keys, one per
+   line; keep any lines already there). A key is identified by its bytes,
+   so once every object has this version, each one can open what the new
+   key will encrypt, while nothing is encrypted with it yet. Wait until the
+   version with it serves all traffic, plus 5 minutes: a Durable Object
+   that is busy at a deployment keeps running its old code for up to that
+   long (Cloudflare's default code update delay, which Fyrden does not
+   change; verified:
+   [Durable Objects code updates](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)).
+   Without this step, an account object could encrypt a data key under the
+   new key while a run object still on the old version, which cannot open
+   it, delivers that account's secrets, and the job would fail with
+   `secrets_unavailable`.
+3. Set the same new key as `CI_SECRETS_KEY_NEXT` on `fyrden-api`
    (`wrangler secret put CI_SECRETS_KEY_NEXT`). From then on new data keys
-   are encrypted with it, and `CI_SECRETS_KEY` still opens the others.
-3. Encrypt every data key again with it: call
+   are encrypted with it, and `CI_SECRETS_KEY` still opens the others. The
+   key is in both `CI_SECRETS_KEYS_RETIRED` and `CI_SECRETS_KEY_NEXT` now,
+   which works: it opens once and encrypts as `_NEXT`.
+4. Encrypt every data key again with it: call
    `POST /api/admin/ci/secrets/rewrap` as an instance administrator,
    starting with no `cursor` and passing the `next_cursor` it answers as
    `cursor`, until `next_cursor` is null. That is one sweep over every
@@ -66,27 +81,26 @@ needs to set their secrets again.
    write also encrypts its account's data key again. An object still on the
    old code that has no data key yet counts nothing, and can make its first
    one under the old key after its page has passed. So the sweep that
-   counts is one started after the cutoff of step 4 (the version that set
+   counts is one started after the cutoff of step 5 (the version that set
    `CI_SECRETS_KEY_NEXT` serving all traffic, plus 5 minutes), while the old
    key still opens: run a whole sweep then, and go on only if it adds up to
    `remaining` 0.
-4. If you kept the old key's value, add it to `CI_SECRETS_KEYS_RETIRED`
+5. If you kept the old key's value, add it to `CI_SECRETS_KEYS_RETIRED`
    (base64 keys, one per line) **before** the next step, and keep it there
    for at least 30 days. Jobs that were already running when you set
    `CI_SECRETS_KEY_NEXT` keep their log masks encrypted under the old key
    until their logs close, so the old key must stay readable. If you don't
    have the old key's value, wait instead. Take as the cutoff the moment
    the version that set `CI_SECRETS_KEY_NEXT` serves all traffic plus
-   5 minutes: a Durable Object that is busy at a deployment keeps running
-   its old code, and can still assign jobs under the old key, for up to
-   that long (Cloudflare's default code update delay, which Fyrden does not
-   change; verified:
-   [Durable Objects code updates](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)).
-   Then wait until every job assigned before the cutoff has finished, and
+   5 minutes: a busy Durable Object can still assign jobs under the old key
+   for up to that long, the code update delay of step 2. Then wait until
+   every job assigned before the cutoff has finished, and
    10 more minutes, the time a finished job's runner may still upload its
    log.
-5. Set the same new key as `CI_SECRETS_KEY`, then delete
+6. Set the same new key as `CI_SECRETS_KEY`, then delete
    `CI_SECRETS_KEY_NEXT` (`wrangler secret delete CI_SECRETS_KEY_NEXT`).
+   You may then remove the new key's line from `CI_SECRETS_KEYS_RETIRED`:
+   as `CI_SECRETS_KEY` it opens and encrypts. Leave the old key's line.
 
 Keys in `CI_SECRETS_KEYS_RETIRED` only open, never encrypt. Keep the old
 key for at least 30 days because Durable Object point-in-time recovery can
@@ -101,7 +115,9 @@ store a copy.
 
 Never remove a retired key while any data key still uses it. The rewrap
 call's `remaining` count says how many still do; remove the key only after
-a pass reports `remaining` 0 and `unreadable` 0, and after the 30 days.
+a pass reports `remaining` 0 and `unreadable` 0, and after the 30 days. The
+one exception is the line of a key that is also `CI_SECRETS_KEY` (step 6):
+it still opens as the current key.
 
 If `CI_SECRETS_KEY` or `CI_SECRETS_KEY_NEXT` is set but is not a 32-byte
 base64 key (for example an empty `CI_SECRETS_KEY_NEXT`, or a value that is

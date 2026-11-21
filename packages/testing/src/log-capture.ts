@@ -5,10 +5,8 @@ import { afterEach, beforeEach, expect, type MockInstance, vi } from "vitest";
 // Rendered the way console would print it, so nothing an argument carries is
 // hidden from the leak check: JSON.stringify turns an Error into "{}" and
 // drops its cause and extra properties.
-const render = (a: unknown): string =>
-  typeof a === "string"
-    ? a
-    : inspect(a, { depth: Number.POSITIVE_INFINITY, breakLength: Number.POSITIVE_INFINITY });
+const INSPECT = { depth: Number.POSITIVE_INFINITY, breakLength: Number.POSITIVE_INFINITY };
+const render = (a: unknown): string => (typeof a === "string" ? a : inspect(a, INSPECT));
 
 export interface CapturedLogs {
   readonly lines: string[];
@@ -35,12 +33,16 @@ function stringsOf(value: unknown, out: string[]): string[] {
   return out;
 }
 
-/** Each registered value as itself and JSON-escaped (the logger writes JSON: line breaks, quotes). */
+/**
+ * Each registered value as itself, JSON-escaped (the logger writes JSON: line
+ * breaks, quotes) and escaped as `render` prints a string inside an object.
+ */
 function secretForms(): string[] {
   const forms = new Set<string>();
   for (const value of secretValues) {
     forms.add(value);
     forms.add(JSON.stringify(value).slice(1, -1));
+    forms.add(inspect(value, INSPECT).slice(1, -1));
   }
   return [...forms];
 }

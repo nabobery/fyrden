@@ -54,6 +54,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `ci_log_masks`: a task's mask values (job tokens, `::add-mask::` values
  *   and delivered secrets), each sealed under the CI master key `key_id`, with
  *   the random `mask_id` its seal is bound to and its crossing length.
+ * - `runs.owner_id`: the account that owned the repository when the run was
+ *   created, the only one whose secrets its jobs are given; NULL for a run
+ *   created without one (before this version), whose jobs get no secrets.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -366,6 +369,7 @@ export const runSchema: readonly DoMigration[] = [
         FROM ci_log_masks;
       DROP TABLE ci_log_masks;
       ALTER TABLE ci_log_masks_v7 RENAME TO ci_log_masks;
+      ALTER TABLE runs ADD COLUMN owner_id TEXT;
     `,
   },
 ];

@@ -45,6 +45,7 @@ import {
   pendingOf,
   proto,
   registerRunner,
+  repoTokenCounts,
   runnerCall,
   taskRow,
   tasksOfRun,
@@ -369,6 +370,17 @@ describe("mask rows at rest", () => {
     ]);
   });
 
+  it("do not open with data after their ciphertext", async () => {
+    const t = await withTask();
+    await inRun(t.runId, (r) =>
+      r.engine.exec(
+        "UPDATE ci_log_masks SET value = value || '.AAAA' WHERE task = ? AND seq = 0",
+        t.number,
+      ),
+    );
+    expect((await openedMasksOf(t.runId, t.number))[0]?.value).toBeUndefined();
+  });
+
   it("are bound to their place: a row's value moved to another row, task or kind does not open", async () => {
     const t = await withTask();
     const secret = fresh("secret");
@@ -510,10 +522,11 @@ describe("two mask writers that read the same count", () => {
       /** Bounded round trips to the object until both writers wait; fails if either settled. */
       both: async (writes: Promise<unknown>[]) => {
         let settled = 0;
-        for (const write of writes)
-          void write.finally(() => {
-            settled++;
-          });
+        const count = () => {
+          settled++;
+        };
+        // Both outcomes handled, so a rejected write leaves no unhandled promise behind.
+        for (const write of writes) write.then(count, count);
         for (let i = 0; i < 500 && arrived < 2 && settled === 0; i++)
           await runInDurableObject(runStub(runId), () => {});
         if (arrived < 2) throw new Error("a writer settled before its hook");
@@ -1202,6 +1215,29 @@ describe("with a current CI master key, but the task's stored masks sealed under
     ).toBeGreaterThanOrEqual(others.length);
   });
 
+  it("re-offered with no other job to give, keeps the runner's version, so the offer is made again once its masks open", async () => {
+    const { runId, runner, lost, version } = await lostAnswer();
+    registerSecretValue(jobTokenOf(lost));
+    const refused = await withVars(runId, rotated(), () => fetchTask(runner, version));
+    expect(refused.task).toBeUndefined();
+    expect(refused.tasksVersion).toBe(version);
+    await inRun(runId, (r) => {
+      r.hooks = {
+        afterMint: (token) => {
+          registerSecretValue(token);
+        },
+      };
+    });
+    try {
+      const again = (await fetchTask(runner, refused.tasksVersion)).task;
+      expect(again?.id).toBe(lost.id);
+    } finally {
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+    }
+  });
+
   it("a secret is refused as unreadable, not as a missing key, and nothing is added", async () => {
     const t = await withTask();
     expect(await addSecrets(t.runId, t.number, [fresh("secret")])).toEqual({ ok: true });
@@ -1338,16 +1374,6 @@ describe("admission with mask headroom", () => {
 /** Reservations a test holds in a run object's pool, by run. */
 const held = new Map<string, { release(): void }>();
 
-/** Job tokens minted for the repository's runs, revoked or not, and how many are revoked. */
-async function repoTokenCounts(repoId: string): Promise<{ minted: number; revoked: number }> {
-  const row = await env.DIRECTORY.prepare(
-    `SELECT COUNT(*) AS minted, COUNT(revoked_at) AS revoked FROM tokens
-     WHERE type = 'job' AND repo_ids LIKE ?`,
-  )
-    .bind(`%${repoId}%`)
-    .first<{ minted: number; revoked: number }>();
-  return { minted: row?.minted ?? 0, revoked: row?.revoked ?? 0 };
-}
 const repoTokens = async (repoId: string) => (await repoTokenCounts(repoId)).minted;
 
 /** A version the organization's runners were told of, with nothing pending: a poll at it may be a lost answer's repeat. */

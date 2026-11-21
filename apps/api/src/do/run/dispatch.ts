@@ -44,6 +44,10 @@ import {
  * task ends, and the runner's reports decoded and passed to the run.
  */
 
+/** The error of a job whose secrets are not delivered because its repository changed owner. */
+const OWNER_CHANGED_ERROR =
+  "owner_changed: the repository moved to another account after this run was created; its jobs are not given that account's secrets";
+
 /** What `assignTask` answers: the encoded `Task`, or why the run refused it. */
 export type AssignTaskAnswer =
   | { readonly task: Uint8Array }
@@ -303,7 +307,13 @@ export class RunDispatch {
     // run's job gets none, and its account object is never asked.
     const request = run ? host.secretsRequest(jobId) : undefined;
     let delivery: ReadSecrets | undefined;
-    if (run && request?.trusted && (request.refs.kind === "all" || request.refs.names.length > 0)) {
+    // A run gets secrets only from the account it is bound to: after a transfer the new owner's
+    // are never read for it, and its jobs that read secrets fail. A run bound to no owner (made
+    // before runs were bound, or from an allocation stored without its owner) gets none either.
+    const readsSecrets =
+      request?.trusted === true && (request.refs.kind === "all" || request.refs.names.length > 0);
+    const ownerChanged = readsSecrets && run?.owner_id !== accountId;
+    if (run && request && readsSecrets && !ownerChanged) {
       // Bounded before the account is asked: the answer and the opened values fit what is
       // reserved, so jobs of one run assigned at once cannot together outgrow the object.
       held.reservation = host.memory.tryReserve(deliveryMemory(request.refs));
@@ -354,6 +364,7 @@ export class RunDispatch {
     const secrets = delivery?.ok ? delivery.secrets : [];
     const undeliverable = (code: string, error: string, names: readonly string[]) =>
       this.#deliveryFailed(wireId, ref, code, error, names);
+    if (ownerChanged) return undeliverable("owner_changed", OWNER_CHANGED_ERROR, []);
     if (delivery && !delivery.ok && delivery.code === "secrets_unavailable")
       return undeliverable("secrets_unavailable", unavailableError(delivery.names), delivery.names);
     if (delivery && !delivery.ok && delivery.code === "secrets_oversize")

@@ -39,6 +39,7 @@ import {
   proto,
   type RegisteredRunner,
   registerRunner,
+  repoTokenCounts,
   runnerCall,
   taskRow,
   tasksOfRun,
@@ -463,7 +464,12 @@ describe("offers and masking", () => {
 
   it("a delivered secret printed by the job is masked in the stored log, in its encodings too", async () => {
     const f = await orgRepo();
-    const value = await repoSecret(f, "A");
+    // JSON writes a quote, a backslash and a line feed escaped, so its form differs from the text.
+    const value = await repoSecret(
+      f,
+      "A",
+      registerSecretValue(`${secretValue()}"\\\n${secretValue()}`),
+    );
     const { runId, runner, task } = await delivered(f, reading("A"));
     const ack = await sendLog(runner, task.id, [
       `plain ${value}`,
@@ -491,6 +497,7 @@ describe("failures fail closed", () => {
           state.storage.sql.exec("UPDATE ci_data_keys SET nonce = ?", nonce);
         else state.storage.sql.exec("UPDATE ci_secrets SET nonce = ? WHERE name = 'A'", nonce);
       });
+      const tokensBefore = await repoTokenCounts(f.repo.id);
       const { runId, task } = await deliver(f, reading("A", "B"));
       expect(task).toBeUndefined();
       await drain(runId);
@@ -500,11 +507,8 @@ describe("failures fail closed", () => {
         `secrets_unavailable: these secrets do not open with the deployment's CI keys: ${broken === "data key" ? "A, B" : "A"}`,
       );
       expect(only?.error).not.toContain(b);
-      const [offer] = await env.DIRECTORY.prepare("SELECT id FROM ci_tasks WHERE run_id = ?")
-        .bind(runId)
-        .all<{ id: number }>()
-        .then((r) => r.results);
-      expect(await jobTokensOf(offer?.id as number)).toEqual([]);
+      // No token was minted for the repository at all, mapped to an offer or not.
+      expect(await repoTokenCounts(f.repo.id)).toEqual(tokensBefore);
     },
   );
 

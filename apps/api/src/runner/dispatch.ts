@@ -159,9 +159,11 @@ export async function dispatchTask(
       retry = true;
     } else if (assigned.refused === "masks_unreadable") {
       // The task's stored masks do not open: the offer and its earlier token stand, and the
-      // runner searches for other work, as when its tokens are exhausted.
+      // runner searches for other work and, given none, asks again at the same version, at
+      // which the offer is made again.
       masksUnreadable(call, offered.id, offered.runId);
       exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+      retry = true;
     } else if (assigned.refused === "tokens_exhausted")
       exhausted.push({ runId: offered.runId, jobId: offered.jobId });
     else
