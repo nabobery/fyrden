@@ -262,7 +262,11 @@ function report(name: string, rows: readonly StoredLogLine[]) {
 }
 
 beforeAll(async () => {
-  forge = await startForge("rawlogs", { primary: seam, vars: { FYRDEN_CI_RUNNERS: "on" } });
+  // Free, with jobs clamped to 10 minutes so the day's CI allowance holds every job and viewer.
+  forge = await startForge("rawlogs", {
+    primary: seam,
+    vars: { FYRDEN_CI_RUNNERS: "on", FYRDEN_CI_MAX_JOB_MINUTES: "10" },
+  });
   owner = await forge.user(`own${nonce}`);
   await forge.admin.api.call("admin.orgs.create", { login: org, admin: owner.handle });
   const repo = await owner.api.call("orgs.repos.create", { org, name: REPO });

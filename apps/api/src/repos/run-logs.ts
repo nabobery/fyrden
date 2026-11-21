@@ -1,4 +1,6 @@
 import type { Input, issueJobLogTicket, Output } from "@fyrden/api-contract";
+import { ciEnv } from "../ci/budget.js";
+import { type LogViewerAdmission, logViewerAdmissionFor } from "../ci/viewer-admission.js";
 import { LOG_VIEWER_POLICY, type StoreTicketAnswer } from "../do/run/viewers.js";
 import { ticketHash } from "../do/user/live.js";
 import { repoFor } from "../git/chunked/operations.js";
@@ -12,36 +14,22 @@ import { runOf } from "./runs.js";
  * The `actions.runs.jobs.live_ticket` operation: a single-use ticket to watch
  * a job's log over a WebSocket (`live/run-logs-route.ts`). The ticket is made
  * and hashed here; only its hash goes to the run's object, which keeps it for
- * the job, the credential and the repository it was issued through.
+ * the job, the credential and the repository it was issued through, and
+ * answers the job's log as stored. The deployment's viewer admission then
+ * decides on that stored ticket (on Free, a grant from the CI ledger); a
+ * ticket it refuses is deleted before the refusal is answered, and was never
+ * disclosed.
  */
-
-/** Why a viewer is not admitted: what the operation answers. */
-export interface LogViewerRefusal {
-  readonly status: 429 | 503;
-  readonly code: string;
-  readonly message: string;
-  readonly retryAfter?: number;
-}
-
-/**
- * Where a deployment's metering of log viewers will plug in (sockets cost
- * reads, rechecks and alarms on Free): asked before each ticket is issued.
- * Admits everyone for now.
- */
-export interface LogViewerAdmission {
-  onTicket(
-    principal: { readonly id: string; readonly type: "user" | "agent" },
-    run: { readonly runId: string; readonly repoId: string },
-    jobId: number,
-  ): Promise<"ok" | LogViewerRefusal>;
-}
-
-export const admitEveryViewer: LogViewerAdmission = { onTicket: async () => "ok" };
 
 export async function issueJobLogTicketOperation(
   ctx: OpContext,
   input: Input<typeof issueJobLogTicket>,
-  admission: LogViewerAdmission = admitEveryViewer,
+  admission: LogViewerAdmission = logViewerAdmissionFor(
+    ciEnv(ctx.env),
+    ctx.env.DIRECTORY,
+    ctx.metrics,
+    ctx.log,
+  ),
 ): Promise<Output<typeof issueJobLogTicket>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
   const run = await runOf(ctx, entry, input.run_id).catch((error: unknown) => {
@@ -64,20 +52,6 @@ export async function issueJobLogTicketOperation(
   const credential = await liveCredential(ctx.env.DIRECTORY, ctx.auth.id, clock());
   if (!credential)
     throw new OperationError(401, "invalid_token", "The token is invalid, expired or revoked.");
-  const admitted = await admission.onTicket(
-    { id: credential.principalId, type: credential.principalType },
-    { runId: run.runId, repoId: entry.id },
-    input.job_id,
-  );
-  if (admitted !== "ok")
-    throw new OperationError(
-      admitted.status,
-      admitted.code,
-      admitted.message,
-      undefined,
-      undefined,
-      admitted.retryAfter,
-    );
   const ticket = randomSecret(32);
   const hash = await ticketHash(ticket);
   ctx.metrics.count("do.request", { class: "RunDO", method: "storeLogTicket" });
@@ -89,6 +63,7 @@ export async function issueJobLogTicketOperation(
       jobId: input.job_id,
       credentialId: credential.id,
       principalId: credential.principalId,
+      budget: admission.budget,
     });
   } catch (error) {
     ctx.log.error("live log ticket not stored", { error });
@@ -110,6 +85,29 @@ export async function issueJobLogTicketOperation(
           Math.ceil(LOG_VIEWER_POLICY.ticketMs / 1000),
         );
     }
+  }
+  const admitted = await admission.onTicket({
+    hash,
+    runId: run.runId,
+    accountId: entry.ownerId,
+    expiresAt: stored.expiresAt,
+    budget: stored.budget,
+  });
+  if (admitted !== "ok") {
+    ctx.metrics.count("do.request", { class: "RunDO", method: "dropLogTicket" });
+    // Never disclosed, it expires anyway: a failed delete only holds one of the run's tickets.
+    await ctx.env.RUN.getByName(input.run_id)
+      .dropLogTicket(hash)
+      .catch((error: unknown) => ctx.log.warn("refused live log ticket not deleted", { error }));
+    throw new OperationError(
+      admitted.status,
+      admitted.code,
+      admitted.message,
+      undefined,
+      undefined,
+      admitted.retryAfter,
+      admitted.retryAt,
+    );
   }
   const path = `/api/repos/${entry.ownerHandle}/${entry.name}/actions/runs/${run.runId}/jobs/${input.job_id}/logs/live`;
   return {

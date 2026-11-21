@@ -21,6 +21,7 @@ import {
   ciFleetCap,
   ciJobPrice,
   ciPollBudget,
+  ciViewerBudget,
   ciViewerPrice,
   fleetReservation,
   grantCi,
@@ -587,17 +588,55 @@ describe("CI prices", () => {
     });
   });
 
-  it("prices a log viewer from the log stored when its ticket is issued and its life", () => {
-    const small = ciViewerPrice({ storedBytes: 0, spanMs: 60 * MINUTE });
-    const large = ciViewerPrice({ storedBytes: 10 * 1024 * 1024, spanMs: 60 * MINUTE });
+  it("budgets a log viewer from the log stored when its ticket is issued and while rows flow", () => {
+    const none = { chunks: 0, rereadBytes: 0, reads: 0 };
+    const small = ciViewerBudget({ stored: none, activeMs: 60 * MINUTE });
+    // One 3 MiB chunk read back in seven reads.
+    const large = ciViewerBudget({
+      stored: { chunks: 1, rereadBytes: 7 * 3 * 1024 * 1024, reads: 7 },
+      activeMs: 60 * MINUTE,
+    });
     expect(small.readBytes).toBe(4 * 1024 * 1024);
-    expect(large.readBytes).toBe(24 * 1024 * 1024);
-    expect(large.getAttempts).toBeGreaterThan(small.getAttempts);
-    expect(large.price.fixed.r2_class_b).toBe(large.getAttempts);
+    expect(large.readBytes).toBe(25 * 1024 * 1024);
+    expect(large.getAttempts - small.getAttempts).toBe(7 + 1);
+    // Its first check, one a minute rows flow, two an attempt, and a margin.
+    expect(small.checks).toBe(1 + 60 + 2 * small.getAttempts + 16);
+    expect(large.checks - small.checks).toBe(2 * (7 + 1));
+    const longer = ciViewerBudget({ stored: none, activeMs: 120 * MINUTE });
+    expect(longer.checks - small.checks).toBe(60);
+    expect(ciViewerBudget({ stored: none, activeMs: 0 }).checks).toBe(
+      1 + 2 * small.getAttempts + 16,
+    );
+  });
+
+  it("prices a log viewer for the budget its socket is held to", () => {
+    const budget = ciViewerBudget({
+      stored: { chunks: 2, rereadBytes: 3 * 1024 * 1024, reads: 5 },
+      activeMs: 30 * MINUTE,
+    });
+    const price = ciViewerPrice(budget);
+    expect(price.fixed).toMatchObject({
+      worker_requests: 2,
+      do_requests: 2 + budget.checks,
+      do_rows_read: 10 * budget.checks,
+      d1_rows_read: 5 * budget.checks,
+      r2_class_b: budget.getAttempts,
+    });
+    expect(price.minutes).toBe(0);
     expect(ciJobPrice(180).fixed.r2_class_b + ciJobPrice(180).perMinute.r2_class_b).toBe(0);
-    expect(small.price.minutes).toBe(0);
-    const longer = ciViewerPrice({ storedBytes: 0, spanMs: 120 * MINUTE });
-    expect(longer.price.fixed.d1_rows_read).toBeGreaterThan(small.price.fixed.d1_rows_read);
+  });
+
+  it("gives a viewer an attempt for each read of each chunk, and one more a chunk", () => {
+    const one = ciViewerBudget({
+      stored: { chunks: 1, rereadBytes: 100 * 1024, reads: 1 },
+      activeMs: MINUTE,
+    });
+    const many = ciViewerBudget({
+      stored: { chunks: 100, rereadBytes: 100 * 1024, reads: 100 },
+      activeMs: MINUTE,
+    });
+    expect(many.readBytes).toBe(one.readBytes);
+    expect(many.getAttempts - one.getAttempts).toBe(2 * 99);
   });
 });
 

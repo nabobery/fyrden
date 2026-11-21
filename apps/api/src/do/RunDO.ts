@@ -1200,6 +1200,8 @@ export class RunDO extends MigratingDO {
    * Stores a live log ticket's hash for job `jobId` (its credential and
    * principal, redeemable through repository `repoId` only); refused for an
    * erased or unknown run, an unknown job, or past the run's unredeemed tickets.
+   * Answers the job's log as stored now; with `budget`, the budget its
+   * socket is held to, from that log (`ViewersHost.storeTicket`).
    */
   storeLogTicket(input: {
     hash: string;
@@ -1207,8 +1209,14 @@ export class RunDO extends MigratingDO {
     jobId: number;
     credentialId: string;
     principalId: string;
+    budget: { readonly maxActiveMs: number } | null;
   }): StoreTicketAnswer {
     return this.viewers.storeTicket(input);
+  }
+
+  /** Deletes an unredeemed live log ticket the deployment did not admit. */
+  dropLogTicket(hash: string): void {
+    this.viewers.dropTicket(hash);
   }
 
   /** A live log upgrade, as the Worker's route forwards it with the credential it verified. */

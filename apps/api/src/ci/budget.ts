@@ -133,9 +133,9 @@ export type CiVariable =
 
 /**
  * Values that replace the Worker's own variables where the run and account
- * objects read CI's configuration, in this isolate only. Empty in a
- * deployment; tests set them, since no request's variables reach those
- * objects' env.
+ * objects, and the live log ticket operation, read CI's configuration, in
+ * this isolate only. Empty in a deployment; tests set them, since no
+ * request's variables reach those objects' env.
  */
 export const ciVariableOverrides: Partial<Record<CiVariable, string>> = {};
 
@@ -221,44 +221,84 @@ export function ciJobPrice(minutes: number): CiPrice {
   return { fixed: CI_JOB_FIXED, perMinute: CI_JOB_PER_MINUTE, minutes };
 }
 
-/** A viewer socket's storage reads: twice the log stored at issuance, plus this. Proposed. */
+/** Bytes a viewer socket may read from storage besides its log's rereads (rows stored later). Proposed. */
 export const CI_VIEWER_READ_MARGIN = 4 * 1024 * 1024;
-/** Bytes a storage read attempt is budgeted for, and attempts any socket gets besides. Proposed. */
+/** Attempts any viewer socket gets besides its log's reads: one a MiB of the margin, and these. Proposed. */
 const VIEWER_GET_BYTES = 1024 * 1024;
 const VIEWER_GET_MARGIN = 16;
+/** Credential checks any viewer socket gets besides its first, its minutes and its reads'. Proposed. */
+const VIEWER_CHECK_MARGIN = 16;
 
 /**
- * A log viewer's budgets and price, from the log's bytes stored when its
- * ticket is issued and the span from issuance to the end of the socket's
- * life: its storage reads (bytes and attempts, enforced by the socket),
- * the ticket and the upgrade, its storage read attempts (each an R2 Class
- * B operation), and at most one recheck a minute of its
- * life. Nothing is refunded. Proposed.
+ * A job's log as stored when a viewer's ticket is issued, as its socket
+ * would read it back: each chunk read again from its start as many times
+ * as its frames take sends to the socket (src/do/run/viewers.ts sizes them).
  */
-export function ciViewerPrice({ storedBytes, spanMs }: { storedBytes: number; spanMs: number }): {
+export interface StoredLogReads {
+  readonly chunks: number;
+  /** Each chunk's bytes times the reads it takes, summed. */
+  readonly rereadBytes: number;
+  /** The reads each chunk takes, summed. */
+  readonly reads: number;
+}
+
+/** What a viewer's socket may spend, as the run holds it to, and what its ticket is priced for. */
+export interface CiViewerBudget {
+  /** Bytes it may read from storage. */
   readonly readBytes: number;
+  /** Storage read attempts it may make. */
   readonly getAttempts: number;
-  readonly price: CiPrice;
-} {
-  if (!isCount(storedBytes) || !isCount(spanMs)) throw new RangeError("viewer");
-  const readBytes = 2 * storedBytes + CI_VIEWER_READ_MARGIN;
-  const life = Math.ceil(spanMs / MINUTE);
-  const getAttempts = Math.ceil(readBytes / VIEWER_GET_BYTES) + VIEWER_GET_MARGIN;
+  /** Checks of its credential and access it may take. */
+  readonly checks: number;
+}
+
+/**
+ * A viewer socket's budget, from the log stored when its ticket is issued
+ * and how long rows may flow to it (`activeMs`): the stored log's rereads
+ * plus the margin; attempts for each of those reads, one more a chunk for
+ * a read cancelled or cut short, one a MiB of the margin, and a margin;
+ * checks for its first, one a minute while rows may flow, two for each
+ * attempt (a socket reading back is checked at most once a minute, and
+ * waits at most two minutes for its window between reads), and a margin.
+ * Proposed.
+ */
+export function ciViewerBudget({
+  stored,
+  activeMs,
+}: {
+  stored: StoredLogReads;
+  activeMs: number;
+}): CiViewerBudget {
+  const { chunks, rereadBytes, reads } = stored;
+  if (!isCount(chunks) || !isCount(rereadBytes) || !isCount(reads) || !isCount(activeMs))
+    throw new RangeError("viewer budget");
+  const getAttempts =
+    reads + chunks + Math.ceil(CI_VIEWER_READ_MARGIN / VIEWER_GET_BYTES) + VIEWER_GET_MARGIN;
   return {
-    readBytes,
+    readBytes: rereadBytes + CI_VIEWER_READ_MARGIN,
     getAttempts,
-    price: {
-      fixed: {
-        ...zero(),
-        worker_requests: 2,
-        do_requests: 2 + life,
-        do_rows_read: 10 * life,
-        d1_rows_read: 5 * life,
-        r2_class_b: getAttempts,
-      },
-      perMinute: zero(),
-      minutes: 0,
+    checks: 1 + Math.ceil(activeMs / MINUTE) + 2 * getAttempts + VIEWER_CHECK_MARGIN,
+  };
+}
+
+/**
+ * A log viewer's price, from the budget its socket is held to: the ticket
+ * and the upgrade, each check it may take, and each storage read attempt
+ * (an R2 Class B operation). Nothing is refunded. Proposed.
+ */
+export function ciViewerPrice({ getAttempts, checks }: CiViewerBudget): CiPrice {
+  if (!isCount(getAttempts) || !isCount(checks)) throw new RangeError("viewer price");
+  return {
+    fixed: {
+      ...zero(),
+      worker_requests: 2,
+      do_requests: 2 + checks,
+      do_rows_read: 10 * checks,
+      d1_rows_read: 5 * checks,
+      r2_class_b: getAttempts,
     },
+    perMinute: zero(),
+    minutes: 0,
   };
 }
 

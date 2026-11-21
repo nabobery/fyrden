@@ -389,6 +389,9 @@ export const runSchema: readonly DoMigration[] = [
     // are written together, before the first call to a store, and cleared when `seq` moves on.
     // `price` is the ledger's (Free); null when only the account's minutes are reserved.
     // `asked_for` is the account `refusals` were counted against; a new owner starts them again.
+    // A live log ticket's budget (src/do/run/viewers.ts), carried onto its socket: the bytes and
+    // storage read attempts it may spend reading stored chunks and the credential checks it may
+    // make; null on all three when unbudgeted.
     name: "ci_reservations",
     sql: `
       CREATE TABLE ci_reservations (
@@ -423,6 +426,11 @@ export const runSchema: readonly DoMigration[] = [
       -- starts its reserve slice.
       INSERT INTO ci_reservations (job_id, seq, state)
         SELECT job_id, 1, 'wanted' FROM run_instances WHERE status = 'queued';
+      ALTER TABLE ci_log_tickets ADD COLUMN read_bytes INTEGER CHECK (read_bytes >= 0);
+      ALTER TABLE ci_log_tickets ADD COLUMN read_gets INTEGER
+        CHECK (read_gets >= 0 AND (read_gets IS NULL) = (read_bytes IS NULL));
+      ALTER TABLE ci_log_tickets ADD COLUMN read_checks INTEGER
+        CHECK (read_checks >= 0 AND (read_checks IS NULL) = (read_bytes IS NULL));
     `,
   },
 ];

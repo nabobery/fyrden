@@ -30,7 +30,9 @@ CREATE TABLE ci_log_tickets (
         credential_id TEXT NOT NULL,
         principal_id TEXT NOT NULL,
         expires_at INTEGER NOT NULL
-      ) STRICT;
+      , read_bytes INTEGER CHECK (read_bytes >= 0), read_gets INTEGER
+        CHECK (read_gets >= 0 AND (read_gets IS NULL) = (read_bytes IS NULL)), read_checks INTEGER
+        CHECK (read_checks >= 0 AND (read_checks IS NULL) = (read_bytes IS NULL))) STRICT;
 CREATE TABLE ci_logs (
         task INTEGER PRIMARY KEY,
         ack_index INTEGER NOT NULL DEFAULT 0,

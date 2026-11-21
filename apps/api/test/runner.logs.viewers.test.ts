@@ -20,8 +20,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import type { OrgDO } from "../src/do/OrgDO.js";
 import { LOG_LATE_MS } from "../src/do/run/logs.js";
-import { LOG_VIEWER_POLICY, type ViewerAttachment, viewerHooks } from "../src/do/run/viewers.js";
+import {
+  LOG_VIEWER_POLICY,
+  VIEWER_READ_PROGRESS,
+  type ViewerAttachment,
+  viewerHooks,
+} from "../src/do/run/viewers.js";
 import { ticketHash } from "../src/do/user/live.js";
+import { randomSecret } from "../src/oauth/params.js";
 import { SESSION_COOKIE } from "../src/oauth/session.js";
 import { type LogRow, Result } from "../src/runner/proto/messages.js";
 import { agentFor } from "./helpers/agents.js";
@@ -73,7 +79,14 @@ const sent = new Map<string, number>();
 const sentBytes = new Map<string, number>();
 const messages = new Map<string, number>();
 const rechecks = new Map<string, number>();
+/** Storage reads each socket was charged: attempts and bytes. */
+const charged = new Map<string, { gets: number; bytes: number }>();
+const chargedTo = (socket: string) => charged.get(socket) ?? { gets: 0, bytes: 0 };
 function installCounters() {
+  viewerHooks.readCharged = (socket, charge) => {
+    const was = chargedTo(socket);
+    charged.set(socket, { gets: was.gets + charge.gets, bytes: was.bytes + charge.bytes });
+  };
   viewerHooks.afterSend = (socket, frame) => {
     sent.set(socket, (sent.get(socket) ?? 0) + 1);
     sentBytes.set(socket, (sentBytes.get(socket) ?? 0) + new TextEncoder().encode(frame).length);
@@ -1542,12 +1555,26 @@ describe("flow control", () => {
       out: before.out,
       controls: before.controls + 1,
     });
+    // A boundary ack releases its frame; the socket stays blocked, its 2 minutes running, while
+    // more than 256 KiB stays out.
     await say(t.runId, socket, { t: "ack", i: before.out[0], o: before.out[1] });
     expect((await attachments(t.runId)).find((s) => s.id === socket.id)).toMatchObject({
       acked: before.out[0],
       ackedPart: before.out[1],
-      blockedSince: null,
+      blockedSince: before.blockedSince,
       out: before.out.slice(3),
+    });
+    // Reopened once one frame (under 256 KiB) is left out.
+    const k = before.out.length - 6;
+    expect(before.out[k + 5]).toBeLessThanOrEqual(LOG_VIEWER_POLICY.ackBytes);
+    await say(t.runId, socket, {
+      t: "ack",
+      i: before.out[k] as number,
+      o: before.out[k + 1] as number,
+    });
+    expect((await attachments(t.runId)).find((s) => s.id === socket.id)).toMatchObject({
+      blockedSince: null,
+      out: before.out.slice(k + 3),
     });
   });
 
@@ -1590,6 +1617,88 @@ describe("flow control", () => {
     await at(t.runId, now(t.runId) + 1);
     await slice(t.runId);
     expect(await socket.closed).toEqual({ code: 4408 });
+  });
+
+  it("sends a blocked socket nothing from memory, and keeps its 2 minutes running, until an ack leaves at most 256 KiB and 16 frames out", async () => {
+    const t = await withTask();
+    const socket = await watch(t, t.f.owner.token);
+    let gets = 0;
+    viewerHooks.afterChunkGet = () => {
+      gets++;
+    };
+    // Rows arriving while it watches, held in memory: 20 KiB rows in frames of up to 256 KiB.
+    const model = runnerModel(t);
+    for (let k = 0; k < 2; k++)
+      await model.send(
+        Array.from({ length: 50 }, (_, j) => row(`${k * 50 + j} ${"x".repeat(20 * KIB)}`)),
+      );
+    await slice(t.runId);
+    await settle(socket);
+    const full = socket.frames.length;
+    const before = (await attachments(t.runId)).find((s) => s.id === socket.id);
+    expect(before?.blockedSince).not.toBeNull();
+    // A boundary ack that leaves more than 256 KiB out, then a run of the job something else wakes
+    // (another viewer opening): nothing sent.
+    await at(t.runId, now(t.runId) + 1_000);
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, 1) });
+    await inRun(t.runId, (r) => r.viewers.slice());
+    await settle(socket);
+    expect(socket.frames).toHaveLength(full);
+    expect((await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince).toBe(
+      before?.blockedSince,
+    );
+    // Within 256 KiB and 16 frames: sent on from memory.
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full - 1) });
+    await slice(t.runId);
+    await settle(socket);
+    expect(socket.frames.length).toBeGreaterThan(full);
+    expect(gets).toBe(0);
+  });
+
+  it("reads nothing more from storage, and keeps its 2 minutes running, until an ack leaves at most 256 KiB and 16 frames out", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    // One 3 MiB chunk of 300 KiB rows, each sent in 32 KiB parts: reread from its start by each read.
+    expect(
+      await model.send(
+        Array.from({ length: 10 }, (_, j) => row(`${j} ${"x".repeat(300 * KIB)}`)),
+        true,
+      ),
+    ).toBe(10);
+    await forget(t.runId);
+    let gets = 0;
+    viewerHooks.afterChunkGet = () => {
+      gets++;
+    };
+    const socket = await watch(t, t.f.owner.token);
+    await settle(socket);
+    expect(gets).toBe(1);
+    const full = socket.frames.length;
+    const blocked = (await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince;
+    expect(blocked).not.toBeNull();
+    // Acks that release frames but leave more out: no read, the socket's 2 minutes still running.
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.slowMs / 2);
+    expect(full).toBeGreaterThan(20);
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, 1) });
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full - 9) });
+    await slice(t.runId);
+    expect(gets).toBe(1);
+    expect(socket.frames).toHaveLength(full);
+    expect((await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince).toBe(
+      blocked,
+    );
+    // Within 256 KiB and 16 frames: read again, a window's worth.
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full - 7) });
+    await slice(t.runId);
+    await settle(socket);
+    expect(gets).toBe(2);
+    expect(socket.frames.length).toBeGreaterThan(full + 20);
+    // Blocked again: acks that leave too much out for 2 minutes close it.
+    await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full + 1) });
+    await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.slowMs);
+    await slice(t.runId);
+    expect(await socket.closed).toEqual({ code: 4408 });
+    expect(gets).toBe(2);
   });
 
   it("sends rows of 2 MiB and 4 MiB in parts that reassemble to the stored rows, from storage and live", async () => {
@@ -1656,11 +1765,16 @@ describe("escaped chunk backfill", () => {
     expect(await model.send([row("\u0001".repeat(MIB))])).toBe(1);
     await forget(t.runId);
     const socket = await watch(t, t.f.owner.token, { checked: false });
+    const [chunk] = await inRun(t.runId, (r) =>
+      r.engine.rows<{ bytes: number }>("SELECT bytes FROM ci_log_chunks WHERE task = ?", t.number),
+    );
     const held = hold(t.runId);
     viewerHooks.afterChunkGet = () => held.hold();
     const reading = slice(t.runId);
     try {
       expect(await held.reached(reading)).toBe(true);
+      // The attempt is charged before the read; nothing of the body yet.
+      expect(chargedTo(socket.id)).toEqual({ gets: 1, bytes: 0 });
       const memory = await inRun(t.runId, (r) => r.memory.stats());
       expect(memory.reservedBytes).toBe(0);
       expect(await model.send([row("tail".repeat(512 * KIB))], true)).toBe(2);
@@ -1670,6 +1784,10 @@ describe("escaped chunk backfill", () => {
       delete viewerHooks.afterChunkGet;
       socket.ws.close();
     }
+    const read = chargedTo(socket.id);
+    expect(read.gets).toBe(1);
+    expect(read.bytes).toBeGreaterThan(0);
+    expect(read.bytes).toBeLessThanOrEqual(chunk?.bytes ?? 0);
   });
 
   it.each([2 * MIB, 4 * MIB - 256])(
@@ -1685,6 +1803,8 @@ describe("escaped chunk backfill", () => {
       const stalled = hold(t.runId);
       const cancellation = hold(t.runId);
       let cancelled = false;
+      /** Bytes the first read's body delivered. */
+      let delivered = 0;
       await inRun(t.runId, (r) => {
         const host = r as unknown as { env: Env };
         const bucket = host.env.CI;
@@ -1719,6 +1839,7 @@ describe("escaped chunk backfill", () => {
                         request.view.byteLength,
                       ).set(value);
                       bytes += value.byteLength;
+                      delivered += value.byteLength;
                       request.respond(value.byteLength);
                     },
                     async cancel() {
@@ -1747,6 +1868,16 @@ describe("escaped chunk backfill", () => {
         });
       });
       const socket = await watch(t, t.f.owner.token, { checked: false });
+      let gets = 0;
+      viewerHooks.afterChunkGet = () => {
+        gets++;
+      };
+      const charges: { gets: number; bytes: number }[] = [];
+      const counting = viewerHooks.readCharged;
+      viewerHooks.readCharged = (id, charge) => {
+        counting?.(id, charge);
+        if (id === socket.id) charges.push(charge);
+      };
       const reading = slice(t.runId);
       let upload: Promise<number> | undefined;
       let overlap: Promise<number> | undefined;
@@ -1757,6 +1888,7 @@ describe("escaped chunk backfill", () => {
         upload = model.send([tail], true);
         expect(await cancellation.reached(upload)).toBe(true);
         expect(cancelled).toBe(true);
+        expect(chargedTo(socket.id).gets).toBe(1);
         expect((await inRun(t.runId, (r) => r.memory.stats())).reservedBytes).toBeGreaterThan(
           15 * MIB,
         );
@@ -1776,6 +1908,11 @@ describe("escaped chunk backfill", () => {
         cancellation.release();
         expect(await upload).toBe(52);
         await reading;
+        // The cancelled read: its attempt, and every byte its body delivered before it stalled.
+        expect(charges.slice(0, 2)).toEqual([
+          { gets: 1, bytes: 0 },
+          { gets: 0, bytes: delivered },
+        ]);
         await forget(t.runId);
         expect((await inRun(t.runId, (r) => r.memory.stats())).reservedBytes).toBe(0);
         await at(t.runId, now(t.runId) + 1_000);
@@ -1784,6 +1921,7 @@ describe("escaped chunk backfill", () => {
           socket,
           [...prefix, control, tail].map((line, i) => ({ i, t: null, c: line.content })),
         );
+        expect(chargedTo(socket.id).gets).toBe(gets);
       } finally {
         stalled.release();
         cancellation.release();
@@ -1887,7 +2025,17 @@ describe("escaped chunk backfill", () => {
         noMore: true,
       }),
     ).toBe(1);
+    const [siblingChunk] = await inRun(t.runId, (r) =>
+      r.engine.rows<{ bytes: number }>(
+        "SELECT c.bytes FROM ci_log_chunks c WHERE c.task = (SELECT task FROM ci_tasks WHERE wire_id = ?)",
+        sibling.id,
+      ),
+    );
     await forget(t.runId);
+    let gets = 0;
+    viewerHooks.afterChunkGet = () => {
+      gets++;
+    };
     const difficult = await watch(t, t.f.owner.token, { checked: false });
     const other = await watch({ ...t, jobId }, t.f.owner.token, { checked: false });
     await inRun(t.runId, (r) => r.viewers.slice());
@@ -1897,7 +2045,299 @@ describe("escaped chunk backfill", () => {
     expect(received(other)).toEqual([{ i: 0, t: 2_345, c: "sibling progresses" }]);
     expect(endOf(other)).toEqual({ t: "end", log: "complete", durable: 1 });
     expect(await other.closed).toEqual({ code: 1000 });
+    expect(chargedTo(other.id)).toEqual({ gets: 1, bytes: siblingChunk?.bytes });
     await expectFinished(t, difficult, expected);
+    // Every attempt charged; a chunk left mid-way is read again from its start, never more.
+    const read = chargedTo(difficult.id);
+    const chunkBytes = chunks[0]?.bytes ?? 0;
+    expect(read.gets + 1).toBe(gets);
+    expect(read.bytes).toBeGreaterThanOrEqual(chunkBytes);
+    expect(read.bytes).toBeLessThanOrEqual(read.gets * chunkBytes);
+  });
+});
+
+// ------------------------------------------------------------------ read budgets
+
+/**
+ * A ticket held to a budget, as a Free deployment's are (the ledger's grant
+ * aside): stored as the operation stores it, its budget sized by the run
+ * from the job's log stored now, rows flowing at most a socket's life.
+ */
+async function budgetedTicket(t: Task) {
+  const ticket = randomSecret(32);
+  const credentialId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
+    .bind(await hashToken(t.f.owner.token))
+    .first<string>("id");
+  if (!credentialId) throw new Error("no credential");
+  const answer = await runStub(t.runId).storeLogTicket({
+    hash: await ticketHash(ticket),
+    repoId: t.f.repo.id,
+    jobId: t.jobId,
+    credentialId,
+    principalId: t.f.owner.principalId,
+    budget: { maxActiveMs: LOG_VIEWER_POLICY.lifeMs },
+  });
+  if (!answer.ok || !answer.budget) throw new Error(answer.ok ? "unbudgeted" : answer.code);
+  return { ticket, stored: answer.stored, budget: answer.budget };
+}
+
+/** A socket on `ticket` from `from`, checked by the object. */
+async function openBudgeted(t: Task, ticket: string, from = 0): Promise<Client> {
+  const response = await upgrade(t, ticket, { token: t.f.owner.token, from });
+  expect(response.status).toBe(101);
+  const c = await client(response, ticket);
+  await slice(t.runId);
+  return c;
+}
+
+/** Runs the job and acknowledges everything received until `c` closes; bounded. Slices run. */
+async function readToClose(t: Task, c: Client): Promise<number> {
+  let slices = 0;
+  for (; slices < 200 && c.code === null; slices++) {
+    await settle(c);
+    if (c.code === null) await ackAll(t.runId, c);
+    await slice(t.runId);
+  }
+  await c.closed;
+  return slices;
+}
+
+const utf8 = new TextEncoder();
+
+/**
+ * Runs the job and acknowledges as a client keeping to the protocol at its
+ * least: after each 256 KiB of frames' UTF-8 or 16 frames handled, never the
+ * rest; bounded. Slices run.
+ */
+async function readAtCadence(t: Task, c: Client): Promise<number> {
+  let handled = 0;
+  let frames = 0;
+  let bytes = 0;
+  let slices = 0;
+  for (; slices < 400 && c.code === null; slices++) {
+    await settle(c);
+    for (; handled < c.texts.length && c.code === null; handled++) {
+      frames++;
+      bytes += utf8.encode(c.texts[handled]).length;
+      if (frames >= 16 || bytes >= 256 * KIB) {
+        await say(t.runId, c, { t: "ack", ...positionAfter(c, handled + 1) });
+        frames = 0;
+        bytes = 0;
+      }
+    }
+    if (c.code === null) await slice(t.runId);
+  }
+  await c.closed;
+  return slices;
+}
+
+const storedChunks = (t: Task) =>
+  inRun(t.runId, (r) =>
+    r.engine.rows<{ bytes: number }>(
+      "SELECT bytes FROM ci_log_chunks WHERE task = ? ORDER BY start_index",
+      t.number,
+    ),
+  );
+
+describe("read budgets", () => {
+  it("keep a backfill over several slices within its bytes and attempts, from the log stored at issuance", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    for (let k = 0; k < 12; k++)
+      await model.send(
+        Array.from({ length: 20 }, (_, j) => row(`${20 * k + j} ${"q".repeat(10 * KIB)}`)),
+      );
+    await model.send([], true);
+    await forget(t.runId);
+    const chunks = await storedChunks(t);
+    const { ticket, stored, budget } = await budgetedTicket(t);
+    // Each chunk read back once for each read's least progress it holds.
+    const reads = (bytes: number) => Math.ceil(bytes / VIEWER_READ_PROGRESS);
+    expect(stored).toMatchObject({
+      bytes: chunks.reduce((sum, chunk) => sum + chunk.bytes, 0),
+      chunks: chunks.length,
+      rereadBytes: chunks.reduce((sum, chunk) => sum + chunk.bytes * reads(chunk.bytes), 0),
+      reads: chunks.reduce((sum, chunk) => sum + reads(chunk.bytes), 0),
+    });
+    const socket = await openBudgeted(t, ticket);
+    // The opening slice, then at least two more: a window of 1 MiB at a time.
+    expect(await readToClose(t, socket)).toBeGreaterThanOrEqual(2);
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 240 });
+    expect(socket.code).toBe(1000);
+    await expectStored(t, socket);
+    const read = chargedTo(socket.id);
+    expect(read.bytes).toBeGreaterThanOrEqual(stored.bytes);
+    expect(read.bytes).toBeLessThanOrEqual(budget.readBytes);
+    expect(read.gets).toBeGreaterThanOrEqual(stored.chunks);
+    expect(read.gets).toBeLessThanOrEqual(budget.getAttempts);
+  });
+
+  it("end a socket whose next read would pass its bytes with `budget`; a new ticket resumes at its next row", async () => {
+    const t = await withTask();
+    const { ticket, budget } = await budgetedTicket(t);
+    expect(budget.readBytes).toBe(4 * MIB);
+    // Stored after the ticket was issued: read from storage, they count.
+    const model = runnerModel(t);
+    for (let k = 0; k < 6; k++)
+      await model.send(
+        Array.from({ length: 10 }, (_, j) => row(`${10 * k + j} ${"b".repeat(100 * KIB)}`)),
+        k === 5,
+      );
+    await forget(t.runId);
+    const largest = Math.max(...(await storedChunks(t)).map((chunk) => chunk.bytes));
+    const socket = await openBudgeted(t, ticket);
+    await readToClose(t, socket);
+    expect(endOf(socket)).toEqual({ t: "end", reason: "budget" });
+    expect(socket.code).toBe(4429);
+    const read = chargedTo(socket.id);
+    expect(read.bytes).toBeLessThanOrEqual(budget.readBytes);
+    expect(read.bytes + largest).toBeGreaterThan(budget.readBytes);
+    const next = received(socket).length;
+    expect(next).toBeGreaterThan(0);
+    expect(next).toBeLessThan(60);
+    await expectStored(t, socket);
+    const again = await budgetedTicket(t);
+    expect(again.budget.readBytes).toBeGreaterThan(budget.readBytes);
+    const resumed = await openBudgeted(t, again.ticket, next);
+    await readToClose(t, resumed);
+    expect(endOf(resumed)).toEqual({ t: "end", log: "complete", durable: 60 });
+    expect(resumed.code).toBe(1000);
+    await expectStored(t, resumed, next);
+    expect(chargedTo(resumed.id).bytes).toBeLessThanOrEqual(again.budget.readBytes);
+  });
+
+  it("end a socket out of read attempts with `budget`, each attempt charged before its read", async () => {
+    const t = await withTask();
+    const { ticket, budget } = await budgetedTicket(t);
+    const model = runnerModel(t);
+    // 50 rows a request: each is stored as a chunk of its own.
+    const n = budget.getAttempts + 5;
+    for (let k = 0; k < n; k++) await model.send(filler(50 * k, 50), k === n - 1);
+    expect((await storedChunks(t)).length).toBe(n);
+    await forget(t.runId);
+    let gets = 0;
+    viewerHooks.afterChunkGet = () => {
+      gets++;
+    };
+    const socket = await openBudgeted(t, ticket);
+    await readToClose(t, socket);
+    expect(endOf(socket)).toEqual({ t: "end", reason: "budget" });
+    expect(socket.code).toBe(4429);
+    expect(chargedTo(socket.id).gets).toBe(budget.getAttempts);
+    expect(gets).toBe(budget.getAttempts);
+    expect(received(socket).length).toBe(50 * budget.getAttempts);
+    await expectStored(t, socket);
+  });
+
+  for (const [label, rows] of [
+    ["a stored 4 MiB row", ["x".repeat(4 * MIB - 64 * KIB), "after"]],
+    [
+      "the second of two 3 MiB rows in one 6 MiB chunk",
+      ["\u0001".repeat(512 * KIB), "\u0002".repeat(512 * KIB), "after"],
+    ],
+    // Ingestion's longest row, every code unit escaped to six bytes: a 24 MiB chunk.
+    ["a near-limit row of escaped characters", ["\u0001".repeat(4 * MIB - 64 * KIB), "after"]],
+  ] as const)
+    it(`let one ticket's socket finish ${label}, acknowledged at the protocol's least`, async () => {
+      const t = await withTask();
+      expect(
+        await runnerModel(t).send(
+          rows.map((c) => row(c)),
+          true,
+        ),
+      ).toBe(rows.length);
+      await forget(t.runId);
+      const { ticket, stored, budget } = await budgetedTicket(t);
+      expect(stored.chunks).toBe(1);
+      const socket = await openBudgeted(t, ticket);
+      await readAtCadence(t, socket);
+      expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: rows.length });
+      expect(socket.code).toBe(1000);
+      await expectStored(t, socket);
+      const read = chargedTo(socket.id);
+      // Read again from the chunk's start for each window, within the reads the chunk was sized for.
+      expect(read.gets).toBeGreaterThanOrEqual(
+        Math.ceil(stored.bytes / LOG_VIEWER_POLICY.windowBytes),
+      );
+      expect(read.gets).toBeLessThanOrEqual(stored.reads);
+      expect(read.gets).toBeLessThanOrEqual(budget.getAttempts);
+      expect(read.bytes).toBeGreaterThan(stored.bytes);
+      expect(read.bytes).toBeLessThanOrEqual(budget.readBytes);
+    });
+
+  it("charge a socket a check each time it is checked, ending it with `budget` once none are left", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    for (let k = 0; k < 12; k++)
+      await model.send(
+        Array.from({ length: 20 }, (_, j) => row(`${20 * k + j} ${"q".repeat(10 * KIB)}`)),
+      );
+    await model.send([], true);
+    await forget(t.runId);
+    const { ticket, budget } = await budgetedTicket(t);
+    expect(budget.checks).toBeGreaterThan(2);
+    await inRun(t.runId, (r) => r.engine.exec("UPDATE ci_log_tickets SET read_checks = 2"));
+    let checks = 0;
+    viewerHooks.afterRecheck = () => {
+      checks++;
+    };
+    // Its first check, then one more after 60 s, each paid for; the third is not.
+    const socket = await openBudgeted(t, ticket);
+    expect(checks).toBe(1);
+    for (let k = 0; k < 2 && socket.code === null; k++) {
+      await ackAll(t.runId, socket);
+      await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.freshMs);
+      await slice(t.runId);
+    }
+    expect(await socket.closed).toEqual({ code: 4429 });
+    expect(endOf(socket)).toEqual({ t: "end", reason: "budget" });
+    expect(checks).toBe(2);
+    expect(received(socket).length).toBeLessThan(240);
+  });
+
+  it("check a socket reading back a finished log, its client pacing it, no more than its ticket paid for", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    for (let k = 0; k < 12; k++)
+      await model.send(
+        Array.from({ length: 20 }, (_, j) => row(`${20 * k + j} ${"q".repeat(10 * KIB)}`)),
+      );
+    await model.send([], true);
+    await forget(t.runId);
+    const { ticket, stored, budget } = await budgetedTicket(t);
+    // Sealed: no minute of rows flowing is paid for.
+    expect(stored.activeMs).toBe(0);
+    let checks = 0;
+    viewerHooks.afterRecheck = () => {
+      checks++;
+    };
+    const socket = await openBudgeted(t, ticket);
+    // Each ack held until just before the window has waited 2 minutes: a check before each read.
+    for (let k = 0; k < 100 && socket.code === null; k++) {
+      await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.slowMs - 1);
+      await slice(t.runId);
+      if (socket.code === null) await ackAll(t.runId, socket);
+      await slice(t.runId);
+    }
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 240 });
+    expect(socket.code).toBe(1000);
+    expect(checks).toBeGreaterThan(2);
+    expect(checks).toBeLessThanOrEqual(budget.checks);
+  });
+
+  it("leave a socket on an unbudgeted ticket unbounded, counting what it reads", async () => {
+    const t = await withTask();
+    const model = runnerModel(t);
+    for (let k = 0; k < 30; k++) await model.send(filler(50 * k, 50), k === 29);
+    await forget(t.runId);
+    const socket = await watch(t, t.f.owner.token, { checked: false });
+    await readToClose(t, socket);
+    expect(endOf(socket)).toEqual({ t: "end", log: "complete", durable: 1500 });
+    const chunks = await storedChunks(t);
+    expect(chargedTo(socket.id)).toEqual({
+      gets: chunks.length,
+      bytes: chunks.reduce((sum, chunk) => sum + chunk.bytes, 0),
+    });
   });
 });
 

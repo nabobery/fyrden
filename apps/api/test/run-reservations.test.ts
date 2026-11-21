@@ -277,6 +277,9 @@ describe("a job queued before its run reserved", () => {
     await inRun(runId, (r) => {
       expect(r.engine.instance(jobId)?.timeout_ms).toBe(360 * MIN);
       r.engine.exec("DROP TABLE ci_reservations");
+      r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_checks");
+      r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_gets");
+      r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_bytes");
       r.engine.exec("DELETE FROM jobs WHERE kind = 'ci_reserve'");
       r.engine.exec("UPDATE _fyrden_schema_version SET version = 7");
       applyDoMigrations(r.context.storage as DurableObjectStorage, runSchema);
