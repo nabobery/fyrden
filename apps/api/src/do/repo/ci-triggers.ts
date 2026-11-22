@@ -152,6 +152,18 @@ const MEMORY_RETRY_MS = 1_000;
  */
 const MAX_EVENT_FAULTS = 20;
 /**
+ * Counted retries of one event (temporary failures included: an
+ * unreachable store, a run object that cannot be started) after which it is
+ * given up as `retries_exhausted`: about a day at the backoff. Proposed.
+ */
+export const MAX_EVENT_ATTEMPTS = 100;
+/**
+ * The retry interval, past {@link MAX_EVENT_ATTEMPTS}, of an event that
+ * allocated a run whose start is unconfirmed: never given up, since the run
+ * may exist, but tried less often. Proposed.
+ */
+export const EXHAUSTED_RETRY_MS = 6 * 60 * 60_000;
+/**
  * Attempts of one event (its counted retries, `attempts`) after which an
  * explicit refusal of its variables by its own owner, with no transfer
  * under way, closes it as `variables_refused`. Proposed.
@@ -320,7 +332,9 @@ type EventRunRow = {
 
 /**
  * A read of the repository's objects failed for a reason that may pass (the
- * object store, the cache, the network): the event is retried, never given up.
+ * object store, the cache, the network): the event is retried, and given up
+ * as `retries_exhausted` at {@link MAX_EVENT_ATTEMPTS} unless a run it
+ * allocated is unconfirmed.
  */
 class TransientFailure extends Error {
   override name = "TransientFailure";
@@ -782,7 +796,8 @@ export class CiTriggers {
 
   /**
    * An event's evaluation threw something it does not handle. A failed read
-   * of storage is retried with backoff for as long as it takes. Anything
+   * of storage is retried with backoff, up to {@link MAX_EVENT_ATTEMPTS}
+   * counted retries (see `#evaluateRow`). Anything
    * else is a fault: retried too, and given up as `evaluation_failed` after
    * {@link MAX_EVENT_FAULTS} of them, so a fault that repeats cannot hold
    * the event forever, but never while a run it allocated may exist without
@@ -798,14 +813,7 @@ export class CiTriggers {
       return retry;
     }
     this.#sql().exec("UPDATE ci_events SET faults = faults + 1 WHERE id = ?", row.id);
-    const unconfirmed =
-      this.#sql()
-        .exec(
-          "SELECT 1 FROM ci_event_runs WHERE event_id = ? AND started_at IS NULL AND outcome IS NULL",
-          row.id,
-        )
-        .toArray().length > 0;
-    if (row.faults + 1 < MAX_EVENT_FAULTS || unconfirmed) {
+    if (row.faults + 1 < MAX_EVENT_FAULTS || this.#unconfirmed(row.id)) {
       this.deps.log().warn("evaluating a CI trigger event failed", { error, event: row.id });
       return retry;
     }
@@ -821,6 +829,18 @@ export class CiTriggers {
     );
     this.deps.git.context.metrics.count("ci.trigger_outcome", { outcome: "evaluation_failed" });
     return undefined;
+  }
+
+  /** Whether the event allocated a run whose start is not confirmed (the run may exist). */
+  #unconfirmed(eventId: number): boolean {
+    return (
+      this.#sql()
+        .exec(
+          "SELECT 1 FROM ci_event_runs WHERE event_id = ? AND started_at IS NULL AND outcome IS NULL LIMIT 1",
+          eventId,
+        )
+        .toArray().length > 0
+    );
   }
 
   /**
@@ -1214,8 +1234,11 @@ export class CiTriggers {
 
   /**
    * One event's evaluation and what follows from it: done, or its retry
-   * deadline set (`next_at`, `attempts`). A spent budget or the start cap
-   * is the caller's to act on.
+   * deadline set (`next_at`, `attempts`). A counted retry that would reach
+   * {@link MAX_EVENT_ATTEMPTS} gives the event up as `retries_exhausted`,
+   * except while a run it allocated is unconfirmed: that one is retried
+   * every {@link EXHAUSTED_RETRY_MS}. A spent budget or the start cap is the
+   * caller's to act on.
    */
   async #evaluateRow(
     row: EventRow,
@@ -1229,6 +1252,11 @@ export class CiTriggers {
       if (error instanceof SliceAborted) throw error.cause;
       stopped = this.#failed(row, error);
     }
+    if (stopped?.kind === "retry" && stopped.counted && row.attempts + 1 >= MAX_EVENT_ATTEMPTS) {
+      // Retried for about a day: given up, unless a run it allocated may exist unconfirmed.
+      if (!this.#unconfirmed(row.id)) return this.#exhausted(row);
+      stopped = { ...stopped, afterMs: Math.max(stopped.afterMs, EXHAUSTED_RETRY_MS) };
+    }
     if (stopped?.kind === "retry")
       this.#sql().exec(
         "UPDATE ci_events SET next_at = ?, attempts = attempts + ? WHERE id = ?",
@@ -1237,6 +1265,25 @@ export class CiTriggers {
         row.id,
       );
     return stopped;
+  }
+
+  /** Gives up an event whose counted retries reached {@link MAX_EVENT_ATTEMPTS}. */
+  #exhausted(row: EventRow): undefined {
+    this.deps.log().error("a CI trigger event kept failing and was given up", {
+      event: row.id,
+      kind: row.kind,
+      outcome: "retries_exhausted",
+      attempts: row.attempts + 1,
+    });
+    this.#sql().exec(
+      `UPDATE ci_events SET state = 'done', outcome = 'retries_exhausted', done_at = ?,
+         attempts = attempts + 1
+       WHERE id = ? AND state = 'pending'`,
+      this.#now(),
+      row.id,
+    );
+    this.deps.git.context.metrics.count("ci.trigger_outcome", { outcome: "retries_exhausted" });
+    return undefined;
   }
 
   /** A reader opened on first use, for one slice or one request; released by the caller. */

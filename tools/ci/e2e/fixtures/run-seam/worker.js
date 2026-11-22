@@ -179,6 +179,18 @@ export default {
       const { repoId, at } = await request.json();
       return json(await env.REPO.getByName(repoId).ciScheduleTick(at ?? Date.now()));
     }
+    // Trigger-inbox read failures through `RepoDO.ciTriggerFaults`, which no route of fyrden-api
+    // reaches: body `{ repoId, mode }`, mode `transient`, `fault` or null (cleared).
+    if (url.pathname === "/__runs/trigger-faults" && request.method === "POST") {
+      const { repoId, mode } = await request.json();
+      return json(await env.REPO.getByName(repoId).ciTriggerFaults(mode ?? null));
+    }
+    // The trigger inbox decided now through `RepoDO.ciTriggersNow`, which no route of fyrden-api
+    // reaches: body `{ repoId }`. Answers the inbox events and the schedule entries.
+    if (url.pathname === "/__runs/triggers-now" && request.method === "POST") {
+      const { repoId } = await request.json();
+      return json(await env.REPO.getByName(repoId).ciTriggersNow());
+    }
     // The run's reserve slice now, through `RunDO.ciReserveNow`, which no route of fyrden-api
     // reaches: body `{ runId }`. Asks a refused job again as its retry alarm would.
     if (url.pathname === "/__runs/reserve-now" && request.method === "POST") {
