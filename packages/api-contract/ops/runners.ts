@@ -65,7 +65,7 @@ export const SelfHostedRunner = z.object({
     .enum(["deleted", "poll_rate", "fleet_cap", "spent"])
     .nullable()
     .describe(
-      "Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while it serves.",
+      "Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while no revocation is recorded: an ephemeral runner past its report window may read null for a few minutes until maintenance records it `spent`, though its credentials already stopped working.",
     ),
 });
 
