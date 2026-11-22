@@ -505,9 +505,15 @@ export class RunReservations {
   /** Free: the CI ledger's grant for every day the job may run on. */
   async #grant(job: Job, row: Fixed): Promise<boolean> {
     const limits = this.host.ci().ledger;
-    // Paid now, though priced on Free: only the account is asked; ending still releases the ledger.
-    if (!limits || row.price === null)
+    if (row.price === null)
       return this.#record(job, row, () => this.#set(row.job_id, "state = 'minutes'"));
+    // Paid now, though priced on Free before its grant was answered: the key is released in the
+    // ledger (a grant whose answer was lost goes back too) and made again on Paid's terms, so
+    // no unpriced grant ever reads as one if the deployment returns to Free.
+    if (!limits) {
+      await this.#releaseLedger(row);
+      return this.#record(job, row, () => this.#nextSeq(row));
+    }
     const answer = await this.#call("grant", row.key, () => {
       this.#count("ci_grant", 3);
       return grantCi(

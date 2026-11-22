@@ -273,6 +273,50 @@ describe("publishing", () => {
     expect(answer.ok && answer.timeoutMinutes).toBe(180);
   });
 
+  it("reserves again under Paid a job priced on Free whose grant never ran, so a later Free never takes it as granted", async () => {
+    const t = await today();
+    const f = await repoWithCommit();
+    const spec = specFor(f, one);
+    await moveTo(t, spec.runId);
+    expect((await startRun(env, spec)).ok).toBe(true);
+    // Priced on Free, its grant not yet answered.
+    await inRun(spec.runId, (r) => {
+      r.hooks = {
+        beforeCiCall: () => {
+          throw new Error("the ledger is unreachable");
+        },
+      };
+    });
+    await drain(spec.runId);
+    expect(await reservationOf(spec.runId, "a")).toMatchObject({
+      seq: 1,
+      state: "wanted",
+      price: expect.any(String),
+    });
+    await inRun(spec.runId, (r) => {
+      r.hooks = {};
+    });
+    // The deployment moves to Paid before the grant runs: the priced key is given up.
+    ciVariableOverrides.FYRDEN_PLAN = "paid";
+    await moveTo(t + 10 * MIN, spec.runId);
+    await drain(spec.runId);
+    expect(await reservationOf(spec.runId, "a")).toMatchObject({
+      seq: 2,
+      state: "reserved",
+      price: null,
+    });
+    const { jobId } = await jobNamed(spec.runId, "a");
+    expect(await receiptsOf(spec.runId)).toEqual([
+      expect.objectContaining({ key: `${spec.runId}/j${jobId}/r1`, state: "released" }),
+    ]);
+    // Back on Free, the Paid reservation is not taken as granted.
+    ciVariableOverrides.FYRDEN_PLAN = "free";
+    expect(await assign(spec.runId, "a", "k", f.owner.principalId)).toEqual({
+      ok: false,
+      code: "not_queued",
+    });
+  });
+
   it("is published again, reserved as it was, when an assignment no runner was given is undone", async () => {
     const t = await today();
     const f = await repoWithCommit();
