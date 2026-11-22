@@ -29,6 +29,8 @@ export function fakeWrangler() {
     d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
+    /** `deployments status` fails, or answers two versions sharing the traffic. */
+    deploymentsStatus: "ok" as "ok" | "fail" | "split",
     /** The read model protocol a deploy recorded as served (fyrden-directory). */
     executorVersion: 0,
     orgInUse: false,
@@ -246,7 +248,19 @@ export function fakeWrangler() {
         return ok(JSON.stringify([{ results, success: true, meta: {} }]));
       }
       if (cmd === "deployments status --name") {
+        if (state.deploymentsStatus === "fail")
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
         const latest = state.apiVersions.at(-1);
+        const before = state.apiVersions.at(-2);
+        if (state.deploymentsStatus === "split" && latest && before)
+          return ok(
+            JSON.stringify({
+              versions: [
+                { version_id: latest.id, percentage: 50 },
+                { version_id: before.id, percentage: 50 },
+              ],
+            }),
+          );
         if (args[3] !== "fyrden-api" || !latest)
           return fail(`The Worker ${args[3]} has no deployments.`);
         return ok(JSON.stringify({ versions: [{ version_id: latest.id, percentage: 100 }] }));

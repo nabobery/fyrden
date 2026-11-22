@@ -11,6 +11,7 @@ import {
   SCHEMA_RUNBOOK,
 } from "../d1-schema.ts";
 import { parseJsonc } from "../jsonc.ts";
+import { liveVersions, versionVars } from "../live-version.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { commitLabel, type SourceState } from "../source.ts";
 import { WranglerError, type WranglerRunner, wrangler } from "../wrangler.ts";
@@ -28,7 +29,11 @@ export interface CiSettings {
   daily?: string;
   /** `FYRDEN_CI_MAX_JOB_MINUTES` (Free): the longest a job may run. */
   maxJobMinutes?: number;
-  /** `FYRDEN_CI_SINCE` while runners are on: left out, the deploy's time. */
+  /**
+   * `FYRDEN_CI_SINCE` while runners are on. Left out, the live version's is
+   * kept while runners stay on, and the deploy's time is set when this deploy
+   * switches them on.
+   */
   since?: string;
 }
 
@@ -76,7 +81,7 @@ export interface DeployDeps {
   live?: { sockets?: number } | undefined;
   /** CI runners and their capacity (left out: the plan's defaults; see `CiSettings`). */
   ci?: CiSettings | undefined;
-  /** The deploy's clock (tests): `FYRDEN_CI_SINCE` when not given. */
+  /** The deploy's clock (tests): `FYRDEN_CI_SINCE` when this deploy switches runners on. */
   now?: () => number;
   /**
    * The email provider, set as `FYRDEN_EMAIL_PROVIDER` and
@@ -271,6 +276,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
       ...(deps.live && { FYRDEN_LIVE: "on" }),
       ...(liveSockets !== undefined && { FYRDEN_LIVE_SOCKETS: String(liveSockets) }),
       ...ci.vars,
+      ...(ci.carrySince && (await carriedCiSince(runner, config.name, deps.now ?? Date.now))),
       ...(deps.email && {
         FYRDEN_EMAIL_PROVIDER: deps.email.provider,
         FYRDEN_EMAIL_FROM: deps.email.from,
@@ -561,7 +567,12 @@ async function checkEnforcementInstall(
  * allowance that Free's limits cannot hold beside live hints and
  * discretionary work.
  */
-function ciVariables(deps: DeployDeps): { vars: Record<string, string>; fleetCap: number | null } {
+function ciVariables(deps: DeployDeps): {
+  vars: Record<string, string>;
+  fleetCap: number | null;
+  /** Runners on without `--ci-since`: `FYRDEN_CI_SINCE` follows the live version (`carriedCiSince`). */
+  carrySince: boolean;
+} {
   const settings = deps.ci ?? {};
   const now = (deps.now ?? Date.now)();
   const on = (settings.runners ?? (deps.plan === "paid" ? "on" : "off")) === "on";
@@ -588,7 +599,7 @@ function ciVariables(deps: DeployDeps): { vars: Record<string, string>; fleetCap
   }
   const vars: Record<string, string> = {
     FYRDEN_CI_RUNNERS: on ? "on" : "off",
-    ...(on && { FYRDEN_CI_SINCE: settings.since ?? new Date(now).toISOString() }),
+    ...(on && settings.since !== undefined && { FYRDEN_CI_SINCE: settings.since }),
     ...(settings.fleet !== undefined && { FYRDEN_CI_FLEET: String(settings.fleet) }),
     ...(settings.daily !== undefined && { FYRDEN_CI_DAILY: settings.daily }),
     ...(settings.maxJobMinutes !== undefined && {
@@ -600,7 +611,55 @@ function ciVariables(deps: DeployDeps): { vars: Record<string, string>; fleetCap
       "WARN CI runners are on with Workers Free's proposed capacity numbers (fleet, allowance, longest job): docs/operations/limits.md, CI capacity",
     );
   const fleetCap = on && deps.plan === "free" ? (settings.fleet ?? CI_FREE_FLEET) : null;
-  return { vars, fleetCap };
+  return { vars, fleetCap, carrySince: on && settings.since === undefined };
+}
+
+// Wrangler's answer for a Worker that exists but was never deployed.
+const NO_DEPLOYMENTS = /no deployments/i;
+
+/**
+ * `FYRDEN_CI_SINCE` for a deploy leaving runners on without `--ci-since`:
+ * the live version's (none if it has none) while its runners are on, so a
+ * redeploy never closes the trigger events still pending from before it;
+ * else, this deploy switching runners on (a first deploy, or the live
+ * version off), the deploy's time. The live version's runners are on only
+ * with `FYRDEN_CI_RUNNERS=on`: every deploy writes the switch, so one without
+ * it was made before it was written, when unset meant off. Refuses, before
+ * anything is uploaded, when the live state cannot be read or two versions
+ * share the traffic.
+ */
+async function carriedCiSince(
+  runner: WranglerRunner,
+  worker: string,
+  now: () => number,
+): Promise<Record<string, string>> {
+  const switchedOn = () => ({ FYRDEN_CI_SINCE: new Date(now()).toISOString() });
+  if ((await workerSecrets(runner, worker)) === null) return switchedOn();
+  const cannot = (why: string) =>
+    new Error(
+      `could not establish when CI was switched on from ${worker}'s live version (${why}): ` +
+        "deploy with --ci-since TIME (when CI was switched on), or with --ci-runners off",
+    );
+  let versions: Awaited<ReturnType<typeof liveVersions>>;
+  try {
+    versions = await liveVersions(runner, worker);
+  } catch (error) {
+    if (error instanceof WranglerError && NO_DEPLOYMENTS.test(error.message)) return switchedOn();
+    throw cannot(error instanceof Error ? error.message : String(error));
+  }
+  const [live, ...others] = versions;
+  if (!live) return switchedOn();
+  if (others.length > 0 || live.percentage !== 100)
+    throw cannot(`${versions.length} versions share its traffic`);
+  let vars: Record<string, string>;
+  try {
+    vars = await versionVars(runner, worker, live.version_id);
+  } catch (error) {
+    throw cannot(error instanceof Error ? error.message : String(error));
+  }
+  if (vars.FYRDEN_CI_RUNNERS !== "on") return switchedOn();
+  const since = vars.FYRDEN_CI_SINCE;
+  return since === undefined ? {} : { FYRDEN_CI_SINCE: since };
 }
 
 /** Runners listed in a fleet refusal, at most. */

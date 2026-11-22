@@ -8,9 +8,10 @@ import {
   queryRemote,
   SCHEMA_RUNBOOK,
 } from "../d1-schema.ts";
+import { liveVersions, versionVars } from "../live-version.ts";
 import { readApiConfig, resourcePlan } from "../resources.ts";
 import { DIRTY_SUFFIX, UNKNOWN_COMMIT } from "../source.ts";
-import { WranglerError, type WranglerRunner, wrangler } from "../wrangler.ts";
+import { WranglerError, type WranglerRunner } from "../wrangler.ts";
 import { workerSecrets } from "./deploy.ts";
 import { provision } from "./provision.ts";
 
@@ -202,27 +203,16 @@ async function searchSummary(
   }
 }
 
-/**
- * The commit the Worker's current version was deployed from (its FYRDEN_COMMIT
- * var). The JSON shapes are wrangler's `deployments status --json` and
- * `versions view --json` output, read from its source; not yet run against a
- * live account [U].
- */
+/** The commit the Worker's current version was deployed from (its FYRDEN_COMMIT var). */
 async function deployedCommit(runner: WranglerRunner, worker: string): Promise<string> {
   try {
-    const status = JSON.parse(
-      await wrangler(runner, ["deployments", "status", "--name", worker, "--json"]),
-    ) as { versions: { version_id: string; percentage: number }[] };
     // fyrden deploy sends all traffic to one version; during a gradual
     // rollout made by hand, the one with the most traffic.
-    const current = [...status.versions].sort((a, b) => b.percentage - a.percentage)[0];
+    const current = [...(await liveVersions(runner, worker))].sort(
+      (a, b) => b.percentage - a.percentage,
+    )[0];
     if (!current) return `WARN ${worker} has no current version`;
-    const version = JSON.parse(
-      await wrangler(runner, ["versions", "view", current.version_id, "--name", worker, "--json"]),
-    ) as { resources: { bindings: { type: string; name: string; text?: string }[] } };
-    const commit = version.resources.bindings.find(
-      (b) => b.type === "plain_text" && b.name === "FYRDEN_COMMIT",
-    )?.text;
+    const commit = (await versionVars(runner, worker, current.version_id)).FYRDEN_COMMIT;
     if (commit === undefined)
       return `info ${worker} does not record its commit (deployed before fyrden deploy did)`;
     if (commit === UNKNOWN_COMMIT)

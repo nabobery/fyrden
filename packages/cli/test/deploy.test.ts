@@ -20,6 +20,7 @@ import type { WranglerRunner } from "../src/wrangler.ts";
 import { fakeWrangler } from "./fake-wrangler.ts";
 
 const realRoot = resolve(import.meta.dirname, "../../..");
+const HOUR = 3_600_000;
 let repoRoot = "";
 
 beforeEach(async () => {
@@ -567,6 +568,64 @@ describe("fyrden deploy", () => {
     vars = (await generatedConfig()).vars as Record<string, string>;
     for (const name of ["FYRDEN_CI_FLEET", "FYRDEN_CI_DAILY", "FYRDEN_CI_MAX_JOB_MINUTES"])
       expect(vars, name).not.toHaveProperty(name);
+  });
+
+  it("keeps when CI was switched on across deploys that leave it on, stamping only a switch-on", async () => {
+    const fake = fakeWrangler();
+    const since = async () =>
+      ((await generatedConfig()).vars as Record<string, string>).FYRDEN_CI_SINCE;
+    const first = Date.parse("2026-11-22T09:00:00Z");
+    await deploy(deps(fake.runner, { now: () => first }).d);
+    expect(await since()).toBe("2026-11-22T09:00:00.000Z");
+    // A routine redeploy keeps it: pending events from before it stay open.
+    await deploy(deps(fake.runner, { now: () => first + HOUR }).d);
+    expect(await since()).toBe("2026-11-22T09:00:00.000Z");
+    // Turned off, then on again: a new switch-on.
+    await deploy(deps(fake.runner, { ci: { runners: "off" } }).d);
+    expect(await since()).toBeUndefined();
+    await deploy(deps(fake.runner, { now: () => first + 2 * HOUR }).d);
+    expect(await since()).toBe("2026-11-22T11:00:00.000Z");
+    // An explicit cutoff always wins, and reads nothing.
+    const calls = fake.calls.length;
+    await deploy(
+      deps(fake.runner, { now: () => first + 3 * HOUR, ci: { since: "2026-11-22T10:30:00Z" } }).d,
+    );
+    expect(await since()).toBe("2026-11-22T10:30:00Z");
+    expect(fake.calls.slice(calls).some((c) => c.args[0] === "deployments")).toBe(false);
+  });
+
+  it("keeps a live version's lack of a cutoff, and stamps over one whose switch was never set", async () => {
+    const fake = fakeWrangler();
+    const at = Date.parse("2026-11-22T09:00:00Z");
+    await deploy(deps(fake.runner, { now: () => at }).d);
+    const live = fake.state.apiVersions.at(-1) as { vars: Record<string, string> };
+    delete live.vars.FYRDEN_CI_SINCE;
+    await deploy(deps(fake.runner, { now: () => at + HOUR }).d);
+    expect((await generatedConfig()).vars).not.toHaveProperty("FYRDEN_CI_SINCE");
+    // Deployed before the switch was always written: unset was off then.
+    const old = fake.state.apiVersions.at(-1) as { vars: Record<string, string> };
+    delete old.vars.FYRDEN_CI_RUNNERS;
+    await deploy(deps(fake.runner, { now: () => at + 2 * HOUR }).d);
+    expect((await generatedConfig()).vars).toMatchObject({
+      FYRDEN_CI_SINCE: "2026-11-22T11:00:00.000Z",
+    });
+  });
+
+  it("stops before the API's upload when the live CI state cannot be read", async () => {
+    for (const failure of ["fail", "split"] as const) {
+      const fake = fakeWrangler();
+      await deploy(deps(fake.runner).d);
+      await deploy(deps(fake.runner).d);
+      fake.state.deploymentsStatus = failure;
+      const versions = fake.state.apiVersions.length;
+      await expect(deploy(deps(fake.runner).d)).rejects.toThrow(
+        /when CI was switched on .* --ci-since/,
+      );
+      expect(fake.state.apiVersions.length).toBe(versions);
+      // Runners off, or an explicit cutoff, need no read.
+      await deploy(deps(fake.runner, { ci: { runners: "off" } }).d);
+      await deploy(deps(fake.runner, { ci: { since: "2026-11-01T00:00:00Z" } }).d);
+    }
   });
 
   it("says Free's CI numbers are proposed when it turns runners on there", async () => {
