@@ -243,6 +243,36 @@ describe("publishing", () => {
     expect(await reservationOf(runId, "a")).toMatchObject({ seq: 2, state: "running" });
   });
 
+  it("reserves again under Free a job reserved on Paid before the plan changed, never assigning the Paid reservation", async () => {
+    ciVariableOverrides.FYRDEN_PLAN = "paid";
+    const t = await today();
+    const f = await repoWithCommit();
+    const runId = await startedAt(f, one, t);
+    expect(await reservationOf(runId, "a")).toMatchObject({
+      seq: 1,
+      state: "reserved",
+      price: null,
+    });
+    // The deployment moves to Free while the Paid reservation's window is still open.
+    ciVariableOverrides.FYRDEN_PLAN = "free";
+    expect(await inRun(runId, (r) => r.queued().length)).toBe(0);
+    expect(await assign(runId, "a", "k1", f.owner.principalId)).toEqual({
+      ok: false,
+      code: "not_queued",
+    });
+    await drain(runId);
+    expect(await reservationOf(runId, "a")).toMatchObject({
+      seq: 2,
+      state: "reserved",
+      minutes: 180,
+    });
+    expect(await receiptsOf(runId)).toEqual([
+      expect.objectContaining({ kind: "job", state: "granted", minutes: 180 }),
+    ]);
+    const answer = await assign(runId, "a", "k2", f.owner.principalId);
+    expect(answer.ok && answer.timeoutMinutes).toBe(180);
+  });
+
   it("is published again, reserved as it was, when an assignment no runner was given is undone", async () => {
     const t = await today();
     const f = await repoWithCommit();

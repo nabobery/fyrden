@@ -238,15 +238,22 @@ export class RunReservations {
 
   /**
    * Whether instance `jobId` may be newly assigned to a runner of
-   * `accountId`: reserved, inside its start window, for that account. One
-   * reserved for another account is released and reserved again for the
-   * repository's owner.
+   * `accountId`: reserved, inside its start window, for that account, and
+   * priced by the ledger when the deployment has one. One reserved for
+   * another account, or reserved on Paid before the deployment moved to
+   * Free, is released and reserved again.
    */
   admits(jobId: number, accountId: string | undefined): boolean {
     const row = this.row(jobId);
     const now = this.host.now();
     if (row?.state !== "reserved" || row.rebind === 1 || (row.window_until ?? 0) <= now)
       return false;
+    // Reserved without the ledger (Paid) while the deployment is now Free: released and reserved
+    // again under Free's allowance and clamp, never run on the old terms.
+    if (row.price === null && this.host.ci().ledger !== null) {
+      this.#closeWindow(jobId, now);
+      return false;
+    }
     if (accountId === undefined || row.account_id === accountId) return true;
     this.#closeWindow(jobId, now);
     return false;

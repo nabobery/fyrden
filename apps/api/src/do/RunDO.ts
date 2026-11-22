@@ -840,7 +840,10 @@ export class RunDO extends MigratingDO {
 
   /**
    * Instances waiting for a runner, oldest first: those whose CI minutes are
-   * reserved, inside their start window, for `accountId` when given.
+   * reserved, inside their start window, for `accountId` when given, and
+   * priced by the ledger when the deployment has one (a reservation made on
+   * Paid is not offered once it is Free; its next assignment attempt or its
+   * window's end has it reserved again).
    */
   queued(
     limit = 100,
@@ -851,11 +854,12 @@ export class RunDO extends MigratingDO {
       .rows<InstanceRow>(
         `SELECT i.* FROM run_instances i JOIN ci_reservations r ON r.job_id = i.job_id
          WHERE i.status = 'queued' AND r.state = 'reserved' AND r.window_until > ?
-           AND (? IS NULL OR r.account_id = ?)
+           AND (? IS NULL OR r.account_id = ?) AND (? = 0 OR r.price IS NOT NULL)
          ORDER BY i.queued_at, i.job_id LIMIT ?`,
         this.context.now(),
         accountId ?? null,
         accountId ?? null,
+        this.#ci().ledger === null ? 0 : 1,
         Math.min(limit, 256),
       )
       .map((row) => ({
