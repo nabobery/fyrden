@@ -6,11 +6,10 @@ import { FyrdenClient } from "../src/index.js";
 describe("FyrdenClient, an operation answering 201 or 204 and nothing else", () => {
   it("gives null for each status", async () => {
     for (const status of [201, 204]) {
-      const fetchFn = vi.fn(
-        async () =>
-          status === 204
-            ? new Response(null, { status })
-            : new Response("{}", { status, headers: { "Content-Type": "application/json" } }),
+      const fetchFn = vi.fn(async () =>
+        status === 204
+          ? new Response(null, { status })
+          : new Response("{}", { status, headers: { "Content-Type": "application/json" } }),
       ) as unknown as typeof fetch;
       const client = new FyrdenClient({
         baseUrl: "https://f.test/api",
