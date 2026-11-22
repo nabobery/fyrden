@@ -2237,11 +2237,12 @@ describe("read budgets", () => {
       30_000,
     ],
     // Ingestion's longest row, every code unit escaped to six bytes: a 24 MiB chunk read back
-    // about 26 times (18 s alone on a laptop, measured 2026-11-22; past 30 s on a loaded CI shard).
+    // about 26 times (alone on a laptop, measured 2026-11-22: 18 s, 28 s with coverage; past 30 s
+    // on a loaded CI shard).
     [
       "a near-limit row of escaped characters",
       ["\u0001".repeat(4 * MIB - 64 * KIB), "after"],
-      120_000,
+      240_000,
     ],
   ] as const)
     it(`let one ticket's socket finish ${label}, acknowledged at the protocol's least`, {
