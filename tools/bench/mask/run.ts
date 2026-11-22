@@ -56,10 +56,13 @@ function inspector(port: number): Promise<{ heap(): Promise<HeapUsage>; close():
     let next = 1;
     const waiting = new Map<number, (usage: HeapUsage) => void>();
     socket.addEventListener("message", (event) => {
-      const { id, result } = JSON.parse(String(event.data)) as { id?: number; result?: HeapUsage };
-      if (id === undefined || result === undefined) return;
-      waiting.get(id)?.(result);
+      const { id, result } = JSON.parse(String(event.data)) as { id?: unknown; result?: HeapUsage };
+      // Only answers to this connection's own queries: anything else the inspector sends is ignored.
+      if (typeof id !== "number" || result === undefined) return;
+      const done = waiting.get(id);
+      if (typeof done !== "function") return;
       waiting.delete(id);
+      done(result);
     });
     socket.addEventListener("error", () => reject(new Error("no inspector")));
     socket.addEventListener("open", () =>
