@@ -1768,8 +1768,12 @@ describe("escaped chunk backfill", () => {
     try {
       expect(await held.reached(reading)).toBe(true);
       expect(chargedTo(socket.id)).toEqual({ gets: 1, bytes: 0 });
-      const memory = await inRun(t.runId, (r) => r.memory.stats());
-      expect(memory.reservedBytes).toBe(0);
+      // Nothing is reserved but the task's kept mask matchers.
+      const memory = await inRun(
+        t.runId,
+        (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld(),
+      );
+      expect(memory).toBe(0);
       expect(await model.send([row("tail".repeat(512 * KIB))], true)).toBe(2);
     } finally {
       held.release();
@@ -1781,6 +1785,32 @@ describe("escaped chunk backfill", () => {
     expect(read.gets).toBe(1);
     expect(read.bytes).toBeGreaterThan(0);
     expect(read.bytes).toBeLessThanOrEqual(chunk?.bytes ?? 0);
+  });
+
+  it("drops the tasks' kept mask matchers when a chunk's read needs their room", async () => {
+    const t = await withTask();
+    // Enough `::add-mask::` values that the task's kept matchers hold more than the 1.5 MiB a
+    // full escaped chunk's read leaves free of the 17 MiB pool.
+    await inRun(t.runId, (r) => {
+      for (let k = 0; k < 64; k++) {
+        const value = `${k}`.padStart(4, "0") + randomSecret().slice(0, 56);
+        insertPlainMask(r, t.number, "add_mask", 0, value);
+      }
+    });
+    const model = runnerModel(t);
+    expect(await model.send([row("\u0001".repeat(MIB))])).toBe(1);
+    expect(await inRun(t.runId, (r) => r.maskCacheBytesHeld())).toBeGreaterThan(1.5 * MIB);
+    await forget(t.runId);
+    const socket = await watch(t, t.f.owner.token, { checked: false });
+    try {
+      await slice(t.runId);
+      const read = chargedTo(socket.id);
+      expect(read.gets).toBe(1);
+      expect(read.bytes).toBeGreaterThan(0);
+      expect(await inRun(t.runId, (r) => r.maskCacheBytesHeld())).toBe(0);
+    } finally {
+      socket.ws.close();
+    }
   });
 
   it.each([2 * MIB, 4 * MIB - 256])(
@@ -2887,7 +2917,9 @@ describe("the cache when sockets go", () => {
     expect(await socket.closed).toEqual({ code: 1001 });
     expect(await attachments(t.runId)).toHaveLength(0);
     expect(await inRun(t.runId, (r) => r.viewers.cacheBytes())).toBe(0);
-    expect(await inRun(t.runId, (r) => r.memory.stats().reservedBytes)).toBe(0);
+    expect(
+      await inRun(t.runId, (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld()),
+    ).toBe(0);
   });
 
   it("is released when a send fails, and the socket is gone", async () => {
@@ -2900,6 +2932,8 @@ describe("the cache when sockets go", () => {
     await runnerModel(t).send(filler(0, 5));
     expect(await attachments(t.runId)).toHaveLength(0);
     expect(await inRun(t.runId, (r) => r.viewers.cacheBytes())).toBe(0);
-    expect(await inRun(t.runId, (r) => r.memory.stats().reservedBytes)).toBe(0);
+    expect(
+      await inRun(t.runId, (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld()),
+    ).toBe(0);
   });
 });

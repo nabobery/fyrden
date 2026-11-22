@@ -190,6 +190,8 @@ export interface DispatchHost {
   requeueTask(ref: TaskRef): boolean;
   /** The object's memory pool: reading a job's secrets reserves from it. */
   readonly memory: DoMemoryBudget;
+  /** Gives back the memory the tasks' kept log-mask matchers hold (`RunLogs`). */
+  dropMaskCaches(): void;
 }
 
 type MemoryReservation = NonNullable<ReturnType<DoMemoryBudget["tryReserve"]>>;
@@ -321,7 +323,13 @@ export class RunDispatch {
     if (run && request && readsSecrets && !ownerChanged) {
       // Bounded before the account is asked: the answer and the opened values fit what is
       // reserved, so jobs of one run assigned at once cannot together outgrow the object.
-      held.reservation = host.memory.tryReserve(deliveryMemory(request.refs));
+      const bytes = deliveryMemory(request.refs);
+      held.reservation = host.memory.tryReserve(bytes);
+      if (!held.reservation) {
+        // Kept matchers only save rebuilding: they give way to an assignment.
+        host.dropMaskCaches();
+        held.reservation = host.memory.tryReserve(bytes);
+      }
       if (!held.reservation) {
         host.log.warn("task withheld: the run has no memory free to read its secrets", {
           taskId: wireId,

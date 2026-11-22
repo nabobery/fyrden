@@ -241,6 +241,8 @@ export interface ViewersHost {
   accept(ws: WebSocket, tags: string[]): void;
   /** Has the `ci_log_viewers` job run now (sooner than any later run it has). */
   ensureSlice(): void;
+  /** Gives back the memory the tasks' kept log-mask matchers hold (`RunLogs`). */
+  dropMaskCaches(): void;
 }
 
 /** A job's log as delivery sees it. */
@@ -1017,6 +1019,11 @@ export class LogViewers {
         reservation = host.memory.tryReserve(need);
         if (!reservation) {
           this.dropCaches();
+          reservation = host.memory.tryReserve(need);
+        }
+        if (!reservation) {
+          // Kept matchers only save rebuilding: they give way, or a large chunk could never be read.
+          host.dropMaskCaches();
           reservation = host.memory.tryReserve(need);
         }
         if (!reservation) {
