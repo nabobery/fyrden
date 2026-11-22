@@ -2229,16 +2229,24 @@ describe("read budgets", () => {
     await expectStored(t, socket);
   });
 
-  for (const [label, rows] of [
-    ["a stored 4 MiB row", ["x".repeat(4 * MIB - 64 * KIB), "after"]],
+  for (const [label, rows, timeout] of [
+    ["a stored 4 MiB row", ["x".repeat(4 * MIB - 64 * KIB), "after"], 30_000],
     [
       "the second of two 3 MiB rows in one 6 MiB chunk",
       ["\u0001".repeat(512 * KIB), "\u0002".repeat(512 * KIB), "after"],
+      30_000,
     ],
-    // Ingestion's longest row, every code unit escaped to six bytes: a 24 MiB chunk.
-    ["a near-limit row of escaped characters", ["\u0001".repeat(4 * MIB - 64 * KIB), "after"]],
+    // Ingestion's longest row, every code unit escaped to six bytes: a 24 MiB chunk read back
+    // about 26 times (18 s alone on a laptop, measured 2026-11-22; past 30 s on a loaded CI shard).
+    [
+      "a near-limit row of escaped characters",
+      ["\u0001".repeat(4 * MIB - 64 * KIB), "after"],
+      120_000,
+    ],
   ] as const)
-    it(`let one ticket's socket finish ${label}, acknowledged at the protocol's least`, async () => {
+    it(`let one ticket's socket finish ${label}, acknowledged at the protocol's least`, {
+      timeout,
+    }, async () => {
       const t = await withTask();
       expect(
         await runnerModel(t).send(
