@@ -1180,17 +1180,19 @@ Search's projections of issues, pull requests, labels and milestones are kept in
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs
-once per token and key; it is optional, as on GitHub. MCP tool calls take no
-key. The key is checked after the token (revocation included), the rate
-limit, the token's scopes and the input; a replay returns the answer the
-same token already got, without checking its access to the repository
-again.
+once per token and key; it is optional, as on GitHub. The MCP tool of such a
+write takes the same key as its optional `idempotency_key` argument, under
+the same rules: it is one claim, so a REST request and a tool call by the
+same token with the same key and input answer each other's replay. The key
+is checked after the token (revocation included), the rate limit, the
+token's scopes and the input; a replay returns the answer the same token
+already got, without checking its access to the repository again.
 
 | What | Value |
 |---|---|
-| Key | 1-255 printable ASCII characters (else 422 `invalid_idempotency_key`), per token |
+| Key | 1-255 printable ASCII characters (else REST answers 422 `invalid_idempotency_key`; MCP answers the tool's argument error, as for any invalid argument), per token |
 | Kept | 24 hours, then forgotten (the cron deletes expired keys) |
-| A retry of the same request | The first answer again, with `Idempotent-Replayed: true`; nothing runs twice |
+| A retry of the same request | The first answer again (over REST with `Idempotent-Replayed: true`); nothing runs twice |
 | The same key, another request | 422 `idempotency_key_reused` (another operation, or another input) |
 | While the first still runs | 409 `idempotency_key_in_use` with `Retry-After: 5` |
 | When the first may or may not have taken effect | 409 `idempotent_outcome_unknown`: it failed unexpectedly, or was still marked running after 10 minutes. Check, then use a new key |

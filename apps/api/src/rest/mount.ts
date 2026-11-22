@@ -1,4 +1,10 @@
-import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
+import {
+  answersNothing,
+  IDEMPOTENCY_KEY,
+  type OperationDef,
+  openApiDocument,
+  registry,
+} from "@fyrden/api-contract";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { ContentfulStatusCode, StatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
@@ -13,7 +19,6 @@ import {
   sessionRefusal,
 } from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
-import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
 export const API_PREFIX = "/api";
 export const API_VERSION = "0.0.0";

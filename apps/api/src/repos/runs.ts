@@ -320,8 +320,8 @@ export async function dispatchWorkflowOperation(
     // The token's principal, as a push by the same token records: a delegated agent acts for its
     // user, whose role the run's job token reads with (the agent alone may have none).
     actor: ctx.auth.principalId,
-    // MCP calls carry no key yet, so each is a dispatch of its own (a retried tool call makes a
-    // second run); a caller-supplied key through the MCP mount is a recorded follow-up.
+    // A keyed call (REST's Idempotency-Key, MCP's idempotency_key) dispatches under its claim, so
+    // a retry answers the same run; a call without a key is a dispatch of its own.
     key: ctx.idempotencyClaim ?? newUlid(Date.now()),
     // Read from the directory's primary: the repository refuses if it is no longer so.
     authorized: { ownerId: entry.ownerId, nameGen: entry.nameGen },

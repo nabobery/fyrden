@@ -20,9 +20,6 @@ export const IDEMPOTENCY_POLICY = {
   reapPerRun: 1_000,
 } as const;
 
-/** What a key may be: 1-255 printable ASCII characters. */
-export const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
-
 export interface Claim {
   readonly tokenId: string;
   readonly key: string;

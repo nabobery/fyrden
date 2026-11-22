@@ -2,7 +2,7 @@ import { isPermission } from "@fyrden/domain";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { whoami } from "../ops/meta.js";
-import { mcpTools } from "../src/mcp.js";
+import { IDEMPOTENCY_KEY, mcpInput, mcpTools } from "../src/mcp.js";
 import {
   AUTHENTICATED,
   defineOperation,
@@ -266,3 +266,41 @@ describe("MCP tool annotations", () => {
         expect(hints[op.id], op.id).toBe(false);
   });
 });
+
+describe("MCP idempotency keys", () => {
+  it("give every keyed write tool an optional idempotency_key, and no other tool one", () => {
+    const byId = new Map<string, OperationDef>(registry.map((op) => [op.id, op]));
+    let keyed = 0;
+    for (const tool of mcpTools(registry)) {
+      const op = byId.get(tool.operationId) as OperationDef;
+      const properties = (tool.inputSchema.properties ?? {}) as Record<string, unknown>;
+      const required = (tool.inputSchema.required ?? []) as string[];
+      if (op.idempotency === "key") {
+        keyed++;
+        expect(properties.idempotency_key, op.id).toMatchObject({
+          type: "string",
+          pattern: IDEMPOTENCY_KEY.source,
+        });
+        expect(required, op.id).not.toContain("idempotency_key");
+      } else expect(properties, op.id).not.toHaveProperty("idempotency_key");
+    }
+    expect(keyed).toBeGreaterThan(0);
+  });
+
+  it("take the key only for the claim: no operation's own input names one", () => {
+    for (const op of registry)
+      expect(Object.keys((op.input as z.ZodObject).shape), op.id).not.toContain("idempotency_key");
+  });
+
+  it("build a keyed tool's input once, and leave other inputs as they are", () => {
+    const keyed = registry.find((op) => op.id === "actions.workflows.dispatch") as OperationDef;
+    expect(mcpInput(keyed)).toBe(mcpInput(keyed));
+    expect(mcpInput(whoami)).toBe(whoami.input);
+    const input = mcpInput(keyed);
+    expect(input.safeParse({ ...validDispatch, idempotency_key: "k-1" }).success).toBe(true);
+    for (const bad of ["", "has space", "x".repeat(256), "é"])
+      expect(input.safeParse({ ...validDispatch, idempotency_key: bad }).success, bad).toBe(false);
+  });
+});
+
+const validDispatch = { owner: "o", repo: "r", workflow_id: "ci.yml", ref: "main" };

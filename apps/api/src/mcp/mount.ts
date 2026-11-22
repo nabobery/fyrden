@@ -1,7 +1,9 @@
 import {
   answersNothing,
+  MCP_IDEMPOTENCY_KEY,
   makeProblem,
   mcpAnnotations,
+  mcpInput,
   type OperationDef,
   registry,
 } from "@fyrden/api-contract";
@@ -49,6 +51,8 @@ export const MCP_PATH = "/mcp";
  * Runs a tool. The SDK turns an exception thrown by a tool into an error
  * result carrying the raw message, past Hono's onError, so unexpected errors
  * are caught here: logged through the redacting logger, answered generically.
+ * A keyed tool's `idempotency_key` (checked by the SDK against `mcpInput`)
+ * is the claim's, as REST's header: the operation's input is the rest.
  */
 export async function runTool(
   op: OperationDef,
@@ -57,7 +61,12 @@ export async function runTool(
   args: unknown,
 ): Promise<CallToolResult> {
   try {
-    return toolResult(await executeOperation(op, handler, ctx, args));
+    const { input, key } = splitKey(op, args);
+    return toolResult(
+      await executeOperation(op, handler, ctx, input, {
+        ...(key !== undefined && { idempotencyKey: key }),
+      }),
+    );
   } catch (error) {
     ctx.log.error("unhandled error", { error, operation: op.id });
     return toolResult({
@@ -70,6 +79,12 @@ export async function runTool(
       }),
     });
   }
+}
+
+function splitKey(op: OperationDef, args: unknown): { input: unknown; key?: string } {
+  if (op.idempotency !== "key" || args === null || typeof args !== "object") return { input: args };
+  const { [MCP_IDEMPOTENCY_KEY]: key, ...input } = args as Record<string, unknown>;
+  return typeof key === "string" ? { input, key } : { input };
 }
 
 function toolResult(result: Awaited<ReturnType<typeof executeOperation>>): CallToolResult {
@@ -321,7 +336,7 @@ function buildServer(ctx: OpContext, era: "modern" | "legacy"): McpServer {
       {
         title: op.mcp.title,
         description: op.mcp.description,
-        inputSchema: withConvertedJsonSchema(op.input),
+        inputSchema: withConvertedJsonSchema(mcpInput(op)),
         ...(!answersNothing(op) && { outputSchema: withConvertedJsonSchema(op.output) }),
         annotations: mcpAnnotations(op),
       },
