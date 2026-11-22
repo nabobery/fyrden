@@ -1,0 +1,13 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["node"],
+    "typeRoots": ["../../../node_modules/.pnpm/node_modules/@types"],
+    "paths": {
+      "esbuild": ["../../../node_modules/.pnpm/node_modules/esbuild"]
+    }
+  },
+  "include": ["run.ts", "src"]
+}
