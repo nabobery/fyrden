@@ -849,4 +849,25 @@ describe("the REST API as stock gh calls it, through the web origin", () => {
     expect(repo.status).toBe(200);
     expect(await repo.json()).toMatchObject({ name: "files" });
   });
+
+  it("links a list's next page on the web origin, as gh variable list follows it", async () => {
+    const variables = `/repos/${stack.handle}/files/actions/variables`;
+    for (const name of ["FIRST", "SECOND"]) {
+      const made = await gh(variables, {
+        method: "POST",
+        body: JSON.stringify({ name, value: "x" }),
+      });
+      expect(made.status).toBe(201);
+    }
+    const url = `${stack.origin}/api/v3${variables}?per_page=1`;
+    const first = await fetch(url, { headers: { Authorization: `token ${stack.token}` } });
+    expect(await first.json()).toMatchObject({ total_count: 2, variables: [{ name: "FIRST" }] });
+    expect(first.headers.get("Link")).toBe(
+      `<${url}&page=2>; rel="next", <${url}&page=2>; rel="last"`,
+    );
+    const second = await fetch(`${url}&page=2`, {
+      headers: { Authorization: `token ${stack.token}` },
+    });
+    expect(await second.json()).toMatchObject({ variables: [{ name: "SECOND" }] });
+  });
 });

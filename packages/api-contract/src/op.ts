@@ -113,6 +113,18 @@ export const NoContent = z.null().describe("No content.");
 export const answersNothing = (def: Pick<OperationDef, "output">): boolean =>
   def.output === NoContent;
 
+/** Whether an operation takes GitHub's page numbers: `page` and `per_page`. */
+export const takesPageNumbers = (def: Pick<OperationDef, "input">): boolean =>
+  "page" in def.input.shape && "per_page" in def.input.shape;
+
+/**
+ * Whether an operation takes page numbers and counts its items in
+ * `total_count`: its REST answer links the other pages (`Link`, as GitHub's),
+ * which clients such as `gh` follow.
+ */
+export const pagedByTotal = (def: Pick<OperationDef, "input" | "output">): boolean =>
+  takesPageNumbers(def) && def.output instanceof z.ZodObject && "total_count" in def.output.shape;
+
 /** Every status an operation answers on success. */
 export const successStatusesOf = (
   def: Pick<OperationDef, "successStatus" | "successStatuses">,

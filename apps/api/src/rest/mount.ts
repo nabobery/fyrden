@@ -1,4 +1,10 @@
-import { answersNothing, type OperationDef, openApiDocument, registry } from "@fyrden/api-contract";
+import {
+  answersNothing,
+  type OperationDef,
+  openApiDocument,
+  pagedByTotal,
+  registry,
+} from "@fyrden/api-contract";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { ContentfulStatusCode, StatusCode } from "hono/utils/http-status";
 import { MAX_JSON_BODY_BYTES, readBoundedBody } from "../http/body.js";
@@ -14,6 +20,7 @@ import {
 } from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
 import { IDEMPOTENCY_KEY } from "./idempotency.js";
+import { pageLinks } from "./links.js";
 
 export const API_PREFIX = "/api";
 /**
@@ -184,6 +191,25 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
   );
 }
 
+/**
+ * The `Link` header of a successful answer of an operation paged by `page`
+ * and `total_count`, from the page and page size the operation read (a
+ * `per_page` past a list's most is read as the most).
+ */
+function linkOf(
+  c: AppContext,
+  op: OperationDef,
+  input: unknown,
+  output: unknown,
+): string | undefined {
+  if (!pagedByTotal(op)) return undefined;
+  const read = op.input.safeParse(input);
+  if (!read.success) return undefined;
+  const { page, per_page: perPage } = read.data as { page: number; per_page: number };
+  const { total_count: total } = output as { total_count: number };
+  return pageLinks(new URL(c.req.url), page, perPage, total);
+}
+
 /** Registers one Hono route per registry operation under /api. */
 /**
  * The operations of a chunked upload session: git's transport, where a git
@@ -247,13 +273,13 @@ export function mountOperation(
           "invalid_idempotency_key",
           "An Idempotency-Key is 1-255 printable ASCII characters.",
         );
-      return respond(
-        c,
-        op,
-        await executeOperation(op, handler, opContext(c), read.input, {
-          ...(key !== undefined && { idempotencyKey: key }),
-        }),
-      );
+      const result = await executeOperation(op, handler, opContext(c), read.input, {
+        ...(key !== undefined && { idempotencyKey: key }),
+      });
+      const res = await respond(c, op, result);
+      const link = result.ok ? linkOf(c, op, read.input, result.output) : undefined;
+      if (link !== undefined) res.headers.set("Link", link);
+      return res;
     },
   );
 }

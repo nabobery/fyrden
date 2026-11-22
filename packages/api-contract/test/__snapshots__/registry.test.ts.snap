@@ -6445,6 +6445,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -6905,6 +6913,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -7254,6 +7270,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -7728,6 +7752,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -10315,6 +10347,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -10443,6 +10483,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -11598,6 +11646,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -12060,6 +12116,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -46821,6 +46885,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
@@ -46982,6 +47054,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
             "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
           },
           "default": {
             "content": {
