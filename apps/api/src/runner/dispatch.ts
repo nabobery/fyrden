@@ -257,9 +257,12 @@ export async function dispatchTask(
       retry = true;
       continue;
     }
+    // An offer another poll answered, whose stored masks do not open: kept as it is, and given none,
+    // the runner asks again at the same version, at which the offer is made again.
     if (assigned.refused === "masks_unreadable") {
       masksUnreadable(call, claimed.taskId, claimed.runId);
       exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      retry = true;
       continue;
     }
     if (assigned.refused === "tokens_exhausted") {

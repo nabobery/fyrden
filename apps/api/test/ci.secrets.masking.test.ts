@@ -24,7 +24,7 @@ import {
 } from "@fyrden/domain/ci";
 import { uniqueId } from "@fyrden/testing";
 import { registerSecretValue } from "@fyrden/testing/log-capture";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { ciSecretKeys, openMask } from "../src/ci/envelope.js";
 import { type MaskKind, maskAdditionalData } from "../src/do/run/logs.js";
@@ -38,6 +38,7 @@ import { decodeUpdateLogResponse, encodeUpdateLogRequest } from "./helpers/runne
 import {
   type Credentials,
   fetchTask,
+  gate,
   jobTokenOf,
   jobTokensOf,
   ON,
@@ -1232,6 +1233,61 @@ describe("with a current CI master key, but the task's stored masks sealed under
       const again = (await fetchTask(runner, refused.tasksVersion)).task;
       expect(again?.id).toBe(lost.id);
     } finally {
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+    }
+  });
+
+  it("met by the poll that claimed it, with no other job to give, keeps the runner's version, so the offer is made again once its masks open", async () => {
+    const f = await orgRepo();
+    const runner = await registerRunner(f.org.login, f.owner);
+    const version = await primed(f);
+    const runId = await started(f, one);
+    await inRun(runId, (r) => {
+      r.hooks = {
+        afterMint: (token) => {
+          registerSecretValue(token);
+        },
+      };
+    });
+    // The clock stands still, so the held poll's deadline never passes: it reaches the assignment.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now());
+    const held = gate();
+    let claims = 0;
+    dispatchHooks.afterClaim = () => (++claims === 1 ? held.hold() : undefined);
+    const pending: Promise<unknown>[] = [];
+    try {
+      // The claiming poll waits; the runner's next poll at its version is answered the offer.
+      const first = fetchTask(runner, version);
+      pending.push(first);
+      await Promise.race([
+        held.started,
+        first.then(() => {
+          throw new Error("the claiming poll settled before its gate");
+        }),
+      ]);
+      const answered = (await fetchTask(runner, version)).task;
+      if (!answered) throw new Error("the offer was not answered");
+      // Its stored masks no longer open when the claiming poll assigns it.
+      const refused = await withVars(runId, rotated(), async () => {
+        held.release();
+        return first;
+      });
+      expect(refused.task).toBeUndefined();
+      expect(refused.tasksVersion).toBe(version);
+      expect(await tasksVersionOf(f.org.id)).not.toBe(version);
+      const again = (await fetchTask(runner, refused.tasksVersion)).task;
+      expect(again?.id).toBe(answered.id);
+      expect(
+        logs.lines.some((l) => l.includes("masks do not open") && l.includes(String(answered.id))),
+      ).toBe(true);
+    } finally {
+      held.release();
+      delete dispatchHooks.afterClaim;
+      await Promise.allSettled(pending);
+      vi.useRealTimers();
       await inRun(runId, (r) => {
         r.hooks = {};
       });

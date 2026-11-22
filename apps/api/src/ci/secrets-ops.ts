@@ -79,7 +79,7 @@ async function repoScope(
 ): Promise<{ repo: RepoEntry; stub: DurableObjectStub<OrgDO> }> {
   const entry = await settledRepo(ctx.env, ctx.auth, owner, repo, permission, {
     transferring:
-      "The repository is being transferred; its secrets and variables can be used once it lands.",
+      "The repository is being transferred, or was transferred after this request was authorized. Once any active transfer ends, look the repository up again (its owner may have changed) and retry the request, with a new Idempotency-Key if it had one: the same key answers this refusal again.",
     metrics: ctx.metrics,
     afterAuthorize: () => ciScopeHooks.afterAuthorize?.() ?? Promise.resolve(),
   });
