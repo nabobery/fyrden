@@ -67,6 +67,12 @@ export type CiMinutesAnswer =
       readonly retryAt: number;
       /** The next month's start, when the month's used minutes alone leave no room; else null. */
       readonly resetsAt: number | null;
+    }
+  | {
+      /** More minutes than the account's or the agent's whole month: no reset admits them. */
+      readonly status: "too_large";
+      readonly reason: "account" | "agent";
+      readonly limit: number;
     };
 
 export type CiMinutesSettlement = "settled" | "duplicate" | "released" | "unknown";
@@ -133,6 +139,10 @@ export class CiMinutes {
       if (existing?.state === "held") return { status: "granted", replay: true };
       if (existing?.state === "released") return { status: "released" };
       if (existing) return { status: "expired" };
+      if (this.limits.account !== null && req.minutes > this.limits.account)
+        return { status: "too_large", reason: "account", limit: this.limits.account };
+      if (this.limits.agent !== null && req.agentId !== null && req.minutes > this.limits.agent)
+        return { status: "too_large", reason: "agent", limit: this.limits.agent };
       const month = monthOf(now);
       this.#prune(now);
       const refusal = (reason: "account" | "agent", limit: number, agentId: string | null) => {

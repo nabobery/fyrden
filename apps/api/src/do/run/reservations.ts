@@ -177,6 +177,12 @@ function tooLarge(minutes: number): string {
   return `ci_too_large: at its timeout of ${minutes} minutes the job costs more than this deployment's daily CI allowance; a shorter timeout-minutes may fit`;
 }
 
+/** What a job needing more than its account's or agent's monthly CI minutes is failed with. */
+function overMonth(minutes: number, reason: "account" | "agent", limit: number): string {
+  const whose = reason === "account" ? "the account's" : "the agent's";
+  return `ci_too_large: at its timeout of ${minutes} minutes the job needs more than ${whose} ${limit} CI minutes a month; a shorter timeout-minutes may fit`;
+}
+
 /** A key's share of the retry jitter: the same for every ask of one key (FNV-1a). */
 function jitter(key: string): number {
   let hash = 0x811c9dc5;
@@ -214,12 +220,16 @@ export class RunReservations {
     this.host.ensureSlice();
   }
 
-  /** An instance ended, by any path: its reservation is settled or released by the slice. */
+  /**
+   * An instance ended, by any path: its reservation is settled or released by
+   * the slice, for the account it was made for. A mark to reserve again for a
+   * new owner is dropped: nothing is left to reserve.
+   */
   end(jobId: number, at: number): void {
     const row = this.row(jobId);
     if (!row || row.state === "ending" || row.state === "settled") return;
     this.host.engine.exec(
-      "UPDATE ci_reservations SET state = 'ending', ended_at = ?, ineligible_at = NULL WHERE job_id = ?",
+      "UPDATE ci_reservations SET state = 'ending', ended_at = ?, ineligible_at = NULL, rebind = 0 WHERE job_id = ?",
       at,
       jobId,
     );
@@ -523,17 +533,16 @@ export class RunReservations {
             "the CI ledger refused the reservation's validity: is the run's clock ahead of D1's?",
           );
         // Too large for any day's allowance: it would wait for nothing, so it fails now.
-        return this.#record(job, row, () => {
-          const instance = this.host.engine.instance(row.job_id);
-          if (instance?.status === "queued")
-            this.host.engine.applyInstance(
-              instance,
-              { kind: "fail" },
-              { error: tooLarge(row.minutes) },
-            );
-        });
+        return this.#record(job, row, () => this.#fail(row, tooLarge(row.minutes)));
       }
     }
+  }
+
+  /** Fails a queued instance that no allowance can ever admit. */
+  #fail(row: Fixed, error: string): void {
+    const instance = this.host.engine.instance(row.job_id);
+    if (instance?.status === "queued")
+      this.host.engine.applyInstance(instance, { kind: "fail" }, { error });
   }
 
   /** The account's minutes; refused, the ledger's grant goes back (its fixed part kept). */
@@ -568,6 +577,12 @@ export class RunReservations {
         return this.#record(job, row, () =>
           this.#refuse(row, "ci_minutes", Math.max(answer.retryAt, answer.resetsAt ?? 0)),
         );
+      case "too_large":
+        // No month can hold it: it would wait for nothing, so it fails now.
+        await this.#releaseBoth(row);
+        return this.#record(job, row, () =>
+          this.#fail(row, overMonth(row.minutes, answer.reason, answer.limit)),
+        );
       case "released":
       case "expired":
         await this.#releaseBoth(row);
@@ -600,7 +615,7 @@ export class RunReservations {
           });
       } else await this.#releaseBoth(r);
     }
-    return this.#record(job, row, () => this.#set(row.job_id, "state = 'settled'"));
+    return this.#record(job, row, () => this.#set(row.job_id, "state = 'settled', rebind = 0"));
   }
 
   async #releaseBoth(row: Fixed): Promise<void> {

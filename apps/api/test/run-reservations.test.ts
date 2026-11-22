@@ -266,6 +266,12 @@ describe("publishing", () => {
 });
 
 describe("a job queued before its run reserved", () => {
+  /** Drops the account's minutes for the run's jobs, as an object from before reservations held none. */
+  const forgetMinutes = (accountId: string, runId: string) =>
+    runInDurableObject(env.ORG.getByName(accountId), (_, state) => {
+      state.storage.sql.exec("DELETE FROM ci_minutes WHERE key LIKE ?", `${runId}/%`);
+    });
+
   it("is clamped and priced at Free's longest job once its run's object is upgraded", async () => {
     ciVariableOverrides.FYRDEN_PLAN = "paid";
     const t = await today();
@@ -284,10 +290,14 @@ describe("a job queued before its run reserved", () => {
       r.engine.exec("UPDATE _fyrden_schema_version SET version = 7");
       applyDoMigrations(r.context.storage as DurableObjectStorage, runSchema);
     });
+    await forgetMinutes(f.owner.principalId, runId);
     ciVariableOverrides.FYRDEN_PLAN = "free";
     await moveTo(t + 5 * MIN, runId);
     await drain(runId);
     expect(await reservationOf(runId, "a")).toMatchObject({ state: "reserved", minutes: 180 });
+    expect(await minutesOf(f.owner.principalId, runId)).toEqual([
+      expect.objectContaining({ key: `${runId}/j${jobId}/r1`, reserved: 180, state: "held" }),
+    ]);
     expect(await receiptsOf(runId)).toEqual([
       expect.objectContaining({ kind: "job", state: "granted", minutes: 180 }),
     ]);
@@ -312,9 +322,13 @@ describe("a job queued before its run reserved", () => {
       );
       r.engine.exec("DELETE FROM jobs WHERE kind = 'ci_reserve'");
     });
+    await forgetMinutes(f.owner.principalId, runId);
     await moveTo(t + 5 * MIN, runId);
     await drain(runId);
     expect(await reservationOf(runId, "a")).toMatchObject({ seq: 1, state: "reserved" });
+    expect(await minutesOf(f.owner.principalId, runId)).toEqual([
+      expect.objectContaining({ key: `${runId}/j${jobId}/r1`, reserved: 360, state: "held" }),
+    ]);
     expect((await pendingOf(runId)).map((p) => p.job_id)).toEqual([jobId]);
   });
 });
@@ -537,6 +551,22 @@ describe("the daily allowance on Free", () => {
     expect((await minutesOf(f.owner.principalId, runId)).map((r) => [r.key, r.state])).toEqual([
       [`${runId}/j${jobId}/r1`, "released"],
       [`${runId}/j${jobId}/r2`, "held"],
+    ]);
+  });
+
+  it("fails a job whose minutes no month of its account can hold at once, with an annotation", async () => {
+    ciVariableOverrides.FYRDEN_PLAN = "paid";
+    ciVariableOverrides.QUOTA_CI_MINUTES = "300";
+    const t = await today();
+    const f = await repoWithCommit();
+    const runId = await startedAt(f, one, t);
+    const a = await jobNamed(runId, "a");
+    expect(a).toMatchObject({ status: "completed", conclusion: "failure", waitingFor: null });
+    expect(a.error).toMatch(/^ci_too_large: .*360 minutes.*300/);
+    expect(await pendingOf(runId)).toEqual([]);
+    expect(await reservationOf(runId, "a")).toMatchObject({ state: "settled" });
+    expect(await minutesOf(f.owner.principalId, runId)).toEqual([
+      expect.objectContaining({ state: "released", reserved: 0 }),
     ]);
   });
 
@@ -884,6 +914,27 @@ describe("a repository that moves", () => {
     ]);
     expect(await pendingOf(runId)).toEqual([expect.objectContaining({ account_id: to.id })]);
     expect(await assign(runId, "a", "k", to.id)).toMatchObject({ ok: true });
+  });
+
+  it("ends a job marked for the new owner without reserving for it again", async () => {
+    ciVariableOverrides.FYRDEN_PLAN = "paid";
+    const t = await today();
+    const f = await orgRepo();
+    const to = await newOrg(f.owner);
+    const runId = await startedAt(f, one, t);
+    await transfer(f, to.login);
+    // The run has learnt of the move (marked for the new owner) when the job is cancelled,
+    // before its reserve slice runs again.
+    await inRun(runId, (r) => r.engine.exec("UPDATE ci_reservations SET rebind = 1"));
+    expect(await runStub(runId).cancel(f.owner.principalId, "graceful")).toMatchObject({
+      ok: true,
+    });
+    await drain(runId);
+    expect(await reservationOf(runId, "a")).toMatchObject({ seq: 1, state: "settled" });
+    await moveTo(t + 40 * MIN, runId);
+    await drain(runId);
+    expect(await reservationOf(runId, "a")).toMatchObject({ seq: 1, state: "settled" });
+    expect(await minutesOf(to.id, runId)).toEqual([]);
   });
 
   it("while its job waits refused: reserved again under the new owner at the next resync", async () => {

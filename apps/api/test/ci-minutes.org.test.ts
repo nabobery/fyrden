@@ -123,6 +123,23 @@ describe("reserving CI minutes", () => {
     expect((await stub.reserveCiMinutes(reservation({ minutes: 101 }))).status).toBe("granted");
   });
 
+  it("answers too_large, and holds nothing, for minutes no month of the account or agent can hold", async () => {
+    const stub = account();
+    expect(await stub.reserveCiMinutes(reservation({ minutes: 2_001 }))).toEqual({
+      status: "too_large",
+      reason: "account",
+      limit: 2_000,
+    });
+    const agentId = uniqueId("agt");
+    expect(await stub.reserveCiMinutes(reservation({ agentId, minutes: 501 }))).toEqual({
+      status: "too_large",
+      reason: "agent",
+      limit: 500,
+    });
+    // Nothing was held: the whole month still fits.
+    expect((await stub.reserveCiMinutes(reservation({ minutes: 2_000 }))).status).toBe("granted");
+  });
+
   it("records minutes on Paid with no quota set, refusing none", async () => {
     ciVariableOverrides.FYRDEN_PLAN = "paid";
     const stub = account();
