@@ -185,12 +185,7 @@ const ownSecrets = (task: { secrets: Map<string, string> }) =>
     [...task.secrets].filter(([k]) => k !== "GITHUB_TOKEN" && k !== "GITEA_TOKEN"),
   );
 
-/**
- * The task a runner is given for a pull request run of the repository's own
- * branch: untrusted for `pull_request`, trusted for `pull_request_target`.
- * A fork's job is never reserved, so never given to a runner
- * (runner-eligibility.test.ts); trust alone decides what is delivered.
- */
+/** A fork's job never reaches a runner (runner-eligibility.test.ts), so only trust decides delivery. */
 async function pullRequestTask(
   f: OrgFixture,
   event: "pull_request" | "pull_request_target",
@@ -288,7 +283,7 @@ describe("which secrets a job gets", () => {
     const value = await orgSecret(f, "PRIV", { visibility: "private" });
     expect(ownSecrets((await delivered(f, reading("PRIV"))).task)).toEqual({ PRIV: value });
     // Reserved while private, then made public: no runner's claim takes a public repository's
-    // job, so its run is asked directly, and delivery reads the visibility as it is now.
+    // job, so its run is asked directly.
     const runId = await started(g, reading("PRIV"));
     const runner = await registerRunner(g.org.login, g.owner);
     const { jobId } = await jobA(runId);

@@ -1,16 +1,9 @@
 import { workersPlan } from "../../git/fetch/mode.js";
 
 /*
- * An account's CI minutes (`ci_minutes`, OrgDO v12): a job reserves its
- * minutes by key before it may start and settles what it ran, or releases
- * them. Every call is idempotent by key. A release leaves the key released,
- * also when it was never reserved, so a reserve of that key arriving later
- * (reordered, or retried after its answer was lost) grants nothing. A
- * reserve at or after the key's validity, by this object's clock, is
- * expired whatever the key holds. A hold never lapses: past its settlement
- * time the job may have run, so it counts as used. Quotas apply per UTC
- * month of the grant, to the account and to each agent; unset, minutes are
- * still recorded.
+ * Every call is idempotent by key. A release leaves the key released even
+ * when it was never reserved, so a later reserve of it (reordered, or
+ * retried after a lost answer) grants nothing.
  */
 
 /** Free's minutes an account a month unless `QUOTA_CI_MINUTES` is set. Proposed. */
@@ -52,7 +45,7 @@ export interface CiMinutesRequest {
   readonly minutes: number;
   /** The latest time (this object's clock, ms) the key may be granted; fixed when the key is made. */
   readonly validUntil: number;
-  /** After this the hold counts as used: the job may have run. */
+  /** After this the hold counts as used, since the job may have run; a hold never lapses. */
   readonly settleBy: number;
 }
 
@@ -89,7 +82,6 @@ type Row = {
 
 const DAY = 86_400_000;
 
-/** A time's UTC month as `YYYY-MM`. */
 function monthOf(at: number): string {
   return new Date(at).toISOString().slice(0, 7);
 }

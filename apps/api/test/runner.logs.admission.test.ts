@@ -1,12 +1,5 @@
-// On Free, each live log ticket is granted from the CI ledger as a viewer
-// before it is answered: priced from the job's log stored when it is issued
-// and charged on every UTC day from issuance to the end of its socket's
-// life, viewers together within a quarter of the allowance. A ticket the
-// ledger refuses, or cannot answer for, is deleted before the refusal is
-// answered. Paid prices nothing. Each test sets D1's ledger clock and the
-// run's clock to the same instant, on a UTC day no other test of the file
-// charges. No runner is registered in this file, so the fleet stays within
-// its cap.
+// Each test sets D1's ledger clock and the run's clock to the same instant.
+// No runner is registered here, so the fleet stays within its cap.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
@@ -55,10 +48,7 @@ function freshNoon(): number {
   return Date.UTC(2032, 0, 1) + days * DAY + 12 * HOUR;
 }
 
-/**
- * A new run's queued job (reserved as on Paid, the setup's plan), then the
- * run's clock and D1's ledger clock at `t` and the deployment on Free.
- */
+/** Reserved on Paid (the setup's plan), then both clocks set to `t` and the deployment moved to Free. */
 async function queuedAt(t: number) {
   const f = await orgRepo();
   const runId = await started(f, one);
@@ -112,15 +102,11 @@ const dayRow = (day: number) =>
     .first<Record<string, number>>();
 
 const NOTHING_STORED = { chunks: 0, rereadBytes: 0, reads: 0 };
-/** A viewer's budget on Free and its price, from what is stored and how long rows may flow. */
 function viewer(activeMs: number) {
   const budget = ciViewerBudget({ stored: NOTHING_STORED, activeMs });
   return { ...budget, price: ciViewerPrice(budget) };
 }
-/**
- * A queued job's viewer on Free: nothing stored, and rows may flow while the
- * job may run (Free's longest job, 180 minutes) and its late window.
- */
+/** Rows may flow for Free's longest job (180 minutes) and its late window. */
 const emptyLog = viewer((180 + 10) * MIN);
 
 describe("a live log ticket on Free", () => {
@@ -272,7 +258,7 @@ describe("a live log ticket's price on Free", () => {
     const q = await queuedAt(t);
     expect((await ticketCall(q)).status).toBe(200);
     const day = Math.floor(t / DAY);
-    // The ticket, the upgrade and the socket's checks: a minute's for 190 minutes, not 24 hours.
+    // The ticket and the upgrade, then the socket's checks.
     expect(emptyLog.checks - viewer(0).checks).toBe(190);
     expect((await dayRow(day))?.viewer_do_requests).toBe(2 + emptyLog.checks);
     expect((await dayRow(day + 1))?.viewer_do_requests).toBe(2 + emptyLog.checks);
@@ -313,10 +299,7 @@ describe("a live log ticket on Paid", () => {
 });
 
 describe("a live log ticket's redemption window as answered", () => {
-  /**
-   * The operation on `q`'s job with an admission that holds the operation's
-   * clock (`Date`, frozen) `ms` on before admitting.
-   */
+  /** Admission moves the operation's frozen clock (`Date`) `ms` on before admitting. */
   async function issuedAfterAdmissionTakes(q: Queued, ms: number) {
     const store = new D1TokenStore(env.DIRECTORY, {
       clock: () => Date.now(),

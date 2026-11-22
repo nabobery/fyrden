@@ -9,21 +9,11 @@ import { workersPlan } from "../git/fetch/mode.js";
 import { LIVE_DAILY } from "../live/budget.js";
 
 /*
- * CI's ledger in the directory (migration 0055), modeled on live's: on
- * Free, a job or a log viewer is granted from a daily allowance before it
- * runs, its whole price debited atomically against every UTC day (D1's
- * clock) it may run on. Its receipt is its key's identity: a retry gets
- * the same answer back, never a second charge, and a key released before
- * it was granted is a tombstone that refuses the grant. A grant asked at
- * or after its `validUntil` (by D1's clock) is expired whether or not its
- * receipt still exists, so pruning cannot turn a retry into a second
- * charge. Only a job's per-minute part is refunded, once: at settlement
- * down to the minutes it ran in each day, or whole on release; the fixed
- * part pays for control work that happened either way. Paid has no
- * allowance: nothing is granted or written.
+ * CI's ledger (migration 0055), modeled on live's. A grant asked at or
+ * after its `validUntil` is expired whether or not its receipt still
+ * exists, so pruning cannot turn a retry into a second charge.
  */
 
-/** The resources CI is priced in: discretionary work's, the Worker's own requests and R2 reads. */
 export const CI_RESOURCES = [...DISCRETIONARY_RESOURCES, "worker_requests", "r2_class_b"] as const;
 export type CiResource = (typeof CI_RESOURCES)[number];
 export type CiVector = Readonly<Record<CiResource, number>>;
@@ -80,7 +70,7 @@ const POLL_D1_ROWS_READ = 5;
 /** D1 rows a lease writes: the runner's row and its index entry. Estimated, unmeasured. */
 const LEASE_D1_ROWS_WRITTEN = 2;
 
-/** The fleet's daily reservation: `cap` runners each at its poll budget plus slack. */
+/** A day's reservation for `cap` runners. */
 export function fleetReservation(cap: number): CiVector {
   const polls = cap * (CI_POLL_BUDGET + Math.ceil((CI_POLL_BUDGET * CI_POLL_SLACK_PERCENT) / 100));
   const leases = Math.ceil(polls / CI_POLL_LEASE);
@@ -94,12 +84,10 @@ export function fleetReservation(cap: number): CiVector {
 }
 
 /**
- * A runner's daily poll budget: `FYRDEN_CI_POLL_BUDGET` when it lowers
- * the default (an operator's check that revocation works, in minutes
- * rather than hours), else `CI_POLL_BUDGET`. Never above it, so the
- * fleet's reservation still covers it. Polls are leased `CI_POLL_LEASE`
- * at a time, so a value is read down to whole leases, and one below a
- * lease (which would revoke a runner before it served a poll) is ignored.
+ * `FYRDEN_CI_POLL_BUDGET` when it lowers `CI_POLL_BUDGET` (an operator's
+ * check that revocation works), rounded down to whole leases. Never above
+ * the default, which the fleet's reservation covers; ignored below one
+ * lease, which would revoke a runner before its first poll.
  */
 export function ciPollBudget(env: object): number {
   const raw = (env as { FYRDEN_CI_POLL_BUDGET?: unknown }).FYRDEN_CI_POLL_BUDGET;
@@ -124,7 +112,6 @@ export function ciMaxJobMinutes(env: object): number | null {
   return CI_FREE_MAX_JOB_MINUTES;
 }
 
-/** The Worker variables CI's reservations read in the run and account objects. */
 export type CiVariable =
   | "FYRDEN_PLAN"
   | "FYRDEN_CI_DAILY"
@@ -141,7 +128,6 @@ export type CiVariable =
  */
 export const ciVariableOverrides: Partial<Record<CiVariable, string>> = {};
 
-/** `env` as CI's reservations read it: with `ciVariableOverrides` in place. */
 export function ciEnv(env: object): object {
   return { ...env, ...ciVariableOverrides };
 }
@@ -217,7 +203,6 @@ export const CI_JOB_FIXED: CiVector = {
 /** The longest job timeout the ledger prices, in minutes (a week). */
 export const CI_MAX_MINUTES = 10_080;
 
-/** A job's price at its timeout of `minutes`. */
 export function ciJobPrice(minutes: number): CiPrice {
   if (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > CI_MAX_MINUTES)
     throw new RangeError(`minutes ${minutes}`);
@@ -241,15 +226,12 @@ export interface StoredLogReads {
   readonly chunks: number;
   /** Each chunk's bytes times the reads it takes, summed. */
   readonly rereadBytes: number;
-  /** The reads each chunk takes, summed. */
   readonly reads: number;
 }
 
 /** What a viewer's socket may spend, as the run holds it to, and what its ticket is priced for. */
 export interface CiViewerBudget {
-  /** Bytes it may read from storage. */
   readonly readBytes: number;
-  /** Storage read attempts it may make. */
   readonly getAttempts: number;
   /** Checks of its credential and access it may take. */
   readonly checks: number;
@@ -257,13 +239,10 @@ export interface CiViewerBudget {
 
 /**
  * A viewer socket's budget, from the log stored when its ticket is issued
- * and how long rows may flow to it (`activeMs`): the stored log's rereads
- * plus the margin; attempts for each of those reads, one more a chunk for
- * a read cancelled or cut short, one a MiB of the margin, and a margin;
- * checks for its first, one a minute while rows may flow, two for each
- * attempt (a socket reading back is checked at most once a minute, and
- * waits at most two minutes for its window between reads), and a margin.
- * Proposed.
+ * and how long rows may flow to it (`activeMs`). Each chunk gets one
+ * attempt more for a read cancelled or cut short; each attempt two checks
+ * (a socket reading back is checked at most once a minute, and waits at
+ * most two minutes for its window between reads). Proposed.
  */
 export function ciViewerBudget({
   stored,
@@ -397,7 +376,6 @@ function requestError(req: CiGrantRequest): string | null {
   return null;
 }
 
-/** A statement whose values are bound by position, each distinct value once. */
 function statement(
   db: D1Database,
   build: (bind: (value: string | number | null) => string) => string,
@@ -437,16 +415,13 @@ const perMinute = (column: string, r: CiResource) =>
   `CAST(json_extract(${column}, '$.${r}') AS INTEGER)`;
 
 /**
- * Grants `req` from the allowance, in one batch: expired at or after its
- * `validUntil` by D1's clock, whatever else; an existing receipt answers
- * itself (granted, released, or expired once settled); a price over the
- * allowance on any day is too large and writes nothing; otherwise the
- * receipt is written and its price added to every UTC day of its span
- * (from D1's clock, up to but not including `spanMs` later, as settlement
- * splits it) only when every such day stays within the
- * allowance (viewers within their share too) and the fleet within its cap.
- * A refusal writes nothing. A batch whose answer is lost throws; retried
- * with the same key, the receipt answers.
+ * Grants `req` in one batch. At or after `validUntil` (D1's clock) it is
+ * expired; an existing receipt answers itself (granted, released, or
+ * expired once settled); otherwise the price is charged to every UTC day
+ * from now up to `spanMs` later, only if each day stays within the
+ * allowance (viewers within their share too) and the fleet within its
+ * cap. A refusal writes nothing. A lost answer throws; a retry with the
+ * same key gets the receipt's answer.
  */
 export async function grantCi(
   db: D1Database,

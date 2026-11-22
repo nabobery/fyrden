@@ -38,7 +38,6 @@ export async function createRunnerRegistrationTokenOperation(
       "Runner registration is turned off on this deployment.",
     );
   const now = clock();
-  // Advisory: registration's own batch decides.
   const { fleet } = runnerAdmissionFor(ctx.env);
   const room = fleet && (await fleetRoom(ctx.env.DIRECTORY, fleet, now, ctx.metrics));
   if (room === "fleet_full")

@@ -13,14 +13,10 @@ import {
 } from "./budget.js";
 
 /*
- * Whether a live log ticket may be answered, decided after the run stored
- * it (and sized its log). On Free each ticket is granted from the CI
- * ledger as a viewer, priced for its socket's reads and life, which the run
- * holds the socket to; a ticket not granted is deleted by the operation.
- * Paid admits every viewer and budgets nothing.
+ * Decided after the run stored a ticket and sized its log. A ticket not
+ * granted is deleted by the operation.
  */
 
-/** Why a viewer is not admitted: what the operation answers. */
 export interface LogViewerRefusal {
   readonly status: 429 | 503;
   readonly code: string;
@@ -30,7 +26,6 @@ export interface LogViewerRefusal {
   readonly retryAt?: number;
 }
 
-/** A ticket the run stored: what its admission is decided on. */
 export interface StoredTicket {
   readonly hash: string;
   readonly runId: string;
@@ -43,11 +38,7 @@ export interface StoredTicket {
 }
 
 export interface LogViewerAdmission {
-  /**
-   * Whether the run holds a ticket's socket to a budget sized from the log
-   * at issuance, and the longest rows may flow to it (Free's longest job and
-   * the late window); null when unbudgeted.
-   */
+  /** The longest rows may flow to a budgeted socket (Free's longest job and the late window); null when unbudgeted. */
   readonly budget: { readonly maxActiveMs: number } | null;
   onTicket(ticket: StoredTicket): Promise<"ok" | LogViewerRefusal>;
 }
@@ -74,12 +65,6 @@ const unavailable = (message: string): LogViewerRefusal => ({
   message,
 });
 
-/**
- * Free's admission: each ticket granted from the CI ledger as a viewer,
- * keyed by its hash, valid until the ticket expires, priced for the budget
- * the run holds its socket to (`ciViewerPrice`), charged on every UTC day
- * from issuance to the end of its socket's life.
- */
 export function freeViewerAdmission(
   db: D1Database,
   limits: CiLimits & { readonly maxActiveMs: number },
@@ -144,7 +129,6 @@ export function freeViewerAdmission(
   };
 }
 
-/** The deployment's viewer admission, from CI's configuration: Free's ledger, or Paid's none. */
 export function logViewerAdmissionFor(
   env: object,
   db: D1Database,

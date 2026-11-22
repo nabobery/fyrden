@@ -131,7 +131,6 @@ function registerRunnerSql(capped: boolean): string {
          RETURNING id, account_id`;
 }
 
-/** Whether another runner fits the fleet; the reason when not. */
 export type FleetRoom = "room" | "fleet_full" | "polls_spent";
 
 const FLEET_ROOM_SQL = `SELECT f.serving, f.spent FROM ${fleetState("?1", "?2")} f`;
@@ -270,7 +269,6 @@ export type Lease =
   | { readonly status: "revoked"; readonly reason: "poll_rate" | "fleet_cap" }
   | { readonly status: "gone" };
 
-/** Leases a block of `block` polls for runner `id` at `now` under `fleet` (`LEASE_POLLS_SQL`). */
 export async function leasePolls(
   db: D1Database,
   lease: { id: number; now: number; block: number; fleet: FleetLimit },

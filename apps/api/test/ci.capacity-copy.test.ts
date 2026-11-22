@@ -1,6 +1,3 @@
-// `fyrden deploy` refuses CI settings a Free deployment cannot hold from its
-// own copy of the API's numbers (packages/cli/src/ci-capacity.ts): the copy
-// must give the ceiling the API clamps its allowance to.
 import { describe, expect, it } from "vitest";
 import {
   CI_DAILY_RESOURCES,

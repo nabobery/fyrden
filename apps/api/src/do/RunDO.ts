@@ -415,7 +415,6 @@ export class RunDO extends MigratingDO {
     return this.engine.rows("SELECT 1 FROM run_erasure WHERE id = 1").length > 0;
   }
 
-  /** How the run pays for its jobs, from the deployment's variables. */
   #ci() {
     return runCiPolicy(ciEnv(this.env));
   }
@@ -841,9 +840,7 @@ export class RunDO extends MigratingDO {
   /**
    * Instances waiting for a runner, oldest first: those whose CI minutes are
    * reserved, inside their start window, for `accountId` when given, and
-   * priced by the ledger when the deployment has one (a reservation made on
-   * Paid is not offered once it is Free; its next assignment attempt or its
-   * window's end has it reserved again).
+   * priced by the ledger when the deployment has one.
    */
   queued(
     limit = 100,
@@ -1204,8 +1201,6 @@ export class RunDO extends MigratingDO {
    * Stores a live log ticket's hash for job `jobId` (its credential and
    * principal, redeemable through repository `repoId` only); refused for an
    * erased or unknown run, an unknown job, or past the run's unredeemed tickets.
-   * With `budget`, answers the budget its socket is held to and the job's
-   * log as stored now it was sized from (`ViewersHost.storeTicket`).
    */
   storeLogTicket(input: {
     hash: string;
@@ -1218,7 +1213,6 @@ export class RunDO extends MigratingDO {
     return this.viewers.storeTicket(input);
   }
 
-  /** Deletes an unredeemed live log ticket the deployment did not admit. */
   dropLogTicket(hash: string): void {
     this.viewers.dropTicket(hash);
   }
@@ -1509,13 +1503,11 @@ export class RunDO extends MigratingDO {
       this.engine.cancel("concurrency", reason === "evicted" ? "force" : "graceful");
   }
 
-  // ------------------------------------------------------------------ CI reservations
-
   /**
    * Runs the reserve slice now, every refused reservation asked again as at
-   * its retry time: only what the alarm will do, done early (a local check
-   * that a refused job is admitted after the day turns). Takes no time; no
-   * route of the Worker reaches it. Answers the reservations as they stand.
+   * its retry time: what the alarm would do, early (a local check that a
+   * refused job is admitted after the day turns). No route of the Worker
+   * reaches it.
    */
   async ciReserveNow(): Promise<ReservationView[]> {
     if (this.#erased() || !this.engine.run()) return [];

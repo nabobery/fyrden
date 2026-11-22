@@ -19,10 +19,9 @@ export const MAINTENANCE_OBJECT = "instance";
  * The five-minute maintenance: archives the directory's audit log, expires
  * repositories and settles abandoned generations (then advances deletions),
  * reaps idempotency keys, OAuth leftovers, the read model's expired writer
- * leases and failed envelopes kept their time, prunes CI's ledger (whatever
- * watched activity or live hints are doing), stamps a page of ephemeral
- * runners past their end revoked (so the index of runners that may serve
- * stays small), and advances transfers;
+ * leases and failed envelopes kept their time, prunes CI's ledger, stamps
+ * ephemeral runners past their end revoked (so the index of runners that
+ * may serve stays small), and advances transfers;
  * while the read model's maintenance holds ordinary work back, not the
  * tasks that write it (deletions' cleanups, abandoned generations'
  * settling, transfers' fences, pruning failed envelopes). Each

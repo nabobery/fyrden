@@ -372,9 +372,8 @@ async function fetchTask(call: CallContext): Promise<Response> {
 }
 
 /**
- * What a FetchTask refused by admission answers. Every one is
- * `unauthenticated`, the only answer that stops the runner (measured):
- * any other leaves it polling unmetered.
+ * Each is sent as `unauthenticated`, the only answer that stops the runner
+ * (measured); any other leaves it polling unmetered.
  */
 const FETCH_REFUSALS: Readonly<Record<Exclude<FetchAdmission, "ok">, string>> = {
   poll_rate: RUNNER_POLLED_TOO_OFTEN,

@@ -226,11 +226,7 @@ async function pending(runId: string) {
   return results;
 }
 
-/**
- * Waits until run `runId` of `repo` has its one job queued, has the run reserve now (as its
- * alarm would), and answers its reservation: a job no runner may take is never reserved, so
- * never published.
- */
+/** Once the run's one job is queued, has the run reserve now (as its alarm would). */
 async function queuedUnreserved(repo: string, runId: string) {
   await eventually(`the job of ${runId} queued`, async () => {
     const { jobs } = await owner.api.call("actions.runs.jobs.list", {
@@ -1193,7 +1189,6 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
         run_id: runId,
       });
       expect(jobs).toMatchObject([{ status: "queued", waiting_for: null }]);
-      // Never reserved, so never published while the eligible jobs ran.
       expect(await pending(runId)).toEqual([]);
     }
   });

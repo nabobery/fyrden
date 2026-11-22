@@ -17,11 +17,10 @@ import type { CiMinutesAnswer } from "../org/ci-minutes.js";
 import type { RunEngine, RunPolicy, RunRow } from "./engine.js";
 
 /*
- * A run's CI reservations: before a queued job instance is published to
- * runners it reserves its minutes in its account's object and, on Free, its
- * price in the CI ledger first (the cheaper refusal; a ledger refusal writes
- * nothing and asks no account). One row an instance (`ci_reservations`)
- * holds its current reservation; its states:
+ * Before a queued job instance is published it reserves its minutes in its
+ * account's object and, on Free, its price in the CI ledger first (the
+ * cheaper refusal: it writes nothing and asks no account). Its
+ * `ci_reservations` row's states:
  *
  *   wanted   -> wanted    a job no runner may take (a fork job, a public or
  *                        inactive repository): no store asked; checked again
@@ -37,15 +36,12 @@ import type { RunEngine, RunPolicy, RunRow } from "./engine.js";
  *   any      -> ending    the instance ended, with a task or none
  *   ending   -> settled   running: settled in both stores; else released in both
  *
- * Every call is made by the reserve slice with the row's key, its inputs
- * fixed in the row before the first call, and its answer is recorded only
- * while the row still has the seq and state it was asked from. A call
- * without an answer leaves the row as it was, so the slice asks again with
- * the same key; the answer that led to a release stays the same (a lapsed
- * window, an expired key, a key the account released), so a release whose
- * answer was lost is asked again too. A release of a key never granted
- * leaves a tombstone in each store, so a reserve still in flight grants
- * nothing later.
+ * Every call carries the row's key, its inputs fixed in the row before the
+ * first call. A call without an answer leaves the row as it was, so the
+ * slice asks again with the same key; a lost release too, since its cause
+ * (a lapsed window, an expired or released key) stays. A release of a key
+ * never granted leaves a tombstone in each store, so a reserve still in
+ * flight grants nothing later.
  */
 
 /** A reservation not assigned within this is released and made again. Proposed. */
@@ -61,11 +57,9 @@ export const CI_RETRY_JITTER_MS = 60_000;
 export const CI_RESERVATION_ASKS = 3;
 /** The wait before the first ask after an expired answer; it doubles with each. Proposed. */
 export const CI_EXPIRED_RETRY_MS = 60_000;
-/** Rows one slice deals with. */
 const PAGE = 16;
 const MIN = 60_000;
 
-/** A store call of the reserve slice, as its hooks name it. */
 export type CiCall =
   | "grant"
   | "reserve"
@@ -74,22 +68,19 @@ export type CiCall =
   | "ledger_settle"
   | "minutes_settle";
 
-/** Pause or fail points around each store call, for tests. */
 export interface ReservationHooks {
   beforeCiCall?: (op: CiCall, key: string) => Promise<void> | void;
   /** After the store answered, before its answer is recorded. */
   afterCiCall?: (op: CiCall, key: string) => Promise<void> | void;
 }
 
-/** How a run pays for its jobs. */
 export interface RunCiPolicy {
   /** Free: the CI ledger's limits, granted from before the account's minutes; Paid: null. */
   readonly ledger: CiLimits | null;
-  /** Free: the longest a job may run, in minutes; Paid: null (its own timeout). */
   readonly maxJobMinutes: number | null;
 }
 
-/** The policy `env` sets (read through `ciEnv` by the run). */
+/** `env` read through `ciEnv`. */
 export function runCiPolicy(env: object): RunCiPolicy {
   const allowance = ciAllowance(env);
   return {
@@ -133,7 +124,6 @@ export interface ReservationRow {
   asked_for: string | null;
 }
 
-/** A row whose inputs are fixed. */
 type Fixed = ReservationRow & {
   key: string;
   account_id: string;
@@ -144,7 +134,6 @@ type Fixed = ReservationRow & {
   settle_by: number;
 };
 
-/** A reservation as `ciReserveNow` reports it. */
 export interface ReservationView {
   readonly jobId: number;
   readonly seq: number;
@@ -152,7 +141,6 @@ export interface ReservationView {
   readonly waitingFor: WaitingFor | null;
 }
 
-/** What the reservations need from their object. */
 export interface ReservationHost {
   readonly env: Env;
   readonly engine: RunEngine;
@@ -164,7 +152,6 @@ export interface ReservationHost {
   tx<T>(fn: () => T): T;
   /** Writes `fn` only while the run exists and `job`'s slice still holds its claim. */
   guarded(job: Job, fn: () => void): void;
-  /** How the run pays for its jobs now. */
   ci(): RunCiPolicy;
   /** Has the reserve slice run at `runAt` (now by default), or earlier. */
   ensureSlice(runAt?: number): void;
@@ -172,12 +159,10 @@ export interface ReservationHost {
   ensureResync(): void;
 }
 
-/** What a too-large job's instance is failed with. */
 function tooLarge(minutes: number): string {
   return `ci_too_large: at its timeout of ${minutes} minutes the job costs more than this deployment's daily CI allowance; a shorter timeout-minutes may fit`;
 }
 
-/** What a job needing more than its account's or agent's monthly CI minutes is failed with. */
 function overMonth(minutes: number, reason: "account" | "agent", limit: number): string {
   const whose = reason === "account" ? "the account's" : "the agent's";
   return `ci_too_large: at its timeout of ${minutes} minutes the job needs more than ${whose} ${limit} CI minutes a month; a shorter timeout-minutes may fit`;
@@ -190,14 +175,13 @@ function jitter(key: string): number {
   return (hash >>> 0) % CI_RETRY_JITTER_MS;
 }
 
-/** Rows with work due at the time bound three times after it. */
+/** Rows with work due; binds the time three times. */
 const DUE = `(rebind = 1 OR state IN ('minutes', 'ending')
   OR (state = 'wanted' AND ineligible_at IS NULL AND (retry_at IS NULL OR retry_at <= ?))
   OR (state = 'reserved' AND window_until <= ?)
   OR (state = 'refused' AND retry_at <= ?))`;
 
 export class RunReservations {
-  /** Whether this object has warned that a store's clock seems ahead of the run's. */
   #clockWarned = false;
 
   constructor(private readonly host: ReservationHost) {}
@@ -209,9 +193,6 @@ export class RunReservations {
     )[0];
   }
 
-  // ---------------------------------------------------------------- in the caller's transaction
-
-  /** An instance was queued: it reserves before it is published. */
   want(jobId: number): void {
     this.host.engine.exec(
       "INSERT INTO ci_reservations (job_id, seq, state) VALUES (?, 1, 'wanted') ON CONFLICT DO NOTHING",
@@ -221,9 +202,8 @@ export class RunReservations {
   }
 
   /**
-   * An instance ended, by any path: its reservation is settled or released by
-   * the slice, for the account it was made for. A mark to reserve again for a
-   * new owner is dropped: nothing is left to reserve.
+   * Its reservation is settled or released by the slice, for the account it
+   * was made for; a pending rebind is dropped.
    */
   end(jobId: number, at: number): void {
     const row = this.row(jobId);
@@ -241,15 +221,13 @@ export class RunReservations {
    * `accountId`: reserved, inside its start window, for that account, and
    * priced by the ledger when the deployment has one. One reserved for
    * another account, or reserved on Paid before the deployment moved to
-   * Free, is released and reserved again.
+   * Free, is released and reserved again, never run on the old terms.
    */
   admits(jobId: number, accountId: string | undefined): boolean {
     const row = this.row(jobId);
     const now = this.host.now();
     if (row?.state !== "reserved" || row.rebind === 1 || (row.window_until ?? 0) <= now)
       return false;
-    // Reserved without the ledger (Paid) while the deployment is now Free: released and reserved
-    // again under Free's allowance and clamp, never run on the old terms.
     if (row.price === null && this.host.ci().ledger !== null) {
       this.#closeWindow(jobId, now);
       return false;
@@ -259,7 +237,6 @@ export class RunReservations {
     return false;
   }
 
-  /** A new assignment of instance `jobId` at `at`: its reservation runs. */
   started(jobId: number, at: number): void {
     this.host.engine.exec(
       "UPDATE ci_reservations SET state = 'running', started_at = ? WHERE job_id = ? AND state = 'reserved'",
@@ -355,12 +332,6 @@ export class RunReservations {
       .map((r) => ({ jobId: r.job_id, seq: r.seq, state: r.state, waitingFor: r.waiting_for }));
   }
 
-  // ---------------------------------------------------------------- the reserve slice
-
-  /**
-   * Moves due reservations on, a page at a time, each by the calls its state
-   * needs; then schedules itself for the next window or retry time.
-   */
   async slice(job: Job): Promise<SliceResult> {
     const run = this.host.engine.run();
     if (!run) return { done: true };
@@ -405,7 +376,6 @@ export class RunReservations {
     return { done: false, cursor: null, runAfterMs: Math.max(0, later.at - now) };
   }
 
-  /** One transition of `row`, and the row as it now stands when another may follow at once. */
   async #step(
     job: Job,
     run: RunRow,
@@ -438,7 +408,6 @@ export class RunReservations {
     }
   }
 
-  /** Fixes a new reservation's inputs, before any store is asked. */
   #fix(job: Job, run: RunRow, row: ReservationRow, directory: Directory): Step {
     const { engine, policy } = this.host;
     // A repository gone from the directory: the run is erased once its repository says so.
@@ -492,7 +461,6 @@ export class RunReservations {
         now,
         now + CI_RESERVATION_VALIDITY_MS,
         now + span + CI_SETTLE_GRACE_MS,
-        // Paid asks only the account.
         price ? "wanted" : "minutes",
         directory.owner as string,
         row.job_id,
@@ -502,7 +470,6 @@ export class RunReservations {
     return then ? { then } : {};
   }
 
-  /** Free: the CI ledger's grant for every day the job may run on. */
   async #grant(job: Job, row: Fixed): Promise<boolean> {
     const limits = this.host.ci().ledger;
     if (row.price === null)
@@ -551,14 +518,12 @@ export class RunReservations {
     }
   }
 
-  /** Fails a queued instance that no allowance can ever admit. */
   #fail(row: Fixed, error: string): void {
     const instance = this.host.engine.instance(row.job_id);
     if (instance?.status === "queued")
       this.host.engine.applyInstance(instance, { kind: "fail" }, { error });
   }
 
-  /** The account's minutes; refused, the ledger's grant goes back (its fixed part kept). */
   async #reserve(job: Job, row: Fixed): Promise<boolean> {
     const answer = await this.#call(
       "reserve",
@@ -603,7 +568,6 @@ export class RunReservations {
     }
   }
 
-  /** A start window past (or closed by an account move): withdrawn, released, made again. */
   async #lapse(job: Job, row: Fixed): Promise<boolean> {
     // Out of its window it is published no more: the dispatch index withdraws it now.
     if (!this.#record(job, row, () => this.host.engine.bumpQueue())) return false;
@@ -611,7 +575,6 @@ export class RunReservations {
     return this.#record(job, row, () => this.#nextSeq(row));
   }
 
-  /** An ended instance's reservation: settled at what it ran, or released, in both stores. */
   async #resolve(job: Job, row: ReservationRow): Promise<boolean> {
     if (row.key !== null) {
       const r = fixed(row);
@@ -676,7 +639,7 @@ export class RunReservations {
     );
   }
 
-  /** The next reservation of the instance: nothing fixed yet; why it waited stays until it is reserved. */
+  /** `waiting_for` stays until the next reservation is reserved. */
   #nextSeq(row: ReservationRow): void {
     this.#set(
       row.job_id,
@@ -718,7 +681,6 @@ export class RunReservations {
     );
   }
 
-  /** Made for an account that no longer owns the repository: released, and made again for its owner. */
   async #rebind(job: Job, row: Fixed): Promise<void> {
     if (row.state === "reserved" && !this.#record(job, row, () => this.host.engine.bumpQueue()))
       return;

@@ -1,18 +1,16 @@
 import { type WranglerRunner, wrangler } from "./wrangler.ts";
 
 /*
- * A Worker's live versions and their plain-text variables, read with
- * wrangler's `deployments status --json` and `versions view --json`. The JSON
- * shapes are read from wrangler's source; not yet run against a live account.
+ * The JSON shapes of wrangler's `deployments status --json` and `versions view
+ * --json` are read from its source; unverified against a live account.
  */
 
-/** A version serving some of the Worker's traffic. */
 export interface LiveVersion {
   readonly version_id: string;
   readonly percentage: number;
 }
 
-/** The versions serving the Worker's traffic; empty when it has no deployment. */
+/** Empty when the Worker has no deployment. */
 export async function liveVersions(
   runner: WranglerRunner,
   worker: string,
@@ -23,7 +21,7 @@ export async function liveVersions(
   return status.versions ?? [];
 }
 
-/** A version's plain-text variables, by name. */
+/** Plain-text variables only. */
 export async function versionVars(
   runner: WranglerRunner,
   worker: string,

@@ -1,10 +1,5 @@
-// A run's jobs reserve CI minutes in their account's object before they are
-// published to runners, and on Free a daily allowance in the CI ledger
-// first. A refusal publishes nothing and asks again after the next UTC
-// midnight; a reservation not assigned within its start window is released
-// and made again; every end, with a task or none, settles or releases both
-// stores by key. The run, the account's object and D1's ledger clock are
-// set to the same instant by each test; the alarms it needs it runs itself.
+// Each test sets the run, the account's object and D1's ledger clock to the
+// same instant, and runs the alarms it needs itself.
 
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -46,7 +41,6 @@ const DAY = 24 * HOUR;
 const one = workflow(job("a"));
 const two = workflow([job("a"), job("b")].join("\n"));
 
-/** D1's clock in every CI ledger statement of this isolate, the run objects' among them. */
 const ledgerClock = { now: 0 };
 let unpin: () => void;
 beforeAll(() => {
@@ -65,24 +59,19 @@ function freshNoon(): number {
   return Date.UTC(2031, 5, 1) + days * DAY + 12 * HOUR;
 }
 
-/**
- * A fresh day's noon, with every clock set to it: user tokens made from here on are valid at
- * this test's times.
- */
+/** Sets every clock to a fresh noon, so user tokens made afterwards are valid at this test's times. */
 async function today(): Promise<number> {
   const t = freshNoon();
   await moveTo(t);
   return t;
 }
 
-/** The account's object, D1's ledger clock and (with `runId`) the run, all at `t`. */
 async function moveTo(t: number, runId?: string): Promise<void> {
   vi.setSystemTime(t);
   ledgerClock.now = t;
   if (runId) await at(runId, t);
 }
 
-/** Starts a run of `source` at `t` and runs its first steps. */
 async function startedAt(
   f: Fixture,
   source: string,
@@ -144,7 +133,6 @@ const minutesOf = (accountId: string, runId: string) =>
       .toArray(),
   );
 
-/** Records the reservation calls the run makes, by operation and key. */
 async function recordCalls(runId: string): Promise<{ op: CiCall; key: string }[]> {
   const calls: { op: CiCall; key: string }[] = [];
   await inRun(runId, (r) => {
@@ -158,7 +146,6 @@ async function recordCalls(runId: string): Promise<{ op: CiCall; key: string }[]
   return calls;
 }
 
-/** The `timeout-minutes` of job `a` in a task's workflow payload, as the runner reads it. */
 const payloadTimeout = (payload: Uint8Array) =>
   (
     JSON.parse(new TextDecoder().decode(payload)) as {
@@ -193,7 +180,6 @@ describe("publishing", () => {
     expect((await jobNamed(spec.runId, "a")).status).toBe("queued");
     expect(await pendingOf(spec.runId)).toEqual([]);
     expect(await reservationOf(spec.runId, "a")).toMatchObject({ seq: 1, state: "wanted" });
-    // Not assignable either.
     expect(await assign(spec.runId, "a", "k", f.owner.principalId)).toEqual({
       ok: false,
       code: "not_queued",
@@ -231,7 +217,6 @@ describe("publishing", () => {
       ok: false,
       code: "not_queued",
     });
-    // Refused for another account: released and reserved again for the repository's owner.
     await drain(runId);
     const { jobId } = await jobNamed(runId, "a");
     expect(await minutesOf(f.owner.principalId, runId)).toEqual([
@@ -253,7 +238,6 @@ describe("publishing", () => {
       state: "reserved",
       price: null,
     });
-    // The deployment moves to Free while the Paid reservation's window is still open.
     ciVariableOverrides.FYRDEN_PLAN = "free";
     expect(await inRun(runId, (r) => r.queued().length)).toBe(0);
     expect(await assign(runId, "a", "k1", f.owner.principalId)).toEqual({
@@ -296,7 +280,6 @@ describe("publishing", () => {
     await inRun(spec.runId, (r) => {
       r.hooks = {};
     });
-    // The deployment moves to Paid before the grant runs: the priced key is given up.
     ciVariableOverrides.FYRDEN_PLAN = "paid";
     await moveTo(t + 10 * MIN, spec.runId);
     await drain(spec.runId);
@@ -309,7 +292,6 @@ describe("publishing", () => {
     expect(await receiptsOf(spec.runId)).toEqual([
       expect.objectContaining({ key: `${spec.runId}/j${jobId}/r1`, state: "released" }),
     ]);
-    // Back on Free, the Paid reservation is not taken as granted.
     ciVariableOverrides.FYRDEN_PLAN = "free";
     expect(await assign(spec.runId, "a", "k", f.owner.principalId)).toEqual({
       ok: false,
@@ -340,7 +322,7 @@ describe("publishing", () => {
 });
 
 describe("a job queued before its run reserved", () => {
-  /** Drops the account's minutes for the run's jobs, as an object from before reservations held none. */
+  /** As an account object from before reservations held minutes. */
   const forgetMinutes = (accountId: string, runId: string) =>
     runInDurableObject(env.ORG.getByName(accountId), (_, state) => {
       state.storage.sql.exec("DELETE FROM ci_minutes WHERE key LIKE ?", `${runId}/%`);
@@ -412,7 +394,6 @@ describe("a job no runner may take", () => {
     env.DIRECTORY.prepare("UPDATE repos SET visibility = ? WHERE id = ?")
       .bind(visibility, repoId)
       .run();
-  /** A pull request's run whose head is in another repository, needing no approval. */
   const forkRun: Partial<RunSpec> = {
     event: "pull_request",
     ref: "refs/pull/1/head",
@@ -443,12 +424,10 @@ describe("a job no runner may take", () => {
       expect(await receiptsOf(runId)).toEqual([]);
       expect(await minutesOf(f.org.id, runId)).toEqual([]);
       expect(await dayOf(t)).toBeNull();
-      // Checked again at each dispatch pass, still asking nothing.
       await moveTo(t + 5 * MIN, runId);
       await drain(runId);
       expect(calls).toEqual([]);
       expect(await reservationOf(runId, "a")).toMatchObject({ seq: 1, state: "wanted" });
-      // Ended, it settles with no call either.
       await runStub(runId).cancel(f.owner.principalId, "graceful");
       await drain(runId);
       expect(await reservationOf(runId, "a")).toMatchObject({ state: "settled", key: null });
@@ -673,7 +652,6 @@ describe("the daily allowance on Free", () => {
     expect((await receiptsOf(runId))[0]?.minutes).toBe(180);
     const answer = await assign(runId, "a", "k", f.owner.principalId);
     expect(answer.ok && answer.timeoutMinutes).toBe(180);
-    // The runner enforces the clamped timeout: its task's payload says so.
     expect(answer.ok && payloadTimeout(answer.payload)).toBe(180);
     const { jobId } = await jobNamed(runId, "a");
     const row = await inRun(runId, (r) => r.engine.instance(jobId));
@@ -910,7 +888,6 @@ describe("the start window", () => {
     expect(first.ok).toBe(true);
     await at(runId, t + 2 * HOUR);
     expect(await assign(runId, "a", "k-a", f.owner.principalId)).toEqual(first);
-    // A new assignment of a job whose window lapsed is refused, before the run releases it.
     expect(await assign(runId, "b", "k-b", f.owner.principalId)).toEqual({
       ok: false,
       code: "not_queued",

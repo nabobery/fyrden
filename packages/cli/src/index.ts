@@ -320,11 +320,7 @@ function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | nu
   return { sockets: Number(sockets) };
 }
 
-/**
- * `--ci-since` in milliseconds since the epoch, read as the API reads
- * `FYRDEN_CI_SINCE` (apps/api/src/runner/service.ts `ciSince`): an ISO 8601
- * time with a zone, or milliseconds; null for anything else.
- */
+/** Read as the API reads `FYRDEN_CI_SINCE` (apps/api/src/runner/service.ts `ciSince`); null for anything else. */
 export function ciSinceMs(text: string): number | null {
   if (/^\d+$/.test(text)) return Number(text) <= 8_640_000_000_000_000 ? Number(text) : null;
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(text))
@@ -334,12 +330,8 @@ export function ciSinceMs(text: string): number | null {
 }
 
 /**
- * The CI flags, each as the API reads its variable: `--ci-runners on|off`
- * on either plan; `--ci-fleet N` (0 to 999,999), `--ci-daily` and
- * `--ci-max-job-minutes N` (1 to 7,200) on Free only, since Paid reads
- * none of them; `--ci-since` only while runners are on (Paid unless
- * `--ci-runners off`, Free only with `--ci-runners on`). Undefined when none
- * is given; null for anything else.
+ * Undefined when no CI flag is given; null when one is invalid. `--ci-fleet`,
+ * `--ci-daily` and `--ci-max-job-minutes` are Free only: Paid reads none of them.
  */
 function ciArgs(given: ReadonlyMap<string, string>, plan: Plan): CiSettings | undefined | null {
   const runners = given.get("--ci-runners");
@@ -378,7 +370,7 @@ export const DISCRETIONARY_RESOURCES: ReadonlySet<string> = new Set([
   "queue_ops",
 ]);
 
-/** The resources `FYRDEN_CI_DAILY` names (apps/api/src/ci/budget.ts): discretionary work's, Worker requests and R2 reads. */
+/** The resources `FYRDEN_CI_DAILY` names (apps/api/src/ci/budget.ts). */
 export const CI_RESOURCES: ReadonlySet<string> = new Set([
   ...DISCRETIONARY_RESOURCES,
   "worker_requests",

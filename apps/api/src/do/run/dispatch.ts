@@ -142,17 +142,11 @@ export interface DispatchHost {
   guarded(job: Job, fn: () => void): void;
   /** Has the dispatch index synced soon (its job runs now). */
   ensureDispatch(): void;
-  /** Queued instances whose CI minutes are reserved for `accountId`, inside their start window. */
   queued(
     limit: number,
     accountId?: string,
   ): { jobId: number; attempt: number; runsOn: string[]; queuedAt: number }[];
-  /**
-   * The repository's owner is `accountId` now: unassigned reservations made
-   * for another are made again, and jobs found ineligible are checked again.
-   */
   ownedBy(accountId: string): void;
-  /** Whether a queued job waits unpublished (to be eligible, refused, or asking). */
   reservationsWaiting(): boolean;
   assign(jobId: number, assignKey: string, accountId: string): AssignAnswer;
   taskLive(ref: TaskRef): boolean;
@@ -876,9 +870,8 @@ export class RunDispatch {
         .bind(run.run_id),
     ]);
     const accountId = (owner?.results[0] as { owner_id: string } | undefined)?.owner_id;
-    // The queued set and its revision, read together after D1 answered. Only jobs reserved for
-    // the repository's owner are published; one reserved for another account is reserved again.
-    // A repository no longer in the directory runs nothing more: everything is withdrawn.
+    // The queued set and its revision, read together after D1 answered. A repository no longer in
+    // the directory runs nothing more: everything is withdrawn.
     const { rev, queued } = host.tx(() => {
       if (accountId !== undefined) host.ownedBy(accountId);
       return {

@@ -1514,17 +1514,14 @@ export class OrgDO extends MigratingDO {
     return new CiMinutes(this.ctx.storage, ciMinuteLimits(ciEnv(this.env)), () => this.#now());
   }
 
-  /** Holds a CI job's minutes by key before it may start (see `CiMinutes.reserve`). */
   reserveCiMinutes(input: CiMinutesRequest): CiMinutesAnswer {
     return this.#ciMinutes().reserve(input);
   }
 
-  /** Settles a CI job's held minutes at what it ran (see `CiMinutes.settle`). */
   settleCiMinutes(key: string, actualMs: number): CiMinutesSettlement {
     return this.#ciMinutes().settle(key, actualMs);
   }
 
-  /** Releases a CI job's minutes by key, held or not (see `CiMinutes.release`). */
   releaseCiMinutes(key: string): "released" | "settled" {
     return this.#ciMinutes().release(key);
   }

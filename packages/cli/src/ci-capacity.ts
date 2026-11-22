@@ -1,11 +1,9 @@
 /*
- * What CI may take of a Free deployment's daily limits, as the API computes
- * it (apps/api/src/ci/budget.ts `ciAllowance`, `fleetReservation`; live's
- * `LIVE_DAILY`; discretionary work's `FREE_DAILY` and `FREE_SHARE`). The API
- * clamps its allowance to this ceiling whatever is set; `fyrden deploy`
- * reads it to refuse a value the API would not honor. Copied, not imported
- * (the CLI depends on no workspace package): apps/api/test/ci.capacity-copy.test.ts
- * fails when the copies differ.
+ * A copy of the ceiling apps/api/src/ci/budget.ts clamps CI's Free allowance to
+ * (`ciAllowance`, `fleetReservation`, `LIVE_DAILY`, `FREE_DAILY`, `FREE_SHARE`),
+ * so `fyrden deploy` can refuse values the API would not honor. The CLI depends
+ * on no workspace package; apps/api/test/ci.capacity-copy.test.ts fails when the
+ * copies differ.
  */
 
 export const CI_DAILY_RESOURCES = [
@@ -32,7 +30,6 @@ const DISCRETIONARY: ReadonlySet<CiDailyResource> = new Set([
   "queue_ops",
 ]);
 
-/** Workers Free's daily limits CI is priced in. */
 export const CI_FREE_DAILY: CiDaily = {
   do_requests: 100_000,
   do_rows_read: 5_000_000,
@@ -45,7 +42,6 @@ export const CI_FREE_DAILY: CiDaily = {
   r2_class_b: Math.floor(10_000_000 / 31),
 };
 
-/** Live hints' daily allowance, kept from CI whether or not live is on. */
 const LIVE_DAILY: Partial<CiDaily> = {
   do_requests: 30_000,
   do_rows_read: 2_000_000,
@@ -56,10 +52,8 @@ const LIVE_DAILY: Partial<CiDaily> = {
   queue_ops: 0,
 };
 
-/** Discretionary work's share of each Free limit unless set. */
 const DISCRETIONARY_SHARE = 0.2;
 
-/** A Free deployment's runners unless `--ci-fleet` is given. */
 export const CI_FREE_FLEET = 2;
 
 const POLL_BUDGET = 21_600;
@@ -68,7 +62,6 @@ const POLL_LEASE = 60;
 const POLL_D1_ROWS_READ = 5;
 const LEASE_D1_ROWS_WRITTEN = 2;
 
-/** The fleet's daily reservation: `cap` runners each at its poll budget plus slack. */
 export function fleetReservation(cap: number): CiDaily {
   const polls = cap * (POLL_BUDGET + Math.ceil((POLL_BUDGET * POLL_SLACK_PERCENT) / 100));
   const leases = Math.ceil(polls / POLL_LEASE);
@@ -81,7 +74,7 @@ export function fleetReservation(cap: number): CiDaily {
   };
 }
 
-/** A `resource=n,…` allowance read whole (the caller has checked its form). */
+/** The caller has checked the `resource=n,…` form. */
 export function dailyValues(value: string | undefined): Partial<Record<string, number>> {
   if (value === undefined) return {};
   return Object.fromEntries(
@@ -92,13 +85,7 @@ export function dailyValues(value: string | undefined): Partial<Record<string, n
   );
 }
 
-/**
- * The most CI's daily allowance may be in each resource on Free: Free's
- * limit less the fleet's reservation and, for discretionary resources,
- * live's allowance and discretionary work's (`discretionary`, as
- * `--discretionary` gives it, else its default share). Negative where the
- * others alone pass the limit.
- */
+/** Negative where the fleet, live hints and discretionary work alone pass Free's limit. */
 export function ciDailyCeiling(fleet: number, discretionary?: string): CiDaily {
   const reserved = fleetReservation(fleet);
   const set = dailyValues(discretionary);
@@ -113,12 +100,7 @@ export function ciDailyCeiling(fleet: number, discretionary?: string): CiDaily {
   ) as CiDaily;
 }
 
-/**
- * Why a Free deployment's CI settings cannot hold, one line each: a fleet
- * whose polling, with live's and discretionary work's allowances, passes
- * Free's limits; or an allowance (`daily`, as `--ci-daily` gives it) above
- * what they leave. Empty when they fit.
- */
+/** One message per resource that cannot hold; empty when the settings fit. */
 export function ciCapacityProblems(options: {
   fleet: number;
   daily?: string | undefined;

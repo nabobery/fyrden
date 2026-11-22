@@ -32,7 +32,6 @@ import type { Fixture } from "./runs.js";
  */
 export const ROOMY_FLEET: Partial<Env> = { FYRDEN_CI_FLEET: "100000" } as Partial<Env>;
 
-/** Runners on, with room for every runner the file registers. */
 export const ON: Partial<Env> = { FYRDEN_CI_RUNNERS: "on", ...ROOMY_FLEET } as Partial<Env>;
 
 /** Runs the app against the test env with some bindings replaced. */

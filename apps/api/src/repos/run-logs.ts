@@ -14,11 +14,9 @@ import { runOf } from "./runs.js";
  * The `actions.runs.jobs.live_ticket` operation: a single-use ticket to watch
  * a job's log over a WebSocket (`live/run-logs-route.ts`). The ticket is made
  * and hashed here; only its hash goes to the run's object, which keeps it for
- * the job, the credential and the repository it was issued through, and
- * answers the job's log as stored. The deployment's viewer admission then
- * decides on that stored ticket (on Free, a grant from the CI ledger); a
- * ticket it refuses is deleted before the refusal is answered, and was never
- * disclosed.
+ * the job, the credential and the repository it was issued through.
+ * Admission is decided on the stored ticket; a refused ticket is deleted
+ * before the refusal is answered, and was never disclosed.
  */
 
 export async function issueJobLogTicketOperation(

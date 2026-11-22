@@ -19,20 +19,19 @@ import { provision } from "./provision.ts";
 
 export type Plan = "free" | "paid";
 
-/** CI's deploy settings, each set as its Worker variable (left out: the plan's default). */
+/** Each is set as its Worker variable; left out, the plan's default. */
 export interface CiSettings {
   /** `FYRDEN_CI_RUNNERS`: left out, on for Paid and off for Free. */
   runners?: "on" | "off";
-  /** `FYRDEN_CI_FLEET` (Free): the most runners the deployment holds, 2 unless given. */
+  /** `FYRDEN_CI_FLEET` (Free): the most runners the deployment holds. */
   fleet?: number;
   /** `FYRDEN_CI_DAILY` (Free): CI's daily allowance, `resource=n,…`. */
   daily?: string;
-  /** `FYRDEN_CI_MAX_JOB_MINUTES` (Free): the longest a job may run. */
+  /** `FYRDEN_CI_MAX_JOB_MINUTES` (Free). */
   maxJobMinutes?: number;
   /**
-   * `FYRDEN_CI_SINCE` while runners are on. Left out, the live version's is
-   * kept while runners stay on, and the deploy's time is set when this deploy
-   * switches them on.
+   * `FYRDEN_CI_SINCE` while runners are on. Left out: the live version's while
+   * runners stay on, else the deploy's time.
    */
   since?: string;
 }
@@ -79,9 +78,8 @@ export interface DeployDeps {
    * when given, 15 on Free when not); left out, off (each deploy sets the variables).
    */
   live?: { sockets?: number } | undefined;
-  /** CI runners and their capacity (left out: the plan's defaults; see `CiSettings`). */
   ci?: CiSettings | undefined;
-  /** The deploy's clock (tests): `FYRDEN_CI_SINCE` when this deploy switches runners on. */
+  /** The deploy's clock, for tests. */
   now?: () => number;
   /**
    * The email provider, set as `FYRDEN_EMAIL_PROVIDER` and
@@ -560,17 +558,13 @@ async function checkEnforcementInstall(
 }
 
 /**
- * CI's Worker variables from the deploy's settings, and the fleet cap a
- * deploy turning runners on must find a Free deployment within (null when
- * runners are off, and on Paid, which caps no fleet). Refuses, before anything changes, a
- * `--ci-since` too far ahead for the API to apply, and on Free a fleet or an
- * allowance that Free's limits cannot hold beside live hints and
- * discretionary work.
+ * `fleetCap` is null when runners are off or on Paid. Refuses, before anything
+ * changes, a `--ci-since` too far ahead for the API to apply and, on Free,
+ * settings Free's limits cannot hold.
  */
 function ciVariables(deps: DeployDeps): {
   vars: Record<string, string>;
   fleetCap: number | null;
-  /** Runners on without `--ci-since`: `FYRDEN_CI_SINCE` follows the live version (`carriedCiSince`). */
   carrySince: boolean;
 } {
   const settings = deps.ci ?? {};
@@ -618,15 +612,11 @@ function ciVariables(deps: DeployDeps): {
 const NO_DEPLOYMENTS = /no deployments/i;
 
 /**
- * `FYRDEN_CI_SINCE` for a deploy leaving runners on without `--ci-since`:
- * the live version's (none if it has none) while its runners are on, so a
- * redeploy never closes the trigger events still pending from before it;
- * else, this deploy switching runners on (a first deploy, or the live
- * version off), the deploy's time. The live version's runners are on only
- * with `FYRDEN_CI_RUNNERS=on`: every deploy writes the switch, so one without
- * it was made before it was written, when unset meant off. Refuses, before
- * anything is uploaded, when the live state cannot be read or two versions
- * share the traffic.
+ * Keeps the live version's `FYRDEN_CI_SINCE` while its runners are on, so a
+ * redeploy never closes trigger events still pending from before it; else the
+ * deploy's time. A live version without `FYRDEN_CI_RUNNERS=on` predates the
+ * switch, when unset meant off. Refuses, before anything is uploaded, when the
+ * live state cannot be read or two versions share the traffic.
  */
 async function carriedCiSince(
   runner: WranglerRunner,
@@ -662,15 +652,12 @@ async function carriedCiSince(
   return since === undefined ? {} : { FYRDEN_CI_SINCE: since };
 }
 
-/** Runners listed in a fleet refusal, at most. */
 const FLEET_LISTED = 20;
 
 /**
- * Refuses, before migrations or any Worker changes, a deployment whose
- * serving runners (not revoked, and not an ephemeral one past its end:
- * apps/api/src/ci/budget.ts `servingRunners`) are more than `cap`, listing
- * the newest, the ones the API would revoke. A directory without runners
- * (a first deploy) passes.
+ * Refuses, before migrations or any Worker change, more serving runners (as
+ * apps/api/src/ci/budget.ts `servingRunners` counts them) than `cap`, listing
+ * the newest, which the API would revoke.
  */
 async function checkFleet(
   runner: WranglerRunner,

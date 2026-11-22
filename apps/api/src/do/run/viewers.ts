@@ -144,7 +144,7 @@ export interface ViewerAttachment {
   /** Counted control messages in the minute that started at `minute`. */
   readonly minute: number;
   readonly controls: number;
-  /** What it may still read from storage, from its ticket's budget; none when unbudgeted. */
+  /** What is left of its ticket's budget; absent when unbudgeted. */
   readonly budget?: ReadBudget;
 }
 
@@ -208,10 +208,9 @@ export interface ViewerHooks {
 export const viewerHooks: ViewerHooks = {};
 
 /**
- * A job's log when a ticket is stored: its current task's manifest (bytes,
- * and how a socket would read it back), and how much longer rows may flow
- * to a socket: the job's timeout and the late window while it may run, the
- * rest of the late window once it completed, nothing once its log is sealed.
+ * A job's log when a ticket is stored. `activeMs`, how much longer rows may
+ * flow to a socket: the job's timeout and the late window while it may run,
+ * the rest of the late window once it completed, nothing once sealed.
  */
 export interface StoredLog extends StoredLogReads {
   readonly bytes: number;
@@ -222,9 +221,7 @@ export type StoreTicketAnswer =
   | {
       readonly ok: true;
       readonly expiresAt: number;
-      /** The log its budget was sized from. */
       readonly stored: StoredLog;
-      /** What its socket is held to. */
       readonly budget: CiViewerBudget;
     }
   | { readonly ok: true; readonly expiresAt: number; readonly stored: null; readonly budget: null }
@@ -355,10 +352,9 @@ export class LogViewers {
    * Stores a ticket's hash for job `jobId`, redeemable by `credentialId`
    * through repository `repoId` for `LOG_VIEWER_POLICY.ticketMs` on this
    * object's clock (the one its redemption is judged by). Expired tickets go first.
-   * With `budget`, the socket redeemed from it is held to the budget
-   * (`ciViewerBudget`) the job's log as stored now and how long rows may
-   * flow to it allow (at most its life and `maxActiveMs`), and answers both;
-   * without, the log is not read.
+   * With `budget`, the redeemed socket is held to `ciViewerBudget` of the
+   * log as stored now and how long rows may flow to it (at most its life and
+   * `maxActiveMs`), and both are answered; without, the log is not read.
    */
   storeTicket(input: {
     hash: string;
@@ -413,7 +409,6 @@ export class LogViewers {
     });
   }
 
-  /** Deletes an unredeemed ticket (one the deployment would not admit). */
   dropTicket(hash: string): void {
     this.host.engine.exec("DELETE FROM ci_log_tickets WHERE hash = ?", hash);
   }
@@ -824,9 +819,9 @@ export class LogViewers {
   /**
    * Checks the credentials of sockets never checked here, and of stale ones
    * with work, by credential, at most `rechecks` of them; each socket against
-   * the dependencies it was opened on. Each budgeted socket due is charged a
-   * check first; one with none left is ended instead. True when an account
-   * could not answer (those sockets stay unchecked).
+   * the dependencies it was opened on. Each budgeted socket due pays a check
+   * first, whether or not it is answered; one with none left is ended. True
+   * when an account could not answer (those sockets stay unchecked).
    */
   async #recheck(): Promise<boolean> {
     const { host } = this;
@@ -840,7 +835,6 @@ export class LogViewers {
       // A socket never checked here is checked at once; a stale one only when it has work.
       if (state.checkedAt > 0 && this.#work(state, this.#jobLog(state.jobId)) === "none") continue;
       if (!due.has(state.credentialId) && due.size >= LOG_VIEWER_POLICY.rechecks) continue;
-      // A budgeted socket pays for each check it is due, whether or not it is answered.
       if (state.budget) {
         if (state.budget.checks < 1) {
           this.#endForBudget(ws);
@@ -944,11 +938,8 @@ export class LogViewers {
   /**
    * Pages sockets behind through the stored chunks: a chunk read once for
    * every socket that needs it, at most `sliceReads` reads a run, and at most
-   * `pageChunks` chunks or `pageBytes` a socket. Each socket reading is
-   * charged an attempt before the read and the bytes it read after; a
-   * budgeted socket that has no attempt left, or fewer bytes than the
-   * chunk's, ends instead. True when ingestion has priority or the memory
-   * pool was too short for a read.
+   * `pageChunks` chunks or `pageBytes` a socket. True when ingestion has
+   * priority or the memory pool was too short for a read.
    */
   async #backfill(): Promise<boolean> {
     const { host } = this;
@@ -1129,10 +1120,7 @@ export class LogViewers {
     return false;
   }
 
-  /**
-   * Whether `ws` can pay for reading a chunk of `bytes`: unbudgeted, or with
-   * an attempt and the bytes left. One that cannot is ended.
-   */
+  /** Whether `ws` can pay for reading a chunk of `bytes`; one that cannot is ended. */
   #affords(ws: WebSocket, bytes: number): boolean {
     const budget = stateOf(ws)?.budget;
     if (!budget || (budget.gets >= 1 && budget.bytes >= bytes)) return true;
@@ -1140,7 +1128,6 @@ export class LogViewers {
     return false;
   }
 
-  /** Charges socket `id` for a storage read, from its budget when it has one. */
   #charge(ws: WebSocket, id: string, charge: { gets: number; bytes: number }): void {
     viewerHooks.readCharged?.(id, charge);
     if (this.#closed.has(ws)) return;

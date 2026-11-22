@@ -52,8 +52,7 @@ describe("a job token's scope", () => {
     expect(scopesOf(tokens)).toEqual([["contents:read", "metadata:read"]]);
   });
 
-  // A fork job is never reserved, so never assigned (runner-eligibility.test.ts); an untrusted
-  // run of the repository's own branch is.
+  // Not a fork: a fork job is never assigned (runner-eligibility.test.ts).
   it("is read only for an approved untrusted run asking for write-all", async () => {
     const f = await orgRepo();
     const spec = specFor(f, source(["permissions: write-all"], ["permissions: write-all"]), {

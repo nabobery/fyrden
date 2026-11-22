@@ -1,10 +1,3 @@
-// A deployment's limits on its runners. On Free, the fleet is capped at
-// registration (registerRunner decides it in its own batch), and each
-// runner's polling is paid for before it is served: an isolate leases a
-// block of polls from the directory and answers that many from it. A lease
-// that would pass the runner's daily budget, or finds it ranked past the
-// cap, revokes it in the same statement. Paid admits every runner.
-
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { CI_POLL_LEASE, ciFleetCap, ciPollBudget } from "../ci/budget.js";
 import { workersPlan } from "../git/fetch/mode.js";
@@ -21,11 +14,7 @@ export type FetchAdmission = "ok" | "poll_rate" | "fleet_cap" | "unaccounted" | 
 export interface RunnerAdmission {
   /** The fleet's limit, read before registration's batch; null: none. */
   readonly fleet: FleetLimit | null;
-  /**
-   * Called on every FetchTask once the runner is authenticated, at `now`
-   * (the isolate's milliseconds); `log` is the request's, for a lease that
-   * could not be recorded.
-   */
+  /** Called on every FetchTask once the runner is authenticated, at `now` (the isolate's milliseconds). */
   onFetch(
     runner: Pick<AuthenticatedRunner, "id">,
     now: number,
@@ -83,11 +72,9 @@ export class PollBlocks {
 const isolateBlocks = new PollBlocks();
 
 /**
- * Free's admission: registration under `fleet`, and every FetchTask served
- * from a block leased from `db`. The block is charged before any poll of
- * it is served, so a lost answer or an evicted isolate can only overcharge.
- * A block is used only on the day (the isolate's clock) the call that
- * leased it began.
+ * A block is charged before any poll of it is served, so a lost answer or
+ * an evicted isolate can only overcharge. A block is used only on the day
+ * (the isolate's clock) the call that leased it began.
  */
 export function freeRunnerAdmission(
   db: D1Database,
@@ -119,7 +106,6 @@ export function freeRunnerAdmission(
   };
 }
 
-/** The deployment's runner admission: Free's limits, or Paid's none. */
 export function runnerAdmissionFor(env: Env, metrics?: Metrics): RunnerAdmission {
   if (workersPlan(env) === "paid") return admitEveryRunner;
   return freeRunnerAdmission(

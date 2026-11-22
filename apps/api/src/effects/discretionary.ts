@@ -70,7 +70,6 @@ export function dailyValues<R extends string>(
   return values;
 }
 
-/** `FYRDEN_DISCRETIONARY_DAILY` read whole (see `dailyValues`). */
 function setValues(env: object): Partial<Record<DiscretionaryResource, number>> | null {
   return dailyValues(
     (env as { FYRDEN_DISCRETIONARY_DAILY?: unknown }).FYRDEN_DISCRETIONARY_DAILY,

@@ -1,9 +1,8 @@
 // Which jobs a runner may be given, decided by the server alone: never a
 // public repository's job, never a fork job (a pull request whose head is
 // in another repository, whatever the trust), whatever labels the runner
-// declares and whether or not the run was approved. A run reserves (and so
-// publishes) only jobs eligible when it reserves them; visibility is read
-// again by the claim itself and by every re-offer, so a repository made public
+// declares and whether or not the run was approved. Visibility is read by
+// the claim itself and by every re-offer, so a repository made public
 // after its job was queued is covered; a re-offer refused for that reason
 // leaves the job queued, and a lost answer whose task was already
 // assigned is not delivered, so an ephemeral runner takes nothing else
@@ -108,11 +107,7 @@ async function everyRunner(f: OrgFixture): Promise<RegisteredRunner[]> {
   ];
 }
 
-/**
- * Each runner polls with dispatch on, under Free's poll meter, and is given
- * nothing. The account's tasks version must be past 0 (`primed`), so a poll at
- * 0 searches for a job and answers with that version: it reached dispatch.
- */
+/** A poll at version 0 shows it reached dispatch only once the tasks version is past 0 (`primed`). */
 async function noRunnerGetsIt(f: OrgFixture, runners: readonly RegisteredRunner[], runId: string) {
   const version = await tasksVersionOf(f.org.id);
   expect(version).toBeGreaterThan(0);
@@ -153,7 +148,6 @@ describe("job eligibility", () => {
     await primed(f);
     await setVisibility(f, "public");
     const runId = await started(f, one);
-    // Never reserved, so never published.
     expect(await pendingOf(runId)).toEqual([]);
     await noRunnerGetsIt(f, await everyRunner(f), runId);
     // Still queued, for run state's queue deadline to end.
@@ -199,7 +193,6 @@ describe("job eligibility", () => {
         ok: true,
       });
       await drain(runId);
-      // Approved, it is still a fork job: never reserved, never published.
       expect(await pendingOf(runId)).toEqual([]);
       await noRunnerGetsIt(f, runners, runId);
       expect((await jobsOf(runId)).map((j) => j.status)).toEqual(["queued"]);
@@ -258,7 +251,7 @@ describe("job eligibility", () => {
     )
       .bind(runId)
       .all();
-    // The run's origin is unknown (a fork, closed): its next job is never reserved or published.
+    // The run's origin is unknown (a fork, closed).
     expect(pending.results).toEqual([]);
     expect((await fetchTask(runner, 0)).task).toBeUndefined();
     await advance(runId, 24 * 60 * MIN + 1);

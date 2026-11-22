@@ -577,15 +577,12 @@ describe("fyrden deploy", () => {
     const first = Date.parse("2026-11-22T09:00:00Z");
     await deploy(deps(fake.runner, { now: () => first }).d);
     expect(await since()).toBe("2026-11-22T09:00:00.000Z");
-    // A routine redeploy keeps it: pending events from before it stay open.
     await deploy(deps(fake.runner, { now: () => first + HOUR }).d);
     expect(await since()).toBe("2026-11-22T09:00:00.000Z");
-    // Turned off, then on again: a new switch-on.
     await deploy(deps(fake.runner, { ci: { runners: "off" } }).d);
     expect(await since()).toBeUndefined();
     await deploy(deps(fake.runner, { now: () => first + 2 * HOUR }).d);
     expect(await since()).toBe("2026-11-22T11:00:00.000Z");
-    // An explicit cutoff always wins, and reads nothing.
     const calls = fake.calls.length;
     await deploy(
       deps(fake.runner, { now: () => first + 3 * HOUR, ci: { since: "2026-11-22T10:30:00Z" } }).d,
@@ -693,7 +690,6 @@ describe("fyrden deploy", () => {
     expect(fake.state.migrated.length).toBe(migrated);
     expect(queries.at(-1)).toContain(`expires_at > ${at}`);
     expect(queries.at(-1)).toContain("revoked_at IS NULL");
-    // Within the cap, or with runners off, it goes ahead.
     await deploy(deps(fake.runner, { plan: "free", ci: { runners: "on", fleet: 3 } }).d);
     await deploy(deps(fake.runner, { plan: "free" }).d);
     await deploy(deps(fake.runner, { plan: "paid" }).d);

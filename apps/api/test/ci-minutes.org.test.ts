@@ -1,10 +1,3 @@
-// CI minutes in an account's object: a job reserves its minutes by key
-// before it may start, settles what it ran, or releases them. Each call is
-// idempotent by key; a release leaves a tombstone that a later reserve of
-// the key is answered with; a reserve at or after the key's validity
-// expires; a hold past its settlement time counts as used. Quotas are per
-// UTC month, for the account and for each agent.
-
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
@@ -82,7 +75,6 @@ describe("reserving CI minutes", () => {
     expect(await rowOf(stub, req.key)).toEqual([
       expect.objectContaining({ key: req.key, reserved: 100, used: 0, state: "held" }),
     ]);
-    // One hold: 1,900 more fit, 1,901 do not.
     expect(await stub.reserveCiMinutes(reservation({ minutes: 1_901 }))).toMatchObject({
       status: "refused",
       reason: "account",
@@ -116,7 +108,6 @@ describe("reserving CI minutes", () => {
       status: "refused",
       reason: "agent",
     });
-    // Another agent, and the account's own work, still fit.
     expect(
       (await stub.reserveCiMinutes(reservation({ agentId: uniqueId("agt"), minutes: 101 }))).status,
     ).toBe("granted");
@@ -136,7 +127,6 @@ describe("reserving CI minutes", () => {
       reason: "agent",
       limit: 500,
     });
-    // Nothing was held: the whole month still fits.
     expect((await stub.reserveCiMinutes(reservation({ minutes: 2_000 }))).status).toBe("granted");
   });
 
@@ -179,7 +169,6 @@ describe("settling and releasing CI minutes", () => {
     await stub.reserveCiMinutes(over);
     expect(await stub.settleCiMinutes(over.key, 50 * MINUTE)).toBe("settled");
     expect(await rowOf(stub, over.key)).toEqual([expect.objectContaining({ used: 10 })]);
-    // 31 + 10 used: 1,959 fit.
     expect((await stub.reserveCiMinutes(reservation({ minutes: 1_960 }))).status).toBe("refused");
     expect((await stub.reserveCiMinutes(reservation({ minutes: 1_959 }))).status).toBe("granted");
   });
@@ -220,7 +209,6 @@ describe("settling and releasing CI minutes", () => {
       reason: "account",
       resetsAt: Date.UTC(2031, 3, 1),
     });
-    // It never lapses to nothing: still counted later on.
     vi.setSystemTime(now + 3 * HOUR);
     expect((await stub.reserveCiMinutes(reservation({ minutes: 51 }))).status).toBe("refused");
   });

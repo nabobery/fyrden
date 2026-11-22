@@ -79,7 +79,6 @@ const sent = new Map<string, number>();
 const sentBytes = new Map<string, number>();
 const messages = new Map<string, number>();
 const rechecks = new Map<string, number>();
-/** Storage reads each socket was charged: attempts and bytes. */
 const charged = new Map<string, { gets: number; bytes: number }>();
 const chargedTo = (socket: string) => charged.get(socket) ?? { gets: 0, bytes: 0 };
 function installCounters() {
@@ -572,7 +571,7 @@ describe("the ticket operation", () => {
     const t = await withTask();
     const issued = await ticketCall(t, t.f.owner.token);
     expect(issued.status).toBe(200);
-    // What is left of 30 s once stored and admitted, on the operation's own clock.
+    // 30 s less the time to store and admit it, on the operation's own clock.
     expect(issued.body.expires_in).toBeGreaterThan(0);
     expect(issued.body.expires_in).toBeLessThanOrEqual(30);
     expect(issued.body.url).toBe(
@@ -1557,8 +1556,6 @@ describe("flow control", () => {
       out: before.out,
       controls: before.controls + 1,
     });
-    // A boundary ack releases its frame; the socket stays blocked, its 2 minutes running, while
-    // more than 256 KiB stays out.
     await say(t.runId, socket, { t: "ack", i: before.out[0], o: before.out[1] });
     expect((await attachments(t.runId)).find((s) => s.id === socket.id)).toMatchObject({
       acked: before.out[0],
@@ -1566,7 +1563,6 @@ describe("flow control", () => {
       blockedSince: before.blockedSince,
       out: before.out.slice(3),
     });
-    // Reopened once one frame (under 256 KiB) is left out.
     const k = before.out.length - 6;
     expect(before.out[k + 5]).toBeLessThanOrEqual(LOG_VIEWER_POLICY.ackBytes);
     await say(t.runId, socket, {
@@ -1628,7 +1624,7 @@ describe("flow control", () => {
     viewerHooks.afterChunkGet = () => {
       gets++;
     };
-    // Rows arriving while it watches, held in memory: 20 KiB rows in frames of up to 256 KiB.
+    // Sent while it watches, so held in memory.
     const model = runnerModel(t);
     for (let k = 0; k < 2; k++)
       await model.send(
@@ -1639,8 +1635,8 @@ describe("flow control", () => {
     const full = socket.frames.length;
     const before = (await attachments(t.runId)).find((s) => s.id === socket.id);
     expect(before?.blockedSince).not.toBeNull();
-    // A boundary ack that leaves more than 256 KiB out, then a run of the job something else wakes
-    // (another viewer opening): nothing sent.
+    // An ack leaving more than 256 KiB out, then a run of the job something else wakes (another
+    // viewer opening).
     await at(t.runId, now(t.runId) + 1_000);
     await say(t.runId, socket, { t: "ack", ...positionAfter(socket, 1) });
     await inRun(t.runId, (r) => r.viewers.slice());
@@ -1649,7 +1645,6 @@ describe("flow control", () => {
     expect((await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince).toBe(
       before?.blockedSince,
     );
-    // Within 256 KiB and 16 frames: sent on from memory.
     await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full - 1) });
     await slice(t.runId);
     await settle(socket);
@@ -1678,7 +1673,6 @@ describe("flow control", () => {
     const full = socket.frames.length;
     const blocked = (await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince;
     expect(blocked).not.toBeNull();
-    // Acks that release frames but leave more out: no read, the socket's 2 minutes still running.
     await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.slowMs / 2);
     expect(full).toBeGreaterThan(20);
     await say(t.runId, socket, { t: "ack", ...positionAfter(socket, 1) });
@@ -1689,13 +1683,11 @@ describe("flow control", () => {
     expect((await attachments(t.runId)).find((s) => s.id === socket.id)?.blockedSince).toBe(
       blocked,
     );
-    // Within 256 KiB and 16 frames: read again, a window's worth.
     await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full - 7) });
     await slice(t.runId);
     await settle(socket);
     expect(gets).toBe(2);
     expect(socket.frames.length).toBeGreaterThan(full + 20);
-    // Blocked again: acks that leave too much out for 2 minutes close it.
     await say(t.runId, socket, { t: "ack", ...positionAfter(socket, full + 1) });
     await at(t.runId, now(t.runId) + LOG_VIEWER_POLICY.slowMs);
     await slice(t.runId);
@@ -1775,7 +1767,6 @@ describe("escaped chunk backfill", () => {
     const reading = slice(t.runId);
     try {
       expect(await held.reached(reading)).toBe(true);
-      // The attempt is charged before the read; nothing of the body yet.
       expect(chargedTo(socket.id)).toEqual({ gets: 1, bytes: 0 });
       const memory = await inRun(t.runId, (r) => r.memory.stats());
       expect(memory.reservedBytes).toBe(0);
@@ -1805,7 +1796,6 @@ describe("escaped chunk backfill", () => {
       const stalled = hold(t.runId);
       const cancellation = hold(t.runId);
       let cancelled = false;
-      /** Bytes the first read's body delivered. */
       let delivered = 0;
       await inRun(t.runId, (r) => {
         const host = r as unknown as { env: Env };
@@ -1910,7 +1900,6 @@ describe("escaped chunk backfill", () => {
         cancellation.release();
         expect(await upload).toBe(52);
         await reading;
-        // The cancelled read: its attempt, and every byte its body delivered before it stalled.
         expect(charges.slice(0, 2)).toEqual([
           { gets: 1, bytes: 0 },
           { gets: 0, bytes: delivered },
@@ -2049,7 +2038,6 @@ describe("escaped chunk backfill", () => {
     expect(await other.closed).toEqual({ code: 1000 });
     expect(chargedTo(other.id)).toEqual({ gets: 1, bytes: siblingChunk?.bytes });
     await expectFinished(t, difficult, expected);
-    // Every attempt charged; a chunk left mid-way is read again from its start, never more.
     const read = chargedTo(difficult.id);
     const chunkBytes = chunks[0]?.bytes ?? 0;
     expect(read.gets + 1).toBe(gets);
@@ -2058,13 +2046,7 @@ describe("escaped chunk backfill", () => {
   });
 });
 
-// ------------------------------------------------------------------ read budgets
-
-/**
- * A ticket held to a budget, as a Free deployment's are (the ledger's grant
- * aside): stored as the operation stores it, its budget sized by the run
- * from the job's log stored now, rows flowing at most a socket's life.
- */
+/** Budgeted as on a Free deployment, the ledger's grant aside. */
 async function budgetedTicket(t: Task) {
   const { ticket, answer } = await storedTicket(t, { maxActiveMs: LOG_VIEWER_POLICY.lifeMs });
   if (!answer.ok || !answer.budget || !answer.stored)
@@ -2072,7 +2054,6 @@ async function budgetedTicket(t: Task) {
   return { ticket, stored: answer.stored, budget: answer.budget };
 }
 
-/** A ticket stored as the operation stores it, with `budget`, and the run's answer. */
 async function storedTicket(t: Task, budget: { readonly maxActiveMs: number } | null) {
   const ticket = randomSecret(32);
   const credentialId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
@@ -2090,7 +2071,6 @@ async function storedTicket(t: Task, budget: { readonly maxActiveMs: number } | 
   return { ticket, answer };
 }
 
-/** A socket on `ticket` from `from`, checked by the object. */
 async function openBudgeted(t: Task, ticket: string, from = 0): Promise<Client> {
   const response = await upgrade(t, ticket, { token: t.f.owner.token, from });
   expect(response.status).toBe(101);
@@ -2099,7 +2079,6 @@ async function openBudgeted(t: Task, ticket: string, from = 0): Promise<Client> 
   return c;
 }
 
-/** Runs the job and acknowledges everything received until `c` closes; bounded. Slices run. */
 async function readToClose(t: Task, c: Client): Promise<number> {
   let slices = 0;
   for (; slices < 200 && c.code === null; slices++) {
@@ -2115,11 +2094,7 @@ async function readToClose(t: Task, c: Client): Promise<number> {
 
 const utf8 = new TextEncoder();
 
-/**
- * Runs the job and acknowledges as a client keeping to the protocol at its
- * least: after each 256 KiB of frames' UTF-8 or 16 frames handled, never the
- * rest; bounded. Slices run.
- */
+/** Acknowledges as rarely as the protocol allows: after each 256 KiB of frames' UTF-8 or 16 frames. */
 async function readAtCadence(t: Task, c: Client): Promise<number> {
   let handled = 0;
   let frames = 0;
@@ -2333,7 +2308,6 @@ describe("read budgets", () => {
     await model.send([], true);
     await forget(t.runId);
     const { ticket, stored, budget } = await budgetedTicket(t);
-    // Sealed: no minute of rows flowing is paid for.
     expect(stored.activeMs).toBe(0);
     let checks = 0;
     viewerHooks.afterRecheck = () => {

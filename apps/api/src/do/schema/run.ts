@@ -59,15 +59,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   created without one (before this version), whose jobs get no secrets.
  *
  * v8 (CI minutes and capacity):
- * - `ci_reservations`: one row a job instance once it is queued, for its
- *   current reservation (`seq` counts its reservations): its state, and the
- *   inputs fixed before any store is asked (key, billed account, agent,
- *   minutes, the ledger's price on Free, span, validity, settlement time),
- *   its start window, when a refused one asks again and why it waits, the
- *   times it ran, when it was last found a job no runner may take
- *   (`ineligible_at`: it asks no store until the run checks again), and
- *   whether it was made for an account that no longer owns the repository
- *   (`rebind`: released and made again for the owner). Instances queued before v8 start `wanted`.
+ * - `ci_reservations`: a queued job instance's current reservation (`seq`
+ *   counts them). `ineligible_at`: found a job no runner may take, so it
+ *   asks no store until the run checks again. `rebind`: made for an account
+ *   that no longer owns the repository, so released and made again.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -387,11 +382,9 @@ export const runSchema: readonly DoMigration[] = [
     version: 8,
     // A job instance's CI reservation (src/do/run/reservations.ts). `key` and the inputs after it
     // are written together, before the first call to a store, and cleared when `seq` moves on.
-    // `price` is the ledger's (Free); null when only the account's minutes are reserved.
-    // `asked_for` is the account `refusals` were counted against; a new owner starts them again.
-    // A live log ticket's budget (src/do/run/viewers.ts), carried onto its socket: the bytes and
-    // storage read attempts it may spend reading stored chunks and the credential checks it may
-    // make; null on all three when unbudgeted.
+    // `price` is the ledger's; null when only the account's minutes are reserved. `asked_for` is
+    // the account `refusals` were counted against; a new owner starts them again. A live log
+    // ticket's budget (src/do/run/viewers.ts): null on all three `read_*` when unbudgeted.
     name: "ci_reservations",
     sql: `
       CREATE TABLE ci_reservations (

@@ -1,11 +1,5 @@
-// Runner admission on Free: the fleet's cap, decided in registration's own
-// batch (the runners that may serve, and today's polls of those that no
-// longer do, which must fit the free slots), and each runner's polling,
-// paid for before it is served in blocks leased from the directory: a
-// lease that would pass the daily budget, or a runner ranked past the cap,
-// revokes it in the same statement. D1's clock (the day) is set by each
-// test; the isolate's clock is passed to the meter or is the test's own.
-// Paid admits every runner.
+// Each test sets D1's clock (the day); the isolate's clock is passed to the
+// meter or is the test's own.
 
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
@@ -54,7 +48,6 @@ const noonOf = (day: number) => day * DAY + 12 * HOUR;
 type Clock = { now: number };
 type Credentials = { id: number; uuid: string; token: string };
 
-/** The env of a Free deployment with runners on, `cap` runners at most, and D1's clock at `clock`. */
 const free = (cap: number, clock: Clock, more: Record<string, unknown> = {}): Partial<Env> =>
   ({
     FYRDEN_CI_RUNNERS: "on",
@@ -63,7 +56,6 @@ const free = (cap: number, clock: Clock, more: Record<string, unknown> = {}): Pa
     ...more,
   }) as Partial<Env>;
 
-/** Runners that may serve now (deployment-wide), by the isolate's clock. */
 async function serving(): Promise<number> {
   return (
     (await env.DIRECTORY.prepare(
@@ -177,7 +169,6 @@ const meterOf = (id: number) =>
     .bind(id)
     .first<MeterRow>();
 
-/** A runner row inserted directly, for driving the meter without the protocol. */
 async function runnerRow(more: { expiresAt?: number | null; revokedAt?: number | null } = {}) {
   const row = await env.DIRECTORY.prepare(
     `INSERT INTO ci_runners (uuid, account_id, token_hash, name, ephemeral, created_at, revoked_at, expires_at)
@@ -213,7 +204,6 @@ describe("the fleet's cap", () => {
     expect((await remove(org.login, owner, first.id, on)).status).toBe(204);
     const second = await register(spare, on);
     expect(second.id).toBeGreaterThan(first.id);
-    // The token is spent now.
     expect(
       await connectError(await registerCall(spare, free(cap + 1, clock)), "permission_denied", 403),
     ).toMatch(/registration token is not valid/);
@@ -298,11 +288,9 @@ describe("the fleet's cap", () => {
   });
 });
 
-/** How many numbered parameters (`?n`) a statement takes. */
 const parameters = (sql: string) =>
   Math.max(...Array.from(sql.matchAll(/\?(\d+)/g), (m) => Number(m[1])));
 
-/** Drives `admission` with `polls` FetchTasks at `now`, each `gapMs` later; the answers. */
 async function drive(
   admission: { onFetch(runner: { id: number }, now: number): Promise<FetchAdmission> },
   id: number,
@@ -378,7 +366,6 @@ describe("the poll meter", () => {
     for (let i = 0; i < 2 * CI_POLL_LEASE; i++)
       answers.push(await (isolates[i % 2] as (typeof isolates)[0]).onFetch({ id }, now + i));
     expect(answers.every((a) => a === "ok")).toBe(true);
-    // Each isolate leased its own block.
     expect((await meterOf(id))?.poll_used).toBe(2 * CI_POLL_LEASE);
     // Two more blocks, one each, and the fifth lease passes the budget.
     for (let i = 0; i < 2 * CI_POLL_LEASE; i++)
@@ -405,7 +392,6 @@ describe("the poll meter", () => {
       await Promise.all([admission.onFetch({ id }, now), admission.onFetch({ id }, now)]),
     ).toEqual(["ok", "ok"]);
     expect(count.queries).toBe(2);
-    // Every poll the two blocks paid for is served before a third lease.
     for (let i = 0; i < 2 * CI_POLL_LEASE - 2; i++)
       expect(await admission.onFetch({ id }, now + i)).toBe("ok");
     expect(count.queries).toBe(2);
@@ -439,7 +425,6 @@ describe("the poll meter", () => {
     expect(count.queries).toBe(4);
     expect(await meterOf(late)).toMatchObject({ poll_day: day + 1, poll_used: 2 * CI_POLL_LEASE });
 
-    // Blocks of past days are dropped from the isolate's store.
     expect(blocks.size).toBe(2);
     await admission.onFetch({ id }, midnight + DAY);
     expect(blocks.size).toBe(1);
@@ -561,7 +546,6 @@ describe("a FetchTask on Free", () => {
     ]);
     expect(logs.lines.some((line) => line.includes(runner.token))).toBe(false);
     expect(await meterOf(runner.id)).toMatchObject({ poll_used: 0, revoked_at: null });
-    // Restarted, it polls again.
     expect(await polled(runner, on)).toEqual({ tasksVersion: 0 });
     expect(await meterOf(runner.id)).toMatchObject({ poll_used: CI_POLL_LEASE });
   });

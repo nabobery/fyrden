@@ -250,7 +250,6 @@ export interface EngineHost {
   logComplete(task: number): boolean;
   /** Job `jobId`'s instance completed, by any path, with a task or none: its watchers are told. */
   jobEnded?(jobId: number): void;
-  /** On Free, the longest a job may run, in minutes; null: its own timeout. */
   maxJobMinutes(): number | null;
   /** Job `jobId`'s instance was queued: it reserves CI minutes before it is published. */
   reservationWanted(jobId: number): void;

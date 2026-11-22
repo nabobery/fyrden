@@ -1,10 +1,3 @@
-// CI's ledger on Free: grants debited atomically against every UTC day they
-// may run on (D1's clock, set by the test), once per key; release keeps the
-// fixed part and leaves a tombstone; settlement refunds the per-minute part
-// by the minutes run in each day; a retry at or after its validity is
-// expired, before and after pruning; the fleet over its cap grants nothing;
-// the five-minute maintenance prunes whatever else runs.
-
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
@@ -54,7 +47,6 @@ const testDay = (slot: number) => 50_000 + slot * 9;
 
 const zero = (): Record<string, number> => Object.fromEntries(CI_RESOURCES.map((r) => [r, 0]));
 const vector = (v: Partial<CiVector> = {}): CiVector => ({ ...zero(), ...v }) as CiVector;
-/** An allowance roomy in every resource but those given. */
 const roomy = (v: Partial<CiVector> = {}): CiVector =>
   ({ ...Object.fromEntries(CI_RESOURCES.map((r) => [r, 1_000_000_000])), ...v }) as CiVector;
 
@@ -115,7 +107,6 @@ describe("a CI grant", () => {
     expect(await settleCi(db, req.key, { startedAt, endedAt: startedAt + 120 * MINUTE })).toBe(
       "settled",
     );
-    // 30 minutes before midnight, 90 after.
     expect(await dayRow(day)).toMatchObject(charge(30));
     expect(await dayRow(day + 1)).toMatchObject(charge(90));
     expect(await settleCi(db, req.key, { startedAt, endedAt: startedAt + 120 * MINUTE })).toBe(
@@ -130,7 +121,6 @@ describe("a CI grant", () => {
     const db = clocked(env.DIRECTORY, clock);
     const req = request({ now: clock.now });
     await grantCi(db, req, limits());
-    // Reported as running from an hour before the grant to an hour past its span.
     expect(
       await settleCi(db, req.key, {
         startedAt: clock.now - 60 * MINUTE,
@@ -191,7 +181,6 @@ describe("a CI grant", () => {
     });
     expect(await receipt(refused.key)).toBeNull();
     expect(await dayRow(day)).toEqual(before);
-    // The day after, the refused key is past its validity; a fresh one finds room again.
     clock.now += DAY;
     expect(await grantCi(db, refused, limits(allowance))).toEqual({
       status: "expired",
@@ -230,7 +219,6 @@ describe("a CI grant", () => {
     });
     expect(await receipt(req.key)).toBeNull();
     expect(await dayRow(day)).toBeNull();
-    // A key granted before answers itself, and an expired one is expired, whatever the allowance.
     const earlier = request({ now: clock.now });
     await grantCi(db, earlier, limits());
     expect(await grantCi(db, earlier, limits(roomy({ worker_requests: 1 })))).toMatchObject({
@@ -303,7 +291,7 @@ describe("a CI grant", () => {
     const day = testDay(9);
     const clock = { now: day * DAY + 12 * 60 * MINUTE };
     const db = clocked(env.DIRECTORY, clock);
-    // First asked at its validity's end: nothing is written.
+    // Asked at its validity's end.
     const late = request({ now: clock.now - 10 * MINUTE });
     expect(await grantCi(db, late, limits())).toEqual({ status: "expired" });
     expect(await receipt(late.key)).toBeNull();
@@ -399,7 +387,6 @@ describe("a CI grant", () => {
       reason: "too_large",
     });
     expect((await grantCi(db, viewer(40), limits(allowance))).status).toBe("granted");
-    // Jobs still have the rest.
     const job = request({
       now: clock.now,
       price: { fixed: vector({ worker_requests: 300 }), perMinute: vector(), minutes: 0 },
@@ -484,7 +471,6 @@ describe("a CI grant at midnight", () => {
     });
     expect(await dayRow(day)).toMatchObject({ worker_requests: 450 });
     expect(await dayRow(day + 1)).toBeNull();
-    // Run to the boundary: all ten minutes are the first day's.
     expect(await settleCi(db, req.key, { startedAt: clock.now, endedAt: (day + 1) * DAY })).toBe(
       "settled",
     );
@@ -502,7 +488,6 @@ describe("a CI grant at midnight", () => {
       lastDay: day + 1,
     });
     expect(await dayRow(day)).toBeNull();
-    // Reported from before midnight: clamped to the span, which starts at it.
     expect(
       await settleCi(db, req.key, { startedAt: clock.now - MINUTE, endedAt: clock.now + MINUTE }),
     ).toBe("settled");
@@ -621,7 +606,6 @@ describe("CI prices", () => {
   it("budgets a log viewer from the log stored when its ticket is issued and while rows flow", () => {
     const none = { chunks: 0, rereadBytes: 0, reads: 0 };
     const small = ciViewerBudget({ stored: none, activeMs: 60 * MINUTE });
-    // One 3 MiB chunk read back in seven reads.
     const large = ciViewerBudget({
       stored: { chunks: 1, rereadBytes: 7 * 3 * 1024 * 1024, reads: 7 },
       activeMs: 60 * MINUTE,
@@ -764,7 +748,7 @@ describe("the CI allowance", () => {
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "99999" })).toBe(CI_POLL_BUDGET);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "0" })).toBe(CI_POLL_BUDGET);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "1e3" })).toBe(CI_POLL_BUDGET);
-    // Polls are leased 60 at a time: less than a lease is the default, the rest whole leases.
+    // Polls are leased 60 at a time.
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "59" })).toBe(CI_POLL_BUDGET);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "60" })).toBe(60);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "179" })).toBe(120);

@@ -126,11 +126,7 @@ const runNameOf = (runId: string) =>
     return toExprString(value.value);
   });
 
-/**
- * What planning made of the run's current attempt: the runs-on of each queued
- * job (read from the instance, published or not: a fork's job never is),
- * each job's state.
- */
+/** Reads runs-on from the instance because a fork's job is never published. */
 async function planOf(runId: string) {
   await at(runId, T0);
   await drain(runId);

@@ -26,9 +26,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `quota_assets` (v10): each repository's own statement of the bytes its
  *   release assets hold, with the tuple (`epoch_gen`, `seq`) that orders
  *   its statements; counted in the account's usage.
- * - `ci_minutes` (v12): the account's CI minutes by reservation key: what
- *   each job reserved and used, in the UTC month of its grant, against the
- *   agent that caused it (if any); released keys stay, so a late reserve of
+ * - `ci_minutes` (v12): CI minutes reserved and used by reservation key, in
+ *   the UTC month of the grant; released keys stay, so a late reserve of
  *   one grants nothing.
  * - `default_labels` (v7): an organization's default labels, copied into
  *   its new repositories; GitHub's set until `org_meta.default_labels_set`.
@@ -349,8 +348,7 @@ export const orgSchema: readonly DoMigration[] = [
   },
   {
     version: 12,
-    // CI minutes held, settled or released by reservation key (src/do/org/ci-minutes.ts). A key
-    // released before it was reserved is a row reserving nothing.
+    // CI minutes by reservation key (src/do/org/ci-minutes.ts).
     name: "ci_minutes",
     sql: `
       CREATE TABLE ci_minutes (
