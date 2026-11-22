@@ -16,6 +16,11 @@ import { handlers } from "../ops/handlers.js";
 import { IDEMPOTENCY_KEY } from "./idempotency.js";
 
 export const API_PREFIX = "/api";
+/**
+ * Where stock `gh` sends REST calls for a host other than github.com, as for
+ * GitHub Enterprise Server: every operation answers there too, the same way.
+ */
+export const API_V3_PREFIX = "/api/v3";
 export const API_VERSION = "0.0.0";
 
 type AppContext = Context<{ Bindings: Env; Variables: AuthVariables }>;
@@ -216,17 +221,16 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     mountOperation(app, op, operationHandler(op));
 }
 
-/** Registers one operation's REST route under /api. */
+/** Registers one operation's REST route under /api and /api/v3. */
 export function mountOperation(
   app: Hono<{ Bindings: Env; Variables: AuthVariables }>,
   op: OperationDef,
   handler: OpHandler<OperationDef>,
 ): void {
-  const path =
-    API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
+  const path = op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
   app.on(
     op.method,
-    path,
+    [API_PREFIX + path, API_V3_PREFIX + path],
     caching(op),
     requireAuth("by-method", "api", gitTransport(op)),
     async (c) => {

@@ -24,7 +24,8 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 /**
  * Reads a token from `Authorization: Bearer <token>`, `Authorization: DPoP
  * <token>` (a DPoP-bound token, RFC 9449) or from the password slot of
- * Basic auth (what git clients send).
+ * Basic auth (what git clients send). `Authorization: token <token>`, what
+ * stock `gh` sends and GitHub takes, is a bearer token by another name.
  */
 export function extractCredential(
   header: string | undefined,
@@ -33,7 +34,8 @@ export function extractCredential(
   const [scheme, value] = header.split(" ", 2);
   if (!scheme || !value) return undefined;
   const kind = scheme.toLowerCase();
-  if (kind === "bearer" || kind === "dpop") return { token: value.trim(), scheme: kind };
+  if (kind === "bearer" || kind === "token") return { token: value.trim(), scheme: "bearer" };
+  if (kind === "dpop") return { token: value.trim(), scheme: "dpop" };
   if (kind === "basic") {
     try {
       const decoded = atob(value.trim());

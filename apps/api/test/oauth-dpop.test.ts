@@ -54,6 +54,11 @@ describe("DPoP-bound tokens", () => {
     expect(
       (await call("/api/user", { headers: { Authorization: `Bearer ${token}` } })).status,
     ).toBe(401);
+    // With the token scheme (what `gh` sends), a bearer token's other name: refused for its binding.
+    const asToken = await call("/api/v3/user", { headers: { Authorization: `token ${token}` } });
+    expect(asToken.status).toBe(401);
+    expect(await asToken.json()).toMatchObject({ code: "invalid_dpop_proof" });
+    expect(asToken.headers.get("WWW-Authenticate")).toContain('error="invalid_dpop_proof"');
     // With a proof: taken.
     expect((await asDpop(key, token)).status).toBe(200);
     // The same proof again, another key's, or one for another URL: refused.

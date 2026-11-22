@@ -1,6 +1,7 @@
 // The file page in a real browser against both Workers, with and without JavaScript: numbered
 // lines that agree with the renderer's rows, line links, go to line, a file paged in blocks,
-// the fall back to plain text, Fjord's colours and a scheme change in place. Needs
+// the fall back to plain text, Fjord's colours and a scheme change in place; and the REST
+// API under /api/v3 through the web origin, as stock `gh` calls it. Needs
 // `pnpm --filter @fyrden/web build` first (turbo does it).
 
 import { type Browser, type Locator, type Page, type Route, expect as see } from "@playwright/test";
@@ -824,5 +825,28 @@ describe("Fjord on the file view", () => {
 
   it("had nothing refused under the Content Security Policy", () => {
     expect(stack.refused).toEqual([]);
+  });
+});
+
+// Stock `gh` sends a host other than github.com its REST calls under `/api/v3`, with
+// `Authorization: token <token>`: through the web origin, the API Worker answers them.
+describe("the REST API as stock gh calls it, through the web origin", () => {
+  const gh = (path: string, init: RequestInit = {}) =>
+    fetch(`${stack.origin}/api/v3${path}`, {
+      ...init,
+      headers: {
+        Authorization: `token ${stack.token}`,
+        Accept: "application/vnd.github+json",
+        ...(init.body !== undefined && { "Content-Type": "application/json; charset=utf-8" }),
+      },
+    });
+
+  it("answers under /api/v3 with the token scheme", async () => {
+    const res = await gh("/user");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ handle: stack.handle });
+    const repo = await gh(`/repos/${stack.handle}/files`);
+    expect(repo.status).toBe(200);
+    expect(await repo.json()).toMatchObject({ name: "files" });
   });
 });
