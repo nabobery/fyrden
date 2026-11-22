@@ -105,7 +105,8 @@ export class CiSchedules {
    * its rows as they are, an overdue tick included (it fires at the next
    * fire, coalesced); a changed file takes `actor`; disabled rows are
    * enabled again, from now. Past {@link MAX_SCHEDULES} entries, the first ones are kept and
-   * `too_many_schedules` is answered.
+   * `too_many_schedules` is answered. Every apply, of nothing too, records
+   * `eventId` as the last refresh applied (`refreshed_event`).
    */
   apply(
     eventId: number,
@@ -126,10 +127,10 @@ export class CiSchedules {
         [...new Set(f.crons)].map((cron, idx) => ({ path: f.path, blob: f.blob, cron, idx })),
       );
       const rows = this.#rows();
-      // Nothing scheduled, before or now: nothing written, no alarm; but an older event still
-      // pending must not apply its refresh after this newer one.
+      // Nothing scheduled, before or now: no rows and no alarm, only the last refresh applied
+      // (no older one applies after it, and failed refreshes are looked for after it).
       if (all.length === 0 && rows.length === 0) {
-        this.#markIfOlderPending(eventId);
+        this.#passed(eventId);
         return null;
       }
       const entries = all.slice(0, MAX_SCHEDULES);
@@ -189,6 +190,23 @@ export class CiSchedules {
     this.deps.git.context.storage.transactionSync(() => this.#markIfOlderPending(eventId));
   }
 
+  /**
+   * Inbox events up to `eventId` need no refresh applied: a page of them
+   * held no failed refresh, or a failed refresh's commit could not be read
+   * (dropped). Older refreshes apply no more, as after an apply.
+   */
+  pass(eventId: number): void {
+    this.deps.git.context.storage.transactionSync(() => this.#passed(eventId));
+  }
+
+  #passed(eventId: number): void {
+    this.#sql().exec(
+      `INSERT INTO ci_schedule_state (id, refreshed_event) VALUES (1, ?)
+       ON CONFLICT (id) DO UPDATE SET refreshed_event = max(refreshed_event, excluded.refreshed_event)`,
+      eventId,
+    );
+  }
+
   /** Records `eventId` as the last refresh when an older refresh event is still pending. */
   #markIfOlderPending(eventId: number): void {
     const older = this.#sql()
@@ -199,11 +217,7 @@ export class CiSchedules {
       )
       .toArray().length;
     if (older === 0) return;
-    this.#sql().exec(
-      `INSERT INTO ci_schedule_state (id, refreshed_event) VALUES (1, ?)
-       ON CONFLICT (id) DO UPDATE SET refreshed_event = max(refreshed_event, excluded.refreshed_event)`,
-      eventId,
-    );
+    this.#passed(eventId);
   }
 
   /**

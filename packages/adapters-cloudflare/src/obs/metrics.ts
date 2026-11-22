@@ -35,8 +35,13 @@ export const METRICS = {
   "blame.refused": ["reason"],
   // A CI trigger event decided without a run for some of its workflows, by
   // outcome = too_many_refs | not_a_directory | directory_too_large |
-  // too_many_workflows | unreadable | too_large | evaluation_failed | ...
+  // too_many_workflows | unreadable | too_large | evaluation_failed |
+  // retries_exhausted | ...
   "ci.trigger_outcome": ["outcome"],
+  // A schedule refresh whose evaluation failed, dropped by a later refresh
+  // because its commit still could not be read (its files go to the next
+  // pusher who changes them).
+  "ci.schedule_refresh_dropped": [],
   // A repository object's operations started on its memory pool, one point
   // each: the wait in ms (0 when granted at once) and the bytes asked for, by
   // consumer = blame | fetch_plan | push_index, outcome = granted | timed_out

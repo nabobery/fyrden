@@ -164,6 +164,17 @@ export const MAX_EVENT_ATTEMPTS = 100;
  */
 export const EXHAUSTED_RETRY_MS = 6 * 60 * 60_000;
 /**
+ * Steps one slice spends on schedule refreshes whose evaluation failed,
+ * before the refresh that applies them goes on in the next slice: each
+ * failed refresh applied or dropped is one, and each page of the inbox
+ * holding none is one. Proposed.
+ */
+export const ABSORB_STEPS = 8;
+/** Inbox events one step reads looking for failed schedule refreshes. Proposed. */
+export const ABSORB_PAGE = 256;
+/** The outcomes of a schedule refresh that was never applied because its evaluation failed. */
+const FAILED_REFRESH = ["evaluation_failed", "retries_exhausted"] as const;
+/**
  * Attempts of one event (its counted retries, `attempts`) after which an
  * explicit refusal of its variables by its own owner, with no transfer
  * under way, closes it as `variables_refused`. Proposed.
@@ -264,12 +275,23 @@ interface SliceBudget {
   trees: number;
   blobs: number;
   starts: number;
+  /** Steps left for failed schedule refreshes (see {@link ABSORB_STEPS}). */
+  absorbs: number;
   readonly listings: Map<string, Discovery>;
 }
 
 function newBudget(): SliceBudget {
-  return { trees: TRIGGER_WORK.trees, blobs: TRIGGER_WORK.blobs, starts: 0, listings: new Map() };
+  return {
+    trees: TRIGGER_WORK.trees,
+    blobs: TRIGGER_WORK.blobs,
+    starts: 0,
+    absorbs: ABSORB_STEPS,
+    listings: new Map(),
+  };
 }
+
+/** The schedules of a commit's workflow files. */
+type ScheduledFiles = { path: string; blob: string; crons: string[] }[];
 
 /** What the trigger resolves once and writes back to the event row. */
 interface Resolved {
@@ -468,6 +490,8 @@ export interface CiTriggersDeps {
   ) => string | null;
   /** A refresh that could not be read (see `CiSchedules.skip`). */
   readonly skipSchedules: (eventId: number) => void;
+  /** In one transaction: inbox events up to `eventId` need no refresh applied (see `CiSchedules.pass`). */
+  readonly passSchedules: (eventId: number) => void;
   /** In a change's transaction while CI is off (see `CiSchedules.noteOff`). */
   readonly noteSchedulesOff: () => void;
   /** CI is on: schedules seen off since start again from now (see `CiSchedules.resume`). */
@@ -846,14 +870,20 @@ export class CiTriggers {
   /**
    * Deletes decided events older than the retention, with their
    * allocations: at the start of each slice, so a repository without new
-   * events keeps no alarm for them.
+   * events keeps no alarm for them. A failed schedule refresh is kept, at
+   * any age, until a later refresh applied or dropped it (it holds who
+   * changed the files it read).
    */
   #prune(): void {
     const before = this.#now() - DONE_RETENTION_MS;
     const old = this.#sql()
       .exec<{ id: number }>(
-        "SELECT id FROM ci_events WHERE state = 'done' AND done_at < ? ORDER BY done_at LIMIT ?",
+        `SELECT id FROM ci_events WHERE state = 'done' AND done_at < ?
+           AND NOT (kind = 'schedule_refresh' AND coalesce(outcome IN (?, ?), 0) AND id > coalesce(
+             (SELECT refreshed_event FROM ci_schedule_state WHERE id = 1), 0))
+         ORDER BY done_at LIMIT ?`,
         before,
+        ...FAILED_REFRESH,
         PRUNE_BATCH,
       )
       .toArray();
@@ -1869,27 +1899,20 @@ class Evaluation {
         afterMs: Math.max(1_000, older.next_at - this.#t.now() + 1),
         counted: false,
       };
-    let discovery = this.#budget.listings.get(refresh.sha);
-    if (!discovery) {
-      try {
-        discovery = await this.#discover(reader, refresh.sha);
-        this.#budget.listings.set(refresh.sha, discovery);
-      } catch (error) {
-        if (!refusal(error)) throw error;
-        this.#t.repo.skipSchedules(this.#row.id);
-        return undefined;
-      }
+    await this.#applyFailedRefreshes(reader);
+    let discovery: Discovery;
+    try {
+      discovery = await this.#listing(reader, refresh.sha);
+    } catch (error) {
+      if (!refusal(error)) throw error;
+      this.#t.repo.skipSchedules(this.#row.id);
+      return undefined;
     }
     if (!discovery.ok) {
       this.#t.repo.skipSchedules(this.#row.id);
       return undefined;
     }
-    const files: { path: string; blob: string; crons: string[] }[] = [];
-    for (const file of discovery.files) {
-      const schedule = (await this.#triggersOf(reader, file)).find((t) => t.event === "schedule");
-      if (schedule?.event === "schedule")
-        files.push({ path: file.path, blob: file.oid, crons: schedule.crons.map((c) => c.value) });
-    }
+    const files = await this.#schedulesIn(reader, discovery.files);
     return (
       this.#t.repo.applySchedules(
         this.#row.id,
@@ -1898,6 +1921,114 @@ class Evaluation {
         refresh.headChange === true,
       ) ?? undefined
     );
+  }
+
+  /** The workflow files at `sha`, listed once a slice. */
+  async #listing(reader: ObjectReader, sha: string): Promise<Discovery> {
+    let discovery = this.#budget.listings.get(sha);
+    if (!discovery) {
+      discovery = await this.#discover(reader, sha);
+      this.#budget.listings.set(sha, discovery);
+    }
+    return discovery;
+  }
+
+  /** The schedules of workflow files `listed`. */
+  async #schedulesIn(
+    reader: ObjectReader,
+    listed: readonly WorkflowFile[],
+  ): Promise<ScheduledFiles> {
+    const files: { path: string; blob: string; crons: string[] }[] = [];
+    for (const file of listed) {
+      const schedule = (await this.#triggersOf(reader, file)).find((t) => t.event === "schedule");
+      if (schedule?.event === "schedule")
+        files.push({ path: file.path, blob: file.oid, crons: schedule.crons.map((c) => c.value) });
+    }
+    return files;
+  }
+
+  /**
+   * Refreshes older than this one whose evaluation failed (given up as
+   * `evaluation_failed` or `retries_exhausted`) and that no later refresh
+   * passed, applied first, oldest first, each as its own pusher: the files
+   * a failed refresh changed stay theirs, not this refresh's pusher's. One
+   * whose commit still cannot be read is dropped (its files go to the next
+   * pusher who changes them, as before). Read from the last refresh applied
+   * or passed (`refreshed_event`) in pages of the inbox, within the slice's
+   * {@link ABSORB_STEPS}; each step's result is kept, so a slice that ends
+   * part-way repeats none. A temporary failure, a spent budget or busy
+   * memory is this refresh's, retried as any.
+   */
+  async #applyFailedRefreshes(reader: ObjectReader): Promise<void> {
+    const step = () => {
+      if (this.#budget.absorbs <= 0) throw new WorkSpent();
+      this.#budget.absorbs--;
+    };
+    for (;;) {
+      const from = this.#t
+        .sql()
+        .exec<{ at: number }>(
+          "SELECT coalesce(max(refreshed_event), 0) AS at FROM ci_schedule_state",
+        )
+        .one().at;
+      const page = this.#t
+        .sql()
+        .exec<{
+          id: number;
+          kind: string;
+          state: string;
+          outcome: string | null;
+          actor_id: string | null;
+          facts: string;
+        }>(
+          `SELECT id, kind, state, outcome, actor_id, facts FROM ci_events
+           WHERE id > ? AND id < ? ORDER BY id LIMIT ?`,
+          from,
+          this.#row.id,
+          ABSORB_PAGE,
+        )
+        .toArray();
+      const last = page.at(-1);
+      if (!last) return;
+      const failed = page.filter(
+        (e) =>
+          e.kind === "schedule_refresh" &&
+          e.state === "done" &&
+          (FAILED_REFRESH as readonly (string | null)[]).includes(e.outcome),
+      );
+      if (failed.length === 0) step();
+      for (const event of failed) {
+        step();
+        const facts = JSON.parse(event.facts) as RefreshFacts;
+        let files: ScheduledFiles | undefined;
+        let error: unknown;
+        try {
+          const discovery = facts.sha ? await this.#listing(reader, facts.sha) : undefined;
+          if (discovery?.ok) files = await this.#schedulesIn(reader, discovery.files);
+        } catch (thrown) {
+          if (retriedAsThis(thrown)) throw thrown;
+          error = thrown;
+        }
+        if (files)
+          this.#t.repo.applySchedules(
+            event.id,
+            files,
+            event.actor_id ?? "",
+            facts.source === "head",
+          );
+        else {
+          this.#t.repo.passSchedules(event.id);
+          this.#t.repo.log().warn("a failed schedule refresh could not be read: dropped", {
+            event: event.id,
+            refresh: this.#row.id,
+            error,
+          });
+          this.#t.repo.git.context.metrics.count("ci.schedule_refresh_dropped", {});
+        }
+      }
+      this.#t.repo.passSchedules(last.id);
+      if (page.length < ABSORB_PAGE) return;
+    }
   }
 
   #triggerEvent(pass: Pass): TriggerEvent {
@@ -2522,6 +2653,22 @@ async function peel(reader: ObjectReader, sha: string): Promise<string | undefin
 }
 
 /** Why a pass cannot be read, when the error is one that ends it; undefined for any other. */
+/**
+ * A failure while applying an older failed refresh that is this refresh's
+ * own to retry (temporary, a spent budget, busy memory, a test's abort),
+ * not a reason to drop the older one.
+ */
+function retriedAsThis(error: unknown): boolean {
+  return (
+    error instanceof TransientFailure ||
+    error instanceof WorkSpent ||
+    error instanceof ReadBudgetError ||
+    error instanceof ReaderWorkSpent ||
+    error instanceof ReadsMemoryBusy ||
+    error instanceof SliceAborted
+  );
+}
+
 function refusal(error: unknown): string | undefined {
   if (error instanceof ReadsMemoryBusy) return undefined;
   if (error instanceof ReadsTooLargeError) return "too_large";

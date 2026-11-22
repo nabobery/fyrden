@@ -717,6 +717,7 @@ export class RepoDO extends MigratingDO {
       applySchedules: (eventId, files, actor, headChange) =>
         this.ciSchedules.apply(eventId, files, actor, headChange),
       skipSchedules: (eventId) => this.ciSchedules.skip(eventId),
+      passSchedules: (eventId) => this.ciSchedules.pass(eventId),
       noteSchedulesOff: () => this.ciSchedules.noteOff(),
       resumeSchedules: () => this.ciSchedules.resume(),
       refreshAccess: () => this.acl.pullForWrite(),
