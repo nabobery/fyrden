@@ -60,6 +60,14 @@ export const admitEveryViewer: LogViewerAdmission = {
 /** How long a ticket may cost: its redemption window, then its socket's life. */
 export const VIEWER_SPAN_MS = LOG_VIEWER_POLICY.ticketMs + LOG_VIEWER_POLICY.lifeMs;
 
+/**
+ * Charged past the span: the ledger's clock is `unixepoch()`, whole seconds
+ * (verified: https://sqlite.org/lang_datefunc.html), up to 999 ms behind the
+ * ticket's issuance in milliseconds, so the span it charges may end before
+ * the socket's latest end, and near midnight leave a day uncharged.
+ */
+const LEDGER_CLOCK_MARGIN_MS = 1000;
+
 const unavailable = (message: string): LogViewerRefusal => ({
   status: 503,
   code: "log_viewers_unavailable",
@@ -97,7 +105,7 @@ export function freeViewerAdmission(
             accountId: ticket.accountId,
             validUntil: ticket.expiresAt,
             price,
-            spanMs: VIEWER_SPAN_MS,
+            spanMs: VIEWER_SPAN_MS + LEDGER_CLOCK_MARGIN_MS,
           },
           limits,
         );

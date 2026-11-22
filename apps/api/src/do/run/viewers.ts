@@ -222,10 +222,12 @@ export type StoreTicketAnswer =
   | {
       readonly ok: true;
       readonly expiresAt: number;
+      /** The log its budget was sized from. */
       readonly stored: StoredLog;
-      /** What its socket is held to; null when unbudgeted. */
-      readonly budget: CiViewerBudget | null;
+      /** What its socket is held to. */
+      readonly budget: CiViewerBudget;
     }
+  | { readonly ok: true; readonly expiresAt: number; readonly stored: null; readonly budget: null }
   | { readonly ok: false; readonly code: "run_not_found" | "job_not_found" | "too_many_tickets" };
 
 /** What the viewers need from their object. */
@@ -353,10 +355,10 @@ export class LogViewers {
    * Stores a ticket's hash for job `jobId`, redeemable by `credentialId`
    * through repository `repoId` for `LOG_VIEWER_POLICY.ticketMs` on this
    * object's clock (the one its redemption is judged by). Expired tickets go first.
-   * Answers the job's log as stored now; with `budget`, the socket redeemed
-   * from it is held to the budget (`ciViewerBudget`) that log and how long
-   * rows may flow to it allow (at most its life and `maxActiveMs`), which
-   * it answers too.
+   * With `budget`, the socket redeemed from it is held to the budget
+   * (`ciViewerBudget`) the job's log as stored now and how long rows may
+   * flow to it allow (at most its life and `maxActiveMs`), and answers both;
+   * without, the log is not read.
    */
   storeTicket(input: {
     hash: string;
@@ -379,13 +381,17 @@ export class LogViewers {
         host.engine.rows<{ n: number }>("SELECT COUNT(*) AS n FROM ci_log_tickets")[0]?.n ?? 0;
       if (held >= LOG_VIEWER_POLICY.tickets) return { ok: false, code: "too_many_tickets" };
       const expiresAt = now + LOG_VIEWER_POLICY.ticketMs;
-      const stored = this.#stored(instance, now);
-      const budget = input.budget
-        ? ciViewerBudget({
-            stored,
-            activeMs: Math.min(LOG_VIEWER_POLICY.lifeMs, input.budget.maxActiveMs, stored.activeMs),
-          })
-        : null;
+      let sized: { stored: StoredLog; budget: CiViewerBudget } | null = null;
+      if (input.budget) {
+        const stored = this.#stored(instance, now);
+        const activeMs = Math.min(
+          LOG_VIEWER_POLICY.lifeMs,
+          input.budget.maxActiveMs,
+          stored.activeMs,
+        );
+        sized = { stored, budget: ciViewerBudget({ stored, activeMs }) };
+      }
+      const budget = sized?.budget ?? null;
       host.engine.exec(
         `INSERT INTO ci_log_tickets
            (hash, repo_id, job_id, credential_id, principal_id, expires_at,
@@ -401,7 +407,9 @@ export class LogViewers {
         budget?.getAttempts ?? null,
         budget?.checks ?? null,
       );
-      return { ok: true, expiresAt, stored, budget };
+      return sized
+        ? { ok: true, expiresAt, ...sized }
+        : { ok: true, expiresAt, stored: null, budget: null };
     });
   }
 

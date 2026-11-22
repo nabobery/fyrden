@@ -9,8 +9,11 @@
 // its cap.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { D1TokenStore } from "@fyrden/adapters-cloudflare/auth";
+import { createLogger } from "@fyrden/adapters-cloudflare/obs";
+import { createIdFactory, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import {
   CI_NOW,
@@ -23,7 +26,10 @@ import {
   ciViewerPrice,
   grantCi,
 } from "../src/ci/budget.js";
+import { type LogViewerAdmission, VIEWER_SPAN_MS } from "../src/ci/viewer-admission.js";
 import { ticketHash } from "../src/do/user/live.js";
+import type { OpContext } from "../src/ops/execute.js";
+import { issueJobLogTicketOperation } from "../src/repos/run-logs.js";
 import { api, json } from "./helpers/api.js";
 import { pinD1Clock } from "./helpers/d1.js";
 import { orgRepo } from "./helpers/runners.js";
@@ -164,6 +170,18 @@ describe("a live log ticket on Free", () => {
       expect((await dayRow(d))?.viewer_do_requests).toBe(emptyLog.price.fixed.do_requests);
   });
 
+  it("whose span ends exactly at midnight by D1's whole-second clock is charged on the day after it too", async () => {
+    // The ledger's clock may be up to a second behind the ticket's issuance, so the socket may
+    // still be open past the midnight its span ends at.
+    const midnight = freshNoon() + 12 * HOUR + DAY;
+    const t = midnight - VIEWER_SPAN_MS;
+    const q = await queuedAt(t);
+    expect((await ticketCall(q)).status).toBe(200);
+    expect(await receiptsOf(q.runId)).toMatchObject([
+      { first_day: Math.floor(t / DAY), last_day: midnight / DAY },
+    ]);
+  });
+
   it("is refused once viewers' quarter is spent, though jobs still fit, until the next UTC midnight, and deleted", async () => {
     const t = freshNoon();
     const q = await queuedAt(t);
@@ -291,5 +309,63 @@ describe("a live log ticket on Paid", () => {
       },
     ]);
     expect(await receiptsOf(q.runId)).toEqual([]);
+  });
+});
+
+describe("a live log ticket's redemption window as answered", () => {
+  /**
+   * The operation on `q`'s job with an admission that holds the operation's
+   * clock (`Date`, frozen) `ms` on before admitting.
+   */
+  async function issuedAfterAdmissionTakes(q: Queued, ms: number) {
+    const store = new D1TokenStore(env.DIRECTORY, {
+      clock: () => Date.now(),
+      newId: createIdFactory(() => Date.now(), secureRandomBytes),
+      randomBytes: secureRandomBytes,
+    });
+    const verified = await store.verify(q.f.owner.token, "read");
+    if (!verified.ok) throw new Error(`the owner's token is refused: ${verified.reason}`);
+    const ctx = {
+      env,
+      auth: verified.record,
+      log: createLogger({ test: "runner.logs.admission" }),
+      metrics: { count() {} },
+      requestId: uniqueId("req"),
+      requestHost: new URL(ORIGIN).host,
+      requestOrigin: ORIGIN,
+      waitUntil() {},
+    } as unknown as OpContext;
+    const slow: LogViewerAdmission = {
+      budget: null,
+      onTicket: async () => {
+        vi.setSystemTime(Date.now() + ms);
+        return "ok";
+      },
+    };
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now());
+    return issueJobLogTicketOperation(
+      ctx,
+      { owner: q.f.org.login, repo: q.f.repo.name, run_id: q.runId, job_id: q.jobId },
+      slow,
+    );
+  }
+
+  it("is what is left of it once admitted", async () => {
+    const q = await queuedAt(freshNoon());
+    const issued = await issuedAfterAdmissionTakes(q, 10_000);
+    expect(issued.expires_in).toBe(20);
+    expect(await ticketsOf(q.runId)).toEqual([
+      expect.objectContaining({ hash: await ticketHash(issued.ticket) }),
+    ]);
+  });
+
+  it("is refused 503, and the ticket deleted, with less than a second left", async () => {
+    const q = await queuedAt(freshNoon());
+    await expect(issuedAfterAdmissionTakes(q, 29_500)).rejects.toMatchObject({
+      status: 503,
+      code: "log_viewers_unavailable",
+    });
+    expect(await ticketsOf(q.runId)).toEqual([]);
   });
 });

@@ -67,6 +67,8 @@ CREATE TABLE ci_budget_receipts (
       AND last_day IS NULL AND span_from IS NULL AND span_until IS NULL AND fixed IS NULL
       AND per_minute IS NULL AND minutes IS NULL AND mint IS NULL)
     OR (kind IS NOT NULL AND account_id IS NOT NULL AND valid_until IS NOT NULL
+      AND first_day IS NOT NULL AND last_day IS NOT NULL AND span_from IS NOT NULL
+      AND span_until IS NOT NULL
       AND first_day >= 0 AND last_day >= first_day AND span_from >= 0 AND span_until > span_from
       AND fixed IS NOT NULL AND per_minute IS NOT NULL AND minutes IS NOT NULL AND mint IS NOT NULL)
   )

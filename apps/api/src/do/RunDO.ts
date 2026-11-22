@@ -1200,8 +1200,8 @@ export class RunDO extends MigratingDO {
    * Stores a live log ticket's hash for job `jobId` (its credential and
    * principal, redeemable through repository `repoId` only); refused for an
    * erased or unknown run, an unknown job, or past the run's unredeemed tickets.
-   * Answers the job's log as stored now; with `budget`, the budget its
-   * socket is held to, from that log (`ViewersHost.storeTicket`).
+   * With `budget`, answers the budget its socket is held to and the job's
+   * log as stored now it was sized from (`ViewersHost.storeTicket`).
    */
   storeLogTicket(input: {
     hash: string;

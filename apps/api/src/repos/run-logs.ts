@@ -55,6 +55,9 @@ export async function issueJobLogTicketOperation(
   const ticket = randomSecret(32);
   const hash = await ticketHash(ticket);
   ctx.metrics.count("do.request", { class: "RunDO", method: "storeLogTicket" });
+  // Its window is timed on this clock from before it is stored, never on the run's: never more
+  // than is left.
+  const storing = clock();
   let stored: StoreTicketAnswer;
   try {
     stored = await ctx.env.RUN.getByName(input.run_id).storeLogTicket({
@@ -93,12 +96,15 @@ export async function issueJobLogTicketOperation(
     expiresAt: stored.expiresAt,
     budget: stored.budget,
   });
-  if (admitted !== "ok") {
+  const drop = async () => {
     ctx.metrics.count("do.request", { class: "RunDO", method: "dropLogTicket" });
     // Never disclosed, it expires anyway: a failed delete only holds one of the run's tickets.
     await ctx.env.RUN.getByName(input.run_id)
       .dropLogTicket(hash)
       .catch((error: unknown) => ctx.log.warn("refused live log ticket not deleted", { error }));
+  };
+  if (admitted !== "ok") {
+    await drop();
     throw new OperationError(
       admitted.status,
       admitted.code,
@@ -109,10 +115,20 @@ export async function issueJobLogTicketOperation(
       admitted.retryAt,
     );
   }
+  const expiresIn = Math.floor((LOG_VIEWER_POLICY.ticketMs - (clock() - storing)) / 1000);
+  if (expiresIn < 1) {
+    ctx.log.warn("live log ticket not answered: its admission took its redemption window");
+    await drop();
+    throw new OperationError(
+      503,
+      "log_viewers_unavailable",
+      "Log viewers cannot be admitted right now. Try again.",
+    );
+  }
   const path = `/api/repos/${entry.ownerHandle}/${entry.name}/actions/runs/${run.runId}/jobs/${input.job_id}/logs/live`;
   return {
     ticket,
-    expires_in: Math.floor(LOG_VIEWER_POLICY.ticketMs / 1000),
+    expires_in: expiresIn,
     url: `${ctx.requestOrigin.replace(/^http/, "ws")}${path}?ticket=${encodeURIComponent(ticket)}`,
   };
 }

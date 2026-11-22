@@ -65,9 +65,14 @@ export class PollBlocks {
     return true;
   }
 
-  /** Holds `left` polls for runner `id` on `day`. */
+  /**
+   * Holds `left` more polls for runner `id` on `day`, beside what it still
+   * holds that day: leases answered at once for one runner each paid for theirs.
+   */
   hold(id: number, day: number, left: number): void {
-    if (day === this.#day) this.#blocks.set(id, { day, left });
+    if (day !== this.#day) return;
+    const held = this.#blocks.get(id);
+    this.#blocks.set(id, { day, left: (held?.day === day ? held.left : 0) + left });
   }
 
   forget(id: number): void {

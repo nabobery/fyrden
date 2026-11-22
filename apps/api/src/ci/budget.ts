@@ -97,12 +97,14 @@ export function fleetReservation(cap: number): CiVector {
  * A runner's daily poll budget: `FYRDEN_CI_POLL_BUDGET` when it lowers
  * the default (an operator's check that revocation works, in minutes
  * rather than hours), else `CI_POLL_BUDGET`. Never above it, so the
- * fleet's reservation still covers it.
+ * fleet's reservation still covers it. Polls are leased `CI_POLL_LEASE`
+ * at a time, so a value is read down to whole leases, and one below a
+ * lease (which would revoke a runner before it served a poll) is ignored.
  */
 export function ciPollBudget(env: object): number {
   const raw = (env as { FYRDEN_CI_POLL_BUDGET?: unknown }).FYRDEN_CI_POLL_BUDGET;
-  if (typeof raw === "string" && /^[1-9][0-9]{0,5}$/.test(raw))
-    return Math.min(Number(raw), CI_POLL_BUDGET);
+  if (typeof raw === "string" && /^[1-9][0-9]{0,5}$/.test(raw) && Number(raw) >= CI_POLL_LEASE)
+    return Math.min(Math.floor(Number(raw) / CI_POLL_LEASE) * CI_POLL_LEASE, CI_POLL_BUDGET);
   return CI_POLL_BUDGET;
 }
 

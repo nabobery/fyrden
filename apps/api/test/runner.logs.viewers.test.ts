@@ -572,7 +572,9 @@ describe("the ticket operation", () => {
     const t = await withTask();
     const issued = await ticketCall(t, t.f.owner.token);
     expect(issued.status).toBe(200);
-    expect(issued.body.expires_in).toBe(30);
+    // What is left of 30 s once stored and admitted, on the operation's own clock.
+    expect(issued.body.expires_in).toBeGreaterThan(0);
+    expect(issued.body.expires_in).toBeLessThanOrEqual(30);
     expect(issued.body.url).toBe(
       `wss://fyrden.test/api${livePath(t.f.path, t.runId, t.jobId)}?ticket=${encodeURIComponent(issued.body.ticket)}`,
     );
@@ -2064,6 +2066,14 @@ describe("escaped chunk backfill", () => {
  * from the job's log stored now, rows flowing at most a socket's life.
  */
 async function budgetedTicket(t: Task) {
+  const { ticket, answer } = await storedTicket(t, { maxActiveMs: LOG_VIEWER_POLICY.lifeMs });
+  if (!answer.ok || !answer.budget || !answer.stored)
+    throw new Error(answer.ok ? "unbudgeted" : answer.code);
+  return { ticket, stored: answer.stored, budget: answer.budget };
+}
+
+/** A ticket stored as the operation stores it, with `budget`, and the run's answer. */
+async function storedTicket(t: Task, budget: { readonly maxActiveMs: number } | null) {
   const ticket = randomSecret(32);
   const credentialId = await env.DIRECTORY.prepare("SELECT id FROM tokens WHERE token_hash = ?")
     .bind(await hashToken(t.f.owner.token))
@@ -2075,10 +2085,9 @@ async function budgetedTicket(t: Task) {
     jobId: t.jobId,
     credentialId,
     principalId: t.f.owner.principalId,
-    budget: { maxActiveMs: LOG_VIEWER_POLICY.lifeMs },
+    budget,
   });
-  if (!answer.ok || !answer.budget) throw new Error(answer.ok ? "unbudgeted" : answer.code);
-  return { ticket, stored: answer.stored, budget: answer.budget };
+  return { ticket, answer };
 }
 
 /** A socket on `ticket` from `from`, checked by the object. */
@@ -2098,6 +2107,8 @@ async function readToClose(t: Task, c: Client): Promise<number> {
     if (c.code === null) await ackAll(t.runId, c);
     await slice(t.runId);
   }
+  if (c.code === null)
+    throw new Error(`still open after ${slices} slices, ${c.texts.length} frames received`);
   await c.closed;
   return slices;
 }
@@ -2127,6 +2138,8 @@ async function readAtCadence(t: Task, c: Client): Promise<number> {
     }
     if (c.code === null) await slice(t.runId);
   }
+  if (c.code === null)
+    throw new Error(`still open after ${slices} slices, ${c.texts.length} frames received`);
   await c.closed;
   return slices;
 }
@@ -2140,6 +2153,12 @@ const storedChunks = (t: Task) =>
   );
 
 describe("read budgets", () => {
+  it("are not sized for an unbudgeted ticket, which answers no stored log", async () => {
+    const t = await withTask();
+    const { answer } = await storedTicket(t, null);
+    expect(answer).toMatchObject({ ok: true, stored: null, budget: null });
+  });
+
   it("keep a backfill over several slices within its bytes and attempts, from the log stored at issuance", async () => {
     const t = await withTask();
     const model = runnerModel(t);

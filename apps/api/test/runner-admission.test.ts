@@ -393,7 +393,26 @@ describe("the poll meter", () => {
     expect(await (isolates[1] as (typeof isolates)[0]).onFetch({ id }, now)).toBe("gone");
   });
 
-  it("discards a block when the day turns, and a block whose lease answered after midnight", async () => {
+  it("serves every poll of two blocks leased at once for one runner in one isolate", async () => {
+    const day = testDay(15);
+    const count = { queries: 0 };
+    const db = countingD1(clockedD1(env.DIRECTORY, CI_NOW, { now: noonOf(day) }), count);
+    const admission = freeRunnerAdmission(db, { cap: 1_000, pollBudget: B }, new PollBlocks());
+    const id = await runnerRow();
+    const now = noonOf(day);
+    // Both polls miss the isolate's block before either lease answers: two leases.
+    expect(
+      await Promise.all([admission.onFetch({ id }, now), admission.onFetch({ id }, now)]),
+    ).toEqual(["ok", "ok"]);
+    expect(count.queries).toBe(2);
+    // Every poll the two blocks paid for is served before a third lease.
+    for (let i = 0; i < 2 * CI_POLL_LEASE - 2; i++)
+      expect(await admission.onFetch({ id }, now + i)).toBe("ok");
+    expect(count.queries).toBe(2);
+    expect(await meterOf(id)).toMatchObject({ poll_used: 2 * CI_POLL_LEASE });
+  });
+
+  it("discards a block when the day turns, and holds none for a day the isolate has left", async () => {
     const day = testDay(13);
     const d1 = { now: (day + 1) * DAY - 1_000 };
     const count = { queries: 0 };
@@ -412,7 +431,8 @@ describe("the poll meter", () => {
     expect(count.queries).toBe(2);
     expect(await meterOf(id)).toMatchObject({ poll_day: day + 1, poll_used: CI_POLL_LEASE });
 
-    // A lease asked before midnight whose answer is for the next day serves only its own poll.
+    // A block is held for the isolate's day at lease time: one leased for the day the isolate
+    // has already left serves only its own poll (D1 charged its own day either way).
     const late = await runnerRow();
     expect(await admission.onFetch({ id: late }, lastSecond)).toBe("ok");
     expect(await admission.onFetch({ id: late }, midnight + 2)).toBe("ok");

@@ -191,14 +191,14 @@ describe("a CI grant", () => {
     });
     expect(await receipt(refused.key)).toBeNull();
     expect(await dayRow(day)).toEqual(before);
-    // The day after has room again.
+    // The day after, the refused key is past its validity; a fresh one finds room again.
     clock.now += DAY;
     expect(await grantCi(db, refused, limits(allowance))).toEqual({
       status: "expired",
     });
-    expect(
-      (await grantCi(db, { ...refused, validUntil: clock.now + MINUTE }, limits(allowance))).status,
-    ).toBe("granted");
+    expect((await grantCi(db, request({ now: clock.now }), limits(allowance))).status).toBe(
+      "granted",
+    );
   });
 
   it("refused when the second day of its span is full, writing nothing on the first", async () => {
@@ -406,6 +406,36 @@ describe("a CI grant", () => {
     });
     expect((await grantCi(db, job, limits(allowance))).status).toBe("granted");
     expect(await dayRow(day)).toMatchObject({ worker_requests: 400, viewer_worker_requests: 100 });
+  });
+});
+
+describe("a CI receipt", () => {
+  const insertGranted = (key: string, nulled?: string) => {
+    const days = { first_day: 1, last_day: 2, span_from: DAY, span_until: 2 * DAY };
+    const row = { ...days, ...(nulled ? { [nulled]: null } : {}) };
+    return env.DIRECTORY.prepare(
+      `INSERT INTO ci_budget_receipts (key, kind, account_id, first_day, last_day, span_from,
+         span_until, fixed, per_minute, minutes, mint, valid_until, expires_at, state, created_at)
+       VALUES (?, 'job', ?, ?, ?, ?, ?, '{}', '{}', 0, ?, 1, 1, 'granted', 0)`,
+    )
+      .bind(
+        key,
+        uniqueId("acct"),
+        row.first_day,
+        row.last_day,
+        row.span_from,
+        row.span_until,
+        uniqueId("mint"),
+      )
+      .run();
+  };
+
+  it("granted has every day and span bound", async () => {
+    await insertGranted(uniqueId("receipt"));
+    for (const column of ["first_day", "last_day", "span_from", "span_until"])
+      await expect(insertGranted(uniqueId("receipt"), column), column).rejects.toThrow(
+        /CHECK constraint failed/,
+      );
   });
 });
 
@@ -734,6 +764,10 @@ describe("the CI allowance", () => {
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "99999" })).toBe(CI_POLL_BUDGET);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "0" })).toBe(CI_POLL_BUDGET);
     expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "1e3" })).toBe(CI_POLL_BUDGET);
+    // Polls are leased 60 at a time: less than a lease is the default, the rest whole leases.
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "59" })).toBe(CI_POLL_BUDGET);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "60" })).toBe(60);
+    expect(ciPollBudget({ FYRDEN_CI_POLL_BUDGET: "179" })).toBe(120);
   });
 
   it("indexes inactive runners by their poll day, for registration's sum of today's polls", async () => {

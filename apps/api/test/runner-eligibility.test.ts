@@ -108,10 +108,16 @@ async function everyRunner(f: OrgFixture): Promise<RegisteredRunner[]> {
   ];
 }
 
-/** Each runner polls with dispatch on, under Free's poll meter, and is given nothing. */
-async function noRunnerGetsIt(runners: readonly RegisteredRunner[], runId: string) {
+/**
+ * Each runner polls with dispatch on, under Free's poll meter, and is given
+ * nothing. The account's tasks version must be past 0 (`primed`), so a poll at
+ * 0 searches for a job and answers with that version: it reached dispatch.
+ */
+async function noRunnerGetsIt(f: OrgFixture, runners: readonly RegisteredRunner[], runId: string) {
+  const version = await tasksVersionOf(f.org.id);
+  expect(version).toBeGreaterThan(0);
   for (const runner of runners) {
-    expect((await fetchTask(runner, 0)).task).toBeUndefined();
+    expect(await fetchTask(runner, 0)).toEqual({ tasksVersion: version });
     const metered = await env.DIRECTORY.prepare("SELECT poll_used FROM ci_runners WHERE id = ?")
       .bind(runner.id)
       .first<number>("poll_used");
@@ -144,11 +150,12 @@ describe("job eligibility", () => {
 
   it("a public repository's job is never assigned, whatever the runner's labels", async () => {
     const f = await orgRepo();
+    await primed(f);
     await setVisibility(f, "public");
     const runId = await started(f, one);
     // Never reserved, so never published.
     expect(await pendingOf(runId)).toEqual([]);
-    await noRunnerGetsIt(await everyRunner(f), runId);
+    await noRunnerGetsIt(f, await everyRunner(f), runId);
     // Still queued, for run state's queue deadline to end.
     expect((await jobsOf(runId)).map((j) => j.status)).toEqual(["queued"]);
   });
@@ -180,11 +187,12 @@ describe("job eligibility", () => {
   for (const event of ["pull_request", "pull_request_target"] as const)
     it(`a fork ${event} run is assigned to no runner, before or after its approval`, async () => {
       const f = await orgRepo();
+      await primed(f);
       const runners = await everyRunner(f);
       const spec = forkSpec(f, event);
       const runId = await started(f, spec.workflow.source, spec);
       expect(await pendingOf(runId)).toEqual([]);
-      await noRunnerGetsIt(runners, runId);
+      await noRunnerGetsIt(f, runners, runId);
 
       const binding = await approvalBinding(spec);
       expect(await runStub(runId).approve(binding as string, f.owner.principalId)).toEqual({
@@ -193,17 +201,18 @@ describe("job eligibility", () => {
       await drain(runId);
       // Approved, it is still a fork job: never reserved, never published.
       expect(await pendingOf(runId)).toEqual([]);
-      await noRunnerGetsIt(runners, runId);
+      await noRunnerGetsIt(f, runners, runId);
       expect((await jobsOf(runId)).map((j) => j.status)).toEqual(["queued"]);
     });
 
   it("a fork run that needs no approval is assigned to no runner", async () => {
     const f = await orgRepo();
+    await primed(f);
     const runners = await everyRunner(f);
     const { approval: _, ...spec } = forkSpec(f, "pull_request");
     const runId = await started(f, spec.workflow.source, spec);
     expect(await pendingOf(runId)).toEqual([]);
-    await noRunnerGetsIt(runners, runId);
+    await noRunnerGetsIt(f, runners, runId);
   });
 
   it("retires a real queued job whose directory row has pre-0053 defaults", async () => {
