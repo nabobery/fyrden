@@ -1,6 +1,13 @@
 import { isPermission, permissionDef } from "@fyrden/domain";
 import { z } from "zod";
-import { answersNothing, type OperationDef, openApiPath, pathParams, type Registry } from "./op.js";
+import {
+  answersNothing,
+  type OperationDef,
+  openApiPath,
+  pathParams,
+  type Registry,
+  successStatusesOf,
+} from "./op.js";
 import { Problem } from "./problem.js";
 import { SESSION_COOKIE } from "./session.js";
 
@@ -55,14 +62,20 @@ function operationObject(op: OperationDef): JsonSchema {
       },
     }),
     responses: {
-      [String(op.successStatus ?? 200)]: answersNothing(op)
-        ? { description: op.successStatus === 205 ? "Reset Content" : "No Content" }
-        : {
-            description:
-              op.successStatus === 201 ? "Created" : op.successStatus === 202 ? "Accepted" : "OK",
-            content: { "application/json": { schema: stripMeta(toSchema(op.output, "output")) } },
-            ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
-          },
+      ...Object.fromEntries(
+        successStatusesOf(op).map((status) => [
+          String(status),
+          answersNothing(op)
+            ? { description: STATUS_TEXT[status] }
+            : {
+                description: STATUS_TEXT[status],
+                content: {
+                  "application/json": { schema: stripMeta(toSchema(op.output, "output")) },
+                },
+                ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
+              },
+        ]),
+      ),
       ...(op.etag && { "304": { description: "Not Modified: the If-None-Match ETag matches" } }),
       default: {
         description: "Error",
@@ -75,6 +88,14 @@ function operationObject(op: OperationDef): JsonSchema {
     "x-fyrden-principals": op.principals,
   };
 }
+
+const STATUS_TEXT: Readonly<Record<number, string>> = {
+  200: "OK",
+  201: "Created",
+  202: "Accepted",
+  204: "No Content",
+  205: "Reset Content",
+};
 
 /** Whether an operation is a web session's only (its permission is). */
 const sessionOnly = (op: OperationDef) =>

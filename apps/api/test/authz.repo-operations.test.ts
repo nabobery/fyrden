@@ -104,6 +104,39 @@ const CASES: Record<
     input: {},
     expected: { status: 404, code: "hook_not_found" },
   },
+  // No secret or variable exists: named ones are not found. A sealed value is checked after
+  // authorization (a key id that is none); a new variable is made in a repository of its own.
+  "repos.actions.secrets.public_key": { input: {}, expected: { status: 200 } },
+  "repos.actions.secrets.list": { input: {}, expected: { status: 200 } },
+  "repos.actions.secrets.get": { input: {}, expected: { status: 404, code: "secret_not_found" } },
+  "repos.actions.secrets.set": {
+    input: { encrypted_value: "", key_id: "checked" },
+    expected: { status: 422, code: "bad_key_id" },
+  },
+  "repos.actions.secrets.delete": {
+    input: {},
+    expected: { status: 404, code: "secret_not_found" },
+  },
+  "repos.actions.organization_secrets.list": { input: {}, expected: { status: 200 } },
+  "repos.actions.variables.list": { input: {}, expected: { status: 200 } },
+  "repos.actions.variables.create": {
+    input: { name: "CHECKED", value: "checked" },
+    expected: { status: 201 },
+    ownRepo: true,
+  },
+  "repos.actions.variables.get": {
+    input: {},
+    expected: { status: 404, code: "variable_not_found" },
+  },
+  "repos.actions.variables.update": {
+    input: { value: "checked" },
+    expected: { status: 404, code: "variable_not_found" },
+  },
+  "repos.actions.variables.delete": {
+    input: {},
+    expected: { status: 404, code: "variable_not_found" },
+  },
+  "repos.actions.organization_variables.list": { input: {}, expected: { status: 200 } },
   // No pull request exists, and the repository has no branches to open one between.
   "pulls.list": { input: {}, expected: { status: 200 } },
   "pulls.get": { input: {}, expected: { status: 404, code: "pull_not_found" } },
@@ -403,6 +436,7 @@ function call(op: OperationDef, token: string, name = repo.name) {
     .replace("{tag+}", "checked")
     .replace("{reaction_id}", "1")
     .replace("{name}", "checked")
+    .replace("{secret_name}", "checked")
     .replace("{comment_id}", "1")
     .replace("{thread_id}", "1")
     .replace("{username}", handle)

@@ -60,8 +60,14 @@ import { SHOWN_HANDLE } from "../../accounts/handles.js";
 import { approvalBinding } from "../../ci/approval.js";
 import { type RunRegistrar, type StartRunAnswer, startRunFrom } from "../../ci/runs.js";
 import { openLiveReader, ReadBudgetError } from "../../git/live-reader.js";
+import type { OrgDO } from "../OrgDO.js";
 import type { RunDO } from "../RunDO.js";
-import { MAX_RUN_CONTEXTS_BYTES, type RunSpec, validateRunSpec } from "../run/spec.js";
+import {
+  MAX_RUN_CONTEXTS_BYTES,
+  type RunSpec,
+  snapshotVariables,
+  validateRunSpec,
+} from "../run/spec.js";
 import { BROWSE_POLICY } from "./browse.js";
 import {
   type HeldReads,
@@ -98,6 +104,8 @@ export type DispatchAnswer =
       readonly code:
         | "ci_off"
         | "repo_not_ready"
+        | "repo_transferring"
+        | "owner_changed"
         | "ref_not_found"
         | "workflow_not_found"
         | "workflow_not_dispatchable"
@@ -143,6 +151,12 @@ const MEMORY_RETRY_MS = 1_000;
  * fault that repeats whatever is retried) before it is given up. Proposed.
  */
 const MAX_EVENT_FAULTS = 20;
+/**
+ * Attempts of one event (its counted retries, `attempts`) after which an
+ * explicit refusal of its variables by its own owner, with no transfer
+ * under way, closes it as `variables_refused`. Proposed.
+ */
+export const MAX_VARIABLES_REFUSALS = 5;
 /** A pass whose `on:` cannot be read matches these, so its author sees the error (as GitHub does). */
 const UNREADABLE_TRIGGERS: readonly Trigger[] = [
   { event: "push", at: { line: 0, column: 0 } },
@@ -217,6 +231,11 @@ interface Pass {
 interface Names {
   readonly owner: string;
   readonly ownerId: string;
+  /**
+   * The repository's owner generation when `ownerId` was read (one per
+   * transfer); absent from names an older version kept.
+   */
+  readonly ownerGen?: number;
   readonly repo: string;
   readonly private: boolean;
   readonly origin: string | null;
@@ -346,6 +365,29 @@ class InvalidSpec extends Error {
   override name = "InvalidSpec";
 }
 
+/** The account's object answered, and holds no such repository (it let it go, or never held it). */
+class VariablesRefused extends Error {
+  override name = "VariablesRefused";
+}
+
+/**
+ * The owner a spec's variables (and names) were read under, kept with its
+ * allocation: a registration under another owner is refused. `gen` is
+ * absent for names an older version kept.
+ */
+interface SnapshotOwner {
+  readonly id: string;
+  readonly gen?: number;
+}
+
+/** The key of an event's facts that holds the owner it was recorded under (absent on older rows). */
+const RECORDED_OWNER = "recorded_owner";
+
+const snapshotOwner = (names: Names): SnapshotOwner => ({
+  id: names.ownerId,
+  ...(names.ownerGen !== undefined && { gen: names.ownerGen }),
+});
+
 /** A test hook's throw: ends the slice as a reset would, never counted against the event. */
 class SliceAborted extends Error {
   override name = "SliceAborted";
@@ -362,6 +404,9 @@ type Stopped =
   | { readonly kind: "retry"; readonly afterMs: number; readonly counted: boolean }
   | { readonly kind: "starts" };
 
+/** A refusal of an event's variables that closes it, with this outcome. */
+type Closed = "owner_changed" | "variables_refused";
+
 export interface CiTriggerHooks {
   /** Before a run is started (a throw counts as a failed start, retried later). */
   beforeStart?: (runId: string) => Promise<void> | void;
@@ -376,6 +421,8 @@ export interface CiTriggerHooks {
 export interface CiTriggerBindings {
   readonly RUN: DurableObjectNamespace<RunDO>;
   readonly DIRECTORY: D1Database;
+  /** The account objects, which hold a run's variables. */
+  readonly ORG: DurableObjectNamespace<OrgDO>;
 }
 
 export interface CiTriggersDeps {
@@ -627,6 +674,9 @@ export class CiTriggers {
     now: number,
     done?: { outcome: string },
   ): void {
+    // An event that may start runs keeps the owner it was recorded under: its runs start only
+    // while the repository is still that owner's (`#ownerMoved`).
+    const owner = done || kind === "schedule_refresh" ? undefined : this.owner()?.recorded;
     const cursor = this.#sql().exec(
       `INSERT OR IGNORE INTO ci_events (key, kind, state, outcome, actor_id, facts, created_at, done_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -635,7 +685,7 @@ export class CiTriggers {
       done ? "done" : "pending",
       done?.outcome ?? null,
       actorId,
-      JSON.stringify(facts),
+      JSON.stringify(owner ? { ...facts, [RECORDED_OWNER]: owner } : facts),
       now,
       done ? now : null,
     );
@@ -808,7 +858,11 @@ export class CiTriggers {
    * records the event under `input.key` and allocates its run with its
    * spec, and the run is started inline (the job retries it after any
    * failure, so the answer names the run once it is recorded). The same
-   * key again answers the run it recorded.
+   * key again answers the run it recorded, or `owner_changed` once that run
+   * was dropped for a change of owner. Refused (`repo_transferring`) before
+   * anything is read or recorded, before and after its variables are read,
+   * and again in the recording transaction, while the repository is not as
+   * `authorized` says.
    */
   async dispatch(input: {
     readonly file: string;
@@ -816,6 +870,11 @@ export class CiTriggers {
     readonly inputs: unknown;
     readonly actor: string;
     readonly key: string;
+    /**
+     * The owner the request was authorized for, and the directory's name
+     * generation then (one more for each rename and transfer).
+     */
+    readonly authorized: { readonly ownerId: string; readonly nameGen: number };
     /** Why nothing may be written now, if anything stops it. */
     readonly refusal: () => DispatchAnswer | undefined;
   }): Promise<DispatchAnswer> {
@@ -823,14 +882,14 @@ export class CiTriggers {
     const recorded = (): DispatchAnswer | undefined => {
       if (!this.deps.enabled()) return { ok: false, code: "ci_off" };
       const [known] = this.#sql()
-        .exec<{ run_id: string }>(
-          `SELECT r.run_id FROM ci_events e JOIN ci_event_runs r ON r.event_id = e.id
+        .exec<{ run_id: string; outcome: string | null }>(
+          `SELECT r.run_id, r.outcome FROM ci_events e JOIN ci_event_runs r ON r.event_id = e.id
            WHERE e.key = ?`,
           key,
         )
         .toArray();
-      if (known) return { ok: true, runId: known.run_id };
-      return input.refusal();
+      if (known) return this.#dispatched(known);
+      return this.#notAsAuthorized(input.authorized) ?? input.refusal();
     };
     const early = recorded();
     if (early) return early;
@@ -926,24 +985,27 @@ export class CiTriggers {
         };
       // The directory unreachable: busy, like a failed read.
       const names = await transient(() => this.readNames([input.actor]));
+      // Moved since it was authorized: its account is not asked.
+      const moved = this.#notAsAuthorized(input.authorized);
+      if (moved) return moved;
+      // A dispatch is trusted: its variables, or busy when the account's object cannot answer.
+      let vars: Record<string, string>;
+      try {
+        vars = await transient(() => this.readVariables(names.ownerId));
+      } catch (error) {
+        // A transfer that began during the read explains a refusal (the former owner let the
+        // repository go) or a failure alike: the conflict, never busy. Nothing moving: busy.
+        const changed = this.#notAsAuthorized(input.authorized);
+        if (changed) return changed;
+        throw error;
+      }
       const workflow = parseWorkflow(file.path, bytes);
       const name = workflow.ok ? workflow.workflow.name?.value : undefined;
       const repoId = this.deps.repoId();
       const origin = names.origin ?? "";
       const source = lossy.decode(bytes);
-      const build = (runId: string, runNumber: number): RunSpec => ({
-        runId,
-        repoId,
-        sha,
-        ref: ref.name,
-        event: "workflow_dispatch",
-        actor: input.actor,
-        workflow: { path: file.path, source },
-        // A dispatch runs the repository's own code, by someone who may write it.
-        trust: "trusted",
-        fork: false,
-        inputs: checked.inputs,
-        github: githubContext({
+      const githubFor = (runId: string, runNumber: number) =>
+        githubContext({
           serverUrl: origin,
           apiUrl: origin ? `${origin}/api` : "",
           repository: contextRepository(repoId, names, defaultBranch),
@@ -952,56 +1014,91 @@ export class CiTriggers {
           runId,
           runNumber,
           event: { kind: "workflow_dispatch", ref: ref.name, sha, inputs: checked.eventInputs },
-        }),
-      });
-      // Inputs and defaults show twice in the contexts (typed, and as event strings): a spec
-      // past the contexts' size is refused here, before anything is recorded, rather than by
-      // the allocation's own check (which stays, and would fail the request).
-      try {
-        validateRunSpec(build(newUlid(this.#now()), Number.MAX_SAFE_INTEGER));
-      } catch (error) {
-        if (!(error instanceof TypeError) || !/contexts exceed/.test(error.message)) throw error;
+        });
+      const build = (runId: string, runNumber: number): RunSpec => {
+        // Measured with the run's own github context: its id and number are known here.
+        const github = githubFor(runId, runNumber);
         return {
-          ok: false,
-          code: "invalid_inputs",
-          errors: [
-            {
-              input: null,
-              message: `The run's contexts, the inputs and their defaults included, would exceed ${MAX_RUN_CONTEXTS_BYTES} bytes.`,
-            },
-          ],
+          runId,
+          repoId,
+          sha,
+          ref: ref.name,
+          event: "workflow_dispatch",
+          actor: input.actor,
+          workflow: { path: file.path, source },
+          // A dispatch runs the repository's own code, by someone who may write it.
+          trust: "trusted",
+          fork: false,
+          inputs: checked.inputs,
+          ...snapshotVariables(vars, github, checked.inputs),
+          github,
         };
+      };
+      const tooLarge: DispatchAnswer = {
+        ok: false,
+        code: "invalid_inputs",
+        errors: [
+          {
+            input: null,
+            message: `The run's contexts, the inputs and their defaults included, would exceed ${MAX_RUN_CONTEXTS_BYTES} bytes.`,
+          },
+        ],
+      };
+      const contextsExceed = (error: unknown) =>
+        error instanceof TypeError && /contexts exceed/.test(error.message);
+      // Inputs and defaults show twice in the contexts (typed, and as event strings): a spec
+      // past the contexts' size even with the smallest github context (run number 1) is
+      // refused here, before anything is read or recorded; the allocation checks the real one.
+      try {
+        validateRunSpec(build(newUlid(this.#now()), 1));
+      } catch (error) {
+        if (!contextsExceed(error)) throw error;
+        return tooLarge;
       }
       const resolved: Resolved = { passes: [], defaultBranch, baseTip: null, names };
-      const made = this.deps.git.context.storage.transactionSync(
-        (): DispatchAnswer | { eventId: number; runId: string } => {
-          // Read again with no await before the write: a request with the same key may have
-          // recorded it meanwhile, or the repository been frozen.
-          const again = recorded();
-          if (again) return again;
-          const [event] = this.#sql()
-            .exec<{ id: number }>(
-              `INSERT INTO ci_events (key, kind, state, actor_id, facts, resolved, created_at)
+      let made: DispatchAnswer | { eventId: number; runId: string };
+      try {
+        made = this.deps.git.context.storage.transactionSync(
+          (): DispatchAnswer | { eventId: number; runId: string } => {
+            // Read again with no await before the write: a request with the same key may have
+            // recorded it meanwhile, or the repository been frozen.
+            const again = recorded();
+            if (again) return again;
+            const [event] = this.#sql()
+              .exec<{ id: number }>(
+                `INSERT INTO ci_events (key, kind, state, actor_id, facts, resolved, created_at)
                VALUES (?, 'workflow_dispatch', 'pending', ?, ?, ?, ?) RETURNING id`,
-              key,
-              input.actor,
-              JSON.stringify({
-                ref: ref.name,
-                sha,
-                path: file.path,
-                inputs: checked.inputs,
-                eventInputs: checked.eventInputs,
-              }),
-              JSON.stringify(resolved),
-              this.#now(),
-            )
-            .toArray();
-          const id = (event as { id: number }).id;
-          const spec = this.allocateRun(id, "workflow_dispatch", file.path, file.oid, build);
-          this.deps.git.jobs.ensure(CI_TRIGGERS_JOB, CI_TRIGGERS_JOB);
-          return { eventId: id, runId: spec.runId };
-        },
-      );
+                key,
+                input.actor,
+                JSON.stringify({
+                  ref: ref.name,
+                  sha,
+                  path: file.path,
+                  inputs: checked.inputs,
+                  eventInputs: checked.eventInputs,
+                }),
+                JSON.stringify(resolved),
+                this.#now(),
+              )
+              .toArray();
+            const id = (event as { id: number }).id;
+            const spec = this.allocateRun(
+              id,
+              "workflow_dispatch",
+              file.path,
+              file.oid,
+              snapshotOwner(names),
+              build,
+            );
+            this.deps.git.jobs.ensure(CI_TRIGGERS_JOB, CI_TRIGGERS_JOB);
+            return { eventId: id, runId: spec.runId };
+          },
+        );
+      } catch (error) {
+        // Past the size with the run's own number: the transaction (the event too) rolled back.
+        if (error instanceof InvalidSpec && contextsExceed(error.cause)) return tooLarge;
+        throw error;
+      }
       if ("ok" in made) return made;
       try {
         await this.decideNow(made.eventId);
@@ -1009,7 +1106,13 @@ export class CiTriggers {
         // Recorded: the job starts the run, and the answer names it.
         this.deps.log().warn("starting a dispatched run failed", { error, runId: made.runId });
       }
-      return { ok: true, runId: made.runId };
+      const [run] = this.#sql()
+        .exec<{ run_id: string; outcome: string | null }>(
+          "SELECT run_id, outcome FROM ci_event_runs WHERE run_id = ?",
+          made.runId,
+        )
+        .toArray();
+      return this.#dispatched(run ?? { run_id: made.runId, outcome: null });
     } catch (error) {
       // Before the record, a read that may succeed shortly (memory other work holds, the object
       // store unreachable): a refusal to retry, never an error that spends the request's key.
@@ -1019,6 +1122,44 @@ export class CiTriggers {
     } finally {
       opened.release();
     }
+  }
+
+  /**
+   * The answer for a dispatch's recorded run: its id, unless its start
+   * found the repository under another owner than the one its spec was
+   * built under, so it was dropped and never runs (`owner_changed`).
+   */
+  #dispatched(run: { readonly run_id: string; readonly outcome: string | null }): DispatchAnswer {
+    if (run.outcome === "owner_changed") return { ok: false, code: "owner_changed" };
+    return { ok: true, runId: run.run_id };
+  }
+
+  /**
+   * `repo_transferring` when the repository is no longer as the dispatch
+   * was authorized: a transfer moves it, another owner holds it, or its
+   * name generation grew since (each transfer adds one, so a transfer away
+   * and back is seen; a rename adds one too, and is refused alike, as the
+   * two cannot be told apart here). Its names and variables would be read
+   * under an owner the caller was not authorized for.
+   */
+  #notAsAuthorized(authorized: {
+    readonly ownerId: string;
+    readonly nameGen: number;
+  }): DispatchAnswer | undefined {
+    const meta = this.#sql()
+      .exec<{ owner_id: string | null; name_gen: number; transfer_id: string | null }>(
+        "SELECT owner_id, name_gen, transfer_id FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    // Without an identity, the caller's refusal answers.
+    if (!meta) return undefined;
+    if (
+      meta.transfer_id !== null ||
+      meta.owner_id !== authorized.ownerId ||
+      meta.name_gen > authorized.nameGen
+    )
+      return { ok: false, code: "repo_transferring" };
+    return undefined;
   }
 
   /** The full ref a dispatch names (a branch first, then a tag, of that name) and its value. */
@@ -1128,9 +1269,12 @@ export class CiTriggers {
    */
   async readNames(principals: Iterable<string>): Promise<Names> {
     const meta = this.#sql()
-      .exec<{ owner_id: string | null; name: string | null; visibility: string | null }>(
-        "SELECT owner_id, name, visibility FROM repo_meta WHERE id = 1",
-      )
+      .exec<{
+        owner_id: string | null;
+        owner_gen: number;
+        name: string | null;
+        visibility: string | null;
+      }>("SELECT owner_id, owner_gen, name, visibility FROM repo_meta WHERE id = 1")
       .toArray()[0];
     const ownerId = meta?.owner_id ?? "";
     const ids = new Set<string>([ownerId, ...principals]);
@@ -1150,11 +1294,26 @@ export class CiTriggers {
     return {
       owner: logins[ownerId] ?? "",
       ownerId,
+      ...(meta && { ownerGen: meta.owner_gen }),
       repo: meta?.name ?? "",
       private: meta?.visibility !== "public",
       origin: this.deps.origin(),
       logins,
     };
+  }
+
+  /**
+   * The variables a trusted run of this repository gets now, from its
+   * account's object, so no run starts without them. Throws
+   * {@link VariablesRefused} when the account answers that it does not hold
+   * the repository (a transfer moving it, or landed), and any other error
+   * when the object cannot answer.
+   * @internal
+   */
+  async readVariables(ownerId: string): Promise<Record<string, string>> {
+    const answer = await this.boundTo().ORG.getByName(ownerId).ciVariablesFor(this.deps.repoId());
+    if (!answer.ok) throw new VariablesRefused(`the account answered no variables: ${answer.code}`);
+    return answer.value;
   }
 
   /**
@@ -1175,6 +1334,7 @@ export class CiTriggers {
     kind: RunKind,
     path: string,
     blob: string,
+    owner: SnapshotOwner,
     build: (runId: string, runNumber: number) => RunSpec,
   ): RunSpec {
     const now = this.#now();
@@ -1208,7 +1368,12 @@ export class CiTriggers {
       this.#sql().exec(
         "INSERT INTO ci_run_specs (run_id, spec, source) VALUES (?, ?, ?)",
         runId,
-        JSON.stringify({ ...spec, workflow: { path: spec.workflow.path, source: "" } }),
+        // The owner the snapshot was read under rides along, outside the spec the run gets.
+        JSON.stringify({
+          ...spec,
+          workflow: { path: spec.workflow.path, source: "" },
+          snapshotOwner: owner,
+        }),
         spec.workflow.source,
       );
       return spec;
@@ -1276,6 +1441,24 @@ export class CiTriggers {
     return this.deps.git.context.storage.sql;
   }
 
+  /**
+   * The repository's owner now, as an event records it, and whether a
+   * transfer is moving the repository; undefined before it has one.
+   * @internal
+   */
+  owner(): { readonly recorded: SnapshotOwner; readonly moving: boolean } | undefined {
+    const meta = this.#sql()
+      .exec<{ owner_id: string | null; owner_gen: number; transfer_id: string | null }>(
+        "SELECT owner_id, owner_gen, transfer_id FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    if (!meta?.owner_id) return undefined;
+    return {
+      recorded: { id: meta.owner_id, gen: meta.owner_gen },
+      moving: meta.transfer_id !== null,
+    };
+  }
+
   #now(): number {
     return this.deps.git.context.now();
   }
@@ -1307,6 +1490,8 @@ class Evaluation {
   /** The changed paths of this event, computed once (both pull request passes share them). */
   #paths: ChangedPaths | undefined;
   readonly #standing = new Map<string, ContributorStanding>();
+  /** The trusted runs' variables, read once per evaluation (see `#variables`). */
+  #vars: Readonly<Record<string, string>> | undefined;
 
   constructor(
     triggers: CiTriggers,
@@ -1344,6 +1529,8 @@ class Evaluation {
         const pass = resolved.passes[this.#pass] as Pass;
         const stopped = await this.#runPass(reader, pass);
         if (stopped === "gone") return this.#done("repo_gone");
+        if (stopped === "owner_changed") return this.#ownerChanged();
+        if (stopped === "variables_refused") return this.#done("variables_refused");
         if (stopped) {
           this.#saveProgress();
           return stopped;
@@ -1406,11 +1593,15 @@ class Evaluation {
         continue;
       }
       if (this.#budget.starts >= MAX_STARTS_PER_SLICE) return { kind: "starts" };
-      const spec = JSON.parse(run.spec) as RunSpec;
-      const stopped = await this.#launch(run.trigger_kind, run.workflow_path, {
-        ...spec,
-        workflow: { path: spec.workflow.path, source: run.source },
-      });
+      const { snapshotOwner: owner, ...spec } = JSON.parse(run.spec) as RunSpec & {
+        snapshotOwner?: SnapshotOwner;
+      };
+      const stopped = await this.#launch(
+        run.trigger_kind,
+        run.workflow_path,
+        { ...spec, workflow: { path: spec.workflow.path, source: run.source } },
+        owner,
+      );
       if (stopped) return stopped;
     }
     return undefined;
@@ -1545,7 +1736,7 @@ class Evaluation {
   // -------------------------------------------------------------- one pass
 
   /** Every workflow file of one pass from the row's progress; a reason to stop, or nothing once decided. */
-  async #runPass(reader: ObjectReader, pass: Pass): Promise<Stopped | "gone" | undefined> {
+  async #runPass(reader: ObjectReader, pass: Pass): Promise<Stopped | "gone" | Closed | undefined> {
     let discovery: Discovery;
     try {
       discovery = this.#budget.listings.get(pass.sha) ?? (await this.#discover(reader, pass.sha));
@@ -1860,15 +2051,31 @@ class Evaluation {
     pass: Pass,
     file: WorkflowFile,
     held: boolean,
-  ): Promise<Stopped | "gone" | undefined> {
+  ): Promise<Stopped | "gone" | Closed | undefined> {
     const bytes = await this.#blob(reader, file.oid);
     if (!bytes) {
       // Larger than any workflow may be: no run could hold it.
       this.#outcome = "workflow_too_large";
       return undefined;
     }
+    // An event an earlier version recorded without its owner starts no run: which owner it was
+    // recorded under cannot be told.
+    const recorded = this.#recordedOwner();
+    if (!recorded) return "owner_changed";
+    const moved = this.#ownerMoved(recorded);
+    if (moved) return moved;
     const names = await this.#unlessUnreachable(() => this.#names());
     if ("kind" in names) return names;
+    const read = await this.#unlessUnreachable(async () => {
+      try {
+        return { vars: await this.#variables(pass, names) };
+      } catch (error) {
+        if (error instanceof VariablesRefused) return { refused: true as const };
+        throw error;
+      }
+    });
+    if ("kind" in read) return read;
+    if ("refused" in read) return this.#ownerRefused(names);
     const build = await this.#specBuilder(
       reader,
       pass,
@@ -1876,10 +2083,11 @@ class Evaluation {
       bytes,
       names,
       held ? { workflowBlob: file.oid, action: this.#facts<PullFacts>().action } : undefined,
+      read.vars,
     );
     let spec: RunSpec;
     try {
-      spec = this.#allocate(pass.kind, file.path, file.oid, build);
+      spec = this.#allocate(pass.kind, file.path, file.oid, recorded, build);
     } catch (error) {
       if (!(error instanceof InvalidSpec)) throw error;
       // Nothing was allocated (the transaction rolled back).
@@ -1890,17 +2098,92 @@ class Evaluation {
       this.#outcome = "invalid_spec";
       return undefined;
     }
-    return this.#launch(pass.kind, file.path, spec);
+    return this.#launch(pass.kind, file.path, spec, recorded);
   }
 
-  /** Starts an allocated run from its spec and records the answer. */
-  async #launch(kind: RunKind, path: string, spec: RunSpec): Promise<Stopped | "gone" | undefined> {
+  /** The owner the event was recorded under; absent on rows an older version recorded. */
+  #recordedOwner(): SnapshotOwner | undefined {
+    return this.#facts<{ [RECORDED_OWNER]?: SnapshotOwner }>()[RECORDED_OWNER];
+  }
+
+  /**
+   * Read before the event's names, so none of another owner are kept: a
+   * retry while a transfer moves the repository (it may be called off), and
+   * `owner_changed` once it is no longer the owner the event was recorded
+   * under (or another generation of it).
+   */
+  #ownerMoved(recorded: SnapshotOwner): Stopped | Closed | undefined {
+    const now = this.#t.owner();
+    if (!now || now.moving)
+      return { kind: "retry", afterMs: backoff(this.#row.attempts), counted: true };
+    const { id, gen } = now.recorded;
+    if (id !== recorded.id || (recorded.gen !== undefined && gen !== recorded.gen))
+      return "owner_changed";
+    return undefined;
+  }
+
+  /**
+   * The event's owner's account refused its variables: while a transfer
+   * moves the repository, a retry (the transfer may yet be called off);
+   * once the repository is another owner's (or another generation's),
+   * `owner_changed`, which closes the event, as its names and variables are
+   * the former owner's; otherwise (the same owner, nothing moving: the
+   * account not caught up yet, or restored to before it held the
+   * repository again) a retry until the event's attempts reach
+   * {@link MAX_VARIABLES_REFUSALS}, then `variables_refused`.
+   */
+  #ownerRefused(names: Names): Stopped | Closed {
+    const meta = this.#t
+      .sql()
+      .exec<{ owner_id: string | null; owner_gen: number; transfer_id: string | null }>(
+        "SELECT owner_id, owner_gen, transfer_id FROM repo_meta WHERE id = 1",
+      )
+      .toArray()[0];
+    const moving = meta === undefined || meta.transfer_id !== null;
+    if (moving) return { kind: "retry", afterMs: backoff(this.#row.attempts), counted: true };
+    const changed =
+      meta.owner_id !== names.ownerId ||
+      (names.ownerGen !== undefined && meta.owner_gen !== names.ownerGen);
+    if (changed) return "owner_changed";
+    if (this.#row.attempts + 1 < MAX_VARIABLES_REFUSALS)
+      return { kind: "retry", afterMs: backoff(this.#row.attempts), counted: true };
+    this.#t.repo.log().error("a CI event's variables kept being refused", {
+      event: this.#row.id,
+      repoId: this.#t.repo.repoId(),
+    });
+    return "variables_refused";
+  }
+
+  /** Closes the event as built under an owner the repository no longer has. */
+  #ownerChanged(): undefined {
+    this.#t.repo.log().info("a CI event was closed: its repository changed owner", {
+      eventId: this.#row.id,
+    });
+    return this.#done("owner_changed");
+  }
+
+  /**
+   * Starts an allocated run from its spec and records the answer. `owner`,
+   * the one its spec was built under, must still be the repository's when
+   * the run is first registered (absent for a spec an older version kept).
+   */
+  async #launch(
+    kind: RunKind,
+    path: string,
+    spec: RunSpec,
+    owner: SnapshotOwner | undefined,
+  ): Promise<Stopped | "gone" | undefined> {
     this.#budget.starts++;
     const binding = await approvalBinding(spec);
     let answer: StartRunAnswer;
     try {
       await this.#t.hooks.beforeStart?.(spec.runId);
-      answer = await startRunFrom(this.#t.repo.registrar, this.#t.boundTo(), spec);
+      answer = await startRunFrom(
+        this.#t.repo.registrar,
+        this.#t.boundTo(),
+        spec,
+        owner && { owner: owner.id, ...(owner.gen !== undefined && { ownerGen: owner.gen }) },
+      );
     } catch (error) {
       this.#t.repo.log().warn("starting a CI run failed", { error, runId: spec.runId });
       return { kind: "retry", afterMs: backoff(this.#row.attempts), counted: true };
@@ -1959,6 +2242,13 @@ class Evaluation {
       case "run_erased":
         this.#mark(kind, path, "run_erased");
         return undefined;
+      case "owner_changed":
+        // Built under the former owner (its names and variables): never started under another.
+        this.#t.repo.log().info("a CI run allocated under the former owner was dropped", {
+          runId: spec.runId,
+        });
+        this.#mark(kind, path, "owner_changed");
+        return undefined;
     }
   }
 
@@ -1996,9 +2286,10 @@ class Evaluation {
     kind: PassKind,
     path: string,
     blob: string,
+    owner: SnapshotOwner,
     build: (runId: string, runNumber: number) => RunSpec,
   ): RunSpec {
-    return this.#t.allocateRun(this.#row.id, kind, path, blob, build);
+    return this.#t.allocateRun(this.#row.id, kind, path, blob, owner, build);
   }
 
   /**
@@ -2013,17 +2304,18 @@ class Evaluation {
     bytes: Uint8Array,
     names: Names,
     approval: RunSpec["approval"],
+    vars: Readonly<Record<string, string>>,
   ): Promise<(runId: string, runNumber: number) => RunSpec> {
     const resolved = this.#resolved as Resolved;
     const repoId = this.#t.repo.repoId();
     const actorId = this.#actor();
     const parsed = parseWorkflow(path, bytes);
     const name = parsed.ok ? parsed.workflow.name?.value : undefined;
-    const fork = isPull(pass.kind) && isForkJob(repoId, this.#facts<PullFacts>().head_repo_id);
+    const fork = this.#fork(pass);
     const origin = names.origin ?? "";
     const event = await this.#contextEvent(reader, pass, names);
     const source = lossy.decode(bytes);
-    return (runId, runNumber) => {
+    const githubFor = (runId: string, runNumber: number) => {
       const input: GithubContextInput = {
         serverUrl: origin,
         apiUrl: origin ? `${origin}/api` : "",
@@ -2034,6 +2326,11 @@ class Evaluation {
         runNumber,
         event,
       };
+      return githubContext(input);
+    };
+    return (runId, runNumber) => {
+      // Measured with the run's own github context: its id and number are known here.
+      const github = githubFor(runId, runNumber);
       return {
         runId,
         repoId,
@@ -2045,9 +2342,28 @@ class Evaluation {
         trust: runTrust(pass.kind, fork),
         fork,
         ...(approval && { approval }),
-        github: githubContext(input),
+        ...snapshotVariables(vars, github, undefined),
+        github,
       };
     };
+  }
+
+  /** Whether a run of this pass is a fork job. */
+  #fork(pass: Pass): boolean {
+    return (
+      isPull(pass.kind) && isForkJob(this.#t.repo.repoId(), this.#facts<PullFacts>().head_repo_id)
+    );
+  }
+
+  /**
+   * The variables of a run of this pass: none for an untrusted run (a
+   * fork's `pull_request`), never asked for; otherwise the account's
+   * answer, read once for the event's runs in this evaluation.
+   */
+  async #variables(pass: Pass, names: Names): Promise<Readonly<Record<string, string>>> {
+    if (runTrust(pass.kind, this.#fork(pass)) !== "trusted") return {};
+    this.#vars ??= await this.#t.readVariables(names.ownerId);
+    return this.#vars;
   }
 
   async #contextEvent(reader: ObjectReader, pass: Pass, names: Names): Promise<ContextEvent> {

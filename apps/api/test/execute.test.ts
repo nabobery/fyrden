@@ -3,7 +3,8 @@ import type { TokenRecord } from "@fyrden/adapters-cloudflare/auth";
 import { createLogger, createMetrics } from "@fyrden/adapters-cloudflare/obs";
 import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
 import type { OperationDef } from "@fyrden/api-contract";
-import { AUTHENTICATED, defineOperation, INSTANCE_ADMIN } from "@fyrden/api-contract";
+import { AUTHENTICATED, defineOperation, INSTANCE_ADMIN, NoContent } from "@fyrden/api-contract";
+import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -11,6 +12,8 @@ import {
   type Handlers,
   type OpContext,
   OperationError,
+  type StatusResult,
+  statusResult,
 } from "../src/ops/execute.js";
 import { handlers } from "../src/ops/handlers.js";
 
@@ -21,6 +24,21 @@ const writeOp = defineOperation({
   summary: "A write",
   input: z.object({ value: z.string() }),
   output: z.object({ ok: z.boolean() }),
+  permission: AUTHENTICATED,
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: false,
+});
+
+const putOp = defineOperation({
+  id: "test.put",
+  method: "PUT",
+  path: "/test/{name}",
+  summary: "A write that creates or updates",
+  input: z.object({ name: z.string() }),
+  output: NoContent,
+  successStatuses: [201, 204],
   permission: AUTHENTICATED,
   principals: ["user"],
   rateLimit: "write",
@@ -64,6 +82,13 @@ describe("Handlers (checked by tsc)", () => {
       "meta.unknown": async () => ({}),
     };
     expect([missing, wrongOutput, extra]).toHaveLength(3);
+  });
+
+  it("takes a status result only as made by statusResult, never a plain object of its shape", () => {
+    const made: StatusResult<201, null> = statusResult(201, null);
+    // @ts-expect-error a plain object is not a StatusResult, which the executor checks at run time
+    const plain: StatusResult<201, null> = { status: 201, output: null };
+    expect([made, plain]).toHaveLength(2);
   });
 });
 
@@ -317,5 +342,91 @@ describe("executeOperation with an Idempotency-Key", () => {
       .bind(key)
       .first<{ claim_id: string; state: string; response: string | null }>();
     expect(row).toEqual({ claim_id: current.claim.claimId, state: "running", response: null });
+  });
+});
+
+describe("executeOperation for an operation whose outcome decides its status", () => {
+  const keyed = () => {
+    const auth = { ...record, id: uniqueId("tok") } as TokenRecord;
+    return {
+      ...ctx("write", true),
+      auth,
+      authState: { ...ctx("write", true).authState, record: auth },
+    };
+  };
+
+  it("answers the status the handler gives, with no output", async () => {
+    for (const status of [201, 204] as const) {
+      const result = await executeOperation(
+        putOp,
+        async () => statusResult(status, null),
+        ctx("write", true),
+        { name: "a" },
+      );
+      expect(result).toEqual({ ok: true, output: null, status });
+    }
+  });
+
+  it("replays each answer's own status", async () => {
+    for (const status of [201, 204] as const) {
+      const handler = vi.fn(async () => statusResult(status, null));
+      const c = keyed();
+      const key = uniqueId("key");
+      const first = await executeOperation(
+        putOp,
+        handler,
+        c,
+        { name: "a" },
+        { idempotencyKey: key },
+      );
+      const again = await executeOperation(
+        putOp,
+        handler,
+        c,
+        { name: "a" },
+        { idempotencyKey: key },
+      );
+      expect(first).toEqual({ ok: true, output: null, status });
+      expect(again).toEqual({ ok: true, output: null, status, replayed: true });
+      expect(handler).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("refuses a status it does not declare, or none, as a server bug, and never runs it again", async () => {
+    const undeclared = [
+      ["a status outside its list", async () => statusResult(205, null)],
+      ["a bare output", async () => null],
+      ["an output that is not null", async () => statusResult(201, { ok: true })],
+    ] as const;
+    for (const [what, answer] of undeclared) {
+      const handler = vi.fn(answer) as unknown as () => Promise<StatusResult<201 | 204, null>>;
+      const c = keyed();
+      const key = uniqueId("key");
+      await expect(
+        executeOperation(putOp, handler, c, { name: "a" }, { idempotencyKey: key }),
+        what,
+      ).rejects.toThrow();
+      const retry = await executeOperation(
+        putOp,
+        handler,
+        c,
+        { name: "a" },
+        { idempotencyKey: key },
+      );
+      expect(retry, what).toMatchObject({
+        ok: false,
+        problem: { code: "idempotent_outcome_unknown" },
+      });
+      expect(handler, what).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("refuses a status from an operation that declares none", async () => {
+    const handler = vi.fn(async () => statusResult(201, { ok: true })) as unknown as () => Promise<{
+      ok: boolean;
+    }>;
+    await expect(
+      executeOperation(writeOp, handler, ctx("write", true), { value: "x" }),
+    ).rejects.toThrow(/test.write/);
   });
 });

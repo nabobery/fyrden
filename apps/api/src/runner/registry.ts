@@ -384,6 +384,21 @@ function parseLabels(json: string): string[] {
 /** How long a claim on a pending job holds before another poll may take the job. Proposed. */
 export const CLAIM_LEASE_MS = 30_000;
 
+/** Every column of `ci_pending_jobs` but its id: a released row written again keeps them. */
+export const PENDING_COLUMNS = [
+  "account_id",
+  "run_id",
+  "job_id",
+  "attempt",
+  "labels",
+  "queued_at",
+  "claimed_by",
+  "claim_until",
+  "claim_nonce",
+  "repo_id",
+  "fork",
+] as const;
+
 /**
  * Supersedes the offers of an account's lapsed claims that were never
  * assigned (?1 the account, ?2 now).
@@ -554,28 +569,56 @@ export async function refuseTask(
  * assignment records the task only on a row not superseded), and the pending
  * row, while it bears this claim, is released and the account's version
  * bumped, so the job is free at once and runners that searched meanwhile
- * search again. One batch.
+ * search again. One batch. With `notBefore`, the released row is not
+ * claimed again before then (`claim_until` without a holder: no claim takes
+ * a row before it, and once it passes the row reads as a lapsed claim,
+ * whose cleanup bumps the version again so runners search for it), and it
+ * is written again under a new id: claims take the oldest id first, so it
+ * goes behind every job queued before the release, and jobs held back in
+ * turn never keep a later one from its turn.
  */
 export async function releaseClaim(
   db: D1Database,
-  claim: { taskId: number; pendingId: number; nonce: string; now: number; accountId: string },
+  claim: {
+    taskId: number;
+    pendingId: number;
+    nonce: string;
+    now: number;
+    accountId: string;
+    notBefore?: number;
+  },
   metrics?: Metrics,
 ): Promise<void> {
   count(metrics, "runner_claim_release");
+  // ?1 the pending row, ?2 this claim's nonce, ?3 the task row, ?4 when it may be claimed again.
+  const held = `id = ?1 AND claim_nonce = ?2
+    AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?3 AND task IS NULL AND superseded_at IS NOT NULL)`;
+  const kept = PENDING_COLUMNS.map((c) =>
+    c === "claim_until" ? "?4" : c === "claimed_by" || c === "claim_nonce" ? "NULL" : c,
+  );
   await db.batch([
     db
       .prepare(
         "UPDATE ci_tasks SET superseded_at = ? WHERE id = ? AND task IS NULL AND superseded_at IS NULL",
       )
       .bind(claim.now, claim.taskId),
-    db
-      .prepare(
-        `UPDATE ci_pending_jobs SET claimed_by = NULL, claim_until = NULL, claim_nonce = NULL
-         WHERE id = ? AND claim_nonce = ?
-           AND EXISTS (SELECT 1 FROM ci_tasks WHERE id = ? AND task IS NULL AND superseded_at IS NOT NULL)`,
-      )
-      .bind(claim.pendingId, claim.nonce, claim.taskId),
-    // changes() is the release's, run just before on the same connection.
+    claim.notBefore === undefined
+      ? db
+          .prepare(
+            `UPDATE ci_pending_jobs SET claimed_by = NULL, claim_until = NULL, claim_nonce = NULL
+             WHERE ${held}`,
+          )
+          .bind(claim.pendingId, claim.nonce, claim.taskId)
+      : // The row it replaces (the same run and job) is deleted; every column but the id and the
+        // claim is kept.
+        db
+          .prepare(
+            `INSERT OR REPLACE INTO ci_pending_jobs (${PENDING_COLUMNS.join(", ")})
+             SELECT ${kept.join(", ")} FROM ci_pending_jobs WHERE ${held}`,
+          )
+          .bind(claim.pendingId, claim.nonce, claim.taskId, claim.notBefore),
+    // changes() is the release's, run just before on the same connection (a replacing insert
+    // counts its row once: the row it deletes is not counted).
     db
       .prepare(
         "UPDATE ci_dispatch SET tasks_version = tasks_version + 1 WHERE account_id = ? AND changes() > 0",

@@ -191,7 +191,9 @@
   // Uploaded with the first deploy by `fyrden deploy` (--secrets-file): the first-run setup's
   // secret, and the platform's commit signing key. Listed, they also reach `wrangler dev` from an
   // env file (only listed secrets do).
-  "secrets": { "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY", "WEBHOOKS_KEY", "EMAIL_KEY"] },
+  "secrets": {
+    "required": ["BOOTSTRAP_SECRET", "SIGNING_KEY", "WEBHOOKS_KEY", "CI_SECRETS_KEY", "EMAIL_KEY"]
+  },
 
   "analytics_engine_datasets": [{ "binding": "METRICS", "dataset": "fyrden_metrics" }],
 

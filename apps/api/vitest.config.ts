@@ -38,10 +38,15 @@ export default defineConfig(async () => {
               SIGNING_KEY: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
               // A fixed key webhook secrets are sealed with (32 bytes).
               WEBHOOKS_KEY: "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+              // A fixed CI master key, for CI secrets' data keys and masks (32 bytes).
+              CI_SECRETS_KEY: "YGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8=",
               // A fixed key unsubscribe links are signed with (32 bytes, base64url).
               EMAIL_KEY: "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8",
               // Where notification emails' links point (email is sent only where a test turns it on).
               FYRDEN_PUBLIC_ORIGIN: "https://fyrden.test",
+              // Benchmarks run only on request; process.env does not reach the tests in workerd
+              // (measured 2026-11-20: FYRDEN_BENCH=1 in the shell left the bench skipped).
+              ...(process.env.FYRDEN_BENCH && { FYRDEN_BENCH: process.env.FYRDEN_BENCH }),
             },
           },
         }),

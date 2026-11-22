@@ -271,12 +271,17 @@ describe("workflow_dispatch", () => {
     const again = await dispatch(f, "ci.yml", { ref: "main", inputs: { env: "prod" } }, { key });
     expect(again).toEqual(first);
     // The repository's own record of the dispatch answers the same run too.
+    const entry = await env.DIRECTORY.prepare("SELECT owner_id, name_gen FROM repos WHERE id = ?")
+      .bind(f.repo.id)
+      .first<{ owner_id: string; name_gen: number }>();
+    const authorized = { ownerId: entry?.owner_id as string, nameGen: entry?.name_gen as number };
     const direct = await f.stub.dispatchWorkflow({
       file: "ci.yml",
       ref: "main",
       inputs: { env: "prod" },
       actor: f.owner.principalId,
       key: "replayed-claim",
+      authorized,
     });
     const repeat = await f.stub.dispatchWorkflow({
       file: "ci.yml",
@@ -284,6 +289,7 @@ describe("workflow_dispatch", () => {
       inputs: { env: "prod" },
       actor: f.owner.principalId,
       key: "replayed-claim",
+      authorized,
     });
     expect(repeat).toEqual(direct);
     const runs = await dispatchRuns(f);
@@ -502,6 +508,7 @@ describe("workflow_dispatch", () => {
       let once = true;
       r.ciTriggers.bindings = {
         RUN: env.RUN,
+        ORG: env.ORG,
         DIRECTORY: new Proxy(directory, {
           get(target, prop) {
             if (prop === "prepare" && once) {
@@ -555,5 +562,65 @@ describe("workflow_dispatch", () => {
     });
     expect(refused.body.errors?.[0]?.message).toMatch(/1048576 bytes/);
     expect(await dispatchRuns(f)).toHaveLength(1);
+  });
+
+  it("measure the contexts with the run's own number: up to the limit, and refused past it", async () => {
+    const f = await dispatchRepo({
+      ".github/workflows/big.yml": [
+        "on:",
+        "  workflow_dispatch:",
+        "    inputs:",
+        "      big:",
+        "        type: string",
+        `        default: '${'"'.repeat(255_000)}'`,
+        "      small:",
+        "        type: string",
+        "        default: ''",
+        "jobs:",
+        "  a:",
+        "    runs-on: x",
+        "    steps:",
+        "      - run: a",
+        "",
+      ].join("\n"),
+    });
+    const size = (runId: string) =>
+      inRun(
+        runId,
+        (r) => new TextEncoder().encode((r.engine.run() as { contexts: string }).contexts).length,
+      );
+    const first = await dispatch(f, "big.yml", { ref: "main" });
+    expect(first.status).toBe(200);
+    // Each character of `small` takes two bytes (typed, and as an event string).
+    const chars = Math.floor((1_048_576 - (await size(first.body.workflow_run_id as string))) / 2);
+    const body = { ref: "main", inputs: { small: "a".repeat(chars) } };
+    const fits = await dispatch(f, "big.yml", body);
+    expect(fits.status).toBe(200);
+    expect(await size(fits.body.workflow_run_id as string)).toBeGreaterThan(1_048_576 - 2);
+    // The same inputs as run 999,999,999: eight more bytes of run number, past the limit.
+    await inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec(
+        "UPDATE ci_run_numbers SET last = 999999998 WHERE workflow_path = ?",
+        ".github/workflows/big.yml",
+      ),
+    );
+    expect(await dispatch(f, "big.yml", body)).toMatchObject({
+      status: 422,
+      body: { code: "invalid_inputs", errors: [{ input: null }] },
+    });
+    // Nothing recorded: no event, and the number not taken.
+    expect(await dispatchRuns(f)).toHaveLength(2);
+    expect(
+      await inRepo(
+        f.stub,
+        (r: RepoDO) =>
+          r.git.context.storage.sql
+            .exec<{ last: number }>(
+              "SELECT last FROM ci_run_numbers WHERE workflow_path = ?",
+              ".github/workflows/big.yml",
+            )
+            .one().last,
+      ),
+    ).toBe(999_999_998);
   });
 });

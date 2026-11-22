@@ -111,11 +111,16 @@ export async function doctor(
   )
     log(await searchSummary(runner, apiDir, directory.name, org.name));
 
-  // The key webhook secrets are sealed with (deploy makes it when there is none).
+  // The keys webhook and CI secrets are kept with (deploy makes each when there is none).
   const secrets = await workerSecrets(runner, config.name).catch(() => null);
   if (secrets && !secrets.has("WEBHOOKS_KEY"))
     log("WARN WEBHOOKS_KEY is not set: webhooks cannot be created (fyrden deploy makes it)");
   else if (secrets) log("ok   WEBHOOKS_KEY is set");
+  if (secrets && !secrets.has("CI_SECRETS_KEY"))
+    log(
+      "WARN CI_SECRETS_KEY is not set: Actions secrets cannot be stored or delivered (fyrden deploy makes it)",
+    );
+  else if (secrets) log("ok   CI_SECRETS_KEY is set");
   if (secrets) log(await deployedCommit(runner, config.name));
   // wrangler has no read-only check for this; deploy names it if it is off.
   log("info Workers Analytics Engine must be enabled once in the dashboard");

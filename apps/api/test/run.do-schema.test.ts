@@ -19,6 +19,7 @@ import runV3 from "./fixtures/do-schemas/RunDO/v3.sql?raw";
 import runV4 from "./fixtures/do-schemas/RunDO/v4.sql?raw";
 import runV5 from "./fixtures/do-schemas/RunDO/v5.sql?raw";
 import runV6 from "./fixtures/do-schemas/RunDO/v6.sql?raw";
+import runV7 from "./fixtures/do-schemas/RunDO/v7.sql?raw";
 
 const versions: Record<number, string> = {
   0: runV0,
@@ -28,6 +29,7 @@ const versions: Record<number, string> = {
   4: runV4,
   5: runV5,
   6: runV6,
+  7: runV7,
 };
 
 describe("RunDO schema", () => {
@@ -304,6 +306,89 @@ describe("RunDO schema", () => {
       { task: 41, ended_at: 123 },
       { task: 42, ended_at: null },
     ]);
+  });
+
+  it("rebuilds v6 masks as plain rows, each with a fresh id and a conservative crossing length", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const values = { token: `fyrden_job_${"t".repeat(36)}`, added: "é-added-value\u0000" };
+    const rows = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      const sql = state.storage.sql;
+      sql.exec(runV6);
+      sql.exec(
+        `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
+         VALUES (41, 0, 'job_token', 0, ?), (41, 1, 'add_mask', 7, ?), (42, 0, 'job_token', 0, ?)`,
+        values.token,
+        values.added,
+        values.token,
+      );
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 6)");
+      applyDoMigrations(state.storage, runSchema);
+      return sql.exec("SELECT * FROM ci_log_masks ORDER BY task, seq").toArray();
+    });
+    const utf8 = (text: string) => new TextEncoder().encode(text).length;
+    expect(rows).toEqual([
+      expect.objectContaining({
+        task: 41,
+        seq: 0,
+        kind: "job_token",
+        from_index: 0,
+        cross_len: 6 * utf8(values.token),
+        key_id: null,
+        value: values.token,
+      }),
+      expect.objectContaining({
+        task: 41,
+        seq: 1,
+        kind: "add_mask",
+        from_index: 7,
+        cross_len: 6 * utf8(values.added),
+        key_id: null,
+        value: values.added,
+      }),
+      expect.objectContaining({ task: 42, seq: 0, kind: "job_token", key_id: null }),
+    ]);
+    const ids = rows.map((row) => row.mask_id);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f]{32}$/);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("leaves a run from v6 bound to no owner", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const owners = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      const sql = state.storage.sql;
+      sql.exec(runV6);
+      sql.exec(
+        `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
+         VALUES (1, 'old-run', 'old-repo', ?, 'refs/heads/main', 'push', 'usr_old',
+           '.github/workflows/ci.yml', '', '{}', 'original-digest', 1, 0, 0)`,
+        "a".repeat(40),
+      );
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 6)");
+      applyDoMigrations(state.storage, runSchema);
+      return sql.exec("SELECT owner_id FROM runs").toArray();
+    });
+    expect(owners).toEqual([{ owner_id: null }]);
+  });
+
+  it("takes secret masks from v7", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const kinds = await runInDurableObject(stub, (_, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO ci_log_masks (task, seq, kind, from_index, mask_id, cross_len, key_id, value)
+         VALUES (1, 0, 'secret', 0, 'id', 3, 'key', 'nonce.sealed')`,
+      );
+      return state.storage.sql.exec("SELECT kind FROM ci_log_masks").toArray();
+    });
+    expect(kinds).toEqual([{ kind: "secret" }]);
   });
 
   it("matches the committed expected schema (no drift)", async () => {

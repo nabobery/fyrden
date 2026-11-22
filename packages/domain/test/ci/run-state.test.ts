@@ -53,6 +53,11 @@ describe("instance transitions", () => {
     expect(s).toEqual(done("success"));
   });
 
+  it("puts an instance whose assignment no runner was given back in the queue", () => {
+    const s = step(step(instance("queued"), { kind: "assign" }), { kind: "unassign" });
+    expect(s).toEqual(instance("queued"));
+  });
+
   it("maps each runner result to a conclusion", () => {
     for (const result of ["success", "failure", "cancelled", "skipped"] as const)
       expect(step(instance("in_progress"), { kind: "complete", result }).conclusion).toBe(result);
@@ -116,13 +121,14 @@ describe("instance transitions", () => {
     const legal: Record<InstanceStatus, readonly InstanceEvent["kind"][]> = {
       blocked: ["queue", "cancel", "force_cancel", "fail"],
       queued: ["assign", "cancel", "queue_expired", "force_cancel", "fail"],
-      in_progress: ["cancel", "complete", "heartbeat_lost", "force_cancel"],
+      in_progress: ["cancel", "complete", "heartbeat_lost", "force_cancel", "unassign"],
       cancelling: ["cancel", "complete", "grace_expired", "heartbeat_lost", "force_cancel"],
       completed: [],
     };
     const events: InstanceEvent[] = [
       { kind: "queue" },
       { kind: "assign" },
+      { kind: "unassign" },
       { kind: "cancel", reason: "cancel" },
       { kind: "complete", result: "success" },
       { kind: "grace_expired" },

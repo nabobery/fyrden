@@ -12,11 +12,14 @@ CREATE TABLE ci_log_chunks (
         created_at INTEGER NOT NULL,
         PRIMARY KEY (task, start_index)
       ) STRICT, WITHOUT ROWID;
-CREATE TABLE ci_log_masks (
+CREATE TABLE "ci_log_masks" (
         task INTEGER NOT NULL,
         seq INTEGER NOT NULL,
-        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask')),
+        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask', 'secret')),
         from_index INTEGER NOT NULL,
+        mask_id TEXT NOT NULL,
+        cross_len INTEGER NOT NULL,
+        key_id TEXT,
         value TEXT NOT NULL,
         PRIMARY KEY (task, seq)
       ) STRICT;
@@ -206,4 +209,4 @@ CREATE TABLE runs (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       , trust TEXT NOT NULL DEFAULT 'untrusted'
-        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1))) STRICT;
+        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1)), owner_id TEXT) STRICT;

@@ -42,10 +42,38 @@ export interface OpContext {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+/**
+ * What a handler returns for an operation whose outcome decides its status
+ * (`successStatuses`): the status and the output, apart.
+ */
+export class StatusResult<S extends number = number, O = unknown> {
+  // Private, so a plain object of the same shape does not satisfy the type; `is` checks it.
+  readonly #brand = true;
+
+  constructor(
+    readonly status: S,
+    readonly output: O,
+  ) {}
+
+  static is(value: unknown): value is StatusResult {
+    return typeof value === "object" && value !== null && #brand in value;
+  }
+}
+
+export const statusResult = <const S extends number, O>(status: S, output: O): StatusResult<S, O> =>
+  new StatusResult(status, output);
+
+/** A handler's answer: the output, or for an operation with `successStatuses`, one of them with it. */
+export type HandlerOutput<D extends OperationDef> = D extends {
+  readonly successStatuses: readonly (infer S extends number)[];
+}
+  ? StatusResult<S, Output<D>>
+  : Output<D>;
+
 export type OpHandler<D extends OperationDef> = (
   ctx: OpContext,
   input: Input<D>,
-) => Promise<Output<D>>;
+) => Promise<HandlerOutput<D>>;
 
 /** One handler per registry operation; a missing one is a type error. */
 export type Handlers = { [D in FyrdenRegistry[number] as D["id"]]: OpHandler<D> };
@@ -171,6 +199,23 @@ export async function reverified(
 }
 
 /**
+ * A handler's answer as the operation's result. The wrong shape, or a
+ * status the operation does not declare, is a server bug, never sent as-is.
+ */
+function success(op: OperationDef, answer: unknown): OpResult {
+  if (op.successStatuses === undefined) {
+    if (StatusResult.is(answer))
+      throw new Error(`${op.id} answered status ${answer.status} but declares no successStatuses`);
+    return { ok: true, output: op.output.parse(answer) };
+  }
+  if (!StatusResult.is(answer))
+    throw new Error(`${op.id} declares successStatuses but answered without a status`);
+  if (!op.successStatuses.some((status) => status === answer.status))
+    throw new Error(`${op.id} answered status ${answer.status}, which it does not declare`);
+  return { ok: true, output: op.output.parse(answer.output), status: answer.status };
+}
+
+/**
  * Runs one operation for any surface (REST or MCP), so they cannot drift:
  * rate limit, write re-verification, principal-type and permission checks,
  * input validation, handler, and output validation.
@@ -267,8 +312,7 @@ export async function executeOperation(
       { ...ctx, auth, authState, ...(claim && { idempotencyClaim: claim.claimId }) },
       input.data,
     );
-    // A handler returning the wrong shape is a server bug, never sent as-is.
-    result = { ok: true, output: op.output.parse(output) };
+    result = success(op, output);
   } catch (error) {
     if (!(error instanceof OperationError)) {
       // It may have taken effect: retries with its key are refused, not run.

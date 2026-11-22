@@ -15,6 +15,9 @@
  * as `v1,<base64>`, one per secret (two while a secret is being rotated).
  */
 
+import { fromBase64, toBase64 } from "../crypto/bytes.js";
+import { type Keyring, keyring } from "../crypto/keyring.js";
+
 const SECRET_PREFIX = "whsec_";
 const encoder = new TextEncoder();
 
@@ -26,81 +29,13 @@ export interface SealedSecret {
   readonly createdAt: number;
 }
 
-interface Key {
-  readonly id: string;
-  readonly key: CryptoKey;
-}
-
 /** The keys secrets are sealed with: the current one (if set), and the retired ones. */
-export interface SecretKeys {
-  readonly current: Key | undefined;
-  readonly byId: ReadonlyMap<string, Key>;
-  /** A key variable that is set but is not a 32-byte key: nothing is sealed until it is fixed. */
-  readonly misconfigured?: string;
-}
-
-type KeysEnv = {
-  readonly WEBHOOKS_KEY?: string;
-  readonly WEBHOOKS_KEY_NEXT?: string;
-  readonly WEBHOOKS_KEYS_RETIRED?: string;
-};
-
-/** Per isolate, for the variable values they were made from. */
-let cache: { readonly from: string; readonly value: Promise<SecretKeys> } | undefined;
+export type SecretKeys = Keyring<CryptoKey>;
 
 /** The deployment's keys; a value that is not a 32-byte key is left out. */
-export function secretKeys(env: object): Promise<SecretKeys> {
-  const vars = env as KeysEnv;
-  // Absent and empty are different settings (an empty one is misconfigured).
-  const from = JSON.stringify([
-    vars.WEBHOOKS_KEY ?? null,
-    vars.WEBHOOKS_KEY_NEXT ?? null,
-    vars.WEBHOOKS_KEYS_RETIRED ?? null,
-  ]);
-  if (cache?.from !== from) cache = { from, value: loadKeys(vars) };
-  return cache.value;
-}
-
-/**
- * The keys: `WEBHOOKS_KEY_NEXT`, while a rotation is under way, seals (and
- * `WEBHOOKS_KEY` still opens what it sealed); else `WEBHOOKS_KEY`.
- */
-async function loadKeys(vars: KeysEnv): Promise<SecretKeys> {
-  const byId = new Map<string, Key>();
-  const key = vars.WEBHOOKS_KEY !== undefined ? await keyOf(vars.WEBHOOKS_KEY) : undefined;
-  const next =
-    vars.WEBHOOKS_KEY_NEXT !== undefined ? await keyOf(vars.WEBHOOKS_KEY_NEXT) : undefined;
-  // A key set but unreadable seals nothing (never the old key in its place, which would make a
-  // rotation look done); the readable ones still open.
-  // (Set means present, an empty value included.)
-  const misconfigured =
-    vars.WEBHOOKS_KEY_NEXT !== undefined && !next
-      ? "WEBHOOKS_KEY_NEXT is not a 32-byte base64 key"
-      : vars.WEBHOOKS_KEY !== undefined && !key
-        ? "WEBHOOKS_KEY is not a 32-byte base64 key"
-        : undefined;
-  const current = misconfigured ? undefined : (next ?? key);
-  for (const k of [key, next]) if (k) byId.set(k.id, k);
-  for (const line of (vars.WEBHOOKS_KEYS_RETIRED ?? "").split("\n")) {
-    if (!line.trim()) continue;
-    const retired = await keyOf(line);
-    if (retired && !byId.has(retired.id)) byId.set(retired.id, retired);
-  }
-  return { current, byId, ...(misconfigured && { misconfigured }) };
-}
-
-async function keyOf(text: string): Promise<Key | undefined> {
-  const raw = fromBase64(text.trim());
-  if (raw?.length !== 32) return undefined;
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", raw));
-  return {
-    id: hex(digest.subarray(0, 8)),
-    key: await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
-      "encrypt",
-      "decrypt",
-    ]),
-  };
-}
+export const secretKeys = keyring("WEBHOOKS", (raw) =>
+  crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]),
+);
 
 /** A new secret: 32 random bytes, `whsec_` + base64. */
 export function newSecret(): string {
@@ -186,22 +121,4 @@ export async function signature(
     parts.push(`v1,${toBase64(new Uint8Array(await crypto.subtle.sign("HMAC", key, signed)))}`);
   }
   return parts.join(" ");
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let text = "";
-  for (const b of bytes) text += String.fromCharCode(b);
-  return btoa(text);
-}
-
-function fromBase64(text: string): Uint8Array | undefined {
-  try {
-    return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
-  } catch {
-    return undefined;
-  }
-}
-
-function hex(bytes: Uint8Array): string {
-  return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

@@ -15,6 +15,9 @@ import {
   type NeedResult,
   nodeOutcome,
   type RunnerResult,
+  type SecretMaskOffer,
+  type SecretReferences,
+  secretReferences,
   type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
@@ -47,6 +50,7 @@ import {
   type MaskSource,
   NO_MASK_SOURCE,
   RunLogs,
+  type SecretMasksAnswer,
 } from "./run/logs.js";
 import { loadModel, type RunModel } from "./run/model.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
@@ -56,10 +60,30 @@ const LEASE_MARGIN_MS = 60_000;
 /** How often an owner renews its grant and a pending scope reads its receipt. Proposed. */
 const RENEW_EVERY_MS = 3 * 60_000;
 
+/** A stored variables snapshot as a task's map of strings (a value of another type, never stored, as its JSON). */
+function stringValues(vars: unknown): Record<string, string> {
+  if (vars === null || typeof vars !== "object" || Array.isArray(vars)) return {};
+  return Object.fromEntries(
+    Object.entries(vars).map(([name, value]) => [
+      name,
+      typeof value === "string" ? value : JSON.stringify(value),
+    ]),
+  );
+}
+
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
-import { type RunSpec, specDigest, validateRunSpec } from "./run/spec.js";
+import {
+  isPrincipalId,
+  MAX_RUN_CONTEXTS_BYTES,
+  type RunSpec,
+  specDigest,
+  validateRunSpec,
+} from "./run/spec.js";
 import { runSchema } from "./schema/run.js";
+
+/** The secret names a task's job token fills, as references fold them. */
+const JOB_TOKEN_NAMES: ReadonlySet<string> = new Set(["GITHUB_TOKEN", "GITEA_TOKEN"]);
 
 /** How long one alarm runs job slices. */
 const ALARM_BUDGET_MS = 5_000;
@@ -179,6 +203,8 @@ export type AssignAnswer =
        * principal's full rights).
        */
       readonly tokenScopes: readonly TokenScope[];
+      /** The task's variables: the run's snapshot, none for an untrusted run. */
+      readonly vars: Readonly<Record<string, string>>;
     }
   | {
       readonly ok: false;
@@ -230,8 +256,11 @@ export class RunDO extends MigratingDO {
   readonly #logs: RunLogs;
   /** The job logs' live sockets. */
   readonly viewers: LogViewers;
-  /** The object's memory pool (NetworkDO's size, proposed): job slices and log requests reserve from it. */
-  readonly memory = createDoMemoryBudget(16 * 1024 * 1024);
+  /**
+   * The object's memory pool (NetworkDO's size and a full-size log request's mask headroom,
+   * proposed): job slices and log requests reserve from it.
+   */
+  readonly memory = createDoMemoryBudget(17 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
   #model: { source: string; model: RunModel } | undefined;
 
@@ -284,6 +313,14 @@ export class RunDO extends MigratingDO {
       logComplete: (task) => host.#logs.complete(task),
       addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
       jobTokensFull: (task) => host.#logs.jobTokensFull(task),
+      jobTokenMasksOpen: (task) => host.#logs.jobTokensOpen(task),
+      secretsRequest: (jobId) => host.secretsRequest(jobId),
+      addSecretMasks: (task, secrets) => host.#logs.addSecretMasks(task, secrets),
+      failTask: (ref, error) => host.failTask(ref, error),
+      requeueTask: (ref) => host.requeueTask(ref),
+      get memory() {
+        return host.memory;
+      },
     });
     this.viewers = new LogViewers({
       env,
@@ -367,8 +404,14 @@ export class RunDO extends MigratingDO {
     return this.#tx(() => this.#reserve(spec, digest));
   }
 
-  /** Creates the run from `spec`; the same spec again returns it, another is refused. */
-  async create(spec: RunSpec): Promise<CreateAnswer> {
+  /**
+   * Creates the run from `spec`; the same spec again returns it, another is
+   * refused. `ownerId`, the account that owned the repository when the spec
+   * was built, is kept with a new run: only that account's secrets are ever
+   * delivered to its jobs. A run created without one is given no secrets.
+   */
+  async create(spec: RunSpec, ownerId?: string): Promise<CreateAnswer> {
+    if (ownerId !== undefined && !isPrincipalId(ownerId)) throw new TypeError("invalid run owner");
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
     const planCheck = await workflowFileCheckName(spec.workflow.path);
@@ -384,8 +427,9 @@ export class RunDO extends MigratingDO {
       const now = this.context.now();
       this.engine.exec(
         `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
-           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork,
+           owner_id)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
         spec.runId,
         spec.repoId,
         spec.sha,
@@ -400,10 +444,33 @@ export class RunDO extends MigratingDO {
         now,
         spec.trust,
         spec.fork ? 1 : 0,
+        ownerId ?? null,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
+      // Variables too large for the contexts fail the run as a workflow that does not plan does.
+      const errors: readonly RunError[] | undefined = !loaded.ok
+        ? loaded.errors.map(({ code, feature, path, line, column, message }) => ({
+            code,
+            feature,
+            path,
+            line,
+            column,
+            message,
+          }))
+        : spec.varsError
+          ? [
+              {
+                code: spec.varsError,
+                feature: "vars",
+                path: "",
+                line: 0,
+                column: 0,
+                message: `The run's variables, encoded as JSON with its other contexts, would exceed ${MAX_RUN_CONTEXTS_BYTES} bytes; values with many characters JSON escapes (control characters) take up to six bytes each.`,
+              },
+            ]
+          : undefined;
       // A workflow that fails to plan runs nothing: it needs no approval, and fails at once.
-      if (binding !== null && loaded.ok) {
+      if (binding !== null && !errors) {
         // Held: no attempt is admitted (no concurrency group, no job, no check) until approved.
         const expires = now + APPROVAL_EXPIRY_MS;
         this.engine.exec(
@@ -413,21 +480,12 @@ export class RunDO extends MigratingDO {
         );
         this.jobs.ensure("run_deadlines", RUN_JOB.deadlines, { runAt: expires });
       }
-      this.engine.insertAttempt(1, spec.actor, loaded.ok ? loaded.model : undefined);
+      this.engine.insertAttempt(1, spec.actor, loaded.ok && !errors ? loaded.model : undefined);
       const attempt = this.engine.attempt(1) as AttemptRow;
-      if (!loaded.ok) {
+      if (errors) {
         this.engine.exec(
           "UPDATE run_attempts SET errors = ? WHERE attempt = 1",
-          JSON.stringify(
-            loaded.errors.map(({ code, feature, path, line, column, message }) => ({
-              code,
-              feature,
-              path,
-              line,
-              column,
-              message,
-            })),
-          ),
+          JSON.stringify(errors),
         );
         this.engine.advanceAttempt(attempt, { kind: "plan_failed" });
         this.#publishPlanFailure(spec.runId, planCheck);
@@ -814,6 +872,7 @@ export class RunDO extends MigratingDO {
       };
     }
     const attempt = this.engine.attempt(row.attempt) as AttemptRow;
+    const contexts = JSON.parse(run.contexts) as { github: unknown; vars?: unknown };
     return {
       ok: true,
       task: { jobId: row.job_id, task: row.task as number },
@@ -823,14 +882,83 @@ export class RunDO extends MigratingDO {
       repoId: run.repo_id,
       actorId: run.actor_id,
       triggeringActorId: attempt.triggering_actor_id,
-      github: JSON.parse(run.contexts).github,
+      github: contexts.github,
       timeoutMinutes: Math.round(row.timeout_ms / 60_000),
       tokenScopes: effectiveScope({
         workflowPermissions: model.workflow.permissions,
         jobPermissions: model.workflow.jobs.find((j) => j.id.value === row.job_key)?.permissions,
         trust: run.trust,
       }),
+      vars: run.trust === "trusted" ? stringValues(contexts.vars) : {},
     };
+  }
+
+  /**
+   * Read only: which secrets job `jobId` would be given, read from the
+   * immutable workflow, and whether its run is trusted (an untrusted run's
+   * jobs get none); undefined for a job the run does not have.
+   */
+  secretsRequest(jobId: number): { trusted: boolean; refs: SecretReferences } | undefined {
+    if (this.#erased()) return undefined;
+    const run = this.engine.run();
+    const row = this.engine.instance(jobId);
+    if (!run || !row) return undefined;
+    if (run.trust !== "trusted") return { trusted: false, refs: { kind: "names", names: [] } };
+    const refs = secretReferences(this.#loadModel().workflow, row.job_key);
+    // The job token's names are always the minted token, never a stored secret (a write refuses
+    // both names), so a job reading only them reads no secret of its account.
+    if (refs.kind === "all") return { trusted: true, refs };
+    return {
+      trusted: true,
+      refs: { kind: "names", names: refs.names.filter((name) => !JOB_TOKEN_NAMES.has(name)) },
+    };
+  }
+
+  /**
+   * Ends task `ref`'s instance as failed with `error`, before any runner was
+   * given it (its secrets could not be delivered, and the run ended its offer
+   * in the directory while it was never recorded); false when the task is
+   * not current or has ended. Its local mapping, if any, is kept, and the
+   * task's end spends no runner's credential for an offer the directory
+   * never recorded.
+   */
+  failTask(ref: TaskRef, error: string): boolean {
+    return this.#tx(() => {
+      const found = this.#task(ref);
+      if (!("row" in found) || found.row.status === "completed") return false;
+      return this.engine.applyInstance(
+        found.row,
+        { kind: "complete", result: "failure" },
+        { error },
+      );
+    });
+  }
+
+  /**
+   * Puts task `ref`'s instance back in the queue: its offer was given up in
+   * the directory before this assignment was recorded there, so no runner
+   * was given it, and none ever can be. It keeps the time it was first
+   * queued (its queue deadline does not move); the task, never handed out,
+   * is dropped and its log closed. False when the task is not current or
+   * not in progress.
+   */
+  requeueTask(ref: TaskRef): boolean {
+    return this.#tx(() => {
+      const found = this.#task(ref);
+      if (!("row" in found) || found.row.status !== "in_progress") return false;
+      const { row } = found;
+      if (!this.engine.applyInstance(row, { kind: "unassign" })) return false;
+      this.engine.exec(
+        `UPDATE run_instances SET task = NULL, assign_key = NULL, started_at = NULL,
+           heartbeat_at = NULL, queued_at = ?
+         WHERE job_id = ?`,
+        row.queued_at,
+        row.job_id,
+      );
+      this.#logs.taskEnded(ref.task, this.context.now());
+      this.engine.ensureDeadlines();
+      return true;
+    });
   }
 
   #task(
@@ -980,6 +1108,16 @@ export class RunDO extends MigratingDO {
     runnerId: number,
   ): Promise<AppendLogAnswer> {
     return this.#logs.append(wireId, body, truncated, runnerId);
+  }
+
+  /**
+   * Registers the secrets delivered to task `task` to be masked in its log,
+   * sealed, in one transaction, within the task's secret budget; called at
+   * assignment before the task is answered. Refused for a task of an
+   * untrusted run, which gets no secrets.
+   */
+  addSecretMasks(task: number, secrets: readonly SecretMaskOffer[]): Promise<SecretMasksAnswer> {
+    return this.#logs.addSecretMasks(task, secrets);
   }
 
   // ------------------------------------------------------------------ live log sockets

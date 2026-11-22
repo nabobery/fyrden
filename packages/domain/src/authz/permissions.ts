@@ -229,6 +229,76 @@ export const PERMISSIONS = {
     implies: ["self_hosted_runners:read"],
     writes: true,
   },
+  // Actions secrets and variables. GitHub lets Write manage them; Fyrden
+  // keeps them to administrators (repository) and owners (organization).
+  // Never a job token's: CI jobs get them delivered, not through the API.
+  "secrets:read": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "List the repository's Actions secrets (names only) and read its public key.",
+    principals: ["user", "agent"],
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "secrets:write": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "Set and delete the repository's Actions secrets.",
+    principals: ["user", "agent"],
+    implies: ["secrets:read"],
+    writes: true,
+  },
+  "variables:read": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "Read the repository's Actions variables.",
+    principals: ["user", "agent"],
+    implies: ["metadata:read"],
+    writes: false,
+  },
+  "variables:write": {
+    resource: "repo",
+    minRole: "admin",
+    summary: "Create, change and delete the repository's Actions variables.",
+    principals: ["user", "agent"],
+    implies: ["variables:read"],
+    writes: true,
+  },
+  "organization_secrets:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary:
+      "List an organization's Actions secrets (names only), the repositories they reach, and read its public key.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "organization_secrets:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary:
+      "Set and delete an organization's Actions secrets, and choose the repositories they reach.",
+    principals: ["user", "agent"],
+    implies: ["organization_secrets:read"],
+    writes: true,
+  },
+  "organization_variables:read": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary: "Read an organization's Actions variables and the repositories they reach.",
+    principals: ["user", "agent"],
+    implies: [],
+    writes: false,
+  },
+  "organization_variables:write": {
+    resource: "account",
+    minAccountRole: "owner",
+    summary:
+      "Create, change and delete an organization's Actions variables, and choose the repositories they reach.",
+    principals: ["user", "agent"],
+    implies: ["organization_variables:read"],
+    writes: true,
+  },
   "metadata:read": {
     resource: "repo",
     minRole: "read",

@@ -20,6 +20,12 @@ export const MASK_MAX_VALUES = 256;
 export const MASK_MAX_TEXT_BYTES = 16 * 1024;
 /** A value longer than this, in UTF-8 bytes, is covered by its trimmed lines only. */
 export const MASK_WHOLE_MAX_BYTES = 4 * 1024;
+/** Secret masks a task may have, counted apart from the caps above. Proposed. */
+export const MASK_SECRET_MAX_VALUES = 200;
+/** UTF-8 bytes of secret mask values a task may have. Proposed. */
+export const MASK_SECRET_MAX_TEXT_BYTES = 256 * 1024;
+/** UTF-8 bytes of the variants of a task's secret masks, which bound the matcher's size. Proposed. */
+export const MASK_SECRET_MAX_VARIANT_BYTES = 32 * 1024;
 
 const COMMAND = "::add-mask::";
 const MASKED = "***";
@@ -188,22 +194,117 @@ export interface LogMask {
   readonly fromIndex: number;
   /** Counted inside `reserve` rather than toward the caps (see `MaskRowsOptions.reserve`). */
   readonly reserved?: boolean | undefined;
+  /** A delivered secret: never counted toward the caps or the reserve (see `checkSecretMasks`). */
+  readonly secret?: boolean | undefined;
+}
+
+/** A stored mask's first row and crossing length (`maskCrossLength` of its value), without the value. */
+export interface LogMaskReach {
+  readonly fromIndex: number;
+  readonly crossLen: number;
+}
+
+/**
+ * The length of the longest variant of `value` that may cross a row
+ * boundary, minus one (0 when none does): what an omitted row's gap must
+ * cover for this value.
+ */
+export function maskCrossLength(value: string): number {
+  let length = 0;
+  for (const variant of variantsOf(value)) {
+    if (variant.crosses) length = Math.max(length, variant.text.length - 1);
+  }
+  return length;
 }
 
 /**
  * Raw UTF-16 units after an omitted row that may finish a crossing variant
  * registered by that row's position. Protecting this prefix does not need
- * the omitted text. Row-local variants cannot cross the gap.
+ * the omitted text. Row-local variants cannot cross the gap. A mask given by
+ * its stored crossing length counts the same as one given by its value.
  */
-export function maskGapLength(masks: readonly LogMask[], index: number): number {
+export function maskGapLength(masks: readonly (LogMask | LogMaskReach)[], index: number): number {
   let length = 0;
   for (const mask of masks) {
     if (mask.fromIndex > index) continue;
-    for (const variant of variantsOf(mask.value)) {
-      if (variant.crosses) length = Math.max(length, variant.text.length - 1);
-    }
+    length = Math.max(length, "crossLen" in mask ? mask.crossLen : maskCrossLength(mask.value));
   }
   return length;
+}
+
+/** UTF-8 bytes of every variant the masker builds for `value`. */
+export function maskVariantBytes(value: string): number {
+  let bytes = 0;
+  for (const variant of variantsOf(value)) bytes += utf8Length(variant.text);
+  return bytes;
+}
+
+/** A delivered secret offered to be masked: its name, for a refusal, and its value. */
+export interface SecretMaskOffer {
+  readonly name: string;
+  readonly value: string;
+}
+
+export type SecretMaskCheck =
+  | {
+      readonly ok: true;
+      /** The offered values the task does not mask yet, once each, in order. */
+      readonly added: readonly string[];
+    }
+  | {
+      readonly ok: false;
+      readonly limit: "values" | "bytes" | "variants";
+      /** The offered secrets new to the task, by name and size; never their values. */
+      readonly secrets: readonly {
+        readonly name: string;
+        readonly bytes: number;
+        readonly variantBytes: number;
+      }[];
+    };
+
+/**
+ * Whether a task masking the secret values `stored` can mask `offered` too,
+ * within the secret budget: `MASK_SECRET_MAX_VALUES` values,
+ * `MASK_SECRET_MAX_TEXT_BYTES` of value text and
+ * `MASK_SECRET_MAX_VARIANT_BYTES` of variant text, over every secret the
+ * task has had (masks only append, so a re-offer's values add to it). A
+ * value the task has already, or shorter than `MASK_MIN_LENGTH` UTF-16
+ * units (never masked), adds nothing; every other value counts in full,
+ * whatever variants it has.
+ */
+export function checkSecretMasks(
+  stored: readonly string[],
+  offered: readonly SecretMaskOffer[],
+): SecretMaskCheck {
+  const known = new Set(stored);
+  let values = stored.length;
+  let bytes = 0;
+  let variantBytes = 0;
+  for (const value of stored) {
+    bytes += utf8Length(value);
+    variantBytes += maskVariantBytes(value);
+  }
+  const added: string[] = [];
+  const sizes: { name: string; bytes: number; variantBytes: number }[] = [];
+  for (const { name, value } of offered) {
+    if (value.length < MASK_MIN_LENGTH || known.has(value)) continue;
+    const size = { name, bytes: utf8Length(value), variantBytes: maskVariantBytes(value) };
+    known.add(value);
+    added.push(value);
+    sizes.push(size);
+    values++;
+    bytes += size.bytes;
+    variantBytes += size.variantBytes;
+  }
+  const limit =
+    values > MASK_SECRET_MAX_VALUES
+      ? "values"
+      : bytes > MASK_SECRET_MAX_TEXT_BYTES
+        ? "bytes"
+        : variantBytes > MASK_SECRET_MAX_VARIANT_BYTES
+          ? "variants"
+          : undefined;
+  return limit === undefined ? { ok: true, added } : { ok: false, limit, secrets: sizes };
 }
 
 /**
@@ -302,6 +403,7 @@ export function maskRows(
   let bytes = 0;
   let reservedValues = 0;
   let reservedBytes = 0;
+  let secretValues = 0;
   for (const mask of masks) {
     const entry: Entry = {
       variants: variantsOf(mask.value),
@@ -315,7 +417,8 @@ export function maskRows(
       mask.value,
       Math.min(known.get(mask.value) ?? Number.POSITIVE_INFINITY, mask.fromIndex),
     );
-    if (mask.reserved === true) {
+    if (mask.secret === true) secretValues++;
+    else if (mask.reserved === true) {
       reservedValues++;
       reservedBytes += utf8Length(mask.value);
     } else bytes += utf8Length(mask.value);
@@ -397,7 +500,11 @@ export function maskRows(
         (known.get(value) ?? Number.POSITIVE_INFINITY) > index
       ) {
         const size = utf8Length(value);
-        const values = entries.length - reservedValues + Math.max(reserved.values, reservedValues);
+        const values =
+          entries.length -
+          secretValues -
+          reservedValues +
+          Math.max(reserved.values, reservedValues);
         if (values >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
         else if (bytes + Math.max(reserved.bytes, reservedBytes) + size > MASK_MAX_TEXT_BYTES)
           dropped.push({ index, reason: "bytes" });

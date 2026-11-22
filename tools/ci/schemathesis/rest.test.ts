@@ -7,6 +7,7 @@
 // describes, so they pass. The rate limits are raised for the run, or most
 // requests would be refused (429) before reaching an operation.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -113,6 +114,10 @@ describe("the REST API under Schemathesis", () => {
     expect(raised.match(/"limit": 1000000/g)?.length).toBe(original.match(/"limit"/g)?.length);
     await writeFile(fuzzConfig, raised);
     const persist = join(scratch, "state");
+    const secretsFile = join(scratch, "secrets.env");
+    await writeFile(secretsFile, `CI_SECRETS_KEY=${randomBytes(32).toString("base64")}\n`, {
+      mode: 0o600,
+    });
     for (const db of ["DIRECTORY", "ORG_READ"]) {
       const migrated = await run(
         process.execPath,
@@ -140,6 +145,11 @@ describe("the REST API under Schemathesis", () => {
         persist,
         "--var",
         `BOOTSTRAP_SECRET:${bootstrapSecret}`,
+        // A required secret every deployment has (`fyrden deploy` makes it): without it the
+        // Actions secrets operations answer 503 by design. In a file, so no argument list
+        // Wrangler records carries it.
+        "--env-file",
+        secretsFile,
         // Live hints on, so their ticket is fuzzed as issued, not as the 503 of a deployment
         // without them.
         "--var",

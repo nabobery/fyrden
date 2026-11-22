@@ -49,6 +49,14 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   expiry, and whether the repository still has to be told of a state this
  *   object decided (cancelled, expired: `notified` 0). No attempt is
  *   admitted while it is present and not approved.
+ *
+ * v7 (sealed masks):
+ * - `ci_log_masks`: a task's mask values (job tokens, `::add-mask::` values
+ *   and delivered secrets), each sealed under the CI master key `key_id`, with
+ *   the random `mask_id` its seal is bound to and its crossing length.
+ * - `runs.owner_id`: the account that owned the repository when the run was
+ *   created, the only one whose secrets its jobs are given; NULL for a run
+ *   created without one (before this version), whose jobs get no secrets.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -324,6 +332,44 @@ export const runSchema: readonly DoMigration[] = [
         expires_at INTEGER NOT NULL,
         notified INTEGER NOT NULL DEFAULT 1 CHECK (notified IN (0, 1))
       ) STRICT;
+    `,
+  },
+  {
+    version: 7,
+    // Masks sealed at rest: `ci_log_masks` is rebuilt, since its kind CHECK cannot be altered,
+    // taking `secret` (a delivered secret). Each row gets `mask_id` (random hex, bound into its
+    // seal's additional data, so a row opens wherever its `seq` falls), `cross_len` (its value's
+    // longest boundary-crossing variant minus one, for an omitted row's gap, read without
+    // opening the value) and `key_id` (the CI master key it is sealed under; `value` is then
+    // "nonce.ciphertext" in base64). Rows copied from v6 stay plain, with `key_id` NULL and a
+    // `cross_len` of six times their UTF-8 length, the most any variant expands a value (a
+    // control character JSON-escaped as \u0000).
+    name: "ci_log_masks_sealed",
+    // Only this object's code reads the table, the object migrates before it answers anything,
+    // and earlier code refuses a newer schema rather than reading it.
+    contract: {
+      safeSince: "the release sealing log masks",
+      reason: "ci_log_masks is rebuilt under its own name; only RunDO code reads it",
+    },
+    sql: `
+      CREATE TABLE ci_log_masks_v7 (
+        task INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('job_token', 'add_mask', 'secret')),
+        from_index INTEGER NOT NULL,
+        mask_id TEXT NOT NULL,
+        cross_len INTEGER NOT NULL,
+        key_id TEXT,
+        value TEXT NOT NULL,
+        PRIMARY KEY (task, seq)
+      ) STRICT;
+      INSERT INTO ci_log_masks_v7 (task, seq, kind, from_index, mask_id, cross_len, key_id, value)
+        SELECT task, seq, kind, from_index, lower(hex(randomblob(16))),
+          6 * length(CAST(value AS BLOB)), NULL, value
+        FROM ci_log_masks;
+      DROP TABLE ci_log_masks;
+      ALTER TABLE ci_log_masks_v7 RENAME TO ci_log_masks;
+      ALTER TABLE runs ADD COLUMN owner_id TEXT;
     `,
   },
 ];

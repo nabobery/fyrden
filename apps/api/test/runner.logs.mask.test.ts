@@ -9,6 +9,7 @@ import { env } from "cloudflare:workers";
 import { buildVariants } from "@fyrden/domain/ci";
 import { describe, expect, it } from "vitest";
 import { type LogRow, Result } from "../src/runner/proto/messages.js";
+import { insertPlainMask, openedMasksOf } from "./helpers/log-masks.js";
 import {
   decodeFetchTaskResponse,
   decodeUpdateLogResponse,
@@ -141,20 +142,8 @@ function expectNoForm(text: string, value: string) {
   for (const variant of buildVariants(value)) expect(text).not.toContain(variant.text);
 }
 
-interface MaskRow {
-  seq: number;
-  kind: string;
-  from_index: number;
-  value: string;
-}
-
-const masksOf = (runId: string, task: number) =>
-  inRun(runId, (r) =>
-    r.engine.rows<MaskRow>(
-      "SELECT seq, kind, from_index, value FROM ci_log_masks WHERE task = ? ORDER BY seq",
-      task,
-    ),
-  );
+/** The task's masks, their values opened (they are sealed at rest). */
+const masksOf = (runId: string, task: number) => openedMasksOf(runId, task);
 
 const logOf = (runId: string, task: number) =>
   inRun(
@@ -633,14 +622,8 @@ describe("persisted mask activation", () => {
   it("keeps a later mask out of the earlier carried prefix after a reset", async () => {
     const { runId, runner, task, number } = await withTask();
     await inRun(runId, (r) => {
-      r.engine.exec(
-        `INSERT INTO ci_log_masks (task, seq, kind, from_index, value)
-         VALUES (?, 1, 'add_mask', 48, ?), (?, 2, 'add_mask', 49, ?)`,
-        number,
-        "XabcdefghZ",
-        number,
-        "abcdefgh",
-      );
+      insertPlainMask(r, number, "add_mask", 48, "XabcdefghZ", 1);
+      insertPlainMask(r, number, "add_mask", 49, "abcdefgh", 2);
     });
     expect(
       await ackOf(runner, {

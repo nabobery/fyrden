@@ -324,7 +324,8 @@ describe("UpdateLog", () => {
     const taskB = (await fetchTask(b, 0)).task;
     if (!taskA || !taskB) throw new Error("no tasks");
     const numberB = (await taskRow(taskB.id))?.task as number;
-    // 60 rows of 64 KiB: just under 4 MiB, so a request reserves about 15.7 MiB of the 16.
+    // 60 rows of 64 KiB: just under 4 MiB, so a request reserves about 15.7 MiB and its 1 MiB
+    // mask headroom of the 17.
     const big = (from: number) => rowsAt(from, 60, (i) => `${i}`.padEnd(64 * KiB, "x"));
     const held = gate();
     await hook(runId, () => ({ beforeLogStore: () => held.hold() }));
@@ -336,7 +337,7 @@ describe("UpdateLog", () => {
     const refused = await inRun(runId, (r) => r.memory.stats());
     // Retained input stays within the pool: the refused body reserved nothing.
     expect(refused.reservedBytes).toBe(during.reservedBytes);
-    expect(refused.peakBytes).toBeLessThanOrEqual(16 * MiB);
+    expect(refused.peakBytes).toBeLessThanOrEqual(17 * MiB);
     expect(await objectsOf(runId, numberB)).toEqual([]);
     held.release();
     expect(await first).toBe(60);
@@ -625,6 +626,26 @@ describe("UpdateLog fencing", () => {
     );
     expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_logs"))).toEqual([]);
     expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_log_chunks"))).toEqual([]);
+    expect(await objectsOf(runId, number)).toEqual([]);
+  });
+
+  it("a flush whose run is erased before its object is written answers not_found and writes nothing", async () => {
+    const { f, runId, runner, task, number } = await withTask();
+    await hook(runId, (r) => ({
+      beforeLogStore: async () => {
+        await r.erase(f.repo.id);
+      },
+    }));
+    await connectError(
+      await sendLog(runner, {
+        taskId: task.id,
+        index: 0,
+        rows: rowsAt(0, 50, (i) => (i === 0 ? "::add-mask::an-added-value" : `line ${i}`)),
+      }),
+      "not_found",
+      404,
+    );
+    expect(await inRun(runId, (r) => r.engine.rows("SELECT * FROM ci_logs"))).toEqual([]);
     expect(await objectsOf(runId, number)).toEqual([]);
   });
 

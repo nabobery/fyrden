@@ -20,6 +20,8 @@
     "@fyrden/domain": "workspace:*",
     "@fyrden/git-core": "workspace:*",
     "@modelcontextprotocol/server": "catalog:",
+    "@noble/ciphers": "catalog:",
+    "@noble/hashes": "catalog:",
     "hono": "catalog:",
     "zod": "catalog:"
   },

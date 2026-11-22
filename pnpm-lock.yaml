@@ -179,6 +179,12 @@ catalogs:
     '@msw/cloudflare':
       specifier: 0.2.0
       version: 0.2.0
+    '@noble/ciphers':
+      specifier: 2.4.0
+      version: 2.4.0
+    '@noble/hashes':
+      specifier: 2.4.0
+      version: 2.4.0
     '@playwright/test':
       specifier: 1.63.0
       version: 1.63.0
@@ -257,6 +263,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/git-core
       '@modelcontextprotocol/server':
+        specifier: 'catalog:'
+        version: 2.4.0
+      '@noble/ciphers':
+        specifier: 'catalog:'
+        version: 2.4.0
+      '@noble/hashes':
         specifier: 'catalog:'
         version: 2.4.0
       hono:
@@ -1524,6 +1536,14 @@ packages:
   '@mswjs/interceptors@0.45.7':
     resolution: {integrity: sha512-PPZQBiojRuy1jJQoUqbrJhoac47GC1GwRazDrYwwbE70zfqMkOY/5a+Du4hp3vlPUXLt/um4TMcmRabmooAkxw==}
     engines: {node: '>=22'}
+
+  '@noble/ciphers@2.4.0':
+    resolution: {integrity: sha512-AnjFn0Jv92laAkvMrghlFZq4qQCIN/4DxFV/eooqtC2YTjB7kBeLMS2T9KJX4Dn+ZVXLOwK0lSgqDtx9gvxtiw==}
+    engines: {node: '>= 20.19.0'}
+
+  '@noble/hashes@2.4.0':
+    resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
+    engines: {node: '>= 20.19.0'}
 
   '@open-draft/until@3.0.1':
     resolution: {integrity: sha512-s7/9ELP4aP9YZtW7RJaa0Xf3RISaRH9+EFN18FtykJYRHGNrl8f9ymvoNXzjhrjmftFvkQudtuDU9RYhk0xs3A==}
@@ -4386,6 +4406,10 @@ snapshots:
       rettime: 0.11.12
     transitivePeerDependencies:
       - supports-color
+
+  '@noble/ciphers@2.4.0': {}
+
+  '@noble/hashes@2.4.0': {}
 
   '@open-draft/until@3.0.1': {}
 

@@ -5,6 +5,7 @@
 // the job has left the queue.
 
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
+import { ciSecretKeys } from "../ci/envelope.js";
 import type { AssignTaskAnswer } from "../do/run/dispatch.js";
 import { clock } from "../services.js";
 import { encodeFetchTaskAnswer } from "./proto/messages.js";
@@ -22,7 +23,15 @@ import {
 export const dispatchHooks: {
   beforeClaim?: () => Promise<void> | void;
   afterClaim?: () => Promise<void> | void;
+  /** Before the directory records a run's refusal of a task. */
+  beforeRefuse?: () => Promise<void> | void;
 } = {};
+
+/**
+ * A job released because its secrets could not be read now is not claimed again for this long,
+ * so the polls in between reach other jobs (it holds no runner meanwhile). Proposed.
+ */
+export const SECRETS_RETRY_MS = 10_000;
 
 /** The pinned runner's FetchTask deadline when it sends none (measured: it sends 4999). */
 const RUNNER_DEADLINE_MS = 4_999;
@@ -67,6 +76,14 @@ export async function dispatchTask(
     encodeFetchTaskAnswer(task, version);
 
   const exhausted: { runId: string; jobId: number }[] = [];
+  // A job skipped for a retryable reason (its secrets could not be read or delivered now): an
+  // answer with no task keeps the runner's version, so it asks again (and is offered a skipped
+  // re-offer again).
+  let retry = false;
+  const refuse = async (refused: Parameters<typeof refuseTask>[1]) => {
+    await dispatchHooks.beforeRefuse?.();
+    await refuseTask(db, refused, call.metrics);
+  };
 
   // The runner repeats the version its task was offered with: it never read that answer. An
   // ephemeral runner that already holds a task is offered only that task again, never another.
@@ -95,6 +112,20 @@ export async function dispatchTask(
     !(runner.ephemeral && !view.reoffer.assigned && (runner.taskConfirmed || liveOffers > 1))
       ? view.reoffer
       : undefined;
+  // Without a CI master key no task's masks can be sealed, so no task is handed out: nothing is
+  // claimed, re-offered or released (a lapsed claim, which any poll clears, waits too), and the
+  // caller's own version keeps it searching once there is a key. The run checks again before it
+  // assigns, for a key that goes after this check.
+  const searches =
+    !(runner.ephemeral && (runner.taskConfirmed || liveOffers > 0)) &&
+    view.tasksVersion !== requestVersion;
+  if ((reoffer || searches || view.expiredClaims) && !(await ciSecretKeys(call.env)).current) {
+    call.log.warn("no task searched for: there is no CI master key", {
+      runnerId: runner.id,
+      ...(reoffer && { taskId: reoffer.id, runId: reoffer.runId }),
+    });
+    return answer(undefined, requestVersion);
+  }
   if (reoffer) {
     // No time left to answer: nothing is touched, and the runner asks again with the same version.
     if (clock() >= deadline) return answer(undefined, requestVersion);
@@ -105,20 +136,44 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
-    if (assigned.refused === "tokens_exhausted")
+    // The key went after the check above: the offer stands (a runner may be running it on an
+    // earlier answer) and nothing else can be handed out either, so no task now and the same
+    // version again.
+    if (assigned.refused === "ci_key_unavailable") {
+      keyUnavailable(call, offered.id, offered.runId);
+      return answer(undefined, requestVersion);
+    }
+    // The account did not answer for the job's secrets: nothing was assigned or minted, and the
+    // offer stands. The runner searches for other work and, given none, asks again at the same
+    // version.
+    if (assigned.refused === "secrets_unreachable") {
+      secretsUnreachable(call, offered.id, offered.runId);
+      exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+      retry = true;
+    } else if (assigned.refused === "secrets_undeliverable") {
+      // Its secrets no longer open or fit: an earlier answer may be running it, so the offer and
+      // its earlier token stand, the runner searches for other work and, given none, asks again
+      // at the same version.
+      secretsUndeliverable(call, offered.id, offered.runId);
+      exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+      retry = true;
+    } else if (assigned.refused === "masks_unreadable") {
+      // The task's stored masks do not open: the offer and its earlier token stand, and the
+      // runner searches for other work and, given none, asks again at the same version, at
+      // which the offer is made again.
+      masksUnreadable(call, offered.id, offered.runId);
+      exhausted.push({ runId: offered.runId, jobId: offered.jobId });
+      retry = true;
+    } else if (assigned.refused === "tokens_exhausted")
       exhausted.push({ runId: offered.runId, jobId: offered.jobId });
     else
-      await refuseTask(
-        db,
-        {
-          taskId: offered.id,
-          code: assigned.refused,
-          runId: offered.runId,
-          jobId: offered.jobId,
-          now: clock(),
-        },
-        call.metrics,
-      );
+      await refuse({
+        taskId: offered.id,
+        code: assigned.refused,
+        runId: offered.runId,
+        jobId: offered.jobId,
+        now: clock(),
+      });
   }
   // Lapsed claims go first, so a claim of a Worker that died never holds a job, whoever polls.
   if (view.expiredClaims) await clearLapsedClaims(db, runner.accountId, clock(), call.metrics);
@@ -143,8 +198,9 @@ export async function dispatchTask(
       },
       call.metrics,
     );
-    // Searched and found nothing: the version read with the runner.
-    if (!claimed) return answer(undefined, view.tasksVersion);
+    // Searched and found nothing: the version read with the runner (its own, after a job skipped
+    // for a retryable reason, so it asks again).
+    if (!claimed) return answer(undefined, retry ? requestVersion : view.tasksVersion);
     await dispatchHooks.afterClaim?.();
     if (clock() >= deadline) {
       // Never assigned: the task row is superseded and the job free for the next poll at once.
@@ -165,6 +221,50 @@ export async function dispatchTask(
       return answer(assigned.task, requestVersion);
     }
     if (assigned.refused === "confirmed") return answer(undefined, requestVersion);
+    // The key went after the check above, or the account did not answer for the job's secrets.
+    // A claim never assigned is given up, so the job is free for any poll, a poll at version 0
+    // too (which is never re-offered a claim): at once without a key, after `SECRETS_RETRY_MS`
+    // when its secrets could not be read, so the polls in between reach other jobs. One the run
+    // assigned before is kept by the release's fence: it is a live offer, made again at its
+    // version. Without a key nothing else can be handed out either; a job whose secrets could not
+    // be read is skipped, and the search goes on.
+    if (assigned.refused === "ci_key_unavailable" || assigned.refused === "secrets_unreachable") {
+      const unreachable = assigned.refused === "secrets_unreachable";
+      if (unreachable) secretsUnreachable(call, claimed.taskId, claimed.runId);
+      else keyUnavailable(call, claimed.taskId, claimed.runId);
+      const now = clock();
+      await releaseClaim(
+        db,
+        {
+          ...claimed,
+          now,
+          accountId: runner.accountId,
+          ...(unreachable && { notBefore: now + SECRETS_RETRY_MS }),
+        },
+        call.metrics,
+      );
+      if (!unreachable) return answer(undefined, requestVersion);
+      exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      retry = true;
+      continue;
+    }
+    // An offer of this claim another poll had assigned (its answer may be running the job), or one
+    // whose end the run could not write. The claim is kept (its lease holds the job from other
+    // polls meanwhile), and the offer is made again.
+    if (assigned.refused === "secrets_undeliverable") {
+      secretsUndeliverable(call, claimed.taskId, claimed.runId);
+      exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      retry = true;
+      continue;
+    }
+    // An offer another poll answered, whose stored masks do not open: kept as it is, and given none,
+    // the runner asks again at the same version, at which the offer is made again.
+    if (assigned.refused === "masks_unreadable") {
+      masksUnreadable(call, claimed.taskId, claimed.runId);
+      exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
+      retry = true;
+      continue;
+    }
     if (assigned.refused === "tokens_exhausted") {
       exhausted.push({ runId: claimed.runId, jobId: claimed.jobId });
       continue;
@@ -174,20 +274,32 @@ export async function dispatchTask(
       runId: claimed.runId,
       code: assigned.refused,
     });
-    await refuseTask(
-      db,
-      {
-        taskId: claimed.taskId,
-        code: assigned.refused,
-        runId: claimed.runId,
-        jobId: claimed.jobId,
-        now: clock(),
-      },
-      call.metrics,
-    );
+    await refuse({
+      taskId: claimed.taskId,
+      code: assigned.refused,
+      runId: claimed.runId,
+      jobId: claimed.jobId,
+      now: clock(),
+    });
   }
   // Out of claims or time: the runner's own version, so it searches again.
   return answer(undefined, requestVersion);
+}
+
+function keyUnavailable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out: there is no CI master key", { taskId, runId });
+}
+
+function masksUnreadable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out: its stored masks do not open", { taskId, runId });
+}
+
+function secretsUnreachable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out: its secrets could not be read", { taskId, runId });
+}
+
+function secretsUndeliverable(call: FetchContext, taskId: number, runId: string): void {
+  call.log.warn("task not handed out again: its secrets cannot be delivered", { taskId, runId });
 }
 
 async function assignTask(

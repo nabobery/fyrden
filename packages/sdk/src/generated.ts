@@ -152,7 +152,7 @@ export type UsersTokensListOutput = {
 export type UsersTokensCreateInput = {
   type?: "pat" | "git";
   /** Permissions it is limited to (and what they imply). Empty: your token's. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "secrets:read" | "secrets:write" | "variables:read" | "variables:write" | "organization_secrets:read" | "organization_secrets:write" | "organization_variables:read" | "organization_variables:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -217,7 +217,7 @@ export type AdminTokensCreateInput = {
   user_id: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply). Empty: the user's full rights. */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "secrets:read" | "secrets:write" | "variables:read" | "variables:write" | "organization_secrets:read" | "organization_secrets:write" | "organization_variables:read" | "organization_variables:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -373,7 +373,7 @@ export type AgentsTokensCreateInput = {
   agent: string;
   type?: "pat" | "git";
   /** Permissions the token is limited to (and what they imply), within your token's. Empty: your token's (for an unrestricted token, the agent's full rights, capped by its owner's). */
-  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes?: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "secrets:read" | "secrets:write" | "variables:read" | "variables:write" | "organization_secrets:read" | "organization_secrets:write" | "organization_variables:read" | "organization_variables:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   expires_in_days?: number;
 };
 
@@ -441,7 +441,7 @@ export type GrantsCreateInput = {
   /** The agent's handle. */
   agent: string;
   /** Permissions the agent may use for you (and what they imply). */
-  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
+  scopes: ("instance:admin" | "instance:read" | "repos:create" | "members:read" | "members:write" | "starring:read" | "starring:write" | "watching:read" | "watching:write" | "notifications:read" | "notifications:write" | "ssh_signing_keys:read" | "ssh_signing_keys:write" | "tokens:read" | "tokens:write" | "agents:read" | "agents:write" | "grants:read" | "grants:write" | "self_hosted_runners:read" | "self_hosted_runners:write" | "secrets:read" | "secrets:write" | "variables:read" | "variables:write" | "organization_secrets:read" | "organization_secrets:write" | "organization_variables:read" | "organization_variables:write" | "metadata:read" | "contents:read" | "contents:write" | "pull_requests:read" | "pull_requests:write" | "issues:read" | "issues:write" | "administration:write" | "repository_hooks:read" | "repository_hooks:write" | "statuses:read" | "statuses:write" | "actions:read" | "actions:write")[];
   /** `owner/name` of each repository it is limited to; every one you can reach when absent. */
   repositories?: string[];
   expires_in_days?: number;
@@ -1830,6 +1830,555 @@ export type AdminWebhooksResealInput = {
 /** Output of `admin.webhooks.reseal`. */
 export type AdminWebhooksResealOutput = {
   resealed: number;
+  remaining: number;
+  unreadable: number;
+  next_cursor: string | null;
+};
+
+/** Input of `repos.actions.secrets.public_key`: Get a repository public key. */
+export type ReposActionsSecretsPublicKeyInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+};
+
+/** Output of `repos.actions.secrets.public_key`. */
+export type ReposActionsSecretsPublicKeyOutput = {
+  /** Which key: pass it with `encrypted_value`. */
+  key_id: string;
+  /** The X25519 public key, base64. */
+  key: string;
+};
+
+/** Input of `repos.actions.secrets.list`: List repository secrets. */
+export type ReposActionsSecretsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `repos.actions.secrets.list`. */
+export type ReposActionsSecretsListOutput = {
+  total_count: number;
+  secrets: {
+    name: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+    /** Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again. */
+    unreadable?: boolean;
+  }[];
+};
+
+/** Input of `repos.actions.secrets.get`: Get a repository secret. */
+export type ReposActionsSecretsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+};
+
+/** Output of `repos.actions.secrets.get`. */
+export type ReposActionsSecretsGetOutput = {
+  name: string;
+  /** ISO 8601. */
+  created_at: string;
+  /** ISO 8601. */
+  updated_at: string;
+  /** Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again. */
+  unreadable?: boolean;
+};
+
+/** Input of `repos.actions.secrets.set`: Create or update a repository secret. */
+export type ReposActionsSecretsSetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  encrypted_value: string;
+  key_id: string;
+};
+
+/** Output of `repos.actions.secrets.set`. */
+export type ReposActionsSecretsSetOutput = null;
+
+/** Input of `repos.actions.secrets.delete`: Delete a repository secret. */
+export type ReposActionsSecretsDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+};
+
+/** Output of `repos.actions.secrets.delete`. */
+export type ReposActionsSecretsDeleteOutput = null;
+
+/** Input of `repos.actions.organization_secrets.list`: List repository organization secrets. */
+export type ReposActionsOrganizationSecretsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `repos.actions.organization_secrets.list`. */
+export type ReposActionsOrganizationSecretsListOutput = {
+  total_count: number;
+  secrets: {
+    name: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+    /** Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again. */
+    unreadable?: boolean;
+  }[];
+};
+
+/** Input of `orgs.actions.secrets.public_key`: Get an organization public key. */
+export type OrgsActionsSecretsPublicKeyInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.actions.secrets.public_key`. */
+export type OrgsActionsSecretsPublicKeyOutput = {
+  /** Which key: pass it with `encrypted_value`. */
+  key_id: string;
+  /** The X25519 public key, base64. */
+  key: string;
+};
+
+/** Input of `orgs.actions.secrets.list`: List organization secrets. */
+export type OrgsActionsSecretsListInput = {
+  /** The organization's handle. */
+  org: string;
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `orgs.actions.secrets.list`. */
+export type OrgsActionsSecretsListOutput = {
+  total_count: number;
+  secrets: ({
+    name: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+    /** Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again. */
+    unreadable?: boolean;
+    /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+    visibility: "all" | "private" | "selected";
+    /** With visibility `selected`: where its repositories are listed. */
+    selected_repositories_url?: string;
+  })[];
+};
+
+/** Input of `orgs.actions.secrets.get`: Get an organization secret. */
+export type OrgsActionsSecretsGetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+};
+
+/** Output of `orgs.actions.secrets.get`. */
+export type OrgsActionsSecretsGetOutput = {
+  name: string;
+  /** ISO 8601. */
+  created_at: string;
+  /** ISO 8601. */
+  updated_at: string;
+  /** Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again. */
+  unreadable?: boolean;
+  /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+  visibility: "all" | "private" | "selected";
+  /** With visibility `selected`: where its repositories are listed. */
+  selected_repositories_url?: string;
+};
+
+/** Input of `orgs.actions.secrets.set`: Create or update an organization secret. */
+export type OrgsActionsSecretsSetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  encrypted_value: string;
+  key_id: string;
+  /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+  visibility: "all" | "private" | "selected";
+  selected_repository_ids?: string[];
+};
+
+/** Output of `orgs.actions.secrets.set`. */
+export type OrgsActionsSecretsSetOutput = null;
+
+/** Input of `orgs.actions.secrets.delete`: Delete an organization secret. */
+export type OrgsActionsSecretsDeleteInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+};
+
+/** Output of `orgs.actions.secrets.delete`. */
+export type OrgsActionsSecretsDeleteOutput = null;
+
+/** Input of `orgs.actions.secrets.repos.list`: List selected repositories for an organization secret. */
+export type OrgsActionsSecretsReposListInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `orgs.actions.secrets.repos.list`. */
+export type OrgsActionsSecretsReposListOutput = {
+  total_count: number;
+  repositories: ({
+    id: string;
+    name: string;
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+  })[];
+};
+
+/** Input of `orgs.actions.secrets.repos.set`: Set selected repositories for an organization secret. */
+export type OrgsActionsSecretsReposSetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  selected_repository_ids: string[];
+};
+
+/** Output of `orgs.actions.secrets.repos.set`. */
+export type OrgsActionsSecretsReposSetOutput = null;
+
+/** Input of `orgs.actions.secrets.repos.add`: Add selected repository to an organization secret. */
+export type OrgsActionsSecretsReposAddInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). Fyrden's ids are strings, where GitHub's are numbers, so `gh secret set --repos` does not work: pass ids. */
+  repository_id: string;
+};
+
+/** Output of `orgs.actions.secrets.repos.add`. */
+export type OrgsActionsSecretsReposAddOutput = null;
+
+/** Input of `orgs.actions.secrets.repos.remove`: Remove selected repository from an organization secret. */
+export type OrgsActionsSecretsReposRemoveInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The secret's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. `GITEA_TOKEN` is refused (Fyrden). */
+  secret_name: string;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). Fyrden's ids are strings, where GitHub's are numbers, so `gh secret set --repos` does not work: pass ids. */
+  repository_id: string;
+};
+
+/** Output of `orgs.actions.secrets.repos.remove`. */
+export type OrgsActionsSecretsReposRemoveOutput = null;
+
+/** Input of `repos.actions.variables.list`: List repository variables. */
+export type ReposActionsVariablesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, at most 30; a larger one is read as 30. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `repos.actions.variables.list`. */
+export type ReposActionsVariablesListOutput = {
+  total_count: number;
+  variables: {
+    name: string;
+    value: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+  }[];
+};
+
+/** Input of `repos.actions.variables.create`: Create a repository variable. */
+export type ReposActionsVariablesCreateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** The value. At most 49152 bytes of UTF-8 (422 `variable_too_large`). */
+  value: string;
+};
+
+/** Output of `repos.actions.variables.create`. */
+export type ReposActionsVariablesCreateOutput = null;
+
+/** Input of `repos.actions.variables.get`: Get a repository variable. */
+export type ReposActionsVariablesGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+};
+
+/** Output of `repos.actions.variables.get`. */
+export type ReposActionsVariablesGetOutput = {
+  name: string;
+  value: string;
+  /** ISO 8601. */
+  created_at: string;
+  /** ISO 8601. */
+  updated_at: string;
+};
+
+/** Input of `repos.actions.variables.update`: Update a repository variable. */
+export type ReposActionsVariablesUpdateInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** The value. At most 49152 bytes of UTF-8 (422 `variable_too_large`). */
+  value?: string;
+};
+
+/** Output of `repos.actions.variables.update`. */
+export type ReposActionsVariablesUpdateOutput = null;
+
+/** Input of `repos.actions.variables.delete`: Delete a repository variable. */
+export type ReposActionsVariablesDeleteInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+};
+
+/** Output of `repos.actions.variables.delete`. */
+export type ReposActionsVariablesDeleteOutput = null;
+
+/** Input of `repos.actions.organization_variables.list`: List repository organization variables. */
+export type ReposActionsOrganizationVariablesListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, at most 30; a larger one is read as 30. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `repos.actions.organization_variables.list`. */
+export type ReposActionsOrganizationVariablesListOutput = {
+  total_count: number;
+  variables: {
+    name: string;
+    value: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+  }[];
+};
+
+/** Input of `orgs.actions.variables.list`: List organization variables. */
+export type OrgsActionsVariablesListInput = {
+  /** The organization's handle. */
+  org: string;
+  /** Page size, at most 30; a larger one is read as 30. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `orgs.actions.variables.list`. */
+export type OrgsActionsVariablesListOutput = {
+  total_count: number;
+  variables: ({
+    name: string;
+    value: string;
+    /** ISO 8601. */
+    created_at: string;
+    /** ISO 8601. */
+    updated_at: string;
+    /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+    visibility: "all" | "private" | "selected";
+    /** With visibility `selected`: where its repositories are listed. */
+    selected_repositories_url?: string;
+  })[];
+};
+
+/** Input of `orgs.actions.variables.create`: Create an organization variable. */
+export type OrgsActionsVariablesCreateInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** The value. At most 49152 bytes of UTF-8 (422 `variable_too_large`). */
+  value: string;
+  /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+  visibility: "all" | "private" | "selected";
+  selected_repository_ids?: string[];
+};
+
+/** Output of `orgs.actions.variables.create`. */
+export type OrgsActionsVariablesCreateOutput = null;
+
+/** Input of `orgs.actions.variables.get`: Get an organization variable. */
+export type OrgsActionsVariablesGetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+};
+
+/** Output of `orgs.actions.variables.get`. */
+export type OrgsActionsVariablesGetOutput = {
+  name: string;
+  value: string;
+  /** ISO 8601. */
+  created_at: string;
+  /** ISO 8601. */
+  updated_at: string;
+  /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+  visibility: "all" | "private" | "selected";
+  /** With visibility `selected`: where its repositories are listed. */
+  selected_repositories_url?: string;
+};
+
+/** Input of `orgs.actions.variables.update`: Update an organization variable. */
+export type OrgsActionsVariablesUpdateInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** The value. At most 49152 bytes of UTF-8 (422 `variable_too_large`). */
+  value?: string;
+  /** Which of the organization's repositories it reaches: `all`, `private` (private and internal ones, as they are when a run reads it), or `selected` (those listed). */
+  visibility?: "all" | "private" | "selected";
+  selected_repository_ids?: string[];
+};
+
+/** Output of `orgs.actions.variables.update`. */
+export type OrgsActionsVariablesUpdateOutput = null;
+
+/** Input of `orgs.actions.variables.delete`: Delete an organization variable. */
+export type OrgsActionsVariablesDeleteInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+};
+
+/** Output of `orgs.actions.variables.delete`. */
+export type OrgsActionsVariablesDeleteOutput = null;
+
+/** Input of `orgs.actions.variables.repos.list`: List selected repositories for an organization variable. */
+export type OrgsActionsVariablesReposListInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `orgs.actions.variables.repos.list`. */
+export type OrgsActionsVariablesReposListOutput = {
+  total_count: number;
+  repositories: ({
+    id: string;
+    name: string;
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+  })[];
+};
+
+/** Input of `orgs.actions.variables.repos.set`: Set selected repositories for an organization variable. */
+export type OrgsActionsVariablesReposSetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  selected_repository_ids: string[];
+};
+
+/** Output of `orgs.actions.variables.repos.set`. */
+export type OrgsActionsVariablesReposSetOutput = null;
+
+/** Input of `orgs.actions.variables.repos.add`: Add selected repository to an organization variable. */
+export type OrgsActionsVariablesReposAddInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). Fyrden's ids are strings, where GitHub's are numbers, so `gh secret set --repos` does not work: pass ids. */
+  repository_id: string;
+};
+
+/** Output of `orgs.actions.variables.repos.add`. */
+export type OrgsActionsVariablesReposAddOutput = null;
+
+/** Input of `orgs.actions.variables.repos.remove`: Remove selected repository from an organization variable. */
+export type OrgsActionsVariablesReposRemoveInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The variable's name. Letters, digits and `_`, not starting with a digit or `GITHUB_`; case is ignored, and names are stored and returned uppercase. */
+  name: string;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). Fyrden's ids are strings, where GitHub's are numbers, so `gh secret set --repos` does not work: pass ids. */
+  repository_id: string;
+};
+
+/** Output of `orgs.actions.variables.repos.remove`. */
+export type OrgsActionsVariablesReposRemoveOutput = null;
+
+/** Input of `admin.ci.secrets.rewrap`: Wrap CI data keys with the current key. */
+export type AdminCiSecretsRewrapInput = {
+  cursor?: string;
+};
+
+/** Output of `admin.ci.secrets.rewrap`. */
+export type AdminCiSecretsRewrapOutput = {
+  rewrapped: number;
   remaining: number;
   unreadable: number;
   next_cursor: string | null;
@@ -9100,8 +9649,8 @@ export const OPERATIONS = {
   "users.git_tokens.create": { method: "POST", path: "/user/git-tokens", pathParams: [], idempotent: true },
   "admin.users.create": { method: "POST", path: "/admin/users", pathParams: [], idempotent: true },
   "admin.tokens.create": { method: "POST", path: "/admin/users/{user_id}/tokens", pathParams: ["user_id"], idempotent: true },
-  "admin.users.suspend": { method: "PUT", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
-  "admin.users.unsuspend": { method: "DELETE", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true },
+  "admin.users.suspend": { method: "PUT", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true, noContent: [204] },
+  "admin.users.unsuspend": { method: "DELETE", path: "/users/{username}/suspended", pathParams: ["username"], idempotent: true, noContent: [204] },
   "admin.users.delete": { method: "DELETE", path: "/admin/users/{username}", pathParams: ["username"], idempotent: true },
   "agents.create": { method: "POST", path: "/agents", pathParams: [], idempotent: true },
   "agents.list": { method: "GET", path: "/agents", pathParams: [], idempotent: false, items: "agents" },
@@ -9143,6 +9692,37 @@ export const OPERATIONS = {
   "repos.hooks.deliveries.get": { method: "GET", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: false, items: "attempts_made" },
   "repos.hooks.deliveries.redeliver": { method: "POST", path: "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts", pathParams: ["owner","repo","hook_id","delivery_id"], idempotent: true },
   "admin.webhooks.reseal": { method: "POST", path: "/admin/webhooks/reseal", pathParams: [], idempotent: true },
+  "repos.actions.secrets.public_key": { method: "GET", path: "/repos/{owner}/{repo}/actions/secrets/public-key", pathParams: ["owner","repo"], idempotent: false },
+  "repos.actions.secrets.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/secrets", pathParams: ["owner","repo"], idempotent: false },
+  "repos.actions.secrets.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}", pathParams: ["owner","repo","secret_name"], idempotent: false },
+  "repos.actions.secrets.set": { method: "PUT", path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}", pathParams: ["owner","repo","secret_name"], idempotent: true, noContent: [201,204] },
+  "repos.actions.secrets.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/actions/secrets/{secret_name}", pathParams: ["owner","repo","secret_name"], idempotent: true, noContent: [204] },
+  "repos.actions.organization_secrets.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/organization-secrets", pathParams: ["owner","repo"], idempotent: false },
+  "orgs.actions.secrets.public_key": { method: "GET", path: "/orgs/{org}/actions/secrets/public-key", pathParams: ["org"], idempotent: false },
+  "orgs.actions.secrets.list": { method: "GET", path: "/orgs/{org}/actions/secrets", pathParams: ["org"], idempotent: false },
+  "orgs.actions.secrets.get": { method: "GET", path: "/orgs/{org}/actions/secrets/{secret_name}", pathParams: ["org","secret_name"], idempotent: false },
+  "orgs.actions.secrets.set": { method: "PUT", path: "/orgs/{org}/actions/secrets/{secret_name}", pathParams: ["org","secret_name"], idempotent: true, noContent: [201,204] },
+  "orgs.actions.secrets.delete": { method: "DELETE", path: "/orgs/{org}/actions/secrets/{secret_name}", pathParams: ["org","secret_name"], idempotent: true, noContent: [204] },
+  "orgs.actions.secrets.repos.list": { method: "GET", path: "/orgs/{org}/actions/secrets/{secret_name}/repositories", pathParams: ["org","secret_name"], idempotent: false },
+  "orgs.actions.secrets.repos.set": { method: "PUT", path: "/orgs/{org}/actions/secrets/{secret_name}/repositories", pathParams: ["org","secret_name"], idempotent: true, noContent: [204] },
+  "orgs.actions.secrets.repos.add": { method: "PUT", path: "/orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}", pathParams: ["org","secret_name","repository_id"], idempotent: true, noContent: [204] },
+  "orgs.actions.secrets.repos.remove": { method: "DELETE", path: "/orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}", pathParams: ["org","secret_name","repository_id"], idempotent: true, noContent: [204] },
+  "repos.actions.variables.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/variables", pathParams: ["owner","repo"], idempotent: false },
+  "repos.actions.variables.create": { method: "POST", path: "/repos/{owner}/{repo}/actions/variables", pathParams: ["owner","repo"], idempotent: true, noContent: [201] },
+  "repos.actions.variables.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/variables/{name}", pathParams: ["owner","repo","name"], idempotent: false },
+  "repos.actions.variables.update": { method: "PATCH", path: "/repos/{owner}/{repo}/actions/variables/{name}", pathParams: ["owner","repo","name"], idempotent: true, noContent: [204] },
+  "repos.actions.variables.delete": { method: "DELETE", path: "/repos/{owner}/{repo}/actions/variables/{name}", pathParams: ["owner","repo","name"], idempotent: true, noContent: [204] },
+  "repos.actions.organization_variables.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/organization-variables", pathParams: ["owner","repo"], idempotent: false },
+  "orgs.actions.variables.list": { method: "GET", path: "/orgs/{org}/actions/variables", pathParams: ["org"], idempotent: false },
+  "orgs.actions.variables.create": { method: "POST", path: "/orgs/{org}/actions/variables", pathParams: ["org"], idempotent: true, noContent: [201] },
+  "orgs.actions.variables.get": { method: "GET", path: "/orgs/{org}/actions/variables/{name}", pathParams: ["org","name"], idempotent: false },
+  "orgs.actions.variables.update": { method: "PATCH", path: "/orgs/{org}/actions/variables/{name}", pathParams: ["org","name"], idempotent: true, noContent: [204] },
+  "orgs.actions.variables.delete": { method: "DELETE", path: "/orgs/{org}/actions/variables/{name}", pathParams: ["org","name"], idempotent: true, noContent: [204] },
+  "orgs.actions.variables.repos.list": { method: "GET", path: "/orgs/{org}/actions/variables/{name}/repositories", pathParams: ["org","name"], idempotent: false },
+  "orgs.actions.variables.repos.set": { method: "PUT", path: "/orgs/{org}/actions/variables/{name}/repositories", pathParams: ["org","name"], idempotent: true, noContent: [204] },
+  "orgs.actions.variables.repos.add": { method: "PUT", path: "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}", pathParams: ["org","name","repository_id"], idempotent: true, noContent: [204] },
+  "orgs.actions.variables.repos.remove": { method: "DELETE", path: "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}", pathParams: ["org","name","repository_id"], idempotent: true, noContent: [204] },
+  "admin.ci.secrets.rewrap": { method: "POST", path: "/admin/ci/secrets/rewrap", pathParams: [], idempotent: true },
   "admin.effects.repair": { method: "POST", path: "/admin/effects/repair", pathParams: [], idempotent: true },
   "admin.events.replay": { method: "POST", path: "/admin/events/failed/{id}/replay", pathParams: ["id"], idempotent: true },
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
@@ -9258,23 +9838,23 @@ export const OPERATIONS = {
   "notifications.list": { method: "GET", path: "/notifications", pathParams: [], idempotent: false, items: "notifications" },
   "notifications.repo_list": { method: "GET", path: "/repos/{owner}/{repo}/notifications", pathParams: ["owner","repo"], idempotent: false, items: "notifications" },
   "notifications.thread_get": { method: "GET", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: false },
-  "notifications.thread_read": { method: "PATCH", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
-  "notifications.thread_done": { method: "DELETE", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true },
+  "notifications.thread_read": { method: "PATCH", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true, noContent: [205] },
+  "notifications.thread_done": { method: "DELETE", path: "/notifications/threads/{thread_id}", pathParams: ["thread_id"], idempotent: true, noContent: [204] },
   "notifications.mark": { method: "PUT", path: "/notifications", pathParams: [], idempotent: true },
   "notifications.live_ticket": { method: "POST", path: "/notifications/live", pathParams: [], idempotent: true },
   "notifications.repo_mark": { method: "PUT", path: "/repos/{owner}/{repo}/notifications", pathParams: ["owner","repo"], idempotent: true },
   "notifications.subscription_get": { method: "GET", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: false },
   "notifications.subscription_put": { method: "PUT", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true },
-  "notifications.subscription_delete": { method: "DELETE", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true },
+  "notifications.subscription_delete": { method: "DELETE", path: "/notifications/threads/{thread_id}/subscription", pathParams: ["thread_id"], idempotent: true, noContent: [204] },
   "feed.list": { method: "GET", path: "/feed", pathParams: [], idempotent: false },
   "feed.sync": { method: "GET", path: "/feed/sync", pathParams: [], idempotent: false },
   "feed.ack": { method: "POST", path: "/feed/ack", pathParams: [], idempotent: true },
   "feed.digest": { method: "GET", path: "/feed/digests/{repository_id}/{subject}/{window}/{epoch}", pathParams: ["repository_id","subject","window","epoch"], idempotent: false },
   "users.emails.list": { method: "GET", path: "/user/emails", pathParams: [], idempotent: false },
   "users.emails.add": { method: "POST", path: "/user/emails", pathParams: [], idempotent: true },
-  "users.emails.delete": { method: "DELETE", path: "/user/emails", pathParams: [], idempotent: true },
+  "users.emails.delete": { method: "DELETE", path: "/user/emails", pathParams: [], idempotent: true, noContent: [204] },
   "users.emails.confirm": { method: "POST", path: "/user/emails/confirm", pathParams: [], idempotent: true },
-  "users.emails.confirmation": { method: "POST", path: "/user/emails/confirmation", pathParams: [], idempotent: true },
+  "users.emails.confirmation": { method: "POST", path: "/user/emails/confirmation", pathParams: [], idempotent: true, noContent: [204] },
   "users.notification_settings.get": { method: "GET", path: "/user/notification-settings", pathParams: [], idempotent: false },
   "users.notification_settings.put": { method: "PUT", path: "/user/notification-settings", pathParams: [], idempotent: true },
   "quotas.user.get": { method: "GET", path: "/user/quota", pathParams: [], idempotent: false },
@@ -9310,7 +9890,7 @@ export const OPERATIONS = {
   "repos.file_commits.create": { method: "POST", path: "/repos/{owner}/{repo}/file-commits", pathParams: ["owner","repo"], idempotent: true },
   "orgs.memberships.set": { method: "PUT", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.memberships.remove": { method: "DELETE", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
-  "admin.orgs.owners.add": { method: "PUT", path: "/admin/organizations/{org}/owners/{username}", pathParams: ["org","username"], idempotent: true },
+  "admin.orgs.owners.add": { method: "PUT", path: "/admin/organizations/{org}/owners/{username}", pathParams: ["org","username"], idempotent: true, noContent: [204] },
   "orgs.members.list": { method: "GET", path: "/orgs/{org}/members", pathParams: ["org"], idempotent: false, items: "members" },
   "orgs.repos.create": { method: "POST", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: true },
   "orgs.repos.list": { method: "GET", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: false, items: "repos" },
@@ -9325,7 +9905,7 @@ export const OPERATIONS = {
   "orgs.teams.repos.remove": { method: "DELETE", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.runners.registration_tokens.create": { method: "POST", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
   "orgs.runners.list": { method: "GET", path: "/orgs/{org}/actions/runners", pathParams: ["org"], idempotent: false, items: "runners" },
-  "orgs.runners.delete": { method: "DELETE", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: true },
+  "orgs.runners.delete": { method: "DELETE", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: true, noContent: [204] },
   "uploads.create": { method: "POST", path: "/repos/{owner}/{repo}/uploads", pathParams: ["owner","repo"], idempotent: true },
   "uploads.get": { method: "GET", path: "/repos/{owner}/{repo}/uploads/{upload_id}", pathParams: ["owner","repo","upload_id"], idempotent: false },
   "uploads.complete": { method: "POST", path: "/repos/{owner}/{repo}/uploads/{upload_id}/complete", pathParams: ["owner","repo","upload_id"], idempotent: true },
@@ -9446,6 +10026,68 @@ export interface Operations {
   "repos.hooks.deliveries.redeliver": { input: ReposHooksDeliveriesRedeliverInput; output: ReposHooksDeliveriesRedeliverOutput };
   /** Seal webhook secrets with the current key. Fyrden: seals again, with `WEBHOOKS_KEY`, webhook secrets sealed with a retired key, a batch of repositories at a time (call again with `cursor` until `next_cursor` is null and `remaining` is 0); `unreadable` counts secrets whose key is gone (rotate those hooks' secrets). Instance administrators only. */
   "admin.webhooks.reseal": { input: AdminWebhooksResealInput; output: AdminWebhooksResealOutput };
+  /** Get a repository public key. The public key to seal the repository's secret values for. Each repository has its own. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. 503 `ci_key_unavailable` while the server's CI key is missing or misconfigured. */
+  "repos.actions.secrets.public_key": { input: ReposActionsSecretsPublicKeyInput; output: ReposActionsSecretsPublicKeyOutput };
+  /** List repository secrets. The repository's Actions secrets by name: names and times, never values. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.secrets.list": { input: ReposActionsSecretsListInput; output: ReposActionsSecretsListOutput };
+  /** Get a repository secret. One secret's name and times, never its value. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.secrets.get": { input: ReposActionsSecretsGetInput; output: ReposActionsSecretsGetOutput };
+  /** Create or update a repository secret. Sets a secret of the repository (100 at most). `encrypted_value` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (`crypto_box_seal`, as `gh secret set` makes it) for the public key `key_id` names, in base64. Refused with 422: `bad_key_id` (not a public key of this scope the server holds; get it again), `undecryptable_value` (the box does not open or is not UTF-8), `secret_too_large`, `invalid_secret_name`, `too_many_secrets`; 503 `ci_key_unavailable` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 404 `repo_not_found` when the repository is no longer the account's when the write commits; 409 `repository_changed` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.secrets.set": { input: ReposActionsSecretsSetInput; output: ReposActionsSecretsSetOutput };
+  /** Delete a repository secret. Deletes a secret of the repository. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.secrets.delete": { input: ReposActionsSecretsDeleteInput; output: ReposActionsSecretsDeleteOutput };
+  /** List repository organization secrets. The organization's secrets that reach the repository, by name: names and times, never values. A run takes the first 100 of them by name, under the repository's own of the same name. A user's repository has none. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.organization_secrets.list": { input: ReposActionsOrganizationSecretsListInput; output: ReposActionsOrganizationSecretsListOutput };
+  /** Get an organization public key. The public key to seal the organization's secret values for. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. 503 `ci_key_unavailable` while the server's CI key is missing or misconfigured. */
+  "orgs.actions.secrets.public_key": { input: OrgsActionsSecretsPublicKeyInput; output: OrgsActionsSecretsPublicKeyOutput };
+  /** List organization secrets. The organization's Actions secrets by name: names, times and visibility, never values. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.list": { input: OrgsActionsSecretsListInput; output: OrgsActionsSecretsListOutput };
+  /** Get an organization secret. One secret's name, times and visibility, never its value. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.get": { input: OrgsActionsSecretsGetInput; output: OrgsActionsSecretsGetOutput };
+  /** Create or update an organization secret. Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility `selected`, `selected_repository_ids` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 `unknown_repository`. `encrypted_value` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (`crypto_box_seal`, as `gh secret set` makes it) for the public key `key_id` names, in base64. Refused with 422: `bad_key_id` (not a public key of this scope the server holds; get it again), `undecryptable_value` (the box does not open or is not UTF-8), `secret_too_large`, `invalid_secret_name`, `too_many_secrets`; 503 `ci_key_unavailable` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.set": { input: OrgsActionsSecretsSetInput; output: OrgsActionsSecretsSetOutput };
+  /** Delete an organization secret. Deletes a secret of the organization. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.delete": { input: OrgsActionsSecretsDeleteInput; output: OrgsActionsSecretsDeleteOutput };
+  /** List selected repositories for an organization secret. The repositories an organization secret lists. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.repos.list": { input: OrgsActionsSecretsReposListInput; output: OrgsActionsSecretsReposListOutput };
+  /** Set selected repositories for an organization secret. Replaces the repositories an organization secret lists. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. 422 `unknown_repository` for an id that is not a repository of the organization. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.repos.set": { input: OrgsActionsSecretsReposSetInput; output: OrgsActionsSecretsReposSetOutput };
+  /** Add selected repository to an organization secret. Adds a repository to an organization secret's list. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. 422 `unknown_repository` for an id that is not a repository of the organization. 422 `too_many_repositories` past 1000 listed. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.repos.add": { input: OrgsActionsSecretsReposAddInput; output: OrgsActionsSecretsReposAddOutput };
+  /** Remove selected repository from an organization secret. Removes a repository from an organization secret's list. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.secrets.repos.remove": { input: OrgsActionsSecretsReposRemoveInput; output: OrgsActionsSecretsReposRemoveOutput };
+  /** List repository variables. The repository's Actions variables by name, with their values. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.variables.list": { input: ReposActionsVariablesListInput; output: ReposActionsVariablesListOutput };
+  /** Create a repository variable. Creates a variable of the repository (500 at most; 422 `too_many_variables`); 409 `variable_exists` when it has one of the name (update it instead), 422 `invalid_variable_name`. 404 `repo_not_found` when the repository is no longer the account's when the write commits; 409 `repository_changed` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.variables.create": { input: ReposActionsVariablesCreateInput; output: ReposActionsVariablesCreateOutput };
+  /** Get a repository variable. One variable, with its value. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.variables.get": { input: ReposActionsVariablesGetInput; output: ReposActionsVariablesGetOutput };
+  /** Update a repository variable. Changes a variable's value. A variable is not renamed: a body `name` other than the path's (ignoring case) answers 422 `invalid_input`, where GitHub renames. 404 `repo_not_found` when the repository is no longer the account's when the write commits; 409 `repository_changed` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.variables.update": { input: ReposActionsVariablesUpdateInput; output: ReposActionsVariablesUpdateOutput };
+  /** Delete a repository variable. Deletes a variable of the repository. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.variables.delete": { input: ReposActionsVariablesDeleteInput; output: ReposActionsVariablesDeleteOutput };
+  /** List repository organization variables. The organization's variables that reach the repository, by name, with their values. A user's repository has none. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 `repo_transferring` while a transfer moves the repository. */
+  "repos.actions.organization_variables.list": { input: ReposActionsOrganizationVariablesListInput; output: ReposActionsOrganizationVariablesListOutput };
+  /** List organization variables. The organization's Actions variables by name, with their values and visibility. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.list": { input: OrgsActionsVariablesListInput; output: OrgsActionsVariablesListOutput };
+  /** Create an organization variable. Creates a variable of the organization (1,000 at most; 422 `too_many_variables`) and chooses the repositories it reaches (`selected_repository_ids` with visibility `selected`; 422 `unknown_repository` for an id that is not a repository of the organization); 409 `variable_exists` when it has one of the name, 422 `invalid_variable_name`. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.create": { input: OrgsActionsVariablesCreateInput; output: OrgsActionsVariablesCreateOutput };
+  /** Get an organization variable. One variable, with its value and visibility. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.get": { input: OrgsActionsVariablesGetInput; output: OrgsActionsVariablesGetOutput };
+  /** Update an organization variable. Changes a variable's value or the repositories it reaches (a new visibility; with `selected`, `selected_repository_ids` replaces the list, absent: kept; `selected_repository_ids` alone replaces the list of a variable already `selected`, and answers 409 `visibility_not_selected` for any other). A variable is not renamed: a body `name` other than the path's (ignoring case) answers 422 `invalid_input`, where GitHub renames. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.update": { input: OrgsActionsVariablesUpdateInput; output: OrgsActionsVariablesUpdateOutput };
+  /** Delete an organization variable. Deletes a variable of the organization. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.delete": { input: OrgsActionsVariablesDeleteInput; output: OrgsActionsVariablesDeleteOutput };
+  /** List selected repositories for an organization variable. The repositories an organization variable lists. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.repos.list": { input: OrgsActionsVariablesReposListInput; output: OrgsActionsVariablesReposListOutput };
+  /** Set selected repositories for an organization variable. Replaces the repositories an organization variable lists. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. 422 `unknown_repository` for an id that is not a repository of the organization. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.repos.set": { input: OrgsActionsVariablesReposSetInput; output: OrgsActionsVariablesReposSetOutput };
+  /** Add selected repository to an organization variable. Adds a repository to an organization variable's list. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. 422 `unknown_repository` for an id that is not a repository of the organization. 422 `too_many_repositories` past 1000 listed. 409 `repository_changed` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 `unknown_repository`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.repos.add": { input: OrgsActionsVariablesReposAddInput; output: OrgsActionsVariablesReposAddOutput };
+  /** Remove selected repository from an organization variable. Removes a repository from an organization variable's list. Only for visibility `selected`: otherwise 409 `visibility_not_selected`. Organization owners only. A user's namespace has none: its handle answers 404 `not_an_org`. */
+  "orgs.actions.variables.repos.remove": { input: OrgsActionsVariablesReposRemoveInput; output: OrgsActionsVariablesReposRemoveOutput };
+  /** Wrap CI data keys with the current key. Fyrden: wraps again, with the current CI master key (`CI_SECRETS_KEY_NEXT` while a rotation is under way, else `CI_SECRETS_KEY`), every account's data keys wrapped with another, a batch of accounts at a time (call again with `cursor` until `next_cursor` is null). Secrets are not encrypted again. `remaining` counts data keys still under another key that open, `unreadable` those whose master key is gone, both for this call's accounts only: add them up over a whole sweep, and sweep again until the sum of `remaining` is 0. 503 `ci_key_unavailable` while the key is missing or misconfigured. Instance administrators only. */
+  "admin.ci.secrets.rewrap": { input: AdminCiSecretsRewrapInput; output: AdminCiSecretsRewrapOutput };
   /** Reopen effects that failed for good. Fyrden: counts the effects of `sink` journaled since `since` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless `dry_run` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only. */
   "admin.effects.repair": { input: AdminEffectsRepairInput; output: AdminEffectsRepairOutput };
   /** Replay an account's failed envelope. Fyrden: puts an account's envelope of events that the events consumer gave up on (kept by its dead-letter queue, `id` the dead letter's message id) back on the events queue, once: the consumer applies it as any envelope, so what its events mean for its members' activity feeds (repositories they no longer read purged from their feeds) is journaled and delivered then. Applying it again changes nothing it already changed; one that fails again goes to the dead-letter queue as a record of its own. Refused (409 `already_replayed`) once replayed; (409 `not_replayable`) for a repository's envelope (which asks for its repository's search repair itself) or one that could not be read; (410 `envelope_expired`) once the envelope was kept its 14 days; (410 `envelope_not_kept`) for one stored without its envelope (too large, too deep or not JSON); (410 `payload_expired`) for one naming an event whose stored payload the account may no longer keep (an event 6 days old or more); (404 `failure_not_found`) for no such record; (503 `read_model_maintenance`) while the read model is paused, recovering or under maintenance, nothing decided; (503 `requeue_failed`) when the queue did not take it, the record left to replay again. Instance administrators only. */
@@ -9752,7 +10394,7 @@ export interface Operations {
   "actions.runs.jobs.live_ticket": { input: ActionsRunsJobsLiveTicketInput; output: ActionsRunsJobsLiveTicketOutput };
   /** Approve a workflow run from a fork. Lets a run from a fork's first-time contributor start: it waits (`status: completed`, `conclusion: action_required`, `approval.state: waiting`) until a user with write access approves it. Approving again answers the same; a run that is not waiting (it needed no approval, or was superseded by a newer push, cancelled or expired) is 409 `approval_not_pending`. Only users may approve. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.runs.approve": { input: ActionsRunsApproveInput; output: ActionsRunsApproveOutput };
-  /** Create a workflow dispatch event. Runs a workflow that has a `workflow_dispatch` trigger, at `ref` (a branch or tag name, or a full ref), with `inputs` checked against the ones it declares (typed in the run's `inputs` context, strings in `github.event.inputs`). `workflow_id` is the workflow's file name, such as `ci.yml`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at `ref` runs. One run per request, and per `Idempotency-Key` within its window: the answer names the run even when its start is still being retried. 404 `workflow_not_found`; 422 `ref_not_found`, `workflow_not_dispatchable` (no `workflow_dispatch` trigger), `invalid_inputs` and `invalid_workflow` (each with `errors`); 409 `repo_not_ready`, and `ci_off` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
+  /** Create a workflow dispatch event. Runs a workflow that has a `workflow_dispatch` trigger, at `ref` (a branch or tag name, or a full ref), with `inputs` checked against the ones it declares (typed in the run's `inputs` context, strings in `github.event.inputs`). `workflow_id` is the workflow's file name, such as `ci.yml`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at `ref` runs. One run per request, and per `Idempotency-Key` within its window: the answer names the run even when its start is still being retried. 404 `workflow_not_found`; 422 `ref_not_found`, `workflow_not_dispatchable` (no `workflow_dispatch` trigger), `invalid_inputs` and `invalid_workflow` (each with `errors`); 409 `repo_not_ready`; 409 `repo_transferring` while a transfer moves the repository, or once it was transferred or renamed after the request was authorized (once any active transfer ends, look the repository up again and dispatch with a new `Idempotency-Key`: the same key answers the refusal again); 409 `owner_changed` when it changed owner before the run started, so the run was dropped (a run answered before that and dropped later is never created: looking it up answers 404 `run_not_found`); and 409 `ci_off` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.workflows.dispatch": { input: ActionsWorkflowsDispatchInput; output: ActionsWorkflowsDispatchOutput };
   /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */
   "repos.blame.get": { input: ReposBlameGetInput; output: ReposBlameGetOutput };

@@ -66,6 +66,29 @@ describe("authorization matrix", () => {
     }
   });
 
+  it("leaves Actions secrets and variables to repository administrators and account owners, users and agents", () => {
+    const allow = (actorType: string, holder: string, permission: string) =>
+      matrix.find(
+        (c) => c.actorType === actorType && c.holder === holder && c.permission === permission,
+      )?.allow;
+    for (const kind of ["secrets", "variables"]) {
+      for (const permission of [`${kind}:read`, `${kind}:write`]) {
+        expect(allow("user", "admin", permission), permission).toBe(true);
+        expect(allow("agent", "admin", permission), permission).toBe(true);
+        expect(allow("user", "maintain", permission), permission).toBe(false);
+        expect(allow("user", "write", permission), permission).toBe(false);
+        expect(allow("installation", "admin", permission), permission).toBe(false);
+      }
+      for (const permission of [`organization_${kind}:read`, `organization_${kind}:write`]) {
+        expect(allow("user", "account-owner", permission), permission).toBe(true);
+        expect(allow("agent", "account-owner", permission), permission).toBe(true);
+        expect(allow("user", "account-member", permission), permission).toBe(false);
+        expect(allow("user", "admin", permission), permission).toBe(false);
+        expect(allow("installation", "account-owner", permission), permission).toBe(false);
+      }
+    }
+  });
+
   it("leaves self-hosted runners to an account's owners, users only", () => {
     const allow = (actorType: string, holder: string, permission: string) =>
       matrix.find(

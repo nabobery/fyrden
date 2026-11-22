@@ -108,6 +108,30 @@ describe("fyrden deploy", () => {
     expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(key);
   });
 
+  it("makes the CI secrets' master key once, never shown, and keeps it", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner);
+    await deploy(d);
+    const key = fake.state.secrets.get("CI_SECRETS_KEY") as string;
+    expect(Buffer.from(key, "base64")).toHaveLength(32);
+    expect(key).not.toBe(fake.state.secrets.get("WEBHOOKS_KEY"));
+    expect(key).not.toBe(fake.state.secrets.get("SIGNING_KEY"));
+    expect(lines.join("\n")).not.toContain(key);
+    expect(fake.calls.some((c) => c.args.join(" ").includes(key))).toBe(false);
+    await deploy(deps(fake.runner).d);
+    expect(fake.state.secrets.get("CI_SECRETS_KEY")).toBe(key);
+  });
+
+  it("adds the CI secrets' master key to a deployment made without it, keeping the others", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    fake.state.secrets.delete("CI_SECRETS_KEY");
+    const webhooks = fake.state.secrets.get("WEBHOOKS_KEY");
+    await deploy(deps(fake.runner).d);
+    expect(Buffer.from(fake.state.secrets.get("CI_SECRETS_KEY") ?? "", "base64")).toHaveLength(32);
+    expect(fake.state.secrets.get("WEBHOOKS_KEY")).toBe(webhooks);
+  });
+
   it("makes the unsubscribe links' key once (base64url), never shown, and keeps it", async () => {
     const fake = fakeWrangler();
     const { d, lines } = deps(fake.runner);
@@ -857,6 +881,22 @@ describe("fyrden doctor", () => {
     const report = await doctor(repoRoot, fake.runner, (l) => lines.push(l), undefined);
     return { report, lines };
   }
+
+  it("reports whether the webhook and CI secrets' keys are set, never their values", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner).d);
+    const ciKey = fake.state.secrets.get("CI_SECRETS_KEY") as string;
+    let { lines } = await doctorLines(fake);
+    expect(lines).toContain("ok   WEBHOOKS_KEY is set");
+    expect(lines).toContain("ok   CI_SECRETS_KEY is set");
+    expect(lines.join("\n")).not.toContain(ciKey);
+    fake.state.secrets.delete("CI_SECRETS_KEY");
+    ({ lines } = await doctorLines(fake));
+    expect(lines).toContain(
+      "WARN CI_SECRETS_KEY is not set: Actions secrets cannot be stored or delivered (fyrden deploy makes it)",
+    );
+    expect(lines).toContain("ok   WEBHOOKS_KEY is set");
+  });
 
   it("compares each deployed D1 schema with the repository, reading only", async () => {
     const fake = fakeWrangler();

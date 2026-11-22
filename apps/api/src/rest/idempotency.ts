@@ -231,7 +231,7 @@ const NOT_FINAL: Readonly<Record<string, (output: unknown) => boolean>> = {
 /** What a key keeps of a request's result. */
 export function outcomeOf(
   op: OperationDef,
-  result: { ok: true; output: unknown } | { ok: false; problem: Problem },
+  result: { ok: true; output: unknown; status?: number } | { ok: false; problem: Problem },
 ): IdempotentOutcome {
   if (!result.ok) {
     const { status, code } = result.problem;
@@ -240,7 +240,7 @@ export function outcomeOf(
     return { kind: "answer", status, body: result.problem };
   }
   if (NOT_FINAL[op.id]?.(result.output)) return { kind: "forget" };
-  const status = op.successStatus ?? 200;
+  const status = result.status ?? op.successStatus ?? 200;
   if (op.secretResponse) {
     const id = (result.output as { id?: unknown }).id;
     return { kind: "secret", status, resourceId: typeof id === "string" ? id : "a resource" };

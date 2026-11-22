@@ -168,7 +168,10 @@ export class FyrdenClient {
           : undefined,
       );
     }
-    if (response.status === 204 || response.status === 205) return null as unknown as OutputOf<K>;
+    // 204 and 205 never carry a body; an operation that answers nothing lists its other statuses.
+    const noContent = (op as { readonly noContent?: readonly number[] }).noContent;
+    if (response.status === 204 || response.status === 205 || noContent?.includes(response.status))
+      return null as unknown as OutputOf<K>;
     return (text ? JSON.parse(text) : {}) as OutputOf<K>;
   }
 

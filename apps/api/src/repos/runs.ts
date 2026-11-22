@@ -17,7 +17,7 @@ import { publicOrigin } from "../email/notifications.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
-import type { RepoEntry } from "./directory.js";
+import { type RepoEntry, settledRepo } from "./directory.js";
 
 /*
  * The Worker side of the `actions.runs.*` operations. A run's object owns
@@ -257,6 +257,13 @@ export async function approveWorkflowRunOperation(
   throw notPending();
 }
 
+/**
+ * A dispatch refused for a transfer or rename: its key's answer is stored,
+ * so the same `Idempotency-Key` replays this refusal.
+ */
+const DISPATCH_TRANSFERRING =
+  "The repository is being transferred, or was transferred or renamed after this request was authorized. Once any active transfer ends, look the repository up again (its owner or name may have changed) and dispatch with a new Idempotency-Key: the same key answers this refusal again.";
+
 const DISPATCH_REFUSALS: Record<
   Exclude<DispatchAnswer, { ok: true }>["code"],
   { status: 404 | 409 | 422 | 503; detail: string }
@@ -264,6 +271,12 @@ const DISPATCH_REFUSALS: Record<
   busy: { status: 503, detail: "The repository is busy. Try again shortly." },
   ci_off: { status: 409, detail: "This deployment runs no CI." },
   repo_not_ready: { status: 409, detail: "The repository cannot run workflows yet." },
+  repo_transferring: { status: 409, detail: DISPATCH_TRANSFERRING },
+  owner_changed: {
+    status: 409,
+    detail:
+      "The repository changed owner before the run started, so the run was dropped and never runs. Dispatch again with a new Idempotency-Key.",
+  },
   ref_not_found: { status: 422, detail: "No branch or tag has that name." },
   workflow_not_found: {
     status: 404,
@@ -277,6 +290,9 @@ const DISPATCH_REFUSALS: Record<
   invalid_workflow: { status: 422, detail: "The workflow file's triggers cannot be read." },
 };
 
+/** Test seams: between the dispatch's access decision and its second ownership check. */
+export const dispatchHooks: { afterAuthorize?: () => Promise<void> } = {};
+
 /**
  * The `actions.workflows.dispatch` operation. The dispatch is recorded
  * under the request's idempotency claim (a later request with the same
@@ -287,7 +303,14 @@ export async function dispatchWorkflowOperation(
   ctx: OpContext,
   input: Input<typeof dispatchWorkflow>,
 ): Promise<Output<typeof dispatchWorkflow>> {
-  const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
+  // Authorized under settled ownership: a decision the repository object made for the former
+  // owner while the directory named the new one is never sent on under the new one's identity.
+  const entry = await settledRepo(ctx.env, ctx.auth, input.owner, input.repo, "actions:write", {
+    transferring: DISPATCH_TRANSFERRING,
+    sameName: true,
+    metrics: ctx.metrics,
+    afterAuthorize: () => dispatchHooks.afterAuthorize?.() ?? Promise.resolve(),
+  });
   ctx.metrics.count("do.request", { class: "RepoDO", method: "dispatchWorkflow" });
   const answer = (await ctx.env.REPO.getByName(entry.id).dispatchWorkflow({
     file: input.workflow_id,
@@ -299,6 +322,8 @@ export async function dispatchWorkflowOperation(
     // MCP calls carry no key yet, so each is a dispatch of its own (a retried tool call makes a
     // second run); a caller-supplied key through the MCP mount is a recorded follow-up.
     key: ctx.idempotencyClaim ?? newUlid(Date.now()),
+    // Read from the directory's primary: the repository refuses if it is no longer so.
+    authorized: { ownerId: entry.ownerId, nameGen: entry.nameGen },
   })) as unknown as DispatchAnswer;
   if (!answer.ok) {
     const refusal = DISPATCH_REFUSALS[answer.code];

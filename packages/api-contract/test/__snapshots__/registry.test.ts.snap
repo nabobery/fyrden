@@ -241,6 +241,92 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/admin/ci/secrets/rewrap": {
+      "post": {
+        "description": "Fyrden: wraps again, with the current CI master key (\`CI_SECRETS_KEY_NEXT\` while a rotation is under way, else \`CI_SECRETS_KEY\`), every account's data keys wrapped with another, a batch of accounts at a time (call again with \`cursor\` until \`next_cursor\` is null). Secrets are not encrypted again. \`remaining\` counts data keys still under another key that open, \`unreadable\` those whose master key is gone, both for this call's accounts only: add them up over a whole sweep, and sweep again until the sum of \`remaining\` is 0. 503 \`ci_key_unavailable\` while the key is missing or misconfigured. Instance administrators only.",
+        "operationId": "admin.ci.secrets.rewrap",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "cursor": {
+                    "maxLength": 200,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "remaining": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "rewrapped": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "unreadable": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "rewrapped",
+                    "remaining",
+                    "unreadable",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Wrap CI data keys with the current key",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/effects/repair": {
       "post": {
         "description": "Fyrden: counts the effects of \`sink\` journaled since \`since\` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless \`dry_run\` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only.",
@@ -2218,6 +2304,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "grants:write",
                         "self_hosted_runners:read",
                         "self_hosted_runners:write",
+                        "secrets:read",
+                        "secrets:write",
+                        "variables:read",
+                        "variables:write",
+                        "organization_secrets:read",
+                        "organization_secrets:write",
+                        "organization_variables:read",
+                        "organization_variables:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -3182,6 +3276,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "grants:write",
                         "self_hosted_runners:read",
                         "self_hosted_runners:write",
+                        "secrets:read",
+                        "secrets:write",
+                        "variables:read",
+                        "variables:write",
+                        "organization_secrets:read",
+                        "organization_secrets:write",
+                        "organization_variables:read",
+                        "organization_variables:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -4583,6 +4685,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "grants:write",
                         "self_hosted_runners:read",
                         "self_hosted_runners:write",
+                        "secrets:read",
+                        "secrets:write",
+                        "variables:read",
+                        "variables:write",
+                        "organization_secrets:read",
+                        "organization_secrets:write",
+                        "organization_variables:read",
+                        "organization_variables:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",
@@ -6206,6 +6316,1638 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "self_hosted_runners:write",
         "x-fyrden-principals": [
           "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/secrets": {
+      "get": {
+        "description": "The organization's Actions secrets by name: names, times and visibility, never values. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "secrets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "selected_repositories_url": {
+                            "description": "With visibility \`selected\`: where its repositories are listed.",
+                            "type": "string",
+                          },
+                          "unreadable": {
+                            "description": "Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again.",
+                            "type": "boolean",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "visibility": {
+                            "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                            "enum": [
+                              "all",
+                              "private",
+                              "selected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "created_at",
+                          "updated_at",
+                          "visibility",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "secrets",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List organization secrets",
+        "x-fyrden-permission": "organization_secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/orgs/{org}/actions/secrets/public-key": {
+      "get": {
+        "description": "The public key to seal the organization's secret values for. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`. 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured.",
+        "operationId": "orgs.actions.secrets.public_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "description": "The X25519 public key, base64.",
+                      "type": "string",
+                    },
+                    "key_id": {
+                      "description": "Which key: pass it with \`encrypted_value\`.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "key_id",
+                    "key",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an organization public key",
+        "x-fyrden-permission": "organization_secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/orgs/{org}/actions/secrets/{secret_name}": {
+      "delete": {
+        "description": "Deletes a secret of the organization. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete an organization secret",
+        "x-fyrden-permission": "organization_secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One secret's name, times and visibility, never its value. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "selected_repositories_url": {
+                      "description": "With visibility \`selected\`: where its repositories are listed.",
+                      "type": "string",
+                    },
+                    "unreadable": {
+                      "description": "Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again.",
+                      "type": "boolean",
+                    },
+                    "updated_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                      "enum": [
+                        "all",
+                        "private",
+                        "selected",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "created_at",
+                    "updated_at",
+                    "visibility",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an organization secret",
+        "x-fyrden-permission": "organization_secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Sets a secret of the organization (1,000 at most) and which repositories it reaches. With visibility \`selected\`, \`selected_repository_ids\` replaces its list (absent: kept); another visibility empties it. An id that is not a repository of the organization is refused with 422 \`unknown_repository\`. \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "encrypted_value": {
+                    "maxLength": 262144,
+                    "type": "string",
+                  },
+                  "key_id": {
+                    "maxLength": 100,
+                    "type": "string",
+                  },
+                  "selected_repository_ids": {
+                    "items": {
+                      "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                  },
+                  "visibility": {
+                    "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                    "enum": [
+                      "all",
+                      "private",
+                      "selected",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "encrypted_value",
+                  "key_id",
+                  "visibility",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+          },
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create or update an organization secret",
+        "x-fyrden-permission": "organization_secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/secrets/{secret_name}/repositories": {
+      "get": {
+        "description": "The repositories an organization secret lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.repos.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repositories": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "full_name": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "full_name",
+                          "visibility",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "repositories",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List selected repositories for an organization secret",
+        "x-fyrden-permission": "organization_secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Replaces the repositories an organization secret lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.repos.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "selected_repository_ids": {
+                    "items": {
+                      "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "selected_repository_ids",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Set selected repositories for an organization secret",
+        "x-fyrden-permission": "organization_secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/secrets/{secret_name}/repositories/{repository_id}": {
+      "delete": {
+        "description": "Removes a repository from an organization secret's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.repos.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Remove selected repository from an organization secret",
+        "x-fyrden-permission": "organization_secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Adds a repository to an organization secret's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.secrets.repos.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Add selected repository to an organization secret",
+        "x-fyrden-permission": "organization_secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/variables": {
+      "get": {
+        "description": "The organization's Actions variables by name, with their values and visibility. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Page size, at most 30; a larger one is read as 30.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "variables": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "selected_repositories_url": {
+                            "description": "With visibility \`selected\`: where its repositories are listed.",
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "value": {
+                            "type": "string",
+                          },
+                          "visibility": {
+                            "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                            "enum": [
+                              "all",
+                              "private",
+                              "selected",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "value",
+                          "created_at",
+                          "updated_at",
+                          "visibility",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "variables",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List organization variables",
+        "x-fyrden-permission": "organization_variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Creates a variable of the organization (1,000 at most; 422 \`too_many_variables\`) and chooses the repositories it reaches (\`selected_repository_ids\` with visibility \`selected\`; 422 \`unknown_repository\` for an id that is not a repository of the organization); 409 \`variable_exists\` when it has one of the name, 422 \`invalid_variable_name\`. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "selected_repository_ids": {
+                    "items": {
+                      "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                  },
+                  "value": {
+                    "description": "The value. At most 49152 bytes of UTF-8 (422 \`variable_too_large\`).",
+                    "maxLength": 196608,
+                    "type": "string",
+                  },
+                  "visibility": {
+                    "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                    "enum": [
+                      "all",
+                      "private",
+                      "selected",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                  "value",
+                  "visibility",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/variables/{name}": {
+      "delete": {
+        "description": "Deletes a variable of the organization. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One variable, with its value and visibility. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "selected_repositories_url": {
+                      "description": "With visibility \`selected\`: where its repositories are listed.",
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "value": {
+                      "type": "string",
+                    },
+                    "visibility": {
+                      "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                      "enum": [
+                        "all",
+                        "private",
+                        "selected",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "value",
+                    "created_at",
+                    "updated_at",
+                    "visibility",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an organization variable",
+        "x-fyrden-permission": "organization_variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "patch": {
+        "description": "Changes a variable's value or the repositories it reaches (a new visibility; with \`selected\`, \`selected_repository_ids\` replaces the list, absent: kept; \`selected_repository_ids\` alone replaces the list of a variable already \`selected\`, and answers 409 \`visibility_not_selected\` for any other). A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "selected_repository_ids": {
+                    "items": {
+                      "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                  },
+                  "value": {
+                    "description": "The value. At most 49152 bytes of UTF-8 (422 \`variable_too_large\`).",
+                    "maxLength": 196608,
+                    "type": "string",
+                  },
+                  "visibility": {
+                    "description": "Which of the organization's repositories it reaches: \`all\`, \`private\` (private and internal ones, as they are when a run reads it), or \`selected\` (those listed).",
+                    "enum": [
+                      "all",
+                      "private",
+                      "selected",
+                    ],
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/variables/{name}/repositories": {
+      "get": {
+        "description": "The repositories an organization variable lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.repos.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "repositories": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "full_name": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "visibility": {
+                            "enum": [
+                              "public",
+                              "internal",
+                              "private",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "name",
+                          "full_name",
+                          "visibility",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "repositories",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List selected repositories for an organization variable",
+        "x-fyrden-permission": "organization_variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Replaces the repositories an organization variable lists. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.repos.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "selected_repository_ids": {
+                    "items": {
+                      "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string",
+                    },
+                    "maxItems": 1000,
+                    "type": "array",
+                  },
+                },
+                "required": [
+                  "selected_repository_ids",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Set selected repositories for an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}": {
+      "delete": {
+        "description": "Removes a repository from an organization variable's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.repos.remove",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Remove selected repository from an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "put": {
+        "description": "Adds a repository to an organization variable's list. Only for visibility \`selected\`: otherwise 409 \`visibility_not_selected\`. 422 \`unknown_repository\` for an id that is not a repository of the organization. 422 \`too_many_repositories\` past 1000 listed. 409 \`repository_changed\` when a repository the write lists moved or was deleted between the lookup and the commit: send it again. A repository already moving to another owner when the write looks it up may instead answer 422 \`unknown_repository\`. Organization owners only. A user's namespace has none: its handle answers 404 \`not_an_org\`.",
+        "operationId": "orgs.actions.variables.repos.add",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repository_id",
+            "required": true,
+            "schema": {
+              "description": "A repository's id (\`rep_…\`, from \`GET /repos/{owner}/{repo}\`). Fyrden's ids are strings, where GitHub's are numbers, so \`gh secret set --repos\` does not work: pass ids.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Add selected repository to an organization variable",
+        "x-fyrden-permission": "organization_variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
       },
@@ -8452,6 +10194,262 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/actions/organization-secrets": {
+      "get": {
+        "description": "The organization's secrets that reach the repository, by name: names and times, never values. A run takes the first 100 of them by name, under the repository's own of the same name. A user's repository has none. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.organization_secrets.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "secrets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "unreadable": {
+                            "description": "Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again.",
+                            "type": "boolean",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "created_at",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "secrets",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository organization secrets",
+        "x-fyrden-permission": "secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/organization-variables": {
+      "get": {
+        "description": "The organization's variables that reach the repository, by name, with their values. A user's repository has none. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.organization_variables.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Page size, at most 30; a larger one is read as 30.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "variables": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "value": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "value",
+                          "created_at",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "variables",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository organization variables",
+        "x-fyrden-permission": "variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/actions/runs/{run_id}": {
       "get": {
         "description": "A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
@@ -9464,9 +11462,928 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/actions/secrets": {
+      "get": {
+        "description": "The repository's Actions secrets by name: names and times, never values. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.secrets.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "secrets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "unreadable": {
+                            "description": "Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again.",
+                            "type": "boolean",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "created_at",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "secrets",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository secrets",
+        "x-fyrden-permission": "secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/secrets/public-key": {
+      "get": {
+        "description": "The public key to seal the repository's secret values for. Each repository has its own. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository. 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured.",
+        "operationId": "repos.actions.secrets.public_key",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "description": "The X25519 public key, base64.",
+                      "type": "string",
+                    },
+                    "key_id": {
+                      "description": "Which key: pass it with \`encrypted_value\`.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "key_id",
+                    "key",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a repository public key",
+        "x-fyrden-permission": "secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/secrets/{secret_name}": {
+      "delete": {
+        "description": "Deletes a secret of the repository. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.secrets.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a repository secret",
+        "x-fyrden-permission": "secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One secret's name and times, never its value. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.secrets.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "unreadable": {
+                      "description": "Fyrden: present (true) when the server can no longer open the secret (its master key is gone); set it again.",
+                      "type": "boolean",
+                    },
+                    "updated_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a repository secret",
+        "x-fyrden-permission": "secrets:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "put": {
+        "description": "Sets a secret of the repository (100 at most). \`encrypted_value\` is the value (UTF-8, at most 49152 bytes) in a libsodium sealed box (\`crypto_box_seal\`, as \`gh secret set\` makes it) for the public key \`key_id\` names, in base64. Refused with 422: \`bad_key_id\` (not a public key of this scope the server holds; get it again), \`undecryptable_value\` (the box does not open or is not UTF-8), \`secret_too_large\`, \`invalid_secret_name\`, \`too_many_secrets\`; 503 \`ci_key_unavailable\` while the server's CI key is missing or misconfigured. Answers 201 when it creates the secret, 204 when it updates it. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.secrets.set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "description": "The secret's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase. \`GITEA_TOKEN\` is refused (Fyrden).",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "encrypted_value": {
+                    "maxLength": 262144,
+                    "type": "string",
+                  },
+                  "key_id": {
+                    "maxLength": 100,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "encrypted_value",
+                  "key_id",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+          },
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create or update a repository secret",
+        "x-fyrden-permission": "secrets:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/variables": {
+      "get": {
+        "description": "The repository's Actions variables by name, with their values. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.variables.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Page size, at most 30; a larger one is read as 30.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "variables": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "created_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "ISO 8601.",
+                            "type": "string",
+                          },
+                          "value": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "value",
+                          "created_at",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "variables",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository variables",
+        "x-fyrden-permission": "variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "post": {
+        "description": "Creates a variable of the repository (500 at most; 422 \`too_many_variables\`); 409 \`variable_exists\` when it has one of the name (update it instead), 422 \`invalid_variable_name\`. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.variables.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+                    "maxLength": 255,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "value": {
+                    "description": "The value. At most 49152 bytes of UTF-8 (422 \`variable_too_large\`).",
+                    "maxLength": 196608,
+                    "type": "string",
+                  },
+                },
+                "required": [
+                  "name",
+                  "value",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Create a repository variable",
+        "x-fyrden-permission": "variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/variables/{name}": {
+      "delete": {
+        "description": "Deletes a variable of the repository. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.variables.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Delete a repository variable",
+        "x-fyrden-permission": "variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+      "get": {
+        "description": "One variable, with its value. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.variables.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "updated_at": {
+                      "description": "ISO 8601.",
+                      "type": "string",
+                    },
+                    "value": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "name",
+                    "value",
+                    "created_at",
+                    "updated_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a repository variable",
+        "x-fyrden-permission": "variables:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+      "patch": {
+        "description": "Changes a variable's value. A variable is not renamed: a body \`name\` other than the path's (ignoring case) answers 422 \`invalid_input\`, where GitHub renames. 404 \`repo_not_found\` when the repository is no longer the account's when the write commits; 409 \`repository_changed\` when it left and came back meanwhile: send it again. Repository administrators only (GitHub also lets Write; Fyrden does not). 409 \`repo_transferring\` while a transfer moves the repository.",
+        "operationId": "repos.actions.variables.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "description": "The variable's name. Letters, digits and \`_\`, not starting with a digit or \`GITHUB_\`; case is ignored, and names are stored and returned uppercase.",
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "value": {
+                    "description": "The value. At most 49152 bytes of UTF-8 (422 \`variable_too_large\`).",
+                    "maxLength": 196608,
+                    "type": "string",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "204": {
+            "description": "No Content",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Update a repository variable",
+        "x-fyrden-permission": "variables:write",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": {
       "post": {
-        "description": "Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`, and \`ci_off\` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "description": "Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`; 409 \`repo_transferring\` while a transfer moves the repository, or once it was transferred or renamed after the request was authorized (once any active transfer ends, look the repository up again and dispatch with a new \`Idempotency-Key\`: the same key answers the refusal again); 409 \`owner_changed\` when it changed owner before the run started, so the run was dropped (a run answered before that and dropped later is never created: looking it up answers 404 \`run_not_found\`); and 409 \`ci_off\` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
         "operationId": "actions.workflows.dispatch",
         "parameters": [
           {
@@ -46566,6 +49483,14 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "grants:write",
                         "self_hosted_runners:read",
                         "self_hosted_runners:write",
+                        "secrets:read",
+                        "secrets:write",
+                        "variables:read",
+                        "variables:write",
+                        "organization_secrets:read",
+                        "organization_secrets:write",
+                        "organization_variables:read",
+                        "organization_variables:write",
                         "metadata:read",
                         "contents:read",
                         "contents:write",

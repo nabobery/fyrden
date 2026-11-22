@@ -54,7 +54,17 @@ describe("evaluate: roles", () => {
     expect(allowed("write").sort()).toEqual(writes);
     expect(allowed("maintain").sort()).toEqual(writes);
     expect(allowed("admin").sort()).toEqual(
-      ["administration:write", "repository_hooks:read", "repository_hooks:write", ...writes].sort(),
+      [
+        "administration:write",
+        "repository_hooks:read",
+        "repository_hooks:write",
+        // Fyrden's rule: GitHub lets Write manage Actions secrets and variables.
+        "secrets:read",
+        "secrets:write",
+        "variables:read",
+        "variables:write",
+        ...writes,
+      ].sort(),
     );
   });
 

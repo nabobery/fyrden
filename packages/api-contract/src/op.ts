@@ -54,9 +54,17 @@ export interface OperationDef<
    * HTTP status of a successful response; 201 when the operation creates a
    * resource, 202 where GitHub answers it, 204 or 205 (with `NoContent` as
    * the output) where GitHub answers nothing (205: Reset Content, as
-   * GitHub's marking a notification thread read).
+   * GitHub's marking a notification thread read). A `NoContent` operation
+   * may also answer a fixed 201 with no body.
    */
   successStatus?: 200 | 201 | 202 | 204 | 205;
+  /**
+   * The statuses a `NoContent` operation answers with no body when the
+   * outcome decides it, as GitHub's secret `PUT` answers 201 when it
+   * creates and 204 when it updates. Its handler returns
+   * `statusResult(status, null)`; it declares no `successStatus`.
+   */
+  successStatuses?: readonly NoContentStatus[];
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   /**
@@ -92,15 +100,23 @@ export interface OperationDef<
       };
 }
 
+/** The statuses an operation may answer with no body. */
+export type NoContentStatus = 201 | 204 | 205;
+
 /**
- * The output of an operation that answers nothing (`successStatus: 204` or 205):
- * `null` to its handler, idempotency replays and the SDK; REST sends no
- * body, MCP a short text.
+ * The output of an operation that answers nothing (`successStatus` 204, 205
+ * or 201, or `successStatuses`): `null` to its handler, idempotency replays
+ * and the SDK; REST sends no body, MCP a short text.
  */
 export const NoContent = z.null().describe("No content.");
 
 export const answersNothing = (def: Pick<OperationDef, "output">): boolean =>
   def.output === NoContent;
+
+/** Every status an operation answers on success. */
+export const successStatusesOf = (
+  def: Pick<OperationDef, "successStatus" | "successStatuses">,
+): readonly number[] => def.successStatuses ?? [def.successStatus ?? 200];
 
 export type Input<D extends OperationDef> = z.infer<D["input"]>;
 export type Output<D extends OperationDef> = z.infer<D["output"]>;
@@ -145,9 +161,25 @@ function validate(def: OperationDef): void {
   if (def.method !== "GET" && def.idempotency !== "key")
     fail("non-GET operations require an Idempotency-Key");
   if (def.method === "GET" && def.successStatus === 201) fail("a GET operation cannot answer 201");
-  if ((def.successStatus === 204 || def.successStatus === 205) !== answersNothing(def))
-    fail("an operation answers 204 or 205 exactly when its output is NoContent");
+  if (def.successStatuses !== undefined) {
+    if (!answersNothing(def))
+      fail("only an operation whose output is NoContent has successStatuses");
+    if (def.successStatus !== undefined) fail("successStatuses replaces successStatus");
+    if (def.method === "GET") fail("a GET operation answers one status");
+    const statuses = new Set<number>(def.successStatuses);
+    if (statuses.size < 2 || statuses.size !== def.successStatuses.length)
+      fail("successStatuses lists two or more distinct statuses");
+    for (const status of statuses)
+      if (status !== 201 && status !== 204 && status !== 205)
+        fail(`successStatuses cannot list ${status}`);
+  } else if (answersNothing(def)) {
+    if (def.successStatus !== 201 && def.successStatus !== 204 && def.successStatus !== 205)
+      fail("an operation whose output is NoContent answers 201, 204 or 205");
+  } else if (def.successStatus === 204 || def.successStatus === 205)
+    fail("an operation answers 204 or 205 only when its output is NoContent");
   if (def.etag && answersNothing(def)) fail("an operation answering nothing has no ETag");
+  if (def.secretResponse && answersNothing(def))
+    fail("an operation answering nothing has no secret response");
   if (def.etag && def.method !== "GET") fail("only a GET operation answers with an ETag");
   if (def.mcp && !TOOL.test(def.mcp.tool)) fail(`MCP tool name ${def.mcp.tool} is invalid`);
   if (def.mcp && def.mcp.readOnly !== (def.method === "GET"))
@@ -157,13 +189,29 @@ function validate(def: OperationDef): void {
     if (!(param in shape)) fail(`path parameter {${param}} missing from input`);
 }
 
-/** Validates and freezes one operation definition. */
+/**
+ * Validates and freezes one operation definition. An operation declaring
+ * `successStatuses` keeps their literal types, so its handler is typed to
+ * answer one of them.
+ */
 export function defineOperation<
   const Id extends string,
   I extends z.ZodObject,
   O extends z.ZodType,
->(def: OperationDef<I, O, Id>): OperationDef<I, O, Id> {
-  validate(def as unknown as OperationDef);
+  const S extends readonly NoContentStatus[],
+>(
+  def: OperationDef<I, O, Id> & { successStatuses: S },
+): OperationDef<I, O, Id> & {
+  successStatuses: S;
+};
+export function defineOperation<
+  const Id extends string,
+  I extends z.ZodObject,
+  O extends z.ZodType,
+>(def: OperationDef<I, O, Id> & { successStatuses?: undefined }): OperationDef<I, O, Id>;
+export function defineOperation(def: OperationDef): OperationDef;
+export function defineOperation(def: OperationDef): OperationDef {
+  validate(def);
   return Object.freeze(def);
 }
 

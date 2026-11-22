@@ -28,6 +28,15 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   its statements; counted in the account's usage.
  * - `default_labels` (v7): an organization's default labels, copied into
  *   its new repositories; GitHub's set until `org_meta.default_labels_set`.
+ * - `ci_data_keys`, `ci_secrets`, `ci_secret_repos`, `ci_variables`,
+ *   `ci_variable_repos`, `ci_repo_epochs` (v11): Actions secrets and
+ *   variables. Each data key generation is stored wrapped under the CI
+ *   master key named by `master_key_id`; a secret is ciphertext under its
+ *   generation's data key, never plain text. `scope` is `org` or a
+ *   repository id; the `_repos` tables list the repositories an
+ *   organization entry with visibility `selected` reaches. A repository's
+ *   CI epoch changes when it leaves, arrives or is deleted, so a write
+ *   prepared before then is refused at its commit.
  * - `pending_audit`: audit rows of access changes, written in the change's
  *   transaction and delivered to the directory's `audit_log` (then
  *   deleted); the alarm retries what could not be delivered.
@@ -277,6 +286,61 @@ export const orgSchema: readonly DoMigration[] = [
       ) STRICT;
       ALTER TABLE transfer_arrivals ADD COLUMN assets TEXT
         CHECK (assets IS NULL OR json_valid(assets));
+    `,
+  },
+  {
+    version: 11,
+    // Actions secrets and variables, and the data keys secrets are sealed
+    // with (`lost_at`: when a newer generation replaced one whose master key
+    // was gone).
+    name: "ci_secrets",
+    sql: `
+      CREATE TABLE ci_data_keys (
+        generation INTEGER PRIMARY KEY CHECK (generation >= 1),
+        wrapped TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        master_key_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        lost_at INTEGER
+      ) STRICT;
+      CREATE TABLE ci_secrets (
+        scope TEXT NOT NULL,
+        name TEXT NOT NULL,
+        generation INTEGER NOT NULL REFERENCES ci_data_keys (generation),
+        nonce TEXT NOT NULL,
+        ciphertext TEXT NOT NULL,
+        visibility TEXT CHECK (visibility IN ('all', 'private', 'selected')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, name),
+        CHECK ((scope = 'org') = (visibility IS NOT NULL))
+      ) STRICT;
+      CREATE TABLE ci_secret_repos (
+        name TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        PRIMARY KEY (name, repo_id)
+      ) STRICT;
+      CREATE INDEX ci_secret_repos_repo ON ci_secret_repos (repo_id);
+      CREATE TABLE ci_variables (
+        scope TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        visibility TEXT CHECK (visibility IN ('all', 'private', 'selected')),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, name),
+        CHECK ((scope = 'org') = (visibility IS NOT NULL))
+      ) STRICT;
+      CREATE TABLE ci_variable_repos (
+        name TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        PRIMARY KEY (name, repo_id)
+      ) STRICT;
+      CREATE INDEX ci_variable_repos_repo ON ci_variable_repos (repo_id);
+      CREATE TABLE ci_repo_epochs (
+        repo_id TEXT PRIMARY KEY,
+        epoch INTEGER NOT NULL
+      ) STRICT;
     `,
   },
 ];
