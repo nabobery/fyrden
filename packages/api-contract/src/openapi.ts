@@ -22,6 +22,9 @@ function stripMeta(schema: JsonSchema): JsonSchema {
   return rest;
 }
 
+/** The body of a 201 an operation that answers nothing sends, as GitHub's `empty-object`. */
+const EMPTY_OBJECT = { type: "object", properties: {}, additionalProperties: false };
+
 /** GitHub's pagination header, on an operation paged by `page` and `total_count`. */
 const LINK_HEADER = {
   description:
@@ -74,7 +77,12 @@ function operationObject(op: OperationDef): JsonSchema {
         successStatusesOf(op).map((status) => [
           String(status),
           answersNothing(op)
-            ? { description: STATUS_TEXT[status] }
+            ? status === 201
+              ? {
+                  description: STATUS_TEXT[status],
+                  content: { "application/json": { schema: EMPTY_OBJECT } },
+                }
+              : { description: STATUS_TEXT[status] }
             : {
                 description: STATUS_TEXT[status],
                 content: {

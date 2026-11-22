@@ -180,9 +180,12 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
     return problemResponse(c, result.problem, { ...retry, ...headers });
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
-  // Nothing to answer: no body (a replay of it too).
-  if (answersNothing(op))
-    return c.body(null, (result.status ?? op.successStatus ?? 204) as StatusCode, headers);
+  // Nothing to answer: no body (a replay of it too), except a 201's `{}`, as
+  // GitHub's: clients such as `gh` decode the body of every answer but a 204.
+  if (answersNothing(op)) {
+    const status = (result.status ?? op.successStatus ?? 204) as StatusCode;
+    return status === 201 ? c.json({}, 201, headers) : c.body(null, status, headers);
+  }
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
