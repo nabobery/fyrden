@@ -135,6 +135,7 @@ export async function listWorkflowRunJobsOperation(
       check: { state: job.check.state, code: job.check.code },
       log_complete: job.logComplete,
       error: job.error,
+      waiting_for: job.waitingFor,
     })),
     next_cursor: page.next === null ? null : encodeCursor(`${attempt}:${page.next}`),
   };

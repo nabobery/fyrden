@@ -5,11 +5,14 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   asksForHelp,
+  CI_RESOURCES,
   checkEmailKey,
+  DISCRETIONARY_RESOURCES,
   emailDeploy,
   envDeployOptions,
   main,
   parseDeployArgs,
+  validAllowance,
 } from "../src/index.ts";
 
 describe("command line", () => {
@@ -84,6 +87,73 @@ describe("command line", () => {
     expect(
       parseDeployArgs(["--internal-calls", "2000", "--internal-calls", "3000"]),
     ).toBeUndefined();
+  });
+});
+
+describe("parseDeployArgs: CI", () => {
+  it("takes the runner switch on or off, on either plan", () => {
+    expect(parseDeployArgs(["--ci-runners", "on", "--plan", "free"])).toEqual({
+      plan: "free",
+      ci: { runners: "on" },
+    });
+    expect(parseDeployArgs(["--ci-runners", "off"])).toEqual({
+      plan: "paid",
+      ci: { runners: "off" },
+    });
+    for (const bad of ["On", "yes", "1", ""])
+      expect(parseDeployArgs(["--ci-runners", bad])).toBeUndefined();
+  });
+
+  it("takes a fleet cap from 0 to 999,999 on Free only (Paid caps no fleet)", () => {
+    expect(parseDeployArgs(["--plan", "free", "--ci-fleet", "0"])).toEqual({
+      plan: "free",
+      ci: { fleet: 0 },
+    });
+    expect(parseDeployArgs(["--plan", "free", "--ci-fleet", "999999"])).toEqual({
+      plan: "free",
+      ci: { fleet: 999_999 },
+    });
+    expect(parseDeployArgs(["--ci-fleet", "3"])).toBeUndefined();
+    for (const bad of ["1000000", "-1", "02", "2.5", "two", ""])
+      expect(parseDeployArgs(["--plan", "free", "--ci-fleet", bad])).toBeUndefined();
+  });
+
+  it("takes a daily allowance and a longest job on Free only, as the API reads them", () => {
+    expect(
+      parseDeployArgs([
+        "--plan",
+        "free",
+        "--ci-daily",
+        "worker_requests=9000,r2_class_b=100",
+        "--ci-max-job-minutes",
+        "7200",
+      ]),
+    ).toEqual({
+      plan: "free",
+      ci: { daily: "worker_requests=9000,r2_class_b=100", maxJobMinutes: 7_200 },
+    });
+    expect(parseDeployArgs(["--ci-daily", "worker_requests=9000"])).toBeUndefined();
+    expect(parseDeployArgs(["--ci-max-job-minutes", "60"])).toBeUndefined();
+    for (const bad of ["queue=1", "worker_requests=1,worker_requests=2", "worker_requests=-1", ""])
+      expect(parseDeployArgs(["--plan", "free", "--ci-daily", bad])).toBeUndefined();
+    for (const bad of ["0", "7201", "60.5", "sixty", ""])
+      expect(parseDeployArgs(["--plan", "free", "--ci-max-job-minutes", bad])).toBeUndefined();
+  });
+
+  it("takes when CI was switched on, as the API reads it, only with runners on", () => {
+    expect(parseDeployArgs(["--ci-since", "2026-11-22T09:00:00Z"])).toEqual({
+      plan: "paid",
+      ci: { since: "2026-11-22T09:00:00Z" },
+    });
+    expect(
+      parseDeployArgs(["--plan", "free", "--ci-runners", "on", "--ci-since", "1795320500180"]),
+    ).toEqual({ plan: "free", ci: { runners: "on", since: "1795320500180" } });
+    expect(parseDeployArgs(["--plan", "free", "--ci-since", "1795320500180"])).toBeUndefined();
+    expect(
+      parseDeployArgs(["--ci-runners", "off", "--ci-since", "2026-11-22T09:00:00Z"]),
+    ).toBeUndefined();
+    for (const bad of ["2026-11-22", "2026-11-22T09:00:00", "yesterday", "-5", ""])
+      expect(parseDeployArgs(["--ci-since", bad])).toBeUndefined();
   });
 });
 
@@ -343,6 +413,23 @@ describe("envDeployOptions", () => {
       "do_rows_written=5,do_rows_written=6",
     ])
       expect(parseDeployArgs(["--discretionary", bad]), bad).toBeUndefined();
+  });
+
+  it("reads a CI daily allowance as the API does: discretionary work's resources, Worker requests and R2 reads", () => {
+    expect(validAllowance("worker_requests=15000,do_requests=0,r2_class_b=5", CI_RESOURCES)).toBe(
+      true,
+    );
+    expect(validAllowance("worker_requests=15000", DISCRETIONARY_RESOURCES)).toBe(false);
+    for (const bad of [
+      "",
+      "rows=5",
+      "worker_requests=",
+      "worker_requests=1e4",
+      "worker_requests=-1",
+      "worker_requests=5;do_requests=1",
+      "worker_requests=5,worker_requests=6",
+    ])
+      expect(validAllowance(bad, CI_RESOURCES), bad).toBe(false);
   });
 });
 

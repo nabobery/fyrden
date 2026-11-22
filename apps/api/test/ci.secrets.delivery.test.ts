@@ -185,37 +185,22 @@ const ownSecrets = (task: { secrets: Map<string, string> }) =>
     [...task.secrets].filter(([k]) => k !== "GITHUB_TOKEN" && k !== "GITEA_TOKEN"),
   );
 
-/**
- * The task of a fork pull request run, assigned by its run object directly:
- * no runner is ever given a fork job, so the offer a claim would make is
- * written here.
- */
-async function forkTask(
+/** A fork's job never reaches a runner (runner-eligibility.test.ts), so only trust decides delivery. */
+async function pullRequestTask(
   f: OrgFixture,
   event: "pull_request" | "pull_request_target",
   source: string,
   vars = {},
 ) {
-  const runId = await started(f, source.replace("on: push", `on: ${event}`), {
+  const { task } = await delivered(f, source.replace("on: push", `on: ${event}`), {
     event,
     ref: event === "pull_request" ? "refs/pull/1/head" : "refs/heads/main",
     github: { event_name: event, workflow: "ci" },
     trust: event === "pull_request" ? "untrusted" : "trusted",
-    fork: true,
+    fork: false,
     vars,
   });
-  const runner = await registerRunner(f.org.login, f.owner);
-  const { jobId } = await jobNamed(runId, "a");
-  const offer = await env.DIRECTORY.prepare(
-    `INSERT INTO ci_tasks (run_id, job_id, runner_id, offered_version, created_at, repo_id, fork)
-     VALUES (?, ?, ?, 0, ?, ?, 1) RETURNING id`,
-  )
-    .bind(runId, jobId, runner.id, now(runId), f.repo.id)
-    .first<{ id: number }>();
-  if (!offer) throw new Error("no offer");
-  const answer = await runStub(runId).assignTask(offer.id, jobId, runner.id, f.org.id);
-  if (!("task" in answer)) throw new Error(`refused: ${answer.refused}`);
-  return decodeTask(answer.task);
+  return task;
 }
 
 /** A version the organization's runners were told of, with nothing pending. */
@@ -295,15 +280,16 @@ describe("which secrets a job gets", () => {
   it("an organization secret of visibility private is not delivered to a public repository", async () => {
     const f = await orgRepo();
     const g = await sibling(f);
-    await env.DIRECTORY.prepare("UPDATE repos SET visibility = 'public' WHERE id = ?")
-      .bind(g.repo.id)
-      .run();
     const value = await orgSecret(f, "PRIV", { visibility: "private" });
     expect(ownSecrets((await delivered(f, reading("PRIV"))).task)).toEqual({ PRIV: value });
-    // A public repository's job is given to no runner, so its run is asked directly.
+    // Reserved while private, then made public: no runner's claim takes a public repository's
+    // job, so its run is asked directly.
     const runId = await started(g, reading("PRIV"));
     const runner = await registerRunner(g.org.login, g.owner);
     const { jobId } = await jobA(runId);
+    await env.DIRECTORY.prepare("UPDATE repos SET visibility = 'public' WHERE id = ?")
+      .bind(g.repo.id)
+      .run();
     const offer = await env.DIRECTORY.prepare(
       `INSERT INTO ci_tasks (run_id, job_id, runner_id, offered_version, created_at, repo_id, fork)
        VALUES (?, ?, ?, 0, ?, ?, 0) RETURNING id`,
@@ -407,22 +393,24 @@ describe("which secrets a job gets", () => {
 // ------------------------------------------------------------------ trust
 
 describe("trust", () => {
-  it("a fork pull_request run gets only the job token and no variables, and the account is never asked", async () => {
+  it("an untrusted pull_request run gets only the job token and no variables, and the account is never asked", async () => {
     const f = await orgRepo();
     await repoSecret(f, "A");
     await orgSecret(f, "B");
     countReads();
-    const task = await forkTask(f, "pull_request", dynamic, { GREETING: "hello" });
+    const task = await pullRequestTask(f, "pull_request", dynamic, { GREETING: "hello" });
     expect([...task.secrets.keys()].sort()).toEqual(["GITEA_TOKEN", "GITHUB_TOKEN"]);
     expect(task.vars.size).toBe(0);
     expect(secretReads).toBe(0);
   });
 
-  it("a fork pull_request_target run, trusted, gets its secrets and variables", async () => {
+  it("a pull_request_target run, trusted, gets its secrets and variables", async () => {
     const f = await orgRepo();
     const a = await repoSecret(f, "A");
     countReads();
-    const task = await forkTask(f, "pull_request_target", reading("A"), { GREETING: "hello" });
+    const task = await pullRequestTask(f, "pull_request_target", reading("A"), {
+      GREETING: "hello",
+    });
     expect(ownSecrets(task)).toEqual({ A: a });
     expect(Object.fromEntries(task.vars)).toEqual({ GREETING: "hello" });
     expect(secretReads).toBe(1);

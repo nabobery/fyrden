@@ -107,8 +107,17 @@ async function everyRunner(f: OrgFixture): Promise<RegisteredRunner[]> {
   ];
 }
 
-async function noRunnerGetsIt(runners: readonly RegisteredRunner[], runId: string) {
-  for (const runner of runners) expect((await fetchTask(runner, 0)).task).toBeUndefined();
+/** A poll at version 0 shows it reached dispatch only once the tasks version is past 0 (`primed`). */
+async function noRunnerGetsIt(f: OrgFixture, runners: readonly RegisteredRunner[], runId: string) {
+  const version = await tasksVersionOf(f.org.id);
+  expect(version).toBeGreaterThan(0);
+  for (const runner of runners) {
+    expect(await fetchTask(runner, 0)).toEqual({ tasksVersion: version });
+    const metered = await env.DIRECTORY.prepare("SELECT poll_used FROM ci_runners WHERE id = ?")
+      .bind(runner.id)
+      .first<number>("poll_used");
+    expect(metered).toBeGreaterThan(0);
+  }
   expect(await tasksOfRun(runId)).toEqual([]);
 }
 
@@ -136,10 +145,11 @@ describe("job eligibility", () => {
 
   it("a public repository's job is never assigned, whatever the runner's labels", async () => {
     const f = await orgRepo();
+    await primed(f);
     await setVisibility(f, "public");
     const runId = await started(f, one);
-    expect(await pendingOf(runId)).toMatchObject([{ repo_id: f.repo.id, fork: 0 }]);
-    await noRunnerGetsIt(await everyRunner(f), runId);
+    expect(await pendingOf(runId)).toEqual([]);
+    await noRunnerGetsIt(f, await everyRunner(f), runId);
     // Still queued, for run state's queue deadline to end.
     expect((await jobsOf(runId)).map((j) => j.status)).toEqual(["queued"]);
   });
@@ -171,29 +181,31 @@ describe("job eligibility", () => {
   for (const event of ["pull_request", "pull_request_target"] as const)
     it(`a fork ${event} run is assigned to no runner, before or after its approval`, async () => {
       const f = await orgRepo();
+      await primed(f);
       const runners = await everyRunner(f);
       const spec = forkSpec(f, event);
       const runId = await started(f, spec.workflow.source, spec);
       expect(await pendingOf(runId)).toEqual([]);
-      await noRunnerGetsIt(runners, runId);
+      await noRunnerGetsIt(f, runners, runId);
 
       const binding = await approvalBinding(spec);
       expect(await runStub(runId).approve(binding as string, f.owner.principalId)).toEqual({
         ok: true,
       });
       await drain(runId);
-      expect(await pendingOf(runId)).toMatchObject([{ repo_id: f.repo.id, fork: 1 }]);
-      await noRunnerGetsIt(runners, runId);
+      expect(await pendingOf(runId)).toEqual([]);
+      await noRunnerGetsIt(f, runners, runId);
       expect((await jobsOf(runId)).map((j) => j.status)).toEqual(["queued"]);
     });
 
   it("a fork run that needs no approval is assigned to no runner", async () => {
     const f = await orgRepo();
+    await primed(f);
     const runners = await everyRunner(f);
     const { approval: _, ...spec } = forkSpec(f, "pull_request");
     const runId = await started(f, spec.workflow.source, spec);
-    expect(await pendingOf(runId)).toMatchObject([{ fork: 1 }]);
-    await noRunnerGetsIt(runners, runId);
+    expect(await pendingOf(runId)).toEqual([]);
+    await noRunnerGetsIt(f, runners, runId);
   });
 
   it("retires a real queued job whose directory row has pre-0053 defaults", async () => {
@@ -239,7 +251,8 @@ describe("job eligibility", () => {
     )
       .bind(runId)
       .all();
-    expect(pending.results).toEqual([{ repo_id: f.repo.id, fork: 1 }]);
+    // The run's origin is unknown (a fork, closed).
+    expect(pending.results).toEqual([]);
     expect((await fetchTask(runner, 0)).task).toBeUndefined();
     await advance(runId, 24 * 60 * MIN + 1);
     expect((await jobsOf(runId)).map((j) => j.conclusion)).toEqual(["success", "cancelled"]);

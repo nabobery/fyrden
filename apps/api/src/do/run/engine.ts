@@ -59,6 +59,7 @@ export const RUN_JOB = {
   sweep: "sweep",
   dispatch: "dispatch",
   taskEnd: "task-end",
+  reserve: "reserve",
   logClose: "log-close",
   logViewers: "log-viewers",
   concurrency: "concurrency",
@@ -249,6 +250,11 @@ export interface EngineHost {
   logComplete(task: number): boolean;
   /** Job `jobId`'s instance completed, by any path, with a task or none: its watchers are told. */
   jobEnded?(jobId: number): void;
+  maxJobMinutes(): number | null;
+  /** Job `jobId`'s instance was queued: it reserves CI minutes before it is published. */
+  reservationWanted(jobId: number): void;
+  /** Job `jobId`'s instance ended at `at`, by any path, with a task or none: its reservation ends. */
+  reservationEnded(jobId: number, at: number): void;
 }
 
 type Bindable = string | number | null;
@@ -422,7 +428,12 @@ export class RunEngine {
       this.#ensure("ci_task_end", RUN_JOB.taskEnd);
       this.host.logEnded(row.task, now);
     }
-    if (completed && row.status !== "completed") this.host.jobEnded?.(row.job_id);
+    if (completed && row.status !== "completed") {
+      this.host.jobEnded?.(row.job_id);
+      this.host.reservationEnded(row.job_id, now);
+    }
+    if (next.status === "queued" && row.status !== "queued")
+      this.host.reservationWanted(row.job_id);
     // Complete stays complete: rows that reached durable storage do not leave it. Without a
     // runner's word, the stored log decides: a forced end leaves a complete log complete.
     let log = row.log_complete;
@@ -850,7 +861,11 @@ export class RunEngine {
         conclusion: null,
         continueOnError: instance.continueOnError,
         timeoutMs:
-          Math.min(instance.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES) * MIN,
+          Math.min(
+            instance.timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
+            MAX_TIMEOUT_MINUTES,
+            this.host.maxJobMinutes() ?? MAX_TIMEOUT_MINUTES,
+          ) * MIN,
       }),
     );
     const concurrency = model.workflow.jobs.find((j) => j.id.value === jobKey)?.concurrency;

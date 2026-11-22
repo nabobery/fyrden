@@ -35,6 +35,7 @@ import {
   ON,
   orgRepo,
   pendingOf,
+  ROOMY_FLEET,
   registerRunner,
   runnerCall,
   taskRow,
@@ -424,7 +425,7 @@ describe("FetchTask", () => {
     const f = await orgRepo();
     await started(f, one);
     const runner = await registerRunner(f.org.login, f.owner);
-    expect(await fetchTask(runner, 3, { overrides: {} })).toEqual({ tasksVersion: 3 });
+    expect(await fetchTask(runner, 3, { overrides: ROOMY_FLEET })).toEqual({ tasksVersion: 3 });
   });
 });
 
@@ -437,6 +438,8 @@ describe("a lost answer", () => {
     const first = await fetchTask(runner, version);
     const lost = first.task;
     if (!lost) throw new Error("no task");
+    // Past the job's start window.
+    await at(runId, now(runId) + 31 * MIN);
     const again = await fetchTask(runner, version);
     expect(again.task?.id).toBe(lost.id);
     expect(again.tasksVersion).toBe(version);
@@ -627,6 +630,8 @@ describe("a lost answer", () => {
       const runId = await started(f, one);
       const first = (await fetchTask(runner, version)).task;
       if (!first) throw new Error("no task");
+      // Past the job's start window.
+      await at(runId, now(runId) + 31 * MIN);
       for (let i = 0; i < 6; i++)
         expect((await fetchTask(runner, version)).task?.id).toBe(first.id);
       const held = gate();
@@ -1071,6 +1076,8 @@ describe("an ephemeral runner", () => {
     const runId = await started(f, two);
     const task = (await fetchTask(runner, version)).task;
     if (!task) throw new Error("no task");
+    // Past the job's start window.
+    await at(runId, now(runId) + 31 * MIN);
     expect((await fetchTask(runner, version)).task?.id).toBe(task.id);
     await updateTask(runner, task.id);
     const runnerRow = () =>

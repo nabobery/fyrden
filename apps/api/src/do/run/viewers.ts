@@ -6,6 +6,7 @@ import {
   type StoredLogOmission,
   type StoredLogRow,
 } from "@fyrden/domain/ci";
+import { type CiViewerBudget, ciViewerBudget, type StoredLogReads } from "../../ci/budget.js";
 import {
   type AuthorizationDeadline,
   LIVE_AUTHORIZATION_RESULT_MS,
@@ -60,6 +61,14 @@ export const LOG_VIEWER_POLICY = {
   /** What may be sent past a socket's last ack: encoded bytes and frames. Proposed. */
   windowBytes: 1024 * 1024,
   windowFrames: 64,
+  /**
+   * What a client may leave unacknowledged once it has handled every frame
+   * (it acknowledges after each `ackBytes` of frames' UTF-8 or `ackFrames`
+   * frames): a socket whose window filled is sent nothing more, and read
+   * nothing for from storage, until its ack leaves no more than this out.
+   */
+  ackBytes: 256 * 1024,
+  ackFrames: 16,
   /** A frame's encoded size at most; a longer row is sent in parts of `partUnits` code units. */
   frameBytes: 256 * 1024,
   partUnits: 32_768,
@@ -88,6 +97,7 @@ export const LOG_CLOSE = {
   access: 4403,
   erased: 4404,
   slow: 4408,
+  budget: 4429,
 } as const;
 type CloseReason = keyof typeof LOG_CLOSE;
 
@@ -134,7 +144,35 @@ export interface ViewerAttachment {
   /** Counted control messages in the minute that started at `minute`. */
   readonly minute: number;
   readonly controls: number;
+  /** What is left of its ticket's budget; absent when unbudgeted. */
+  readonly budget?: ReadBudget;
 }
+
+/** Bytes, storage read attempts and credential checks left to a socket. */
+export interface ReadBudget {
+  readonly bytes: number;
+  readonly gets: number;
+  readonly checks: number;
+}
+
+/**
+ * Stored bytes of a chunk at least one read from storage sends a socket
+ * when its frames fill the window rather than the chunk ending: a read
+ * starts with at most `ackBytes` out, and a frame (at most `frameBytes`)
+ * goes only when it fits, so it sends at least the window less those;
+ * frames' bytes exceed the stored rows' they carry by less than 1/64 of
+ * that (at most about 100 bytes a frame, for its own keys and a surrogate
+ * pair split between parts, and 64 frames at most). The
+ * frame cap does not end a read first: the 48 frames left take more than
+ * the window, as every part but a row's last holds 32,768 code units, a
+ * row sent in parts is over 256 KiB, and a frame of whole rows ends short
+ * only before a row too long to join it.
+ */
+export const VIEWER_READ_PROGRESS = Math.floor(
+  ((LOG_VIEWER_POLICY.windowBytes - LOG_VIEWER_POLICY.ackBytes - LOG_VIEWER_POLICY.frameBytes) *
+    63) /
+    64,
+);
 
 /** A log line as stored (one NDJSON line) and as sent: the same object, the same key order. */
 export type LogLine = StoredLogLine;
@@ -150,6 +188,8 @@ export interface ViewerHooks {
   sending?: (socket: string) => void;
   /** After a stored chunk was read for a page, before anything of it is sent. */
   afterChunkGet?: (runId: string, key: string) => Promise<void> | void;
+  /** A socket charged for a storage read: an attempt before it, then the bytes it read. */
+  readCharged?: (socket: string, charge: { gets: number; bytes: number }) => void;
   beforeRecheck?: (runId: string, credentialId: string) => Promise<void> | void;
   afterRecheck?: (runId: string, credentialId: string) => Promise<void> | void;
   beforeAccessCheck?: (runId: string, credentialId: string) => Promise<void> | void;
@@ -167,8 +207,24 @@ export interface ViewerHooks {
 
 export const viewerHooks: ViewerHooks = {};
 
+/**
+ * A job's log when a ticket is stored. `activeMs`, how much longer rows may
+ * flow to a socket: the job's timeout and the late window while it may run,
+ * the rest of the late window once it completed, nothing once sealed.
+ */
+export interface StoredLog extends StoredLogReads {
+  readonly bytes: number;
+  readonly activeMs: number;
+}
+
 export type StoreTicketAnswer =
-  | { readonly ok: true; readonly expiresAt: number }
+  | {
+      readonly ok: true;
+      readonly expiresAt: number;
+      readonly stored: StoredLog;
+      readonly budget: CiViewerBudget;
+    }
+  | { readonly ok: true; readonly expiresAt: number; readonly stored: null; readonly budget: null }
   | { readonly ok: false; readonly code: "run_not_found" | "job_not_found" | "too_many_tickets" };
 
 /** What the viewers need from their object. */
@@ -296,6 +352,9 @@ export class LogViewers {
    * Stores a ticket's hash for job `jobId`, redeemable by `credentialId`
    * through repository `repoId` for `LOG_VIEWER_POLICY.ticketMs` on this
    * object's clock (the one its redemption is judged by). Expired tickets go first.
+   * With `budget`, the redeemed socket is held to `ciViewerBudget` of the
+   * log as stored now and how long rows may flow to it (at most its life and
+   * `maxActiveMs`), and both are answered; without, the log is not read.
    */
   storeTicket(input: {
     hash: string;
@@ -303,31 +362,108 @@ export class LogViewers {
     jobId: number;
     credentialId: string;
     principalId: string;
+    budget: { readonly maxActiveMs: number } | null;
   }): StoreTicketAnswer {
     const { host } = this;
     return host.tx((): StoreTicketAnswer => {
       const run = host.engine.run();
       if (host.erased() || !run || run.repo_id !== input.repoId)
         return { ok: false, code: "run_not_found" };
-      if (!host.engine.instance(input.jobId)) return { ok: false, code: "job_not_found" };
+      const instance = host.engine.instance(input.jobId);
+      if (!instance) return { ok: false, code: "job_not_found" };
       const now = host.now();
       host.engine.exec("DELETE FROM ci_log_tickets WHERE expires_at <= ?", now);
       const held =
         host.engine.rows<{ n: number }>("SELECT COUNT(*) AS n FROM ci_log_tickets")[0]?.n ?? 0;
       if (held >= LOG_VIEWER_POLICY.tickets) return { ok: false, code: "too_many_tickets" };
       const expiresAt = now + LOG_VIEWER_POLICY.ticketMs;
+      let sized: { stored: StoredLog; budget: CiViewerBudget } | null = null;
+      if (input.budget) {
+        const stored = this.#stored(instance, now);
+        const activeMs = Math.min(
+          LOG_VIEWER_POLICY.lifeMs,
+          input.budget.maxActiveMs,
+          stored.activeMs,
+        );
+        sized = { stored, budget: ciViewerBudget({ stored, activeMs }) };
+      }
+      const budget = sized?.budget ?? null;
       host.engine.exec(
-        `INSERT INTO ci_log_tickets (hash, repo_id, job_id, credential_id, principal_id, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO ci_log_tickets
+           (hash, repo_id, job_id, credential_id, principal_id, expires_at,
+            read_bytes, read_gets, read_checks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         input.hash,
         input.repoId,
         input.jobId,
         input.credentialId,
         input.principalId,
         expiresAt,
+        budget?.readBytes ?? null,
+        budget?.getAttempts ?? null,
+        budget?.checks ?? null,
       );
-      return { ok: true, expiresAt };
+      return sized
+        ? { ok: true, expiresAt, ...sized }
+        : { ok: true, expiresAt, stored: null, budget: null };
     });
+  }
+
+  dropTicket(hash: string): void {
+    this.host.engine.exec("DELETE FROM ci_log_tickets WHERE hash = ?", hash);
+  }
+
+  /** Instance `instance`'s log as stored at `now` (nothing of a log never masked: never read). */
+  #stored(
+    instance: {
+      status: string;
+      task: number | null;
+      timeout_ms: number;
+      completed_at: number | null;
+    },
+    now: number,
+  ): StoredLog {
+    const { task } = instance;
+    const running = instance.status !== "completed";
+    const none = { bytes: 0, chunks: 0, rereadBytes: 0, reads: 0 };
+    if (task === null)
+      return { ...none, activeMs: running ? instance.timeout_ms + LOG_LATE_MS : 0 };
+    const row = this.host.engine.rows<{
+      bytes: number;
+      chunks: number;
+      reread_bytes: number;
+      reads: number;
+      unmasked: number | null;
+      sealed: number | null;
+      ended_at: number | null;
+    }>(
+      `SELECT coalesce(sum(c.bytes), 0) AS bytes, count(c.task) AS chunks,
+         coalesce(sum(c.bytes * ((c.bytes + w.size - 1) / w.size)), 0) AS reread_bytes,
+         coalesce(sum((c.bytes + w.size - 1) / w.size), 0) AS reads,
+         l.unmasked, (l.finalized = 1 OR l.state = 'complete') AS sealed, l.ended_at
+       FROM (SELECT ?1 AS task) t
+       CROSS JOIN (SELECT CAST(?2 AS INTEGER) AS size) w
+       LEFT JOIN ci_logs l ON l.task = t.task
+       LEFT JOIN ci_log_chunks c ON c.task = t.task
+       GROUP BY t.task`,
+      task,
+      VIEWER_READ_PROGRESS,
+    )[0];
+    const ended = row?.ended_at ?? instance.completed_at;
+    const activeMs =
+      row?.sealed === 1
+        ? 0
+        : running
+          ? instance.timeout_ms + LOG_LATE_MS
+          : Math.max(0, (ended ?? now) + LOG_LATE_MS - now);
+    if (!row || row.unmasked === 1) return { ...none, activeMs };
+    return {
+      bytes: row.bytes,
+      chunks: row.chunks,
+      rereadBytes: row.reread_bytes,
+      reads: row.reads,
+      activeMs,
+    };
   }
 
   /**
@@ -341,20 +477,30 @@ export class LogViewers {
     if (request.headers.get("Upgrade") !== "websocket") return new Response(null, { status: 426 });
     const admission = parseAdmission(request.headers.get(LOG_VIEWER_HEADER));
     if (!admission) return new Response(null, { status: 400 });
-    const found = host.tx((): "missing" | "spent" | "ok" => {
+    const found = host.tx((): "missing" | "spent" | { budget: ReadBudget | null } => {
       const run = host.engine.run();
       if (host.erased() || !run || run.repo_id !== admission.repoId) return "missing";
-      const spent = host.engine.rows(
+      const [spent] = host.engine.rows<{
+        read_bytes: number | null;
+        read_gets: number | null;
+        read_checks: number | null;
+      }>(
         `DELETE FROM ci_log_tickets
          WHERE hash = ? AND repo_id = ? AND credential_id = ? AND job_id = ? AND expires_at > ?
-         RETURNING hash`,
+         RETURNING read_bytes, read_gets, read_checks`,
         admission.hash,
         admission.repoId,
         admission.credentialId,
         admission.jobId,
         host.now(),
       );
-      return spent.length > 0 ? "ok" : "spent";
+      if (!spent) return "spent";
+      return {
+        budget:
+          spent.read_bytes === null || spent.read_gets === null || spent.read_checks === null
+            ? null
+            : { bytes: spent.read_bytes, gets: spent.read_gets, checks: spent.read_checks },
+      };
     });
     if (found === "missing") return new Response("No such run.", { status: 404 });
     if (found === "spent")
@@ -394,6 +540,7 @@ export class LogViewers {
       until: now + LOG_VIEWER_POLICY.lifeMs,
       minute: now,
       controls: 0,
+      ...(found.budget && { budget: found.budget }),
     };
     server.serializeAttachment(state);
     host.metrics.count("live.log_socket", { event: "opened", reason: "ticket" });
@@ -550,15 +697,18 @@ export class LogViewers {
       )
         k += 3;
       if (k > 0 && compare(state.out[k - 3] ?? 0, state.out[k - 2] ?? 0, ack.i, ack.o) === 0) {
-        const blocked = state.blockedSince !== null;
+        const out = state.out.slice(k);
+        // A socket whose window filled stays blocked (its 2 minutes running) until the ack
+        // leaves no more out than a client handling every frame may.
+        const reopened = state.blockedSince !== null && drained(out);
         write(ws, {
           ...state,
           acked: ack.i,
           ackedPart: ack.o,
-          out: state.out.slice(k),
-          blockedSince: null,
+          out,
+          blockedSince: reopened || state.blockedSince === null ? null : state.blockedSince,
         });
-        if (blocked) this.host.ensureSlice();
+        if (reopened) this.host.ensureSlice();
         return;
       }
     }
@@ -669,8 +819,9 @@ export class LogViewers {
   /**
    * Checks the credentials of sockets never checked here, and of stale ones
    * with work, by credential, at most `rechecks` of them; each socket against
-   * the dependencies it was opened on. True when an account could not answer
-   * (those sockets stay unchecked).
+   * the dependencies it was opened on. Each budgeted socket due pays a check
+   * first, whether or not it is answered; one with none left is ended. True
+   * when an account could not answer (those sockets stay unchecked).
    */
   async #recheck(): Promise<boolean> {
     const { host } = this;
@@ -683,7 +834,14 @@ export class LogViewers {
       if (!state || now < state.checkedAt + LOG_VIEWER_POLICY.freshMs) continue;
       // A socket never checked here is checked at once; a stale one only when it has work.
       if (state.checkedAt > 0 && this.#work(state, this.#jobLog(state.jobId)) === "none") continue;
-      if (due.size >= LOG_VIEWER_POLICY.rechecks) break;
+      if (!due.has(state.credentialId) && due.size >= LOG_VIEWER_POLICY.rechecks) continue;
+      if (state.budget) {
+        if (state.budget.checks < 1) {
+          this.#endForBudget(ws);
+          continue;
+        }
+        write(ws, { ...state, budget: { ...state.budget, checks: state.budget.checks - 1 } });
+      }
       due.add(state.credentialId);
     }
     const runId = run.run_id;
@@ -795,20 +953,26 @@ export class LogViewers {
       const now = host.now();
       let wanted: { task: number; start: number; end: number; bytes: number; key: string } | null =
         null;
-      const group: WebSocket[] = [];
+      let group: WebSocket[] = [];
       for (const ws of this.#open()) {
         const state = stateOf(ws);
         if (!state || this.#locked.has(state.id) || state.blockedSince !== null) continue;
         if (now >= state.checkedAt + LOG_VIEWER_POLICY.freshMs) continue;
+        // A read goes only to sockets that can take a full window from it (`VIEWER_READ_PROGRESS`).
         const page = pages.get(state.id);
         if (
           page &&
-          (page.chunks >= LOG_VIEWER_POLICY.pageChunks || page.bytes >= LOG_VIEWER_POLICY.pageBytes)
+          (page.chunks >= LOG_VIEWER_POLICY.pageChunks ||
+            page.bytes + LOG_VIEWER_POLICY.windowBytes > LOG_VIEWER_POLICY.pageBytes)
         )
           continue;
         const log = this.#jobLog(state.jobId);
         if (log.task === null || state.sent >= log.linesEnd) continue;
         if (this.#fromCache(log.task)(state.sent)) continue;
+        if (!drained(state.out)) {
+          if (state.blockedSince === null) write(ws, { ...state, blockedSince: now });
+          continue;
+        }
         if (wanted === null) {
           wanted = this.#chunkAt(log.task, state.sent);
           if (wanted === null) continue;
@@ -817,8 +981,17 @@ export class LogViewers {
           group.push(ws);
       }
       if (wanted === null || group.length === 0) return false;
+      const chunkBytes = wanted.bytes;
+      group = group.filter((ws) => this.#affords(ws, chunkBytes));
+      if (group.length === 0) continue;
       const ids = group.map((ws) => (stateOf(ws) as ViewerAttachment).id);
       for (const id of ids) this.#locked.add(id);
+      const charge = (spent: { gets: number; bytes: number }) => {
+        for (const [k, ws] of group.entries()) this.#charge(ws, ids[k] as string, spent);
+      };
+      // Charged before the read: an attempt counts whether or not its body is ever read.
+      charge({ gets: 1, bytes: 0 });
+      let read = 0;
       let reservation: MemoryReservation | undefined;
       let active: BackfillRead | undefined;
       try {
@@ -894,7 +1067,12 @@ export class LogViewers {
           });
         let expected = wanted.start;
         try {
-          for await (const line of readLogLines(object.body, signal)) {
+          const counted = (bytes: number) => {
+            read += bytes;
+            if (read > chunkBytes)
+              throw new Error("a stored chunk is longer than its manifest says");
+          };
+          for await (const line of readLogLines(object.body, signal, counted)) {
             signal.throwIfAborted();
             if (line.i !== expected || line.i >= wanted.end)
               throw new Error("stored log positions do not match the manifest");
@@ -930,6 +1108,7 @@ export class LogViewers {
           for (const ws of group) this.#close(ws, "unavailable", "the log cannot be read");
         }
       } finally {
+        if (read > 0) charge({ gets: 0, bytes: read });
         for (const id of ids) this.#locked.delete(id);
         reservation?.release();
         if (active) {
@@ -939,6 +1118,46 @@ export class LogViewers {
       }
     }
     return false;
+  }
+
+  /** Whether `ws` can pay for reading a chunk of `bytes`; one that cannot is ended. */
+  #affords(ws: WebSocket, bytes: number): boolean {
+    const budget = stateOf(ws)?.budget;
+    if (!budget || (budget.gets >= 1 && budget.bytes >= bytes)) return true;
+    this.#endForBudget(ws);
+    return false;
+  }
+
+  #charge(ws: WebSocket, id: string, charge: { gets: number; bytes: number }): void {
+    viewerHooks.readCharged?.(id, charge);
+    if (this.#closed.has(ws)) return;
+    const state = stateOf(ws);
+    if (!state?.budget) return;
+    write(ws, {
+      ...state,
+      budget: {
+        ...state.budget,
+        bytes: Math.max(0, state.budget.bytes - charge.bytes),
+        gets: Math.max(0, state.budget.gets - charge.gets),
+      },
+    });
+  }
+
+  /**
+   * Ends a socket whose budget cannot pay for its next storage read or check: an
+   * `end` with reason `budget` (and `unfinished` for a row cut mid-part,
+   * since a new socket starts at a row), sent if its window has room, then
+   * 4429 either way. Its client asks for a new ticket.
+   */
+  #endForBudget(ws: WebSocket): void {
+    const state = stateOf(ws);
+    if (!state || this.#closed.has(ws)) return;
+    const end: Record<string, unknown> = { t: "end", reason: "budget" };
+    if (state.sentPart > 0) end.unfinished = state.sent;
+    const text = JSON.stringify(end);
+    viewerHooks.beforeSend?.(state.id);
+    if (fits(state, utf8Length(text)) && !this.#send(ws, state, text)) return;
+    this.#close(ws, "budget", "budget spent: ask for a new ticket");
   }
 
   #chunkAt(
@@ -972,9 +1191,10 @@ export class LogViewers {
 
   /**
    * Sends `ws` frames from `get` (rows by index) from its cursor on, while
-   * it is checked, alive and its window has room; each frame decided on the
-   * state read just before it is sent. With `page`, counts the bytes sent
-   * and stops at the page's bound.
+   * it is checked, alive, not blocked (an ack reopens a blocked socket) and
+   * its window has room; each frame decided on the state read just before
+   * it is sent. With `page`, counts the bytes sent and stops at the page's
+   * bound.
    */
   #pump(
     ws: WebSocket,
@@ -984,6 +1204,7 @@ export class LogViewers {
     for (;;) {
       const state = stateOf(ws);
       if (!state || this.#closed.has(ws)) return "closed";
+      if (state.blockedSince !== null) return "blocked";
       if (page && page.bytes >= LOG_VIEWER_POLICY.pageBytes) return "budget";
       const frame = nextFrame(state, get);
       if (frame === null) return "done";
@@ -1151,6 +1372,13 @@ function stateOf(ws: WebSocket): ViewerAttachment | null {
 
 function write(ws: WebSocket, state: ViewerAttachment): void {
   ws.serializeAttachment(state);
+}
+
+/** Whether frames out past an ack (`ViewerAttachment.out`) are within what a client may leave unacknowledged. */
+function drained(out: readonly number[]): boolean {
+  let bytes = 0;
+  for (let k = 2; k < out.length; k += 3) bytes += out[k] ?? 0;
+  return out.length / 3 <= LOG_VIEWER_POLICY.ackFrames && bytes <= LOG_VIEWER_POLICY.ackBytes;
 }
 
 /** Whether a frame of `bytes` fits the window past the socket's ack. */

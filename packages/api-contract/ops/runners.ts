@@ -11,7 +11,7 @@ const Org = z
 const RunnerId = z.coerce.number().int().positive().describe("The runner's id.");
 
 const SWITCH_NOTE =
-  " While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`.";
+  " While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. On Free, a registration token is refused with 409 `runner_fleet_full` while the deployment's runner fleet is full (`FYRDEN_CI_FLEET`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused.";
 
 export const RunnerRegistrationToken = z.object({
   token: z
@@ -59,7 +59,13 @@ export const SelfHostedRunner = z.object({
     .int()
     .nullable()
     .describe(
-      "Unix time in milliseconds: when it was deleted; its credential stopped working then.",
+      "Unix time in milliseconds: when it was deleted or revoked, or when an ephemeral runner's report window ended (set automatically); its credential stopped working then.",
+    ),
+  revoked_reason: z
+    .enum(["deleted", "poll_rate", "fleet_cap", "spent"])
+    .nullable()
+    .describe(
+      "Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while no revocation is recorded: an ephemeral runner past its report window may read null for a few minutes until maintenance records it `spent`, though its credentials already stopped working.",
     ),
 });
 

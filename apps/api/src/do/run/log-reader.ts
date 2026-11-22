@@ -252,10 +252,15 @@ class LogParser {
   }
 }
 
-/** Reads canonical RunLogs NDJSON. Aborting cancels a pending byte read and releases its lock. */
+/**
+ * Reads canonical RunLogs NDJSON. Aborting cancels a pending byte read and
+ * releases its lock. `counted` is told the bytes of each read as it returns;
+ * what it throws ends the reading.
+ */
 export async function* readLogLines(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  counted?: (bytes: number) => void,
 ): AsyncGenerator<ReadLogLine> {
   const reader = body.getReader({ mode: "byob" });
   const parser = new LogParser();
@@ -272,6 +277,7 @@ export async function* readLogLines(
     for (;;) {
       signal?.throwIfAborted();
       const { value, done } = await reader.read(readBuffer);
+      if (value) counted?.(value.byteLength);
       signal?.throwIfAborted();
       if (value) {
         for (const byte of value) {

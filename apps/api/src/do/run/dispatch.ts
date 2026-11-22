@@ -142,8 +142,13 @@ export interface DispatchHost {
   guarded(job: Job, fn: () => void): void;
   /** Has the dispatch index synced soon (its job runs now). */
   ensureDispatch(): void;
-  queued(limit: number): { jobId: number; attempt: number; runsOn: string[]; queuedAt: number }[];
-  assign(jobId: number, assignKey: string): AssignAnswer;
+  queued(
+    limit: number,
+    accountId?: string,
+  ): { jobId: number; attempt: number; runsOn: string[]; queuedAt: number }[];
+  ownedBy(accountId: string): void;
+  reservationsWaiting(): boolean;
+  assign(jobId: number, assignKey: string, accountId: string): AssignAnswer;
   taskLive(ref: TaskRef): boolean;
   updateTask(ref: TaskRef): TaskAnswer<{ cancel: boolean }>;
   completeTask(
@@ -341,7 +346,7 @@ export class RunDispatch {
         return { refused: "secrets_unreachable" };
       }
     }
-    const assigned = host.assign(jobId, `t${wireId}`);
+    const assigned = host.assign(jobId, `t${wireId}`, accountId);
     if (!assigned.ok) return { refused: assigned.code };
     const ref = assigned.task;
     // A task out of token masks is never given another: refused before anything is written or
@@ -865,13 +870,15 @@ export class RunDispatch {
         .bind(run.run_id),
     ]);
     const accountId = (owner?.results[0] as { owner_id: string } | undefined)?.owner_id;
-    // The queued set and its revision, read together after D1 answered.
-    const snapshot = host.tx(() => ({
-      rev: (host.engine.run() as RunRow).queue_rev,
-      queued: host.queued(PAGE),
-    }));
-    // A repository no longer in the directory runs nothing more: withdraw everything.
-    const queued = accountId === undefined ? [] : snapshot.queued;
+    // The queued set and its revision, read together after D1 answered. A repository no longer in
+    // the directory runs nothing more: everything is withdrawn.
+    const { rev, queued } = host.tx(() => {
+      if (accountId !== undefined) host.ownedBy(accountId);
+      return {
+        rev: (host.engine.run() as RunRow).queue_rev,
+        queued: accountId === undefined ? [] : host.queued(PAGE, accountId),
+      };
+    });
     const have = new Map(
       ((published?.results ?? []) as { job_id: number; account_id: string }[]).map((r) => [
         r.job_id,
@@ -956,16 +963,17 @@ export class RunDispatch {
     host.guarded(job, () =>
       host.engine.exec(
         "UPDATE runs SET queue_synced_rev = max(queue_synced_rev, ?) WHERE id = 1",
-        snapshot.rev,
+        rev,
       ),
     );
     const after = host.engine.run();
     if (after && after.queue_synced_rev < after.queue_rev)
       return { done: false, cursor: null, runAfterMs: 0 };
-    // Caught up. While anything is published, look again later: nothing tells the run when its
-    // repository moves. The watermark, not this job, is what the run counts as owed, and a
-    // change to the queue moves this later run earlier.
-    return want.size > 0
+    // Caught up. While anything is published, or a queued job waits unpublished, look again later:
+    // nothing tells the run when its repository moves or changes visibility. The watermark, not
+    // this job, is what the run counts as owed, and a change to the queue moves this later run
+    // earlier.
+    return want.size > 0 || host.reservationsWaiting()
       ? { done: false, cursor: null, runAfterMs: DISPATCH_RESYNC_MS }
       : { done: true };
   }

@@ -19,6 +19,7 @@ import orgV8 from "./fixtures/do-schemas/OrgDO/v8.sql?raw";
 import orgV9 from "./fixtures/do-schemas/OrgDO/v9.sql?raw";
 import orgV10 from "./fixtures/do-schemas/OrgDO/v10.sql?raw";
 import orgV11 from "./fixtures/do-schemas/OrgDO/v11.sql?raw";
+import orgV12 from "./fixtures/do-schemas/OrgDO/v12.sql?raw";
 
 const versions: Record<number, string> = {
   0: orgV0,
@@ -29,6 +30,7 @@ const versions: Record<number, string> = {
   9: orgV9,
   10: orgV10,
   11: orgV11,
+  12: orgV12,
 };
 
 describe("OrgDO schema", () => {

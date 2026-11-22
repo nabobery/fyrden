@@ -60,6 +60,7 @@ export default defineConfig(async () => {
           "./test/setup/log-capture.ts",
           "./test/setup/hold-alarms.ts",
           "./test/setup/live-memo.ts",
+          "./test/setup/ci-capacity.ts",
         ],
         // Node, once per run: real git's advertisement bytes for the smart HTTP tests,
         // and repositories git packed for the fetch and push tests.

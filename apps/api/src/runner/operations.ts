@@ -13,7 +13,13 @@ import { orgFor } from "../accounts/account.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { clock } from "../services.js";
-import { createRegistration, listRunners as listRunnerRows, revokeRunner } from "./registry.js";
+import { runnerAdmissionFor } from "./admission.js";
+import {
+  createRegistration,
+  fleetRoom,
+  listRunners as listRunnerRows,
+  revokeRunner,
+} from "./registry.js";
 import { runnersOn } from "./service.js";
 
 /** How long a registration token registers a runner: GitHub's lifetime for its own. */
@@ -31,8 +37,22 @@ export async function createRunnerRegistrationTokenOperation(
       "runners_off",
       "Runner registration is turned off on this deployment.",
     );
-  const token = generateToken("run", secureRandomBytes);
   const now = clock();
+  const { fleet } = runnerAdmissionFor(ctx.env);
+  const room = fleet && (await fleetRoom(ctx.env.DIRECTORY, fleet, now, ctx.metrics));
+  if (room === "fleet_full")
+    throw new OperationError(
+      409,
+      "runner_fleet_full",
+      "This deployment's runner fleet is full; delete a runner before registering another.",
+    );
+  if (room === "polls_spent")
+    throw new OperationError(
+      409,
+      "runner_fleet_full",
+      "This deployment's runners have used today's polling; register again after 00:00 UTC.",
+    );
+  const token = generateToken("run", secureRandomBytes);
   const expiresAt = now + REGISTRATION_TTL_MS;
   await createRegistration(
     ctx.env.DIRECTORY,
@@ -74,6 +94,7 @@ export async function listRunnersOperation(
       created_at: row.createdAt,
       declared_at: row.declaredAt,
       revoked_at: row.revokedAt,
+      revoked_reason: row.revokedReason,
     })),
     next_cursor: rows.length > input.per_page && last ? encodeCursor(String(last.id)) : null,
   };

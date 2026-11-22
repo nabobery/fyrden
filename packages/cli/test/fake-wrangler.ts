@@ -23,10 +23,14 @@ export function fakeWrangler() {
     /** The migration files each D1 database has applied, by name (its d1_migrations table). */
     d1Migrations: new Map<string, string[]>(),
     effects: [] as { state: string; count: number; oldest: number }[],
+    /** fyrden-directory's serving runners, newest first, once its ci_runners table exists. */
+    ciRunners: [] as { id: number; name: string; account_id: string }[],
     /** Answers other queries of a database (a test's own SQLite), before the cases above. */
     d1Query: undefined as ((db: string, sql: string) => unknown[] | undefined) | undefined,
     /** fyrden-api's versions, latest last, with the vars each was deployed with. */
     apiVersions: [] as { id: string; vars: Record<string, string> }[],
+    /** `deployments status` fails, or answers two versions sharing the traffic. */
+    deploymentsStatus: "ok" as "ok" | "fail" | "split",
     /** The read model protocol a deploy recorded as served (fyrden-directory). */
     executorVersion: 0,
     orgInUse: false,
@@ -236,13 +240,27 @@ export function fakeWrangler() {
         else if (sql.startsWith("UPDATE read_model_barriers SET executor_version")) {
           state.executorVersion = Number(/executor_version = (\d+)/.exec(sql)?.[1]);
           results = [{ shard: "default" }];
-        } else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
+        } else if (sql.includes("FROM ci_runners") && schema.some((o) => o.name === "ci_runners"))
+          results = state.ciRunners;
+        else if (sql.includes("FROM effects") && schema.some((o) => o.name === "effects"))
           results = state.effects;
         else return fail("no such table: effects: SQLITE_ERROR [code: 7500]");
         return ok(JSON.stringify([{ results, success: true, meta: {} }]));
       }
       if (cmd === "deployments status --name") {
+        if (state.deploymentsStatus === "fail")
+          return fail("A request to the Cloudflare API failed. [code: 10013]");
         const latest = state.apiVersions.at(-1);
+        const before = state.apiVersions.at(-2);
+        if (state.deploymentsStatus === "split" && latest && before)
+          return ok(
+            JSON.stringify({
+              versions: [
+                { version_id: latest.id, percentage: 50 },
+                { version_id: before.id, percentage: 50 },
+              ],
+            }),
+          );
         if (args[3] !== "fyrden-api" || !latest)
           return fail(`The Worker ${args[3]} has no deployments.`);
         return ok(JSON.stringify({ versions: [{ version_id: latest.id, percentage: 100 }] }));
