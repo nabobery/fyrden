@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { type DeployDeps, deploy, type Plan } from "./commands/deploy.ts";
+import { type CiSettings, type DeployDeps, deploy, type Plan } from "./commands/deploy.ts";
 import { destroy } from "./commands/destroy.ts";
 import { doctor } from "./commands/doctor.ts";
 import { parseRepairArgs, REPAIR_USAGE, repairEffects } from "./commands/effects.ts";
@@ -29,6 +29,8 @@ const USAGE = `usage:
                                  [--email-sending on|off] [--email-daily-limit N]
                                  [--email-monthly-limit N] [--email-reserve N]
                                  [--public-origin https://HOST]]
+                [--ci-runners on|off] [--ci-fleet N] [--ci-since TIME]
+                [--ci-daily resource=n,...] [--ci-max-job-minutes N]
                                      create resources, migrate and deploy both Workers;
                                      Paid: N calls to D1, R2 and Durable Objects an invocation
                                      (1,000 to 10,000,000; default 1,000);
@@ -51,7 +53,14 @@ const USAGE = `usage:
                                      writes outside the read model's executor refused from
                                      org migration 0018 on: installed over data only with
                                      --quiesced on (a test deployment with nothing running);
-                                     the read model's restore floor recorded once it is
+                                     the read model's restore floor recorded once it is;
+                                     CI runners on for Paid, off for Free unless --ci-runners,
+                                     switched on at TIME (an ISO time with a zone, or epoch ms;
+                                     default now); Free only: at most N runners (2 unless set;
+                                     refused while more serve), CI's daily allowance per
+                                     resource (the watched-activity ones, worker_requests and
+                                     r2_class_b; refused past what Free leaves) and its longest
+                                     job (1 to 7,200 minutes, default 180)
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -162,6 +171,7 @@ export function parseDeployArgs(args: readonly string[]):
       discretionary?: string;
       email?: EmailArgs;
       live?: LiveArgs;
+      ci?: CiSettings;
       watchAudiences?: true;
       readModelMaintenance?: true;
       quiesced?: true;
@@ -185,6 +195,11 @@ export function parseDeployArgs(args: readonly string[]):
     "--email-monthly-limit",
     "--email-reserve",
     "--public-origin",
+    "--ci-runners",
+    "--ci-fleet",
+    "--ci-daily",
+    "--ci-max-job-minutes",
+    "--ci-since",
   ];
   for (let i = 0; i < args.length; i += 2) {
     const [flag, value] = [args[i] as string, args[i + 1]];
@@ -207,6 +222,8 @@ export function parseDeployArgs(args: readonly string[]):
   if (live === null) return undefined;
   const email = emailArgs(given);
   if (email === null) return undefined;
+  const ci = ciArgs(given, plan);
+  if (ci === null) return undefined;
   const extra = {
     ...(discretionary !== undefined && { discretionary }),
     ...(watch === "on" && { watchAudiences: true as const }),
@@ -214,6 +231,7 @@ export function parseDeployArgs(args: readonly string[]):
     ...(quiesced === "on" && { quiesced: true as const }),
     ...(live !== undefined && { live }),
     ...(email !== undefined && { email }),
+    ...(ci !== undefined && { ci }),
   };
   const calls = given.get("--internal-calls");
   if (calls === undefined) return { plan, ...extra };
@@ -300,6 +318,53 @@ function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | nu
   if (sockets === undefined) return {};
   if (!/^[1-9]\d{0,5}$/.test(sockets) || Number(sockets) > 100_000) return null;
   return { sockets: Number(sockets) };
+}
+
+/**
+ * `--ci-since` in milliseconds since the epoch, read as the API reads
+ * `FYRDEN_CI_SINCE` (apps/api/src/runner/service.ts `ciSince`): an ISO 8601
+ * time with a zone, or milliseconds; null for anything else.
+ */
+export function ciSinceMs(text: string): number | null {
+  if (/^\d+$/.test(text)) return Number(text) <= 8_640_000_000_000_000 ? Number(text) : null;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(text))
+    return null;
+  const ms = Date.parse(text);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * The CI flags, each as the API reads its variable: `--ci-runners on|off`
+ * on either plan; `--ci-fleet N` (0 to 999,999), `--ci-daily` and
+ * `--ci-max-job-minutes N` (1 to 7,200) on Free only, since Paid reads
+ * none of them; `--ci-since` only while runners are on (Paid unless
+ * `--ci-runners off`, Free only with `--ci-runners on`). Undefined when none
+ * is given; null for anything else.
+ */
+function ciArgs(given: ReadonlyMap<string, string>, plan: Plan): CiSettings | undefined | null {
+  const runners = given.get("--ci-runners");
+  const fleet = given.get("--ci-fleet");
+  const daily = given.get("--ci-daily");
+  const maxJob = given.get("--ci-max-job-minutes");
+  const since = given.get("--ci-since");
+  if (runners !== undefined && runners !== "on" && runners !== "off") return null;
+  if (fleet !== undefined && (plan !== "free" || !/^(0|[1-9]\d{0,5})$/.test(fleet))) return null;
+  if (daily !== undefined && (plan !== "free" || !validAllowance(daily, CI_RESOURCES))) return null;
+  if (
+    maxJob !== undefined &&
+    (plan !== "free" || !/^[1-9]\d{0,3}$/.test(maxJob) || Number(maxJob) > 7_200)
+  )
+    return null;
+  const on = runners === undefined ? plan === "paid" : runners === "on";
+  if (since !== undefined && (!on || ciSinceMs(since) === null)) return null;
+  const settings: CiSettings = {
+    ...(runners !== undefined && { runners }),
+    ...(fleet !== undefined && { fleet: Number(fleet) }),
+    ...(daily !== undefined && { daily }),
+    ...(maxJob !== undefined && { maxJobMinutes: Number(maxJob) }),
+    ...(since !== undefined && { since }),
+  };
+  return Object.keys(settings).length > 0 ? settings : undefined;
 }
 
 /** The resources `FYRDEN_DISCRETIONARY_DAILY` names (apps/api/src/effects/discretionary.ts). */
@@ -436,6 +501,7 @@ export async function main(argv: string[]): Promise<number> {
     discretionary,
     email,
     live,
+    ci,
     watchAudiences,
     readModelMaintenance,
     quiesced,
@@ -445,6 +511,7 @@ export async function main(argv: string[]): Promise<number> {
     discretionary?: string;
     email?: EmailArgs;
     live?: LiveArgs;
+    ci?: CiSettings;
     watchAudiences?: true;
     readModelMaintenance?: true;
     quiesced?: true;
@@ -458,6 +525,7 @@ export async function main(argv: string[]): Promise<number> {
     readModelMaintenance,
     quiesced,
     live,
+    ci,
     email: email && (await emailDeploy(email)),
     runner,
     buildWeb: async () => {

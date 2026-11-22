@@ -7,6 +7,7 @@ import type { Context, Hono } from "hono";
 import type { AppEnv } from "../app.js";
 import type { ReportTaskAnswer } from "../do/run/dispatch.js";
 import type { AppendLogAnswer } from "../do/run/logs.js";
+import { workersPlan } from "../git/fetch/mode.js";
 import { clock } from "../services.js";
 import { type FetchAdmission, type RunnerAdmission, runnerAdmissionFor } from "./admission.js";
 import {
@@ -74,11 +75,15 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /**
  * Whether runners may register and are offered work: the Worker variable
- * `FYRDEN_CI_RUNNERS` set to `on` (off otherwise). Turning it off leaves
- * registered runners polling with nothing to do, so it can be turned on again.
+ * `FYRDEN_CI_RUNNERS`, `on` or `off`; unset (or empty), on for Paid and off
+ * for Free (`FYRDEN_PLAN`), whose CI capacity numbers are proposed. Any
+ * other value is off. Turning it off leaves registered runners polling with
+ * nothing to do, so it can be turned on again.
  */
 export function runnersOn(env: object): boolean {
-  return (env as { FYRDEN_CI_RUNNERS?: unknown }).FYRDEN_CI_RUNNERS === "on";
+  const value = (env as { FYRDEN_CI_RUNNERS?: unknown }).FYRDEN_CI_RUNNERS;
+  if (value === undefined || value === "") return workersPlan(env) === "paid";
+  return value === "on";
 }
 
 /**

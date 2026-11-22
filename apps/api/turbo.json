@@ -1,17 +1,30 @@
 {
   "$schema": "../../node_modules/turbo/schema.json",
   "extends": ["//"],
-  // paths.wide-30k.test.ts imports its tree from the path-finder benchmark, so
-  // the tests and the compiler both read it.
+  // paths.wide-30k.test.ts imports its tree from the path-finder benchmark, and
+  // ci.capacity-copy.test.ts the deploy's copy of CI's Free numbers, so the
+  // tests and the compiler read both.
   "tasks": {
     "typecheck": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts",
+        "$TURBO_ROOT$/packages/cli/src/ci-capacity.ts"
+      ]
     },
     "test": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts",
+        "$TURBO_ROOT$/packages/cli/src/ci-capacity.ts"
+      ]
     },
     "test:coverage": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/tools/bench/path-finder/wide-30k.ts",
+        "$TURBO_ROOT$/packages/cli/src/ci-capacity.ts"
+      ]
     }
   }
 }

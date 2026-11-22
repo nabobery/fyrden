@@ -8,6 +8,7 @@ import { generateToken, hashToken, secureRandomBytes } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { runnersOn } from "../src/runner/service.js";
 import { countingD1 } from "./helpers/d1.js";
 import { principalWithToken } from "./helpers/principals.js";
 import {
@@ -221,6 +222,32 @@ describe("the deployment switch", () => {
       "runner registration is turned off on this deployment",
     );
     expect(await runnerRows(org.id)).toEqual([]);
+  });
+
+  it("follows the plan when unset: on for Paid, off for Free; set, it decides", async () => {
+    const owner = await who();
+    const org = await newOrg(owner);
+    const mint = (vars: Record<string, string>) =>
+      rest(
+        "POST",
+        `/orgs/${org.login}/actions/runners/registration-token`,
+        owner.token,
+        { ...ROOMY_FLEET, ...vars } as Partial<Env>,
+        {},
+      );
+    expect((await mint({ FYRDEN_PLAN: "paid" })).status).toBe(201);
+    expect((await mint({ FYRDEN_PLAN: "paid", FYRDEN_CI_RUNNERS: "off" })).status).toBe(409);
+    expect((await mint({ FYRDEN_PLAN: "free" })).status).toBe(409);
+    expect((await mint({ FYRDEN_PLAN: "free", FYRDEN_CI_RUNNERS: "on" })).status).toBe(201);
+  });
+
+  it("reads a value other than on or off as off, on either plan", () => {
+    for (const plan of ["paid", "free"])
+      for (const value of ["On", "yes", "1", " on"])
+        expect(runnersOn({ FYRDEN_PLAN: plan, FYRDEN_CI_RUNNERS: value })).toBe(false);
+    expect(runnersOn({ FYRDEN_PLAN: "paid", FYRDEN_CI_RUNNERS: "" })).toBe(true);
+    expect(runnersOn({ FYRDEN_CI_RUNNERS: "on" })).toBe(true);
+    expect(runnersOn({})).toBe(false);
   });
 
   it("Ping answers with the switch off", async () => {

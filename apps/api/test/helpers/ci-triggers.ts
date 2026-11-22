@@ -18,8 +18,7 @@ import { inRun, runStub } from "./runs.js";
  */
 
 function setSwitch(vars: { FYRDEN_CI_RUNNERS?: string }, on: boolean): void {
-  if (on) vars.FYRDEN_CI_RUNNERS = "on";
-  else delete vars.FYRDEN_CI_RUNNERS;
+  vars.FYRDEN_CI_RUNNERS = on ? "on" : "off";
 }
 
 /**

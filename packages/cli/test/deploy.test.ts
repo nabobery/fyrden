@@ -508,6 +508,10 @@ describe("fyrden deploy", () => {
       FYRDEN_EMAIL_SENDING: "on",
       FYRDEN_EMAIL_PROVIDER: "resend",
       FYRDEN_DISCRETIONARY_DAILY: "queue_ops=1",
+      FYRDEN_CI_SINCE: "1",
+      FYRDEN_CI_FLEET: "9",
+      FYRDEN_CI_DAILY: "queue_ops=1",
+      FYRDEN_CI_MAX_JOB_MINUTES: "9",
     };
     await writeFile(
       path,
@@ -517,10 +521,123 @@ describe("fyrden deploy", () => {
       }),
     );
     const fake = fakeWrangler();
-    await deploy(deps(fake.runner).d);
+    await deploy(deps(fake.runner, { ci: { runners: "off" } }).d);
     const vars = (await generatedConfig()).vars as Record<string, string>;
     for (const name of Object.keys(owned)) expect(vars, name).not.toHaveProperty(name);
     expect(vars.KEEP).toBe("1");
+  });
+
+  it("turns CI runners on for Paid and off for Free unless told, stamping when they were turned on", async () => {
+    const fake = fakeWrangler();
+    const at = Date.parse("2026-11-22T09:00:00Z");
+    await deploy(deps(fake.runner, { now: () => at }).d);
+    expect((await generatedConfig()).vars).toMatchObject({
+      FYRDEN_CI_RUNNERS: "on",
+      FYRDEN_CI_SINCE: "2026-11-22T09:00:00.000Z",
+    });
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    let vars = (await generatedConfig()).vars as Record<string, string>;
+    expect(vars.FYRDEN_CI_RUNNERS).toBe("off");
+    expect(vars).not.toHaveProperty("FYRDEN_CI_SINCE");
+    await deploy(deps(fake.runner, { ci: { runners: "off" } }).d);
+    vars = (await generatedConfig()).vars as Record<string, string>;
+    expect(vars.FYRDEN_CI_RUNNERS).toBe("off");
+    expect(vars).not.toHaveProperty("FYRDEN_CI_SINCE");
+    await deploy(
+      deps(fake.runner, {
+        plan: "free",
+        now: () => at,
+        ci: {
+          runners: "on",
+          since: "2026-11-22T08:00:00Z",
+          fleet: 1,
+          daily: "worker_requests=9000",
+          maxJobMinutes: 60,
+        },
+      }).d,
+    );
+    expect((await generatedConfig()).vars).toMatchObject({
+      FYRDEN_CI_RUNNERS: "on",
+      FYRDEN_CI_SINCE: "2026-11-22T08:00:00Z",
+      FYRDEN_CI_FLEET: "1",
+      FYRDEN_CI_DAILY: "worker_requests=9000",
+      FYRDEN_CI_MAX_JOB_MINUTES: "60",
+    });
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    vars = (await generatedConfig()).vars as Record<string, string>;
+    for (const name of ["FYRDEN_CI_FLEET", "FYRDEN_CI_DAILY", "FYRDEN_CI_MAX_JOB_MINUTES"])
+      expect(vars, name).not.toHaveProperty(name);
+  });
+
+  it("says Free's CI numbers are proposed when it turns runners on there", async () => {
+    const fake = fakeWrangler();
+    const { d, lines } = deps(fake.runner, { plan: "free", ci: { runners: "on" } });
+    await deploy(d);
+    expect(lines.join("\n")).toMatch(/WARN CI runners are on with Workers Free's proposed/);
+    const paid = deps(fake.runner);
+    await deploy(paid.d);
+    expect(paid.lines.join("\n")).not.toMatch(/proposed capacity/);
+  });
+
+  it("refuses a CI cutoff more than 5 minutes ahead before anything changes", async () => {
+    const fake = fakeWrangler();
+    const at = Date.parse("2026-11-22T09:00:00Z");
+    await expect(
+      deploy(deps(fake.runner, { now: () => at, ci: { since: "2026-11-22T09:05:01Z" } }).d),
+    ).rejects.toThrow(/more than 5 minutes ahead/);
+    expect(fake.calls).toEqual([]);
+    await deploy(deps(fake.runner, { now: () => at, ci: { since: "2026-11-22T09:05:00Z" } }).d);
+  });
+
+  it("refuses on Free a fleet or a CI allowance its daily limits cannot hold, before anything changes", async () => {
+    const fake = fakeWrangler();
+    await expect(
+      deploy(deps(fake.runner, { plan: "free", ci: { runners: "on", fleet: 5 } }).d),
+    ).rejects.toThrow(/worker_requests: a fleet of 5 runners.*need 113400, past Free's 100000/);
+    await expect(
+      deploy(deps(fake.runner, { plan: "free", ci: { daily: "worker_requests=60000" } }).d),
+    ).rejects.toThrow(/worker_requests: --ci-daily asks 60000, at most 54640 is left/);
+    // Discretionary work's allowance counts: 30,000 for live leaves 70,000 at most.
+    await expect(
+      deploy(
+        deps(fake.runner, {
+          plan: "free",
+          discretionary: "do_requests=60000",
+          ci: { daily: "do_requests=10001" },
+        }).d,
+      ),
+    ).rejects.toThrow(/do_requests: --ci-daily asks 10001, at most 10000 is left/);
+    expect(fake.calls).toEqual([]);
+    await deploy(deps(fake.runner, { plan: "free", ci: { fleet: 4 } }).d);
+  });
+
+  it("refuses to turn runners on over a fleet larger than its cap, listing the newest, before migrating", async () => {
+    const fake = fakeWrangler();
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    const at = 1_800_000_000_000;
+    const queries: string[] = [];
+    fake.state.ciRunners = [
+      { id: 7, name: 'new"\n  runner 1 "forged', account_id: "org_b" },
+      { id: 5, name: "mid", account_id: "org_a" },
+      { id: 2, name: "old", account_id: "org_a" },
+    ];
+    fake.state.d1Query = (db, sql) => {
+      if (db === "fyrden-directory" && sql.includes("FROM ci_runners")) queries.push(sql);
+      return undefined;
+    };
+    const migrated = fake.state.migrated.length;
+    await expect(
+      deploy(deps(fake.runner, { plan: "free", now: () => at, ci: { runners: "on" } }).d),
+    ).rejects.toThrow(
+      /3 runners serve this deployment, more than its fleet of 2[\s\S]*runner 7 "new\\"\\n {2}runner 1 \\"forged" \(account org_b\)/,
+    );
+    expect(fake.state.migrated.length).toBe(migrated);
+    expect(queries.at(-1)).toContain(`expires_at > ${at}`);
+    expect(queries.at(-1)).toContain("revoked_at IS NULL");
+    // Within the cap, or with runners off, it goes ahead.
+    await deploy(deps(fake.runner, { plan: "free", ci: { runners: "on", fleet: 3 } }).d);
+    await deploy(deps(fake.runner, { plan: "free" }).d);
+    await deploy(deps(fake.runner, { plan: "paid" }).d);
   });
 
   it("turns live hints on when given, and off again when a later deploy leaves them out", async () => {

@@ -719,7 +719,7 @@ describe("the CI allowance", () => {
     expect(ciFleetCap({ FYRDEN_CI_FLEET: "7" })).toBe(7);
     expect(ciFleetCap({ FYRDEN_CI_FLEET: "x" })).toBe(2);
     expect(ciFleetCap({ FYRDEN_PLAN: "paid" })).toBeNull();
-    expect(ciFleetCap({ FYRDEN_PLAN: "paid", FYRDEN_CI_FLEET: "3" })).toBe(3);
+    expect(ciFleetCap({ FYRDEN_PLAN: "paid", FYRDEN_CI_FLEET: "3" })).toBeNull();
     expect(CI_POLL_BUDGET).toBe(21_600);
     const two = fleetReservation(2);
     expect(two.worker_requests).toBe(45_360);

@@ -144,11 +144,12 @@ export function ciEnv(env: object): object {
   return { ...env, ...ciVariableOverrides };
 }
 
-/** The most runners the deployment holds: `FYRDEN_CI_FLEET`, else Free's default; Paid: none unless set. */
+/** The most runners a Free deployment holds: `FYRDEN_CI_FLEET`, else Free's default. Paid: none. */
 export function ciFleetCap(env: object): number | null {
+  if (workersPlan(env) === "paid") return null;
   const raw = (env as { FYRDEN_CI_FLEET?: unknown }).FYRDEN_CI_FLEET;
   if (typeof raw === "string" && /^(0|[1-9][0-9]{0,5})$/.test(raw)) return Number(raw);
-  return workersPlan(env) === "paid" ? null : CI_FREE_FLEET;
+  return CI_FREE_FLEET;
 }
 
 /**
