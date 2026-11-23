@@ -16,8 +16,16 @@ import {
 import { type CiKeyring, openSecretValue, unwrapDataKey } from "../../ci/envelope.js";
 import type { SecretMasksAnswer } from "./logs.js";
 
+/** A secret opened for a job, with where it was read from, for the delivery audit. */
+export interface DeliveredSecret extends SecretMaskOffer {
+  /** `org` or the repository id. */
+  readonly scope: string;
+  /** Its data key generation. */
+  readonly generation: number;
+}
+
 export type ReadSecrets =
-  | { readonly ok: true; readonly secrets: readonly SecretMaskOffer[] }
+  | { readonly ok: true; readonly secrets: readonly DeliveredSecret[] }
   /** Some do not open: their names, never their values. */
   | { readonly ok: false; readonly code: "secrets_unavailable"; readonly names: readonly string[] }
   /** Their value text, counting each, is more than a job is given: their names and sizes, unopened. */
@@ -132,7 +140,7 @@ export async function readSecrets(
         key.generation,
         await unwrapDataKey(keys, { accountId, generation: key.generation }, key),
       );
-    const secrets: SecretMaskOffer[] = [];
+    const secrets: DeliveredSecret[] = [];
     const unavailable: string[] = [];
     for (const e of answer.value.entries) {
       const dataKey = dataKeys.get(e.generation);
@@ -144,7 +152,7 @@ export async function readSecrets(
           e,
         ));
       if (value === undefined) unavailable.push(e.name);
-      else secrets.push({ name: e.name, value });
+      else secrets.push({ name: e.name, value, scope: e.scope, generation: e.generation });
     }
     if (unavailable.length > 0)
       return { ok: false, code: "secrets_unavailable", names: unavailable };
@@ -164,7 +172,7 @@ function listed(items: readonly string[]): string {
 
 /** The job's error when secrets do not open: their names. */
 export function unavailableError(names: readonly string[]): string {
-  return `secrets_unavailable: these secrets do not open with the deployment's CI keys: ${listed(names)}`;
+  return `secrets_unavailable: these secrets do not open: set them again (${listed(names)})`;
 }
 
 const LIMITS: Record<Extract<SecretMasksAnswer, { code: "secrets_unmaskable" }>["limit"], string> =

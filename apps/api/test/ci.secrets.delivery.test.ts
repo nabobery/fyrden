@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ciSecretKeys, sealSecretValue, unwrapDataKey } from "../src/ci/envelope.js";
 import { accountHooks, type OrgDO } from "../src/do/OrgDO.js";
 import type { RunDO } from "../src/do/RunDO.js";
-import { RECORD_TASK_SQL } from "../src/do/run/dispatch.js";
+import { DELIVERY_AUDIT_SQL, RECORD_TASK_SQL } from "../src/do/run/dispatch.js";
 import { deliveryBound, deliveryMemory } from "../src/do/run/secrets.js";
 import { dispatchHooks, SECRETS_RETRY_MS } from "../src/runner/dispatch.js";
 import { Result } from "../src/runner/proto/messages.js";
@@ -470,6 +470,105 @@ describe("offers and masking", () => {
   });
 });
 
+// ------------------------------------------------------------------ the delivery audit
+
+/** The `ci.secrets.deliver` rows of account `accountId`, oldest first. */
+async function deliveries(accountId: string) {
+  const { results } = await env.DIRECTORY.prepare(
+    "SELECT actor_id, details FROM audit_log WHERE target_id = ? AND action = 'ci.secrets.deliver' ORDER BY seq",
+  )
+    .bind(accountId)
+    .all<{ actor_id: string | null; details: string }>();
+  return results.map((r) => ({ actor: r.actor_id, ...JSON.parse(r.details) }));
+}
+
+describe("the delivery audit", () => {
+  it("records which secrets an assignment delivered: scope, name and generation, never a value", async () => {
+    const f = await orgRepo();
+    const own = await repoSecret(f, "REPO_ONE");
+    const shared = await orgSecret(f, "ORG_ONE");
+    const { runId, task } = await delivered(f, reading("REPO_ONE", "ORG_ONE"));
+    const rows = await deliveries(f.org.id);
+    expect(rows).toEqual([
+      {
+        actor: null,
+        repo_id: f.repo.id,
+        run_id: runId,
+        job_id: expect.any(Number),
+        task_id: task.id,
+        secrets: [
+          { scope: "org", name: "ORG_ONE", generation: 1 },
+          { scope: f.repo.id, name: "REPO_ONE", generation: 1 },
+        ],
+      },
+    ]);
+    const text = JSON.stringify(rows);
+    expect(text).not.toContain(own);
+    expect(text).not.toContain(shared);
+  });
+
+  it("records a delivery near the most a job can get, names at their longest", async () => {
+    const f = await orgRepo();
+    // 199 secrets (the job token's masks keep it within the 200 mask values), 255-character names.
+    const long = (k: number) => `S${String(k).padStart(3, "0")}${"X".repeat(251)}`;
+    await orgSecret(f, long(0));
+    await plant(
+      f,
+      "org",
+      Array.from({ length: 99 }, (_, i) => ({
+        name: long(i + 1),
+        value: secretValue(7),
+        visibility: "all" as const,
+      })),
+    );
+    await repoSecret(f, long(100));
+    await plant(
+      f,
+      f.repo.id,
+      Array.from({ length: 98 }, (_, i) => ({ name: long(i + 101), value: secretValue(7) })),
+    );
+    const { task } = await delivered(f, dynamic);
+    expect(Object.keys(ownSecrets(task))).toHaveLength(199);
+    const [row] = await deliveries(f.org.id);
+    expect(row?.secrets).toHaveLength(199);
+    expect(row?.secrets[0]).toEqual({ scope: "org", name: long(0), generation: 1 });
+  });
+
+  it("writes nothing for a job given no secret, or one whose secrets do not open", async () => {
+    const f = await orgRepo();
+    await repoSecret(f, "A");
+    await delivered(f, workflow(job("a")));
+    await runInDurableObject(account(f), (_: OrgDO, state) => {
+      state.storage.sql.exec("UPDATE ci_data_keys SET nonce = ?", btoa("x".repeat(12)));
+    });
+    const { task } = await deliver(f, reading("A"));
+    expect(task).toBeUndefined();
+    expect(await deliveries(f.org.id)).toEqual([]);
+  });
+
+  it("writes a row for each offer that delivers, and none for a confirmed task offered again", async () => {
+    const f = await orgRepo();
+    const runner: RegisteredRunner = await registerRunner(f.org.login, f.owner);
+    const version = await primed(f);
+    await repoSecret(f, "A");
+    await started(f, reading("A"));
+    const first = (await fetchTask(runner, version)).task;
+    const again = (await fetchTask(runner, version)).task;
+    if (!first || !again) throw new Error("not offered twice");
+    expect(again.id).toBe(first.id);
+    expect((await deliveries(f.org.id)).map((r) => r.task_id)).toEqual([first.id, first.id]);
+    // The statement's predicate is the record's: once confirmed, a re-offer records nothing.
+    const row = await taskRow(first.id);
+    await env.DIRECTORY.prepare("UPDATE ci_tasks SET confirmed_at = 1 WHERE id = ?")
+      .bind(first.id)
+      .run();
+    const audited = await env.DIRECTORY.prepare(DELIVERY_AUDIT_SQL)
+      .bind(first.id, row?.task, 1, f.org.id, "{}")
+      .run();
+    expect(audited.meta.changes).toBe(0);
+  });
+});
+
 // ------------------------------------------------------------------ failures
 
 describe("failures fail closed", () => {
@@ -492,7 +591,7 @@ describe("failures fail closed", () => {
       const [only] = await jobsOf(runId);
       expect(only).toMatchObject({ status: "completed", conclusion: "failure" });
       expect(only?.error).toBe(
-        `secrets_unavailable: these secrets do not open with the deployment's CI keys: ${broken === "data key" ? "A, B" : "A"}`,
+        `secrets_unavailable: these secrets do not open: set them again (${broken === "data key" ? "A, B" : "A"})`,
       );
       expect(only?.error).not.toContain(b);
       // No token was minted for the repository at all, mapped to an offer or not.
@@ -1367,9 +1466,7 @@ describe("a failed delivery and a late record of the same offer", () => {
     await drain(runId);
     const [only] = await jobsOf(runId);
     expect(only).toMatchObject({ status: "completed", conclusion: "failure" });
-    expect(only?.error).toBe(
-      "secrets_unavailable: these secrets do not open with the deployment's CI keys: A",
-    );
+    expect(only?.error).toBe("secrets_unavailable: these secrets do not open: set them again (A)");
   });
 });
 

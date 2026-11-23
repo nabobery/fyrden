@@ -221,6 +221,26 @@ To replace an account's data key (instance administrators):
    exposed credential is revoked and replaced, and `unreadable_secrets` is 0
    (or the remaining secrets are deleted).
 
+To see which jobs were given which secrets, read the delivery audit. Each
+assignment that delivers secrets writes one `ci.secrets.deliver` row to the
+directory's `audit_log`, in the same batch that records the task, before
+the runner gets anything: its `target_id` is the account id and its
+`details` name the repository, run, job and task, and each secret's scope
+(`org` or a repository id), name and data key generation, never a value.
+
+```sh
+npx wrangler d1 execute fyrden-directory --remote --command \
+  "SELECT at, details FROM audit_log WHERE action = 'ci.secrets.deliver' AND target_id = '<account_id>' ORDER BY seq"
+```
+
+Rows are archived to R2 and leave D1 7 days after archiving: older ones
+are in the `fyrden-assets` bucket under `audit/instance/<yyyy>/<mm>/<dd>/directory-…`
+(one NDJSON row per line), not under the account's own audit prefix. A row
+says a job **may** have received a secret (an assignment recorded and then
+refused still has one). A secret with no row was still exposed to whoever
+holds the old data key: change every credential of a replaced generation,
+not only the delivered ones.
+
 What the replacement does not remove:
 
 - Point-in-time recovery can restore the account's storage as it was up to

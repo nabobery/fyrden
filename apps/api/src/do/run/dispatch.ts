@@ -205,6 +205,16 @@ type MemoryReservation = NonNullable<ReturnType<DoMemoryBudget["tryReserve"]>>;
 export const RECORD_TASK_SQL = `UPDATE ci_tasks SET task = ?1
   WHERE id = ?2 AND superseded_at IS NULL AND confirmed_at IS NULL AND ended_at IS NULL`;
 
+/**
+ * The audit row of an assignment that delivers secrets (?1 the offer, ?2 the task, ?3 when, ?4
+ * the account, ?5 the details), in the batch after `RECORD_TASK_SQL`: written exactly when the
+ * record is, under the same predicate, so no answer carrying secrets leaves without it.
+ */
+export const DELIVERY_AUDIT_SQL = `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+  SELECT ?3, NULL, NULL, 'ci.secrets.deliver', ?4, ?5, NULL
+  WHERE EXISTS (SELECT 1 FROM ci_tasks WHERE id = ?1 AND task = ?2 AND superseded_at IS NULL
+    AND confirmed_at IS NULL AND ended_at IS NULL)`;
+
 /** A job token outlives its job's timeout by this. Proposed. */
 const JOB_TOKEN_GRACE_MS = 10 * 60_000;
 /** And never lives longer than this (GitHub's ceiling for a self-hosted job's token). */
@@ -430,12 +440,34 @@ export class RunDispatch {
     );
     await host.hooks.beforeTaskRecord?.();
     const db = host.env.DIRECTORY;
-    this.#count("ci_task_assigned", 3);
-    const [recorded, earlier, offer] = await db.batch([
+    const record = [
       db.prepare(RECORD_TASK_SQL).bind(ref.task, wireId),
       db.prepare("SELECT token_id FROM ci_job_tokens WHERE task_id = ?").bind(wireId),
       db.prepare("SELECT confirmed_at, task, ended_at FROM ci_tasks WHERE id = ?").bind(wireId),
-    ]);
+    ];
+    // Last, so the results above keep their places; it still runs after the record.
+    if (secrets.length > 0)
+      record.push(
+        db.prepare(DELIVERY_AUDIT_SQL).bind(
+          wireId,
+          ref.task,
+          host.now(),
+          accountId,
+          JSON.stringify({
+            repo_id: run?.repo_id ?? null,
+            run_id: run?.run_id ?? null,
+            job_id: ref.jobId,
+            task_id: wireId,
+            secrets: secrets
+              .map((s) => ({ scope: s.scope, name: s.name, generation: s.generation }))
+              .sort((a, b) =>
+                a.scope === b.scope ? (a.name < b.name ? -1 : 1) : a.scope < b.scope ? -1 : 1,
+              ),
+          }),
+        ),
+      );
+    this.#count("ci_task_assigned", record.length);
+    const [recorded, earlier, offer] = await db.batch(record);
     if ((recorded?.meta.changes ?? 0) === 0) {
       const row = offer?.results[0] as
         | { confirmed_at: number | null; task: number | null; ended_at: number | null }
