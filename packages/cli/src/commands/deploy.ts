@@ -30,6 +30,11 @@ export interface CiSettings {
   /** `FYRDEN_CI_MAX_JOB_MINUTES` (Free). */
   maxJobMinutes?: number;
   /**
+   * `FYRDEN_CI_RUN_RETENTION_DAYS`: how long a finished run is kept, 7 to 400
+   * days; left out, 90. Applies to runs already finished too.
+   */
+  runRetentionDays?: number;
+  /**
    * `FYRDEN_CI_SINCE` while runners are on. Left out: the live version's while
    * runners stay on, else the deploy's time.
    */
@@ -214,6 +219,7 @@ const DEPLOY_SWITCHES = new Set([
   "FYRDEN_CI_FLEET",
   "FYRDEN_CI_DAILY",
   "FYRDEN_CI_MAX_JOB_MINUTES",
+  "FYRDEN_CI_RUN_RETENTION_DAYS",
 ]);
 
 /** How far ahead of the clock the API still applies `FYRDEN_CI_SINCE` (apps/api `MAX_CUTOFF_LEAD_MS`). */
@@ -598,6 +604,9 @@ function ciVariables(deps: DeployDeps): {
     ...(settings.daily !== undefined && { FYRDEN_CI_DAILY: settings.daily }),
     ...(settings.maxJobMinutes !== undefined && {
       FYRDEN_CI_MAX_JOB_MINUTES: String(settings.maxJobMinutes),
+    }),
+    ...(settings.runRetentionDays !== undefined && {
+      FYRDEN_CI_RUN_RETENTION_DAYS: String(settings.runRetentionDays),
     }),
   };
   if (on && deps.plan === "free")

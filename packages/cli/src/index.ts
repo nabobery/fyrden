@@ -31,6 +31,7 @@ const USAGE = `usage:
                                  [--public-origin https://HOST]]
                 [--ci-runners on|off] [--ci-fleet N] [--ci-since TIME]
                 [--ci-daily resource=n,...] [--ci-max-job-minutes N]
+                [--ci-run-retention-days N]
                                      create resources, migrate and deploy both Workers;
                                      Paid: N calls to D1, R2 and Durable Objects an invocation
                                      (1,000 to 10,000,000; default 1,000);
@@ -60,7 +61,9 @@ const USAGE = `usage:
                                      refused while more serve), CI's daily allowance per
                                      resource (the watched-activity ones, worker_requests and
                                      r2_class_b; refused past what Free leaves) and its longest
-                                     job (1 to 7,200 minutes, default 180)
+                                     job (1 to 7,200 minutes, default 180); finished runs kept
+                                     N days (7 to 400; a deploy without it keeps 90, so give it
+                                     every deploy: a lower N erases runs already past it)
   fyrden doctor                      check login, resources and D1 schemas without changing anything
   fyrden destroy [--yes]             list what deploy created; with --yes delete it all (data loss)
   ${REPAIR_USAGE}
@@ -199,6 +202,7 @@ export function parseDeployArgs(args: readonly string[]):
     "--ci-fleet",
     "--ci-daily",
     "--ci-max-job-minutes",
+    "--ci-run-retention-days",
     "--ci-since",
   ];
   for (let i = 0; i < args.length; i += 2) {
@@ -339,7 +343,14 @@ function ciArgs(given: ReadonlyMap<string, string>, plan: Plan): CiSettings | un
   const daily = given.get("--ci-daily");
   const maxJob = given.get("--ci-max-job-minutes");
   const since = given.get("--ci-since");
+  const retention = given.get("--ci-run-retention-days");
   if (runners !== undefined && runners !== "on" && runners !== "off") return null;
+  // As the API reads it (apps/api/src/do/run/retention.ts): a whole number of days, 7 to 400.
+  if (
+    retention !== undefined &&
+    (!/^\d+$/.test(retention) || Number(retention) < 7 || Number(retention) > 400)
+  )
+    return null;
   if (fleet !== undefined && (plan !== "free" || !/^(0|[1-9]\d{0,5})$/.test(fleet))) return null;
   if (daily !== undefined && (plan !== "free" || !validAllowance(daily, CI_RESOURCES))) return null;
   if (
@@ -354,6 +365,7 @@ function ciArgs(given: ReadonlyMap<string, string>, plan: Plan): CiSettings | un
     ...(fleet !== undefined && { fleet: Number(fleet) }),
     ...(daily !== undefined && { daily }),
     ...(maxJob !== undefined && { maxJobMinutes: Number(maxJob) }),
+    ...(retention !== undefined && { runRetentionDays: Number(retention) }),
     ...(since !== undefined && { since }),
   };
   return Object.keys(settings).length > 0 ? settings : undefined;
