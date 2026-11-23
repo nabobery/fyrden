@@ -26,8 +26,15 @@ export interface BuiltUnder {
   readonly ownerGen?: number;
 }
 
-/** What records a run in its repository (the repository object's `registerRun`). */
+/** What records a run in its repository (the repository object's `registerRun` and `forgetRun`). */
 export interface RunRegistrar {
+  forgetRun(input: { readonly runId: string }): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+  >;
   registerRun(input: {
     readonly runId: string;
     readonly sha: string;
@@ -67,7 +74,8 @@ export async function startRunFrom(
   reachableVia?: string,
 ): Promise<StartRunAnswer> {
   const reserved = await env.RUN.getByName(spec.runId).reserve(spec);
-  if (!reserved.ok) return reserved;
+  if (!reserved.ok)
+    return reserved.code === "run_erased" ? forgotten(repo, spec, reserved) : reserved;
   const registered = await repo.registerRun({
     runId: spec.runId,
     sha: spec.sha,
@@ -77,8 +85,22 @@ export async function startRunFrom(
   });
   if (!registered.ok) return registered;
   // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-  return (await env.RUN.getByName(spec.runId).create(
+  const created = (await env.RUN.getByName(spec.runId).create(
     spec,
     builtUnder?.owner,
   )) as unknown as CreateAnswer;
+  return !created.ok && created.code === "run_erased" ? forgotten(repo, spec, created) : created;
+}
+
+/**
+ * A run erased or retiring (expired) is forgotten by its repository again
+ * before its start is answered: a retried start may have recorded it after
+ * it was forgotten, or the forget may not have finished. A failure throws,
+ * so the trigger retries the start and reaches this again.
+ */
+async function forgotten<A>(repo: RunRegistrar, spec: RunSpec, answer: A): Promise<A> {
+  const forgot = await repo.forgetRun({ runId: spec.runId });
+  if (!forgot.ok && forgot.code !== "repo_not_found")
+    throw new Error(`${forgot.code}: the erased run ${spec.runId} could not be forgotten`);
+  return answer;
 }

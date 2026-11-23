@@ -2591,6 +2591,28 @@ describe("the end", () => {
     });
     expect(await socket.closed).toEqual({ code: 4404 });
   });
+
+  it("closes every socket 4404 when the run's retirement begins, while its repository cannot forget it", async () => {
+    const t = await withTask();
+    const socket = await watch(t, t.f.owner.token);
+    const done = await runStub(t.runId).completeTask(
+      { jobId: t.jobId, task: t.number },
+      { result: "success", logComplete: false },
+    );
+    expect(done.ok).toBe(true);
+    await drain(t.runId);
+    await inRun(t.runId, async (r) => {
+      r.policy = { ...r.policy, retentionMs: 1 };
+      r.hooks.beforeRepoCall = (op) => {
+        if (op === "forgetRun") throw new Error("the repository could not be reached");
+      };
+      const later = now(t.runId) + 1;
+      (r.context as { now: () => number }).now = () => later;
+      await r.ciReconcileAt(later);
+    });
+    expect(await socket.closed).toEqual({ code: 4404 });
+    expect(await inRun(t.runId, (r) => r.engine.run() !== undefined)).toBe(true);
+  });
 });
 
 // ------------------------------------------------------------------ client messages

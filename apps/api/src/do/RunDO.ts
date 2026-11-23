@@ -447,10 +447,25 @@ export class RunDO extends MigratingDO {
     return latest.completed_at + this.policy.retentionMs;
   }
 
-  /** Whether the run's retention ended. */
+  /**
+   * Whether the run's retention ended. Once its retirement began, it stays
+   * ended whatever the retention becomes: the repository may have forgotten
+   * the run already, so it must not run again.
+   */
   #expired(): boolean {
+    if (this.#retiring()) return true;
     const at = this.#expiresAt();
     return at !== undefined && at <= this.context.now();
+  }
+
+  /** Whether the run's retirement began (its job is queued) and has not ended. */
+  #retiring(): boolean {
+    return (
+      this.engine.rows(
+        "SELECT 1 FROM jobs WHERE job_id = ? AND state IN ('queued', 'running')",
+        RUN_JOB.retire,
+      ).length > 0
+    );
   }
 
   /** Whether the run is answered as no run: erased, or expired and about to be. */
@@ -470,6 +485,12 @@ export class RunDO extends MigratingDO {
 
   #reserve(spec: RunSpec, digest: string): ReserveAnswer {
     if (this.#erased()) return { ok: false, code: "run_erased" };
+    if (this.#expired()) {
+      // Erased in all but storage: a retried start must not record it again. Its retirement
+      // begins here, so it holds once the caller has the repository forget the run.
+      this.jobs.ensure("run_retire", RUN_JOB.retire);
+      return { ok: false, code: "run_erased" };
+    }
     const existing = this.engine.rows<{ repo_id: string; spec_digest: string | null }>(
       "SELECT repo_id, spec_digest FROM run_identity WHERE id = 1",
     )[0];
@@ -1721,6 +1742,7 @@ export class RunDO extends MigratingDO {
       handlers[kind] = this.#marked(kind, handler);
     // Never exhausts, so never marked: nothing else would visit a finished run again.
     handlers.run_reconcile = { runSlice: () => this.#reconcile() };
+    handlers.run_retire = { runSlice: (job) => this.#retire(job) };
     handlers.run_approval = { runSlice: () => this.#notifyApproval() };
     return handlers;
   }
@@ -1863,6 +1885,11 @@ export class RunDO extends MigratingDO {
    */
   async #reconcile(): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
     if (!this.engine.run()) return { done: true };
+    if (this.#expired()) {
+      // Its retention ended: retired from here on, by a job of its own that never gives up.
+      this.jobs.ensure("run_retire", RUN_JOB.retire);
+      return { done: true };
+    }
     const outcome = await this.#register();
     if (outcome === "gone") {
       await this.#repositoryGone();
@@ -1909,6 +1936,65 @@ export class RunDO extends MigratingDO {
     }
   }
 
+  /**
+   * Retires the expired run: sends its check outbox once (best effort), so
+   * a required check is not left pending; asks the repository to forget it;
+   * then erases it. A failure is retried at the sweep's interval, the run
+   * kept and answered as no run, and never ends the job: once begun, the
+   * retirement holds whatever the retention becomes. Work still owed then
+   * is dropped, with a warning naming it.
+   */
+  async #retire(
+    job: Job,
+  ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+    const run = this.engine.run();
+    if (!run) return { done: true };
+    const retry = { done: false as const, cursor: null, runAfterMs: this.policy.sweepMs };
+    // Answered as no run already: its live log sockets close now, not once the erasure succeeds.
+    this.viewers.erased();
+    try {
+      await this.#flushChecks(job);
+    } catch (error) {
+      this.#log.warn("check updates of a retiring run not sent", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      const answer = await this.#repoCall(
+        "forgetRun",
+        (repo) =>
+          // The RPC stub's type of a union answer is not assignable to the union; it is the union.
+          repo.forgetRun({ runId: run.run_id }) as unknown as ReturnType<RepoDO["forgetRun"]>,
+      );
+      if (!answer.ok && answer.code !== "repo_not_found") {
+        this.#log.warn("retiring run not forgotten by its repository", { code: answer.code });
+        return retry;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!repoGone(message)) {
+        this.#log.warn("retiring run not forgotten by its repository", { error: message });
+        return retry;
+      }
+    }
+    try {
+      const owed = this.#owedNames();
+      await this.erase(run.repo_id);
+      // Counted once, when the run is gone: a retry before then may still deliver the work.
+      if (owed.length > 0) {
+        this.#log.warn("a run retired with work still owed", { owed });
+        for (const kind of owed) this.context.metrics.count("ci.run_retired_owed", { owed: kind });
+      }
+    } catch (error) {
+      // Its repository forgot it: retried until erased, never given up as a failed job.
+      this.#log.warn("retiring run not erased", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return retry;
+    }
+    return { done: true };
+  }
+
   /** Retries exhausted jobs while anything is owed; ends when nothing is. */
   #sweep(): { done: true } | { done: false; cursor: null; runAfterMs: number } {
     const faults = this.engine.rows<{ kind: JobKind; job_id: string }>(
@@ -1949,6 +2035,27 @@ export class RunDO extends MigratingDO {
     return this.#reservations.owed();
   }
 
+  /** What the run still owes outside the object, by name; nothing scheduled (unlike `#owed`). */
+  #owedNames(): string[] {
+    const run = this.engine.run();
+    if (!run) return [];
+    const owed: string[] = [];
+    if (
+      this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
+        .length > 0
+    )
+      owed.push("checks");
+    if (run.queue_synced_rev < run.queue_rev) owed.push("dispatch");
+    if (
+      this.engine.rows("SELECT 1 FROM run_owners WHERE state IN ('admitting', 'releasing') LIMIT 1")
+        .length > 0
+    )
+      owed.push("concurrency");
+    if (run.task_end_acked < run.task_end_seq) owed.push("task_end");
+    if (this.#reservations.owed()) owed.push("reservations");
+    return owed;
+  }
+
   override async alarm(): Promise<void> {
     if (this.#erased()) {
       await this.ctx.storage.deleteAlarm();
@@ -1957,7 +2064,63 @@ export class RunDO extends MigratingDO {
     await measureInvocation(
       this.context.metrics,
       { where: "do", op: "alarm", doClass: "RunDO" },
-      () => this.jobs.runDue(this.#handlers(), this.memory, this.context.now() + ALARM_BUDGET_MS),
+      () => this.jobs.runDue(this.#due(), this.memory, this.context.now() + ALARM_BUDGET_MS),
     );
+  }
+
+  /**
+   * The handlers an alarm runs. Once the run retires, only its retirement
+   * acts: any other job's slice ends it at once (the erasure deletes it
+   * anyway), so none acts for a run its repository may have forgotten, such
+   * as a concurrency request replayed after the coordinator forgot the run.
+   */
+  #due(): Partial<Record<JobKind, JobHandler>> {
+    const handlers = this.#handlers();
+    for (const kind of Object.keys(handlers) as JobKind[]) {
+      const handler = handlers[kind] as JobHandler;
+      // Decided as each slice starts: a retirement may begin within this alarm.
+      if (kind !== "run_retire")
+        handlers[kind] = {
+          ...handler,
+          runSlice: (job) =>
+            this.#retiring() ? Promise.resolve({ done: true }) : handler.runSlice(job),
+        };
+    }
+    return handlers;
+  }
+
+  /**
+   * Runs the run's weekly check as at `at` (never earlier than now), then a
+   * retirement it began, slice by slice: what the alarm would do at `at`
+   * (a local check of retention). No route of the Worker reaches it.
+   */
+  async ciReconcileAt(
+    at: number,
+  ): Promise<{ erased: boolean; jobs: string[]; alarm: number | null }> {
+    const clock = this.context as { now: () => number };
+    const real = clock.now;
+    clock.now = () => Math.max(at, real());
+    try {
+      const handlers = this.#handlers();
+      for (const [jobId, kind] of [
+        [RUN_JOB.reconcile, "run_reconcile"],
+        [RUN_JOB.retire, "run_retire"],
+      ] as const) {
+        const handler = handlers[kind];
+        if (handler && !this.#erased())
+          await this.jobs.runJob(jobId, handler, this.memory, real() + ALARM_BUDGET_MS);
+      }
+    } finally {
+      clock.now = real;
+    }
+    return {
+      erased: this.#erased(),
+      jobs: this.engine
+        .rows<{ job_id: string; state: string }>(
+          "SELECT job_id, state FROM jobs WHERE state IN ('queued', 'running') ORDER BY job_id",
+        )
+        .map((row) => `${row.job_id}:${row.state}`),
+      alarm: await this.ctx.storage.getAlarm(),
+    };
   }
 }

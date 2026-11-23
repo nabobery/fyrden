@@ -64,6 +64,7 @@ export const RUN_JOB = {
   logViewers: "log-viewers",
   concurrency: "concurrency",
   reconcile: "reconcile",
+  retire: "retire",
   approval: "approval",
 } as const;
 
