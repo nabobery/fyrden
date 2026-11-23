@@ -33,7 +33,7 @@ export function mcpAnnotations(op: OperationDef): McpAnnotations {
   };
 }
 
-/** What an idempotency key may be, as a REST header or an MCP argument: 1-255 printable ASCII characters. */
+/** What an idempotency key may be, as a REST header or an MCP argument: 1-255 visible ASCII characters, no spaces (`!` to `~`). */
 export const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/;
 
 /** The MCP argument that carries a keyed operation's idempotency key (REST: `Idempotency-Key`). */
@@ -61,7 +61,7 @@ export function mcpInput(op: OperationDef): z.ZodType {
         .regex(IDEMPOTENCY_KEY)
         .optional()
         .describe(
-          "Makes the call safe to retry: calls by the same token with the same key and arguments run once, within 24 hours, and a retry gets the first answer (as REST's Idempotency-Key). 1-255 printable ASCII characters, such as a UUID.",
+          "Makes the call safe to retry: calls by the same token with the same key and arguments run once, within 24 hours, and a retry gets the first answer (as REST's Idempotency-Key). 1-255 visible ASCII characters with no spaces, such as a UUID.",
         ),
     });
     keyedInputs.set(op, input);

@@ -1227,7 +1227,7 @@ already got, without checking its access to the repository again.
 
 | What | Value |
 |---|---|
-| Key | 1-255 printable ASCII characters (else REST answers 422 `invalid_idempotency_key`; MCP answers the tool's argument error, as for any invalid argument), per token |
+| Key | 1-255 visible ASCII characters, no spaces (`!` to `~`; else REST answers 422 `invalid_idempotency_key`; MCP answers the tool's argument error, as for any invalid argument), per token |
 | Kept | 24 hours, then forgotten (the cron deletes expired keys) |
 | A retry of the same request | The first answer again (over REST with `Idempotent-Replayed: true`); nothing runs twice |
 | The same key, another request | 422 `idempotency_key_reused` (another operation, or another input) |

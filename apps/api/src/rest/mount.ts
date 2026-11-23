@@ -274,7 +274,7 @@ export function mountOperation(
           c,
           422,
           "invalid_idempotency_key",
-          "An Idempotency-Key is 1-255 printable ASCII characters.",
+          "An Idempotency-Key is 1-255 visible ASCII characters, with no spaces.",
         );
       const result = await executeOperation(op, handler, opContext(c), read.input, {
         ...(key !== undefined && { idempotencyKey: key }),

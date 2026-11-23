@@ -716,7 +716,7 @@ describe("workflow_dispatch over MCP", () => {
     expect(await dispatchRuns(f)).toHaveLength(2);
   });
 
-  it("refuse a key that is not 1-255 printable ASCII before anything runs", async () => {
+  it("refuse a key that is not 1-255 visible ASCII characters before anything runs", async () => {
     const f = await dispatchRepo();
     for (const key of ["", "has space", "x".repeat(256), "é"]) {
       const answer = await callTool(
