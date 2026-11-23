@@ -173,6 +173,9 @@ describe("repository secrets", () => {
     await page.getByRole("button", { name: "Save secret" }).click();
     await see(page.getByRole("alert")).toContainText("not starting with a digit or GITHUB_");
     await see(page.getByLabel("Name")).toHaveAttribute("aria-invalid", "true");
+    // Refused, both fields stay in the browser's own boxes for a retry (the value never came back).
+    await see(page.getByLabel("Name")).toHaveValue("GITHUB_TOKEN");
+    await see(page.getByLabel("Value")).toHaveValue(CANARY);
     await accessible("new repository secret, refused name");
   });
 
@@ -366,6 +369,8 @@ describe("organization secrets and variables", () => {
     await page.getByRole("button", { name: "Save secret" }).click();
     await see(page).toHaveURL(`${orgSettings()}/secrets/actions/DEPLOY/edit?created=DEPLOY`);
     await see(page.getByText("No repository can use it until you add one.")).toBeVisible();
+    // The value typed on the new page is not carried into the next one.
+    await see(page.getByLabel("Value")).toHaveValue("");
     await accessible("organization secret, selected, none");
 
     await page.getByLabel("Add repository").fill("nope");

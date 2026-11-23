@@ -1,5 +1,5 @@
 import { ciName } from "@fyrden/domain";
-import { Form, Link, redirect, useActionData } from "react-router";
+import { Form, Link, redirect, useActionData, useLocation } from "react-router";
 import {
   describedBy,
   ErrorSummary,
@@ -125,6 +125,7 @@ export default function SecretForm({ loaderData }: Route.ComponentProps) {
   const result: Result | undefined = useActionData<typeof action>();
   const errors: FormErrors = result?.errors ?? {};
   const { shell, scope, secret, access } = loaderData;
+  const location = useLocation();
   return (
     <SettingsShell scope={shell} active="secrets">
       <section className="panel" aria-labelledby="secret-form">
@@ -144,7 +145,9 @@ export default function SecretForm({ loaderData }: Route.ComponentProps) {
           </p>
         )}
         <ErrorSummary errors={errors} />
-        <Form method="post" encType="multipart/form-data">
+        {/* Keyed by page: the value typed on the new page is not carried into the edit page
+            a save opens. */}
+        <Form key={location.pathname} method="post" encType="multipart/form-data">
           {!secret && (
             <>
               <label htmlFor="name">Name</label>
