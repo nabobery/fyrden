@@ -87,6 +87,12 @@ export interface RunPolicy {
    * erasure; an outage delays that, the check retrying every `sweepMs`. Proposed: 7 days.
    */
   readonly reconcileMs: number;
+  /**
+   * How long a run is kept after its latest attempt completed: then it is
+   * expired (answered as no run) and retired. The deployment's
+   * `FYRDEN_CI_RUN_RETENTION_DAYS`; 90 days by default, as on GitHub.
+   */
+  readonly retentionMs: number;
   /** Nodes one scheduling step decides at most, before it ends its invocation. Proposed. */
   readonly nodesPerStep: number;
   /** Expression work one step spends at most before it ends its invocation: four full budgets. */
@@ -107,6 +113,7 @@ export const RUN_DEFAULTS: RunPolicy = {
   checkFlushMs: 1_000,
   sweepMs: 30 * MIN,
   reconcileMs: 7 * 24 * 60 * MIN,
+  retentionMs: 90 * 24 * 60 * MIN,
   nodesPerStep: 32,
   stepWork: 4 * MAX_EXPRESSION_WORK,
   maxInstanceOutputBytes: 1024 * 1024,
@@ -968,6 +975,8 @@ export class RunEngine {
     this.#settleObsoleteChecks(n);
     this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
     this.#ensure("run_sweep", RUN_JOB.sweep, this.host.policy.sweepMs);
+    // The run's weekly check retires it at its expiry, not up to a week later.
+    this.#ensure("run_reconcile", RUN_JOB.reconcile, this.host.policy.retentionMs);
   }
 
   // ---------------------------------------------------------------- cancellation

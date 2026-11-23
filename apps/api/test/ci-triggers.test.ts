@@ -42,6 +42,7 @@ import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
   at,
+  createdAt,
   drain,
   jobsOf,
   runStub,
@@ -75,7 +76,8 @@ const checksOn = async (f: CiRepo, sha: string) =>
 /** Each run's due jobs run at a fixed clock, then a minute on, so its checks reach the repository. */
 async function settle(runIds: readonly string[]) {
   for (const id of runIds) {
-    await at(id, T0);
+    // From its creation: a run that failed to plan completed then, and T0 is past its retention.
+    await at(id, await createdAt(id));
     await drain(id);
     await advance(id, 60_000);
   }

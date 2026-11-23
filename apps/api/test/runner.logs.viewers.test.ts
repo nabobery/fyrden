@@ -2570,6 +2570,27 @@ describe("the end", () => {
       body: { code: "run_not_found" },
     });
   });
+
+  it("closes every socket 4404 once the run's retention ends, before the run is erased", async () => {
+    const t = await withTask();
+    const socket = await watch(t, t.f.owner.token);
+    const done = await runStub(t.runId).completeTask(
+      { jobId: t.jobId, task: t.number },
+      { result: "success", logComplete: false },
+    );
+    expect(done.ok).toBe(true);
+    await drain(t.runId);
+    expect((await runStub(t.runId).get())?.status).toBe("completed");
+    await inRun(t.runId, (r) => {
+      r.policy = { ...r.policy, retentionMs: 1 };
+    });
+    await at(t.runId, now(t.runId) + 1);
+    await inRun(t.runId, async (r) => {
+      r.policy = { ...r.policy, retentionMs: 1 };
+      await r.viewers.slice();
+    });
+    expect(await socket.closed).toEqual({ code: 4404 });
+  });
 });
 
 // ------------------------------------------------------------------ client messages

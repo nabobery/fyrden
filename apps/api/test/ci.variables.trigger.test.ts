@@ -44,6 +44,7 @@ import { ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
 import {
   at,
+  createdAt,
   drain,
   finish,
   inRun,
@@ -882,7 +883,8 @@ describe("the snapshot", () => {
     const f = await varsRepo("push", { N1: nul, N2: nul, N3: nul, N4: nul, N5: nul });
     await runTriggers(f.stub);
     const runId = await onlyRun(f, "push");
-    await at(runId, T0);
+    // From its creation: it failed then, and T0 is past its retention.
+    await at(runId, await createdAt(runId));
     await drain(runId);
     const view = await viewOf(runId);
     expect(view).toMatchObject({ status: "completed", conclusion: "failure", approval: null });

@@ -63,6 +63,7 @@ import {
   runCiPolicy,
   type WaitingFor,
 } from "./run/reservations.js";
+import { runRetentionDays } from "./run/retention.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -295,6 +296,11 @@ export class RunDO extends MigratingDO {
       },
       jobPolicy(env),
     );
+    this.policy = {
+      ...RUN_DEFAULTS,
+      retentionMs:
+        runRetentionDays(env, (message) => this.#log.warn(message)) * 24 * 60 * 60 * 1000,
+    };
     const host = this;
     this.engine = new RunEngine({
       storage: ctx.storage,
@@ -373,7 +379,7 @@ export class RunDO extends MigratingDO {
       log: this.#log,
       memory: this.memory,
       now: () => host.context.now(),
-      erased: () => host.#erased(),
+      erased: () => host.#hidden(),
       tx: (fn) => host.#tx(fn),
       sockets: (tag) => ctx.getWebSockets(tag),
       accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
@@ -426,6 +432,30 @@ export class RunDO extends MigratingDO {
 
   #erased(): boolean {
     return this.engine.rows("SELECT 1 FROM run_erasure WHERE id = 1").length > 0;
+  }
+
+  /**
+   * When the run's retention ends: `retentionMs` after its latest attempt
+   * completed; undefined while that attempt has not. Derived, never stored,
+   * so a re-run restarts it.
+   */
+  #expiresAt(): number | undefined {
+    const [latest] = this.engine.rows<{ status: string; completed_at: number | null }>(
+      "SELECT status, completed_at FROM run_attempts ORDER BY attempt DESC LIMIT 1",
+    );
+    if (latest?.status !== "completed" || latest.completed_at === null) return undefined;
+    return latest.completed_at + this.policy.retentionMs;
+  }
+
+  /** Whether the run's retention ended. */
+  #expired(): boolean {
+    const at = this.#expiresAt();
+    return at !== undefined && at <= this.context.now();
+  }
+
+  /** Whether the run is answered as no run: erased, or expired and about to be. */
+  #hidden(): boolean {
+    return this.#erased() || this.#expired();
   }
 
   #ci() {
@@ -599,7 +629,7 @@ export class RunDO extends MigratingDO {
    */
   approve(binding: string, approver: string): ApproveAnswer {
     return this.#tx((): ApproveAnswer => {
-      if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      if (this.#hidden() || !this.engine.run()) return { ok: false, code: "run_not_found" };
       this.#expireApproval();
       const approval = this.#approvalRow();
       if (!approval) return { ok: false, code: "not_waiting" };
@@ -624,7 +654,7 @@ export class RunDO extends MigratingDO {
    */
   supersede(): ApproveAnswer {
     return this.#tx((): ApproveAnswer => {
-      if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      if (this.#hidden() || !this.engine.run()) return { ok: false, code: "run_not_found" };
       const approval = this.#approvalRow();
       if (approval?.state === "superseded") return { ok: true };
       if (approval?.state !== "waiting") return { ok: false, code: "not_waiting" };
@@ -756,7 +786,7 @@ export class RunDO extends MigratingDO {
 
   /** The run as its current attempt stands; undefined when there is none (or it was erased). */
   get(): RunView | undefined {
-    return this.#erased() ? undefined : this.#view();
+    return this.#hidden() ? undefined : this.#view();
   }
 
   /** A page of an attempt's jobs (the current one by default), by job id after `after`. */
@@ -765,7 +795,7 @@ export class RunDO extends MigratingDO {
     after = 0,
     limit = 100,
   ): { jobs: JobView[]; next: number | null } | undefined {
-    if (this.#erased()) return undefined;
+    if (this.#hidden()) return undefined;
     const run = this.engine.run();
     if (!run) return undefined;
     const n = attempt ?? run.attempt;
@@ -812,7 +842,7 @@ export class RunDO extends MigratingDO {
     mode: "graceful" | "force",
   ): { ok: true } | { ok: false; code: "run_not_found" | "run_not_cancellable" } {
     return this.#tx(() => {
-      if (this.#erased() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      if (this.#hidden() || !this.engine.run()) return { ok: false, code: "run_not_found" };
       if (!this.engine.cancel(by, mode)) return { ok: false, code: "run_not_cancellable" };
       this.#endApproval("cancelled");
       return { ok: true };
@@ -826,7 +856,7 @@ export class RunDO extends MigratingDO {
         code: "run_not_found" | "run_not_completed" | "rerun_limit" | "approval_required";
       } {
     return this.#tx(() => {
-      if (this.#erased()) return { ok: false, code: "run_not_found" };
+      if (this.#hidden()) return { ok: false, code: "run_not_found" };
       const current = this.engine.current();
       if (!current) return { ok: false, code: "run_not_found" };
       // A run never approved stays unapproved: re-running it would start code no one approved.
@@ -1838,10 +1868,15 @@ export class RunDO extends MigratingDO {
       await this.#repositoryGone();
       return { done: true };
     }
+    if (outcome !== "ok") return { done: false, cursor: null, runAfterMs: this.policy.sweepMs };
+    // Checked again at its expiry, when that comes before the next week's check.
+    const expiresAt = this.#expiresAt();
+    const untilExpiry = expiresAt === undefined ? Infinity : expiresAt - this.context.now();
     return {
       done: false,
       cursor: null,
-      runAfterMs: outcome === "ok" ? this.policy.reconcileMs : this.policy.sweepMs,
+      runAfterMs:
+        untilExpiry > 0 ? Math.min(this.policy.reconcileMs, untilExpiry) : this.policy.reconcileMs,
     };
   }
 

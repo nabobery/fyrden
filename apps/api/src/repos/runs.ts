@@ -249,6 +249,7 @@ export async function approveWorkflowRunOperation(
     return {};
   }
   if (answer.ok) return {};
+  if (answer.code === "run_not_found") throw runNotFound();
   // The run ended unapproved in between: the repository records how, and nothing was approved.
   const ended = ((await runStub(ctx, input.run_id, "get").get()) as RunView | undefined)?.approval;
   if (ended && (ended.state === "cancelled" || ended.state === "expired")) {
