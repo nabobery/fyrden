@@ -67,4 +67,20 @@ export default [
     id: "repo.variable.edit",
   }),
   route(":owner/:repo/watching", "routes/repo.watching.tsx"),
+  route("settings/orgs/:org/secrets/actions", "routes/ci.secrets.tsx", { id: "org.secrets" }),
+  route("settings/orgs/:org/secrets/actions/new", "routes/ci.secret.tsx", {
+    id: "org.secret.new",
+  }),
+  route("settings/orgs/:org/secrets/actions/:name/edit", "routes/ci.secret.tsx", {
+    id: "org.secret.edit",
+  }),
+  route("settings/orgs/:org/variables/actions", "routes/ci.variables.tsx", {
+    id: "org.variables",
+  }),
+  route("settings/orgs/:org/variables/actions/new", "routes/ci.variable.tsx", {
+    id: "org.variable.new",
+  }),
+  route("settings/orgs/:org/variables/actions/:name/edit", "routes/ci.variable.tsx", {
+    id: "org.variable.edit",
+  }),
 ] satisfies RouteConfig;

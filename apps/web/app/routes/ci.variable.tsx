@@ -1,23 +1,35 @@
 import { ciName } from "@fyrden/domain";
 import { Form, Link, redirect, useActionData } from "react-router";
-import { describedBy, ErrorSummary, FieldError, When } from "../components/ci-settings-ui.js";
+import {
+  describedBy,
+  ErrorSummary,
+  FieldError,
+  RepositoryAccess,
+  VisibilityField,
+  When,
+} from "../components/ci-settings-ui.js";
 import { SettingsShell } from "../components/settings-shell.js";
 import { apiGet, assertSameOrigin } from "../lib/api.server.js";
 import {
   type CiScope,
+  editPath,
   errorsFor,
   type FormErrors,
   listPath,
   scopeOf,
   VALUE_TOO_LARGE,
+  type Visibility,
 } from "../lib/ci-settings.js";
 import {
   apiBase,
+  changeAccess,
   fitsValue,
+  loadAccess,
   loadShell,
   normalizeLineBreaks,
   problemOf,
   readValueForm,
+  visibilityOf,
   write,
 } from "../lib/ci-settings.server.js";
 import type { Route } from "./+types/ci.variable";
@@ -27,6 +39,7 @@ interface Variable {
   readonly value: string;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly visibility?: Visibility;
 }
 
 export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
@@ -45,11 +58,16 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   if (params.name)
     variable = await apiGet<Variable>(context, request, variablePath(scope, params.name));
   else await apiGet(context, request, `${variablesPath(scope)}?per_page=1`);
-  return { shell, scope, variable };
+  const access = await loadAccess(context, request, scope, "variable", variable);
+  return { shell, scope, variable, access };
 }
 
 /** A refused write: its errors and, a variable being readable, the value sent (to send again). */
-type Result = { readonly errors: FormErrors; readonly value?: string };
+type Result = {
+  readonly errors: FormErrors;
+  readonly value?: string;
+  readonly visibility?: Visibility;
+};
 
 export async function action({ request, context, params }: Route.ActionArgs) {
   assertSameOrigin(request);
@@ -72,24 +90,42 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     return redirect(`${listPath(scope, "variable")}?deleted=${encodeURIComponent(name)}`);
   }
 
+  if (params.name) {
+    const name = ciName("variable", params.name);
+    const changed = name && (await changeAccess(context, request, scope, "variable", name, form));
+    if (changed) return changed;
+  }
+
   const field = form.get("value");
   const value = normalizeLineBreaks(typeof field === "string" ? field : "");
+  const visibility = scope.kind === "organization" ? visibilityOf(form) : undefined;
+  // A refused save shows what was sent again: the value (readable) and the access chosen.
+  const sent = { value, ...(visibility && { visibility }) };
   const name = ciName("variable", params.name ?? String(form.get("name") ?? ""));
-  if (name === undefined) return { errors: nameError(), value } satisfies Result;
-  if (!fitsValue(value)) return { errors: { value: VALUE_TOO_LARGE }, value } satisfies Result;
+  if (name === undefined) return { errors: nameError(), ...sent } satisfies Result;
+  if (scope.kind === "organization" && visibility === undefined)
+    return {
+      errors: { visibility: "Choose which repositories can use it." },
+      value,
+    } satisfies Result;
+  const access = scope.kind === "organization" ? { visibility } : {};
+  if (!fitsValue(value)) return { errors: { value: VALUE_TOO_LARGE }, ...sent } satisfies Result;
   const result = params.name
-    ? await write(context, request, "PATCH", variablePath(scope, name), { name, value })
-    : await write(context, request, "POST", variablesPath(scope), { name, value });
+    ? await write(context, request, "PATCH", variablePath(scope, name), { name, value, ...access })
+    : await write(context, request, "POST", variablesPath(scope), { name, value, ...access });
   const problem = problemOf(result, request);
-  if (problem) return { errors: errorsFor("variable", scope, problem), value } satisfies Result;
-  const done = params.name ? "saved" : "created";
-  return redirect(`${listPath(scope, "variable")}?${done}=${encodeURIComponent(name)}`);
+  if (problem) return { errors: errorsFor("variable", scope, problem), ...sent } satisfies Result;
+  const done = `${params.name ? "saved" : "created"}=${encodeURIComponent(name)}`;
+  // A new variable for selected repositories reaches none yet: its page adds them.
+  if (!params.name && visibility === "selected")
+    return redirect(`${editPath(scope, "variable", name)}?${done}`);
+  return redirect(`${listPath(scope, "variable")}?${done}`);
 }
 
 export default function VariableForm({ loaderData }: Route.ComponentProps) {
   const result: Result | undefined = useActionData<typeof action>();
   const errors: FormErrors = result?.errors ?? {};
-  const { shell, scope, variable } = loaderData;
+  const { shell, scope, variable, access } = loaderData;
   const value = result?.value ?? variable?.value ?? "";
   return (
     <SettingsShell scope={shell} active="variables">
@@ -142,6 +178,14 @@ export default function VariableForm({ loaderData }: Route.ComponentProps) {
             secrets. At most 48 KiB. Line breaks are stored as LF.
           </p>
           <FieldError id="value-error" message={errors.value} />
+          {scope.kind === "organization" && (
+            <VisibilityField
+              chosen={result?.visibility ?? variable?.visibility}
+              stored={variable?.visibility}
+              error={errors.visibility}
+              secret={false}
+            />
+          )}
           <p>
             <button className="primary" type="submit" name="intent" value="save">
               Save variable
@@ -149,6 +193,7 @@ export default function VariableForm({ loaderData }: Route.ComponentProps) {
           </p>
         </Form>
       </section>
+      {access && <RepositoryAccess noun="variable" {...access} error={errors.repository} />}
       {variable && (
         <section className="panel" aria-labelledby="delete-variable">
           <h2 id="delete-variable">Delete this variable</h2>

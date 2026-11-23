@@ -18,7 +18,16 @@ import {
   readForm,
   signInUrl,
 } from "./api.server.js";
-import type { CiScope } from "./ci-settings.js";
+import {
+  type AccessRepository,
+  type CiKind,
+  type CiScope,
+  editPath,
+  errorsFor,
+  type FormErrors,
+  VISIBILITIES,
+  type Visibility,
+} from "./ci-settings.js";
 import type { PageLinks } from "./pages.js";
 import { sealBox } from "./sealed-box.server.js";
 import { pageUrl } from "./target.js";
@@ -207,4 +216,95 @@ export function shortValue(value: string): string {
     ? LIST_VALUE_CHARS - 1
     : LIST_VALUE_CHARS;
   return `${value.slice(0, end)}…`;
+}
+
+/** The visibility a form chose, if it is one. */
+export function visibilityOf(form: FormData): Visibility | undefined {
+  const value = form.get("visibility");
+  return VISIBILITIES.find((v) => v.value === value)?.value;
+}
+
+const entryPath = (scope: CiScope, kind: CiKind, name: string) =>
+  `${apiBase(scope)}/actions/${kind === "secret" ? "secrets" : "variables"}/${encodeURIComponent(name)}`;
+
+/** An organization entry's repositories, a page at a time (`repo_page`), when it lists them. */
+export async function loadAccess(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  scope: CiScope,
+  kind: CiKind,
+  entry: { readonly name: string; readonly visibility?: Visibility } | null,
+): Promise<{ repositories: readonly AccessRepository[]; total: number; pages: PageLinks } | null> {
+  if (scope.kind !== "organization" || entry?.visibility !== "selected") return null;
+  const page = pageNumber(request, "repo_page");
+  const list = await readList<{ total_count: number; repositories: AccessRepository[] }>(
+    context,
+    request,
+    `${entryPath(scope, kind, entry.name)}/repositories`,
+    ACCESS_PER_PAGE,
+    page,
+  );
+  return {
+    repositories: list.repositories,
+    total: list.total_count,
+    pages: numberedPages(request, "repo_page", page, ACCESS_PER_PAGE, list.total_count),
+  };
+}
+
+const ACCESS_PER_PAGE = 100;
+
+/**
+ * Adds a repository (by name, of the organization) to the entry `name`, or
+ * removes one (by id), one at a time: the API's item operations, so a list
+ * of up to 1,000 never has to fit one form. Null for any other intent.
+ */
+export async function changeAccess(
+  context: Readonly<RouterContextProvider>,
+  request: Request,
+  scope: CiScope,
+  kind: CiKind,
+  name: string,
+  form: FormData,
+): Promise<Response | { errors: FormErrors } | null> {
+  const intent = form.get("intent");
+  if (scope.kind !== "organization") return null;
+  if (intent !== "add-repository" && intent !== "remove-repository") return null;
+  const repository = String(form.get("repository") ?? "").trim();
+  const back = (notice: string) =>
+    redirect(`${editPath(scope, kind, name)}?${notice}=${encodeURIComponent(repository)}`);
+  let id: string;
+  if (intent === "add-repository") {
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(repository))
+      return { errors: { repository: "Not a repository of this organization." } };
+    const found = await apiCall<{ id: string }>(
+      context,
+      request,
+      "GET",
+      `/repos/${encodeURIComponent(scope.org)}/${encodeURIComponent(repository)}`,
+    );
+    if (found.status === 401) throw redirect(signInUrl(request));
+    if (found.status === 404)
+      return { errors: { repository: "Not a repository of this organization." } };
+    if (found.status !== 200)
+      return {
+        errors: errorsFor(
+          kind,
+          scope,
+          (found.body as unknown as Problem) ?? { status: found.status },
+        ),
+      };
+    id = found.body.id;
+  } else {
+    id = String(form.get("repository_id") ?? "");
+    if (!id) return { errors: { form: "Choose a repository to remove." } };
+  }
+  const result = await write(
+    context,
+    request,
+    intent === "add-repository" ? "PUT" : "DELETE",
+    `${entryPath(scope, kind, name)}/repositories/${encodeURIComponent(id)}`,
+  );
+  const problem = problemOf(result, request);
+  if (problem) return { errors: errorsFor(kind, scope, problem) };
+  return back(intent === "add-repository" ? "added" : "removed");
 }

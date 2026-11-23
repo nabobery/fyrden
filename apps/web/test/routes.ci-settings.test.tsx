@@ -578,3 +578,309 @@ describe("page paths", () => {
       expect(isApiPath(path), path).toBe(false);
   });
 });
+
+describe("organization secrets and variables", () => {
+  const org = { org: "acme" };
+  const secretsPath = "/settings/orgs/acme/secrets/actions";
+  const created = () => new Response(null, { status: 201 });
+  const updated = () => new Response(null, { status: 204 });
+
+  it("sets a secret with the visibility chosen, and needs one chosen", async () => {
+    const { context, calls } = api({
+      "GET /api/orgs/acme/actions/secrets/public-key": json(KEY),
+      "PUT /api/orgs/acme/actions/secrets/TOKEN": created,
+    });
+    const none = await secretAction({
+      request: multipartPost(`${secretsPath}/new`, { intent: "save", name: "TOKEN", value: "v" }),
+      context,
+      params: org,
+    } as never);
+    expect(none).toMatchObject({ errors: { visibility: expect.any(String) } });
+    expect(calls).toHaveLength(0);
+
+    const made = (await secretAction({
+      request: multipartPost(`${secretsPath}/new`, {
+        intent: "save",
+        name: "token",
+        value: "v",
+        visibility: "private",
+      }),
+      context,
+      params: org,
+    } as never)) as Response;
+    const put = await openPut(calls[1] as Request);
+    expect(put.value).toBe("v");
+    expect(put.body).toMatchObject({ visibility: "private", key_id: "key-1" });
+    expect(put.body).not.toHaveProperty("selected_repository_ids");
+    expect(made.headers.get("Location")).toBe(`${secretsPath}?created=TOKEN`);
+  });
+
+  it("sends a new secret for selected repositories to its edit page to add them", async () => {
+    const { context } = api({
+      "GET /api/orgs/acme/actions/secrets/public-key": json(KEY),
+      "PUT /api/orgs/acme/actions/secrets/TOKEN": created,
+    });
+    const made = (await secretAction({
+      request: multipartPost(`${secretsPath}/new`, {
+        intent: "save",
+        name: "TOKEN",
+        value: "v",
+        visibility: "selected",
+      }),
+      context,
+      params: org,
+    } as never)) as Response;
+    expect(made.headers.get("Location")).toBe(`${secretsPath}/TOKEN/edit?created=TOKEN`);
+  });
+
+  it("adds a repository by name, and says so on the field when there is none", async () => {
+    const { context, calls } = api({
+      "GET /api/repos/acme/web": json({ ...orgRepo, id: "rep_9", name: "web" }),
+      "PUT /api/orgs/acme/actions/secrets/TOKEN/repositories/rep_9": updated,
+    });
+    const p = { ...org, name: "TOKEN" };
+    const added = (await secretAction({
+      request: multipartPost(`${secretsPath}/TOKEN/edit`, {
+        intent: "add-repository",
+        repository: "web",
+      }),
+      context,
+      params: p,
+    } as never)) as Response;
+    expect(calls.map(lineOf)).toEqual([
+      "GET /api/repos/acme/web",
+      "PUT /api/orgs/acme/actions/secrets/TOKEN/repositories/rep_9",
+    ]);
+    expect(added.headers.get("Location")).toBe(`${secretsPath}/TOKEN/edit?added=web`);
+
+    const missing = await secretAction({
+      request: multipartPost(`${secretsPath}/TOKEN/edit`, {
+        intent: "add-repository",
+        repository: "nope",
+      }),
+      context,
+      params: p,
+    } as never);
+    expect(missing).toMatchObject({
+      errors: { repository: "Not a repository of this organization." },
+    });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("removes a repository by id", async () => {
+    const { context, calls } = api({
+      "DELETE /api/orgs/acme/actions/variables/REGION/repositories/rep_9": updated,
+    });
+    const removed = (await variableAction({
+      request: multipartPost("/settings/orgs/acme/variables/actions/REGION/edit", {
+        intent: "remove-repository",
+        repository_id: "rep_9",
+        repository: "web",
+      }),
+      context,
+      params: { ...org, name: "REGION" },
+    } as never)) as Response;
+    expect(calls.map(lineOf)).toEqual([
+      "DELETE /api/orgs/acme/actions/variables/REGION/repositories/rep_9",
+    ]);
+    expect(removed.headers.get("Location")).toBe(
+      "/settings/orgs/acme/variables/actions/REGION/edit?removed=web",
+    );
+  });
+
+  it("changes a variable's visibility with its value by PATCH", async () => {
+    const { context, calls } = api({
+      "PATCH /api/orgs/acme/actions/variables/REGION": updated,
+    });
+    await variableAction({
+      request: multipartPost("/settings/orgs/acme/variables/actions/REGION/edit", {
+        intent: "save",
+        value: "eu",
+        visibility: "all",
+      }),
+      context,
+      params: { ...org, name: "REGION" },
+    } as never);
+    expect(await (calls[0] as Request).json()).toEqual({
+      name: "REGION",
+      value: "eu",
+      visibility: "all",
+    });
+  });
+
+  it("answers a member's 403 and a user's 404 as the page's own", async () => {
+    for (const [status, code] of [
+      [403, "forbidden"],
+      [404, "not_an_org"],
+    ] as const) {
+      const { context } = api({
+        "GET /api/orgs/acme/actions/secrets": json({ status, code }, status),
+        "GET /api/orgs/acme/actions/variables": json({ status, code }, status),
+      });
+      const args = (url: string) =>
+        ({ request: new Request(`${ORIGIN}${url}`), context, params: org }) as never;
+      await expect(secretsLoader(args(secretsPath))).rejects.toMatchObject({ init: { status } });
+      await expect(secretLoader(args(`${secretsPath}/new`))).rejects.toMatchObject({
+        init: { status },
+      });
+      await expect(
+        variablesLoader(args("/settings/orgs/acme/variables/actions")),
+      ).rejects.toMatchObject({ init: { status } });
+    }
+  });
+
+  it("reads 6 variables a page, and the selected repositories 100 a page", async () => {
+    const { context, calls } = fakeApi((request) => {
+      const url = new URL(request.url);
+      if (url.pathname.endsWith("/repositories"))
+        return json({ total_count: 101, repositories: [] });
+      if (url.pathname === "/api/orgs/acme/actions/variables/REGION")
+        return json({
+          name: "REGION",
+          value: "eu",
+          visibility: "selected",
+          created_at: T,
+          updated_at: T,
+        });
+      return json({ total_count: 0, variables: [] });
+    });
+    await variablesLoader({
+      request: new Request(`${ORIGIN}/settings/orgs/acme/variables/actions`),
+      context,
+      params: org,
+    } as never);
+    const data = await variableLoader({
+      request: new Request(
+        `${ORIGIN}/settings/orgs/acme/variables/actions/REGION/edit?repo_page=2`,
+      ),
+      context,
+      params: { ...org, name: "REGION" },
+    } as never);
+    const asked = calls.map((c) => `${new URL(c.url).pathname}${new URL(c.url).search}`);
+    expect(asked).toContain("/api/orgs/acme/actions/variables?per_page=6&page=1");
+    expect(asked).toContain(
+      "/api/orgs/acme/actions/variables/REGION/repositories?per_page=100&page=2",
+    );
+    expect(data).toMatchObject({ access: { total: 101, pages: { first: expect.any(String) } } });
+  });
+
+  it("renders visibility as required radios, private by default, and the selected repositories", () => {
+    const shell = { kind: "organization", org: "acme" };
+    const scope = { kind: "organization", org: "acme" };
+    const fresh = renderPage(SecretForm, `${secretsPath}/new`, {
+      shell,
+      scope,
+      secret: null,
+      access: null,
+    });
+    const radio = (html: string, value: string) =>
+      (html.match(new RegExp(`<input[^>]*value="${value}"[^>]*>`))?.[0] ?? "").toLowerCase();
+    expect(radio(fresh, "private")).toContain("checked");
+    expect(radio(fresh, "all")).not.toContain("checked");
+    expect(radio(fresh, "all")).toContain("required");
+
+    const edit = renderPage(SecretForm, `${secretsPath}/TOKEN/edit`, {
+      shell,
+      scope,
+      secret: { name: "TOKEN", created_at: T, updated_at: T, visibility: "selected" },
+      access: {
+        repositories: [{ id: "rep_9", name: "web", full_name: "acme/web", visibility: "private" }],
+        total: 1,
+        pages: { next: null, first: null },
+      },
+    });
+    expect(radio(edit, "selected")).toContain("checked");
+    expect(edit).toContain("acme/web");
+    expect(edit).toContain('value="rep_9"');
+    expect(edit).toContain("Add repository");
+    expect(edit).toContain("enter its value again");
+  });
+
+  it("keeps the access chosen when a save is refused, for a secret and a variable", async () => {
+    const shell = { kind: "organization", org: "acme" };
+    const scope = { kind: "organization", org: "acme" };
+    const checked = (html: string) =>
+      html
+        .match(/<input[^>]*checked[^>]*value="(\w+)"|<input[^>]*value="(\w+)"[^>]*checked/i)
+        ?.slice(1)
+        .find(Boolean);
+
+    const secret = api({
+      "GET /api/orgs/acme/actions/secrets/public-key": json(KEY),
+      "PUT /api/orgs/acme/actions/secrets/TOKEN": json(
+        { status: 503, code: "ci_key_unavailable", detail: "no key" },
+        503,
+      ),
+    });
+    const secretResult = await secretAction({
+      request: multipartPost(`${secretsPath}/TOKEN/edit`, {
+        intent: "save",
+        value: CANARY,
+        visibility: "selected",
+      }),
+      context: secret.context,
+      params: { ...org, name: "TOKEN" },
+    } as never);
+    expect(secretResult).toMatchObject({
+      visibility: "selected",
+      errors: { form: expect.any(String) },
+    });
+    expect(await exposed(secretResult)).not.toContain(CANARY);
+    const secretHtml = renderPage(
+      SecretForm,
+      `${secretsPath}/TOKEN/edit`,
+      {
+        shell,
+        scope,
+        secret: { name: "TOKEN", created_at: T, updated_at: T, visibility: "all" },
+        access: null,
+      },
+      secretResult,
+    );
+    expect(checked(secretHtml)).toBe("selected");
+
+    const variable = api({
+      "PATCH /api/orgs/acme/actions/variables/REGION": json(
+        { status: 429, code: "rate_limited", detail: "slow" },
+        429,
+      ),
+    });
+    const variableResult = await variableAction({
+      request: multipartPost("/settings/orgs/acme/variables/actions/REGION/edit", {
+        intent: "save",
+        value: "eu",
+        visibility: "private",
+      }),
+      context: variable.context,
+      params: { ...org, name: "REGION" },
+    } as never);
+    expect(variableResult).toMatchObject({ visibility: "private", value: "eu" });
+    const variableHtml = renderPage(
+      VariableForm,
+      "/settings/orgs/acme/variables/actions/REGION/edit",
+      {
+        shell,
+        scope,
+        variable: { name: "REGION", value: "us", created_at: T, updated_at: T, visibility: "all" },
+        access: null,
+      },
+      variableResult,
+    );
+    expect(checked(variableHtml)).toBe("private");
+  });
+
+  it("routes the organization pages under /settings/orgs", () => {
+    const routeOf = (path: string) =>
+      matchRoutes(
+        routes.map((r) => ({ path: r.path ?? "", id: r.id ?? r.file })),
+        path,
+      )?.at(-1)?.route.id;
+    expect(routeOf("/settings/orgs/acme/secrets/actions")).toBe("org.secrets");
+    expect(routeOf("/settings/orgs/acme/secrets/actions/new")).toBe("org.secret.new");
+    expect(routeOf("/settings/orgs/acme/secrets/actions/NEW/edit")).toBe("org.secret.edit");
+    expect(routeOf("/settings/orgs/acme/variables/actions")).toBe("org.variables");
+    expect(routeOf("/settings/orgs/acme/variables/actions/new")).toBe("org.variable.new");
+    expect(routeOf("/settings/orgs/acme/variables/actions/X/edit")).toBe("org.variable.edit");
+    expect(isApiPath("/settings/orgs/acme/secrets/actions")).toBe(false);
+  });
+});

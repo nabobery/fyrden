@@ -1,6 +1,7 @@
 // Actions secrets and variables settings, in a real browser against both
 // Workers: an administrator sets, updates and deletes a repository's
-// secrets and variables, a 48 KiB value fits and one byte more does not,
+// secrets and variables, an organization's owner its own with the
+// repositories they reach, a 48 KiB value fits and one byte more does not,
 // line breaks typed in a form are stored as "\n" (with and without
 // JavaScript), worst-case variable values still list, a writer gets no
 // page and no form, and a secret's value never comes back to the browser
@@ -307,6 +308,133 @@ describe("who may manage them", () => {
         expect(response?.status(), path).toBe(404);
         await see(theirs.getByLabel("Value")).toHaveCount(0);
       }
+    } finally {
+      await close(theirs);
+    }
+  });
+});
+
+describe("organization secrets and variables", () => {
+  const org = "acme";
+  const orgSettings = () => `${stack.origin}/settings/orgs/${org}`;
+
+  it("reaches the organization's pages from its repository, and sets a secret for all", async () => {
+    await ok("POST", "/admin/organizations", { login: org, admin: handle });
+    await ok("POST", `/orgs/${org}/repos`, { name: "web" });
+    await ok("POST", `/orgs/${org}/repos`, { name: "app" });
+    await visit(page, `${stack.origin}/${org}/web/settings/secrets/actions`);
+    await see(page.getByRole("heading", { name: "Organization secrets" })).toBeVisible();
+    await page.getByRole("link", { name: "Manage organization secrets" }).click();
+    await see(page).toHaveURL(`${orgSettings()}/secrets/actions`);
+    await see(page.getByRole("navigation", { name: "Organization settings" })).toBeVisible();
+    await accessible("organization secrets, empty");
+    await page.getByRole("link", { name: "New secret" }).click();
+    await see(page.getByLabel("Private repositories")).toBeChecked();
+    await accessible("new organization secret");
+    await page.getByLabel("Name").fill("org_token");
+    await page.getByLabel("Value").fill(`${CANARY}-org`);
+    await page.getByLabel("All repositories").check();
+    await page.getByRole("button", { name: "Save secret" }).click();
+    await see(page.getByRole("status")).toHaveText("Created the secret ORG_TOKEN.");
+    await see(page.getByRole("row", { name: /ORG_TOKEN/ })).toContainText("all");
+    await accessible("organization secrets");
+
+    await visit(page, `${stack.origin}/${org}/web/settings/secrets/actions`);
+    await see(page.getByText("ORG_TOKEN")).toBeVisible();
+  });
+
+  it("changes a secret's access only with its value entered again", async () => {
+    await visit(page, `${orgSettings()}/secrets/actions/ORG_TOKEN/edit`);
+    await see(page.getByLabel("All repositories")).toBeChecked();
+    await see(page.getByText("enter its value again")).toBeVisible();
+    await page.getByLabel("Private repositories").check();
+    await page.getByRole("button", { name: "Save secret" }).click();
+    await see(page.getByLabel("Value")).toHaveAttribute("required", "");
+    await see(page).toHaveURL(`${orgSettings()}/secrets/actions/ORG_TOKEN/edit`);
+    await page.getByLabel("Value").fill(`${CANARY}-org-2`);
+    await page.getByLabel("Private repositories").check();
+    await page.getByRole("button", { name: "Save secret" }).click();
+    await see(page.getByRole("status")).toHaveText("Updated the secret ORG_TOKEN.");
+    await see(page.getByRole("row", { name: /ORG_TOKEN/ })).toContainText("private");
+  });
+
+  it("adds and removes the repositories of a secret for selected ones", async () => {
+    await visit(page, `${orgSettings()}/secrets/actions/new`);
+    await page.getByLabel("Name").fill("DEPLOY");
+    await page.getByLabel("Value").fill(`${CANARY}-selected`);
+    await page.getByLabel("Selected repositories").check();
+    await page.getByRole("button", { name: "Save secret" }).click();
+    await see(page).toHaveURL(`${orgSettings()}/secrets/actions/DEPLOY/edit?created=DEPLOY`);
+    await see(page.getByText("No repository can use it until you add one.")).toBeVisible();
+    await accessible("organization secret, selected, none");
+
+    await page.getByLabel("Add repository").fill("nope");
+    await page.getByRole("button", { name: "Add repository" }).click();
+    await see(page.getByRole("alert")).toContainText("Not a repository of this organization.");
+    await see(page.getByLabel("Add repository")).toHaveAttribute("aria-invalid", "true");
+    await accessible("organization secret, repository refused");
+
+    for (const repo of ["web", "app"]) {
+      await page.getByLabel("Add repository").fill(repo);
+      await page.getByRole("button", { name: "Add repository" }).click();
+      await see(page.getByRole("status")).toHaveText(`Added ${repo}.`);
+    }
+    await see(page.getByText("2 repositories can use this secret.")).toBeVisible();
+    await accessible("organization secret, selected");
+    await page.getByRole("button", { name: `Remove ${org}/app` }).click();
+    await see(page.getByRole("status")).toHaveText("Removed app.");
+    const listed = await ok<{ repositories: { name: string }[] }>(
+      "GET",
+      `/orgs/${org}/actions/secrets/DEPLOY/repositories`,
+    );
+    expect(listed.repositories.map((r) => r.name)).toEqual(["web"]);
+  });
+
+  it("sets a variable for private repositories, then for selected ones", async () => {
+    await visit(page, `${orgSettings()}/variables/actions/new`);
+    await page.getByLabel("Name").fill("STAGE");
+    await page.getByLabel("Value").fill("prod\nblue");
+    await page.getByRole("button", { name: "Save variable" }).click();
+    await see(page.getByRole("status")).toHaveText("Created the variable STAGE.");
+    const made = await ok<{ value: string; visibility: string }>(
+      "GET",
+      `/orgs/${org}/actions/variables/STAGE`,
+    );
+    expect(made).toMatchObject({ value: "prod\nblue", visibility: "private" });
+    await accessible("organization variables");
+
+    await page.getByRole("link", { name: "STAGE" }).click();
+    await page.getByLabel("Selected repositories").check();
+    await page.getByRole("button", { name: "Save variable" }).click();
+    await see(page.getByRole("status")).toHaveText("Updated the variable STAGE.");
+    await visit(page, `${orgSettings()}/variables/actions/STAGE/edit`);
+    await page.getByLabel("Add repository").fill("web");
+    await page.getByRole("button", { name: "Add repository" }).click();
+    await see(page.getByRole("status")).toHaveText("Added web.");
+    await accessible("organization variable, selected");
+    await visit(page, `${stack.origin}/${org}/web/settings/variables/actions`);
+    await see(page.getByRole("heading", { name: "Organization variables" })).toBeVisible();
+    await see(page.getByText("STAGE")).toBeVisible();
+    await accessible("repository variables with the organization's");
+  });
+
+  it("gives a member no organization pages, and a repository's admin only its own", async () => {
+    const token = await userToken("cy");
+    await ok("PUT", `/orgs/${org}/memberships/cy`, { role: "member" });
+    await ok("PUT", `/repos/${org}/web/collaborators/cy`, { permission: "admin" });
+    const theirs = await signedIn(token);
+    try {
+      for (const path of ["secrets/actions", "secrets/actions/new", "variables/actions"]) {
+        const response = await theirs.goto(`${orgSettings()}/${path}`);
+        expect(response?.status(), path).toBe(403);
+        await see(theirs.getByLabel("Value")).toHaveCount(0);
+      }
+      await visit(theirs, `${stack.origin}/${org}/web/settings/secrets/actions`);
+      await see(theirs.getByRole("heading", { name: "Actions secrets" })).toBeVisible();
+      await see(theirs.getByRole("heading", { name: "Organization secrets" })).toBeVisible();
+      await see(theirs.getByRole("link", { name: "Manage organization secrets" })).toHaveCount(0);
+      const notAnOrg = await theirs.goto(`${stack.origin}/settings/orgs/${handle}/secrets/actions`);
+      expect(notAnOrg?.status()).toBe(404);
     } finally {
       await close(theirs);
     }

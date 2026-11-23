@@ -1,24 +1,36 @@
 import { ciName } from "@fyrden/domain";
 import { Form, Link, redirect, useActionData } from "react-router";
-import { describedBy, ErrorSummary, FieldError, When } from "../components/ci-settings-ui.js";
+import {
+  describedBy,
+  ErrorSummary,
+  FieldError,
+  RepositoryAccess,
+  VisibilityField,
+  When,
+} from "../components/ci-settings-ui.js";
 import { SettingsShell } from "../components/settings-shell.js";
 import { apiGet, assertSameOrigin } from "../lib/api.server.js";
 import {
   type CiScope,
+  editPath,
   errorsFor,
   type FormErrors,
   listPath,
   scopeOf,
   VALUE_TOO_LARGE,
+  type Visibility,
 } from "../lib/ci-settings.js";
 import {
   apiBase,
+  changeAccess,
   fitsValue,
+  loadAccess,
   loadShell,
   normalizeLineBreaks,
   problemOf,
   putSealedSecret,
   readValueForm,
+  visibilityOf,
   write,
 } from "../lib/ci-settings.server.js";
 import type { Route } from "./+types/ci.secret";
@@ -28,6 +40,7 @@ interface Secret {
   readonly created_at: string;
   readonly updated_at: string;
   readonly unreadable?: boolean;
+  readonly visibility?: Visibility;
 }
 
 export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
@@ -44,12 +57,17 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   let secret: Secret | null = null;
   if (params.name) secret = await apiGet<Secret>(context, request, secretPath(scope, params.name));
   else await apiGet(context, request, `${apiBase(scope)}/actions/secrets?per_page=1`);
-  return { shell, scope, secret };
+  const access = await loadAccess(context, request, scope, "secret", secret);
+  return { shell, scope, secret, access };
 }
 
-type Result = { readonly errors: FormErrors };
+/** A refused write: its errors and, on a save, the access chosen (never the value). */
+type Result = { readonly errors: FormErrors; readonly visibility?: Visibility };
 
-const refused = (errors: FormErrors): Result => ({ errors });
+const refused = (errors: FormErrors, visibility?: Visibility): Result => ({
+  errors,
+  ...(visibility && { visibility }),
+});
 
 export async function action({ request, context, params }: Route.ActionArgs) {
   assertSameOrigin(request);
@@ -71,23 +89,42 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     return redirect(`${listPath(scope, "secret")}?deleted=${encodeURIComponent(name)}`);
   }
 
+  if (params.name) {
+    const name = ciName("secret", params.name);
+    const changed = name && (await changeAccess(context, request, scope, "secret", name, form));
+    if (changed) return changed;
+  }
+
+  const visibility = scope.kind === "organization" ? visibilityOf(form) : undefined;
   const name = ciName("secret", params.name ?? String(form.get("name") ?? ""));
-  if (name === undefined) return refused(nameError());
+  if (name === undefined) return refused(nameError(), visibility);
+  if (scope.kind === "organization" && visibility === undefined)
+    return refused({ visibility: "Choose which repositories can use it." });
   const field = form.get("value");
   const value = normalizeLineBreaks(typeof field === "string" ? field : "");
-  if (value === "") return refused({ value: "Enter the secret's value." });
-  if (!fitsValue(value)) return refused({ value: VALUE_TOO_LARGE });
-  const result = await putSealedSecret(context, request, scope, name, value);
+  if (value === "") return refused({ value: "Enter the secret's value." }, visibility);
+  if (!fitsValue(value)) return refused({ value: VALUE_TOO_LARGE }, visibility);
+  const result = await putSealedSecret(
+    context,
+    request,
+    scope,
+    name,
+    value,
+    scope.kind === "organization" ? { visibility } : {},
+  );
   const problem = problemOf(result, request);
-  if (problem) return refused(errorsFor("secret", scope, problem));
-  const done = result.status === 201 ? "created" : "saved";
-  return redirect(`${listPath(scope, "secret")}?${done}=${encodeURIComponent(name)}`);
+  if (problem) return refused(errorsFor("secret", scope, problem), visibility);
+  const done = `${result.status === 201 ? "created" : "saved"}=${encodeURIComponent(name)}`;
+  // A new secret for selected repositories reaches none yet: its page adds them.
+  if (result.status === 201 && visibility === "selected")
+    return redirect(`${editPath(scope, "secret", name)}?${done}`);
+  return redirect(`${listPath(scope, "secret")}?${done}`);
 }
 
 export default function SecretForm({ loaderData }: Route.ComponentProps) {
-  const result = useActionData<typeof action>();
+  const result: Result | undefined = useActionData<typeof action>();
   const errors: FormErrors = result?.errors ?? {};
-  const { shell, scope, secret } = loaderData;
+  const { shell, scope, secret, access } = loaderData;
   return (
     <SettingsShell scope={shell} active="secrets">
       <section className="panel" aria-labelledby="secret-form">
@@ -146,6 +183,14 @@ export default function SecretForm({ loaderData }: Route.ComponentProps) {
             <code>gh secret set</code> or the API.
           </p>
           <FieldError id="value-error" message={errors.value} />
+          {scope.kind === "organization" && (
+            <VisibilityField
+              chosen={result?.visibility ?? secret?.visibility}
+              stored={secret?.visibility}
+              error={errors.visibility}
+              secret
+            />
+          )}
           <p>
             <button className="primary" type="submit" name="intent" value="save">
               Save secret
@@ -153,6 +198,7 @@ export default function SecretForm({ loaderData }: Route.ComponentProps) {
           </p>
         </Form>
       </section>
+      {access && <RepositoryAccess noun="secret" {...access} error={errors.repository} />}
       {secret && (
         <section className="panel" aria-labelledby="delete-secret">
           <h2 id="delete-secret">Delete this secret</h2>

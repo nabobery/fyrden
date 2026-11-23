@@ -31,10 +31,40 @@ export const listPath = (scope: CiScope, kind: CiKind): string =>
 export const editPath = (scope: CiScope, kind: CiKind, name: string): string =>
   `${listPath(scope, kind)}/${encodeURIComponent(name)}/edit`;
 
+/** Which of an organization's repositories an entry reaches. */
+export type Visibility = "all" | "private" | "selected";
+
+export const VISIBILITIES: readonly { value: Visibility; label: string; hint: string }[] = [
+  {
+    value: "private",
+    label: "Private repositories",
+    hint: "The organization's private and internal repositories.",
+  },
+  {
+    value: "all",
+    label: "All repositories",
+    hint: "Every repository of the organization, public ones included.",
+  },
+  {
+    value: "selected",
+    label: "Selected repositories",
+    hint: "Only the repositories you add on this page.",
+  },
+];
+
+/** A repository an organization entry lists (visibility `selected`). */
+export interface AccessRepository {
+  readonly id: string;
+  readonly name: string;
+  readonly full_name: string;
+  readonly visibility: string;
+}
+
 /** A form's errors: a message per field, and the form's own. */
 export interface FormErrors {
   readonly name?: string;
   readonly value?: string;
+  readonly visibility?: string;
   readonly repository?: string;
   readonly confirm?: string;
   readonly form?: string;
