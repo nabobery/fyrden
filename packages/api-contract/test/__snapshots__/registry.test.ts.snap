@@ -106,6 +106,229 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
   },
   "openapi": "3.1.1",
   "paths": {
+    "/admin/accounts/{account}/ci/data-key": {
+      "get": {
+        "description": "Fyrden: the account's id and newest CI data key generation (null before any secret was set), how many Actions secrets it holds, and how many of them do not open (their generation was replaced, or its master key is gone). \`unreadable\` lists the first 100 of those by scope (\`org\` or a repository id) and name; \`unreadable_truncated\` is true when there are more. Never a value or a key. A suspended account is found. Instance administrators only.",
+        "operationId": "admin.ci.data_key.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "description": "The user's or organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                    },
+                    "created_at": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "generation": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "secrets": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "unreadable": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                          },
+                          "scope": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "scope",
+                          "name",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "unreadable_secrets": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "unreadable_truncated": {
+                      "type": "boolean",
+                    },
+                  },
+                  "required": [
+                    "account_id",
+                    "generation",
+                    "created_at",
+                    "secrets",
+                    "unreadable_secrets",
+                    "unreadable",
+                    "unreadable_truncated",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get an account's CI data key status",
+        "x-fyrden-permission": "instance:read",
+        "x-fyrden-principals": [
+          "user",
+        ],
+      },
+    },
+    "/admin/accounts/{account}/ci/data-key/replace": {
+      "post": {
+        "description": "Fyrden: for a leaked account data key. Starts a new data key generation for the account and retires \`generation\` and every older one: their wrapped keys are erased, so their secrets stay listed with \`unreadable: true\` and are never delivered to a job until set again under the new public key. Variables are not touched. Cannot be undone. \`account_id\` and \`generation\` come from \`GET /admin/accounts/{account}/ci/data-key\`: 409 \`account_changed\` when the handle is now another account's, 409 \`no_data_key\` when the account has no such generation, 409 \`generation_changed\` when \`generation\` is not the newest. Naming a generation already replaced answers that replacement again and changes nothing, so a retry (with or without an \`Idempotency-Key\`) answers the same. 503 \`ci_key_unavailable\` while the CI master key is missing or misconfigured. A suspended account is found. Instance administrators only.",
+        "operationId": "admin.ci.data_key.replace",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account",
+            "required": true,
+            "schema": {
+              "description": "The user's or organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "account_id": {
+                    "description": "The account's id, as the status answers it.",
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "type": "string",
+                  },
+                  "generation": {
+                    "description": "The generation to replace: the account's newest.",
+                    "maximum": 999999999,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [
+                  "account_id",
+                  "generation",
+                ],
+                "type": "object",
+              },
+            },
+          },
+          "required": true,
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account_id": {
+                      "type": "string",
+                    },
+                    "generation": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "replaced_at": {
+                      "type": "string",
+                    },
+                    "replaced_generation": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "account_id",
+                    "generation",
+                    "replaced_generation",
+                    "replaced_at",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Replace an account's CI data key",
+        "x-fyrden-permission": "instance:admin",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
+    },
     "/admin/accounts/{account}/quota": {
       "put": {
         "description": "Sets a user's or organization's limits; null goes back to the instance default, and a limit left out is kept. Lowering a limit below the use refuses new repositories and pushes; nothing is deleted. Instance administrators only.",

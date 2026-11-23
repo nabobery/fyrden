@@ -5,7 +5,7 @@ import {
   MAX_SELECTED_REPOS,
 } from "@fyrden/domain";
 import { z } from "zod";
-import { defineOperation, INSTANCE_ADMIN, NoContent } from "../src/op.js";
+import { defineOperation, INSTANCE_ADMIN, INSTANCE_READ, NoContent } from "../src/op.js";
 import { REPO_NAME_PATTERN } from "./repos.js";
 
 /*
@@ -779,6 +779,63 @@ export const rewrapCiSecrets = defineOperation({
   permission: INSTANCE_ADMIN,
   principals: ["user"],
   rateLimit: "expensive",
+  idempotency: "key",
+  mcp: false,
+});
+
+const AccountHandle = Handle.describe("The user's or organization's handle.");
+const Generation = z
+  .number()
+  .int()
+  .min(1)
+  .max(999_999_999)
+  .describe("A data key generation (the number before the dot in a public key's `key_id`).");
+
+export const getCiDataKey = defineOperation({
+  id: "admin.ci.data_key.get",
+  method: "GET",
+  path: "/admin/accounts/{account}/ci/data-key",
+  summary: "Get an account's CI data key status",
+  description:
+    "Fyrden: the account's id and newest CI data key generation (null before any secret was set), how many Actions secrets it holds, and how many of them do not open (their generation was replaced, or its master key is gone). `unreadable` lists the first 100 of those by scope (`org` or a repository id) and name; `unreadable_truncated` is true when there are more. Never a value or a key. A suspended account is found. Instance administrators only.",
+  input: z.object({ account: AccountHandle }),
+  output: z.object({
+    account_id: z.string(),
+    generation: z.number().int().nullable(),
+    created_at: z.string().nullable(),
+    secrets: z.number().int(),
+    unreadable_secrets: z.number().int(),
+    unreadable: z.array(z.object({ scope: z.string(), name: z.string() })),
+    unreadable_truncated: z.boolean(),
+  }),
+  permission: INSTANCE_READ,
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
+export const replaceCiDataKey = defineOperation({
+  id: "admin.ci.data_key.replace",
+  method: "POST",
+  path: "/admin/accounts/{account}/ci/data-key/replace",
+  summary: "Replace an account's CI data key",
+  description:
+    "Fyrden: for a leaked account data key. Starts a new data key generation for the account and retires `generation` and every older one: their wrapped keys are erased, so their secrets stay listed with `unreadable: true` and are never delivered to a job until set again under the new public key. Variables are not touched. Cannot be undone. `account_id` and `generation` come from `GET /admin/accounts/{account}/ci/data-key`: 409 `account_changed` when the handle is now another account's, 409 `no_data_key` when the account has no such generation, 409 `generation_changed` when `generation` is not the newest. Naming a generation already replaced answers that replacement again and changes nothing, so a retry (with or without an `Idempotency-Key`) answers the same. 503 `ci_key_unavailable` while the CI master key is missing or misconfigured. A suspended account is found. Instance administrators only.",
+  input: z.object({
+    account: AccountHandle,
+    account_id: z.string().min(1).max(64).describe("The account's id, as the status answers it."),
+    generation: Generation.describe("The generation to replace: the account's newest."),
+  }),
+  output: z.object({
+    account_id: z.string(),
+    generation: z.number().int(),
+    replaced_generation: z.number().int(),
+    replaced_at: z.string(),
+  }),
+  permission: INSTANCE_ADMIN,
+  principals: ["user"],
+  rateLimit: "write",
   idempotency: "key",
   mcp: false,
 });

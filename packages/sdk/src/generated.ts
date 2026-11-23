@@ -2384,6 +2384,44 @@ export type AdminCiSecretsRewrapOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `admin.ci.data_key.get`: Get an account's CI data key status. */
+export type AdminCiDataKeyGetInput = {
+  /** The user's or organization's handle. */
+  account: string;
+};
+
+/** Output of `admin.ci.data_key.get`. */
+export type AdminCiDataKeyGetOutput = {
+  account_id: string;
+  generation: number | null;
+  created_at: string | null;
+  secrets: number;
+  unreadable_secrets: number;
+  unreadable: {
+    scope: string;
+    name: string;
+  }[];
+  unreadable_truncated: boolean;
+};
+
+/** Input of `admin.ci.data_key.replace`: Replace an account's CI data key. */
+export type AdminCiDataKeyReplaceInput = {
+  /** The user's or organization's handle. */
+  account: string;
+  /** The account's id, as the status answers it. */
+  account_id: string;
+  /** The generation to replace: the account's newest. */
+  generation: number;
+};
+
+/** Output of `admin.ci.data_key.replace`. */
+export type AdminCiDataKeyReplaceOutput = {
+  account_id: string;
+  generation: number;
+  replaced_generation: number;
+  replaced_at: string;
+};
+
 /** Input of `admin.effects.repair`: Reopen effects that failed for good. */
 export type AdminEffectsRepairInput = {
   sink: "feed" | "webhooks" | "references";
@@ -9727,6 +9765,8 @@ export const OPERATIONS = {
   "orgs.actions.variables.repos.add": { method: "PUT", path: "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}", pathParams: ["org","name","repository_id"], idempotent: true, noContent: [204] },
   "orgs.actions.variables.repos.remove": { method: "DELETE", path: "/orgs/{org}/actions/variables/{name}/repositories/{repository_id}", pathParams: ["org","name","repository_id"], idempotent: true, noContent: [204] },
   "admin.ci.secrets.rewrap": { method: "POST", path: "/admin/ci/secrets/rewrap", pathParams: [], idempotent: true },
+  "admin.ci.data_key.get": { method: "GET", path: "/admin/accounts/{account}/ci/data-key", pathParams: ["account"], idempotent: false },
+  "admin.ci.data_key.replace": { method: "POST", path: "/admin/accounts/{account}/ci/data-key/replace", pathParams: ["account"], idempotent: true },
   "admin.effects.repair": { method: "POST", path: "/admin/effects/repair", pathParams: [], idempotent: true },
   "admin.events.replay": { method: "POST", path: "/admin/events/failed/{id}/replay", pathParams: ["id"], idempotent: true },
   "admin.search.backfill": { method: "POST", path: "/admin/search/backfill", pathParams: [], idempotent: true },
@@ -10092,6 +10132,10 @@ export interface Operations {
   "orgs.actions.variables.repos.remove": { input: OrgsActionsVariablesReposRemoveInput; output: OrgsActionsVariablesReposRemoveOutput };
   /** Wrap CI data keys with the current key. Fyrden: wraps again, with the current CI master key (`CI_SECRETS_KEY_NEXT` while a rotation is under way, else `CI_SECRETS_KEY`), every account's data keys wrapped with another, a batch of accounts at a time (call again with `cursor` until `next_cursor` is null). Secrets are not encrypted again. `remaining` counts data keys still under another key that open, `unreadable` those whose master key is gone, both for this call's accounts only: add them up over a whole sweep, and sweep again until the sum of `remaining` is 0. 503 `ci_key_unavailable` while the key is missing or misconfigured. Instance administrators only. */
   "admin.ci.secrets.rewrap": { input: AdminCiSecretsRewrapInput; output: AdminCiSecretsRewrapOutput };
+  /** Get an account's CI data key status. Fyrden: the account's id and newest CI data key generation (null before any secret was set), how many Actions secrets it holds, and how many of them do not open (their generation was replaced, or its master key is gone). `unreadable` lists the first 100 of those by scope (`org` or a repository id) and name; `unreadable_truncated` is true when there are more. Never a value or a key. A suspended account is found. Instance administrators only. */
+  "admin.ci.data_key.get": { input: AdminCiDataKeyGetInput; output: AdminCiDataKeyGetOutput };
+  /** Replace an account's CI data key. Fyrden: for a leaked account data key. Starts a new data key generation for the account and retires `generation` and every older one: their wrapped keys are erased, so their secrets stay listed with `unreadable: true` and are never delivered to a job until set again under the new public key. Variables are not touched. Cannot be undone. `account_id` and `generation` come from `GET /admin/accounts/{account}/ci/data-key`: 409 `account_changed` when the handle is now another account's, 409 `no_data_key` when the account has no such generation, 409 `generation_changed` when `generation` is not the newest. Naming a generation already replaced answers that replacement again and changes nothing, so a retry (with or without an `Idempotency-Key`) answers the same. 503 `ci_key_unavailable` while the CI master key is missing or misconfigured. A suspended account is found. Instance administrators only. */
+  "admin.ci.data_key.replace": { input: AdminCiDataKeyReplaceInput; output: AdminCiDataKeyReplaceOutput };
   /** Reopen effects that failed for good. Fyrden: counts the effects of `sink` journaled since `since` (Unix milliseconds, not in the future) that failed for good while what they deliver can still matter (within 7 days of their change, and not ended on purpose: their source moved on, a feed page past its deadline or gone, a sink the deployment no longer has, or watched activity's one attempt); unless `dry_run` (the default), reopens up to 1,000 of them, the oldest first (call again for more). Reopened effects keep their ids and what they carry, their attempts count again from one, and the effects cron sends them with the other overdue effects. Refused (503) while the read model is under maintenance. Instance administrators only. */
   "admin.effects.repair": { input: AdminEffectsRepairInput; output: AdminEffectsRepairOutput };
   /** Replay an account's failed envelope. Fyrden: puts an account's envelope of events that the events consumer gave up on (kept by its dead-letter queue, `id` the dead letter's message id) back on the events queue, once: the consumer applies it as any envelope, so what its events mean for its members' activity feeds (repositories they no longer read purged from their feeds) is journaled and delivered then. Applying it again changes nothing it already changed; one that fails again goes to the dead-letter queue as a record of its own. Refused (409 `already_replayed`) once replayed; (409 `not_replayable`) for a repository's envelope (which asks for its repository's search repair itself) or one that could not be read; (410 `envelope_expired`) once the envelope was kept its 14 days; (410 `envelope_not_kept`) for one stored without its envelope (too large, too deep or not JSON); (410 `payload_expired`) for one naming an event whose stored payload the account may no longer keep (an event 6 days old or more); (404 `failure_not_found`) for no such record; (503 `read_model_maintenance`) while the read model is paused, recovering or under maintenance, nothing decided; (503 `requeue_failed`) when the queue did not take it, the record left to replay again. Instance administrators only. */

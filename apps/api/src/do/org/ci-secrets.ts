@@ -16,6 +16,10 @@
  * - a data key's rewrap or a new generation commits only if the row (or
  *   the newest generation) is still the one it read, and is otherwise read
  *   again (at most `CAS_ATTEMPTS` times).
+ *
+ * A replacement (`replaceDataKey`) retires every generation older than the
+ * one it makes: their wrapped keys are erased, so no reader opens them again,
+ * whatever master keys come back.
  */
 import {
   ciName,
@@ -110,6 +114,30 @@ export interface CiSecretsDelivery {
   readonly oversize?: readonly { readonly name: string; readonly bytes: number }[];
 }
 
+/** A replacement's outcome, read from the retired generation's row (so a retry answers the same). */
+export interface CiDataKeyReplaced {
+  /** The generation made. */
+  readonly generation: number;
+  /** The generation the request named, now retired. */
+  readonly replacedGeneration: number;
+  readonly replacedAt: number;
+}
+
+/** Unreadable secrets listed by `dataKeyStatus` at most. */
+export const MAX_LISTED_UNREADABLE = 100;
+
+export interface CiDataKeyStatus {
+  /** The newest generation, or null before any secret was set. */
+  readonly generation: number | null;
+  readonly createdAt: number | null;
+  readonly secrets: number;
+  /** Secrets whose generation does not open: retired, or its master key gone. */
+  readonly unreadableSecrets: number;
+  /** The first of them by scope and name, at most `MAX_LISTED_UNREADABLE`. */
+  readonly unreadable: readonly { readonly scope: string; readonly name: string }[];
+  readonly unreadableTruncated: boolean;
+}
+
 export interface CiActor {
   readonly principalId: string;
   readonly requestId?: string;
@@ -129,7 +157,14 @@ export interface CiHost {
   audited(): void;
   /** A test's pause point (see `accountHooks`). */
   pause(
-    point: "listed" | "prepared" | "keyPrepared" | "rewrapPrepared" | "secretsRead",
+    point:
+      | "listed"
+      | "prepared"
+      | "keyPrepared"
+      | "rewrapPrepared"
+      | "rewrapCounted"
+      | "replacePrepared"
+      | "secretsRead",
   ): Promise<void>;
 }
 
@@ -176,6 +211,11 @@ const ok = <T>(value: T): CiResult<T> => ({ ok: true, value });
 const sealedBytes = (chars: number, pad: number) =>
   Math.max(0, Math.ceil((chars * 3) / 4) - pad - 16);
 
+const NO_DATA_KEY = fail(
+  409,
+  "no_data_key",
+  "The account has no CI data key of that generation: read the newest with GET /admin/accounts/{account}/ci/data-key.",
+);
 const NOT_AN_ORG = fail(404, "not_an_org", "The account is not an organization.");
 const REPO_GONE = fail(404, "repo_not_found", "The repository is not this account's any more.");
 const REPO_CHANGED = fail(
@@ -253,13 +293,28 @@ export class AccountCi {
       .toArray()[0];
   }
 
+  /** A generation's row unless it is retired: every reader of a data key comes through here. */
   #generation(generation: number): DataKeyRow | undefined {
     return this.#sql
       .exec<DataKeyRow>(
-        "SELECT generation, wrapped, nonce, master_key_id FROM ci_data_keys WHERE generation = ?",
+        `SELECT generation, wrapped, nonce, master_key_id FROM ci_data_keys
+         WHERE generation = ? AND replaced_at IS NULL`,
         generation,
       )
       .toArray()[0];
+  }
+
+  /** The replacement that retired `generation`, if one did. */
+  #replaced(generation: number): CiDataKeyReplaced | undefined {
+    const row = this.#sql
+      .exec<{ replaced_by: number | null; replaced_at: number | null }>(
+        "SELECT replaced_by, replaced_at FROM ci_data_keys WHERE generation = ?",
+        generation,
+      )
+      .toArray()[0];
+    return row?.replaced_by != null && row.replaced_at != null
+      ? { generation: row.replaced_by, replacedGeneration: generation, replacedAt: row.replaced_at }
+      : undefined;
   }
 
   #unavailable(keys: CiKeyring): CiFailure {
@@ -361,7 +416,7 @@ export class AccountCi {
         rewrapped: 0,
         remaining: this.#sql
           .exec<{ n: number }>(
-            "SELECT count(*) AS n FROM ci_data_keys WHERE master_key_id <> ?",
+            "SELECT count(*) AS n FROM ci_data_keys WHERE master_key_id <> ? AND replaced_at IS NULL",
             expectedKeyId,
           )
           .one().n,
@@ -379,13 +434,12 @@ export class AccountCi {
       this.#sql
         .exec<DataKeyRow>(
           `SELECT generation, wrapped, nonce, master_key_id FROM ci_data_keys
-           WHERE master_key_id <> ? ORDER BY generation`,
+           WHERE master_key_id <> ? AND replaced_at IS NULL ORDER BY generation`,
           current?.id ?? "",
         )
         .toArray();
     if (!current) return { rewrapped: 0, remaining: stale().length, unreadable: 0 };
     let rewrapped = 0;
-    let unreadable = 0;
     for (const first of stale()) {
       let row: DataKeyRow | undefined = first;
       for (
@@ -395,10 +449,7 @@ export class AccountCi {
       ) {
         const place = at(accountId, row.generation);
         const dataKey = await unwrapDataKey(keys, place, wrappedOf(row));
-        if (!dataKey) {
-          unreadable++;
-          break;
-        }
+        if (!dataKey) break;
         const wrapped = await wrapDataKey(keys, place, dataKey);
         if (!wrapped) break;
         await this.host.pause("rewrapPrepared");
@@ -422,7 +473,145 @@ export class AccountCi {
         row = this.#generation(read.generation);
       }
     }
-    return { rewrapped, remaining: stale().length - unreadable, unreadable };
+    // Counted over one set read at the end, each row once: a replacement during the loop
+    // retires rows it had listed, so counting along the way could go negative.
+    const left = stale();
+    await this.host.pause("rewrapCounted");
+    let remaining = 0;
+    let unreadable = 0;
+    for (const row of left) {
+      const dataKey = await unwrapDataKey(keys, at(accountId, row.generation), wrappedOf(row));
+      if (dataKey) remaining++;
+      else unreadable++;
+      dataKey?.fill(0);
+    }
+    return { rewrapped, remaining, unreadable };
+  }
+
+  /**
+   * Starts generation `generation + 1` and retires every older one, in one
+   * transaction guarded by `generation` still being the newest: their wrapped
+   * keys are erased, so their secrets stay listed (unreadable) and are never
+   * delivered until set again. Variables are not touched. A request naming a
+   * generation already retired answers that replacement from its row and
+   * writes nothing, needing no master key: a retry answers the same.
+   */
+  async replaceDataKey(actor: CiActor, generation: number): Promise<CiResult<CiDataKeyReplaced>> {
+    const account = this.host.account();
+    if (!account) return NO_DATA_KEY;
+    const earlier = this.#replaced(generation);
+    if (earlier) return ok(earlier);
+    const keys = await this.#keys();
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+      const replayed = this.#replaced(generation);
+      if (replayed) return ok(replayed);
+      const newest = this.#newest();
+      if (!newest || !this.#generation(generation)) return NO_DATA_KEY;
+      if (newest.generation !== generation)
+        return fail(
+          409,
+          "generation_changed",
+          `Generation ${generation} is not the newest: the newest is ${newest.generation}. Read the status again and replace the newest.`,
+        );
+      if (!keys.current) return this.#unavailable(keys);
+      const next = generation + 1;
+      const dataKey = newDataKey();
+      const wrapped = await wrapDataKey(keys, at(account.id, next), dataKey);
+      dataKey.fill(0);
+      if (!wrapped) return this.#unavailable(keys);
+      await this.host.pause("replacePrepared");
+      const done = this.host.storage.transactionSync((): CiDataKeyReplaced | undefined => {
+        if (this.#newest()?.generation !== generation) return undefined;
+        const now = this.host.now();
+        this.#sql.exec(
+          `INSERT INTO ci_data_keys (generation, wrapped, nonce, master_key_id, created_at)
+           VALUES (?, ?, ?, ?, ?)`,
+          next,
+          wrapped.wrapped,
+          wrapped.nonce,
+          wrapped.masterKeyId,
+          now,
+        );
+        const retired = this.#sql
+          .exec<{ generation: number }>(
+            `SELECT generation FROM ci_data_keys
+             WHERE generation < ? AND replaced_at IS NULL ORDER BY generation`,
+            next,
+          )
+          .toArray()
+          .map((r) => r.generation);
+        this.#sql.exec(
+          `UPDATE ci_data_keys SET wrapped = '', nonce = '', replaced_at = ?, replaced_by = ?
+           WHERE generation < ? AND replaced_at IS NULL`,
+          now,
+          next,
+          next,
+        );
+        const secrets = this.#sql
+          .exec<{ n: number }>("SELECT count(*) AS n FROM ci_secrets WHERE generation < ?", next)
+          .one().n;
+        this.host.audit(actor, "ci.data_key.replace", {
+          generation: next,
+          replaces: generation,
+          retired,
+          secrets,
+        });
+        return { generation: next, replacedGeneration: generation, replacedAt: now };
+      });
+      if (done) {
+        this.host.audited();
+        return ok(done);
+      }
+    }
+    return fail(503, "ci_key_unavailable", "The account's data key kept changing; try again.");
+  }
+
+  /** The account's newest generation, and which of its secrets do not open. */
+  async dataKeyStatus(): Promise<CiDataKeyStatus> {
+    const account = this.host.account();
+    const usedGenerations = () =>
+      this.#sql
+        .exec<{ generation: number }>("SELECT DISTINCT generation FROM ci_secrets")
+        .toArray()
+        .map((r) => r.generation);
+    const checked = usedGenerations();
+    const open = account ? await this.#dataKeys(account.id, checked) : new Map();
+    for (const key of open.values()) key.fill(0);
+    // No await from here: the answer is of one state. A generation used since the unwraps was not
+    // checked: it opens unless retired (a new one is made under the current master key).
+    const closed = usedGenerations().filter(
+      (g) => !this.#generation(g) || (checked.includes(g) && !open.has(g)),
+    );
+    const newest = this.#sql
+      .exec<{ generation: number; created_at: number }>(
+        "SELECT generation, created_at FROM ci_data_keys ORDER BY generation DESC LIMIT 1",
+      )
+      .toArray()[0];
+    const secrets = this.#sql.exec<{ n: number }>("SELECT count(*) AS n FROM ci_secrets").one().n;
+    const inClosed = "generation IN (SELECT value FROM json_each(?))";
+    const unreadableSecrets = this.#sql
+      .exec<{ n: number }>(
+        `SELECT count(*) AS n FROM ci_secrets WHERE ${inClosed}`,
+        JSON.stringify(closed),
+      )
+      .one().n;
+    const listed = this.#sql
+      .exec<{ scope: string; name: string }>(
+        `SELECT scope, name FROM ci_secrets WHERE ${inClosed} ORDER BY scope, name LIMIT ?`,
+        JSON.stringify(closed),
+        MAX_LISTED_UNREADABLE + 1,
+      )
+      .toArray();
+    return {
+      generation: newest?.generation ?? null,
+      createdAt: newest?.created_at ?? null,
+      secrets,
+      unreadableSecrets,
+      unreadable: listed
+        .slice(0, MAX_LISTED_UNREADABLE)
+        .map((r) => ({ scope: r.scope, name: r.name })),
+      unreadableTruncated: listed.length > MAX_LISTED_UNREADABLE,
+    };
   }
 
   /** Data keys by generation, unwrapped; a generation that does not open is absent. */
@@ -505,6 +694,8 @@ export class AccountCi {
     const answer = this.host.storage.transactionSync((): CiResult<{ created: boolean }> => {
       const moved = this.#fenceFailure(epochs);
       if (moved) return moved;
+      // A replacement since it was prepared retired the generation it was sealed under.
+      if (!this.#generation(generation)) return BAD_KEY_ID;
       const exists = this.#exists("secret", input.scope, name);
       if (!exists) {
         const full = this.#full("secret", input.scope);
