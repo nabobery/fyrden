@@ -10,6 +10,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
+import { RUN_JOB } from "../src/do/run/engine.js";
 import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
@@ -349,10 +350,11 @@ describe("the repository's record of a run", () => {
     });
     await advance(runId, WEEK);
     const left = await inRun(runId, (r) => ({
-      jobs: r.engine.rows("SELECT * FROM jobs").length,
+      jobs: r.engine.rows<{ job_id: string }>("SELECT job_id FROM jobs").map((row) => row.job_id),
       erased: r.engine.rows("SELECT * FROM run_erasure").length,
     }));
-    expect(left).toEqual({ jobs: 0, erased: 1 });
+    // Nothing but the purge of its log chunks, which erasure leaves.
+    expect(left).toEqual({ jobs: [RUN_JOB.logPurge], erased: 1 });
   });
 });
 

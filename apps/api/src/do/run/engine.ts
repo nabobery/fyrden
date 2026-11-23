@@ -65,6 +65,7 @@ export const RUN_JOB = {
   concurrency: "concurrency",
   reconcile: "reconcile",
   retire: "retire",
+  logPurge: "log-purge",
   approval: "approval",
 } as const;
 

@@ -75,7 +75,8 @@ describe("retiring an expired run", () => {
     expect((await state(runId)).erased).toBe(false);
     await runAt(runId, T0 + RETENTION);
     expect(await recorded(f, runId)).toBe(false);
-    expect(await state(runId)).toEqual({ erased: true, jobs: [] });
+    // Only its log purge is left, due once a log write in flight would have landed.
+    expect(await state(runId)).toEqual({ erased: true, jobs: [`${RUN_JOB.logPurge}:queued`] });
     expect(await runStub(runId).get()).toBeUndefined();
   });
 

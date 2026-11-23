@@ -5,8 +5,14 @@ import {
   type JobHandler,
   type JobKind,
   JobQueue,
+  type SliceResult,
 } from "@fyrden/adapters-cloudflare/git";
-import { createLogger, createMetrics, measureInvocation } from "@fyrden/adapters-cloudflare/obs";
+import {
+  countSubrequests,
+  createLogger,
+  createMetrics,
+  measureInvocation,
+} from "@fyrden/adapters-cloudflare/obs";
 import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
   effectiveScope,
@@ -48,6 +54,7 @@ import {
 } from "./run/engine.js";
 import {
   type AppendLogAnswer,
+  LOG_LATE_MS,
   type LogHooks,
   type MaskSource,
   NO_MASK_SOURCE,
@@ -238,7 +245,12 @@ export type TaskAnswer<T> =
 export interface RunHooks extends DispatchHooks, LogHooks, ReservationHooks {
   beforeRepoCall?: (op: string) => Promise<void> | void;
   afterRepoCall?: (op: string) => Promise<void> | void;
+  /** Before each call of an erased run's log purge (a throw fails that slice). */
+  beforeLogPurgeCall?: () => Promise<void> | void;
 }
+
+/** R2 calls (a list and a delete per 1,000 chunks) one slice of an erased run's log purge makes at most. Proposed. */
+export const LOG_PURGE_CALLS = 20;
 
 /**
  * What the repository answers once it is deleted: a refused change, or any call at all while
@@ -262,6 +274,8 @@ export class RunDO extends MigratingDO {
   hooks: RunHooks = {};
   /** Values to mask in job logs that are fetched rather than stored (none yet). */
   maskSource: MaskSource = NO_MASK_SOURCE;
+  /** R2 calls one log-purge slice makes at most. Tests may lower it. */
+  logPurgeCalls = LOG_PURGE_CALLS;
   /** The most the tasks' kept log-mask matchers may hold. Tests may lower it. */
   maskCacheBytes = MASK_CACHE_BYTES;
 
@@ -1590,8 +1604,10 @@ export class RunDO extends MigratingDO {
   // ------------------------------------------------------------------ erasure
 
   /**
-   * Erases the reserved repository's run, retaining its identity and a tombstone.
-   * Returns false for another repository; repeating an authorized erasure succeeds.
+   * Erases the reserved repository's run, retaining its identity and a tombstone,
+   * and leaves one job: the purge of its log chunks from R2, once a write that
+   * was in flight has landed. Returns false for another repository; repeating
+   * an authorized erasure succeeds, and purges again if no purge is pending.
    */
   async erase(repoId: string): Promise<boolean> {
     const erased = this.#tx(() => {
@@ -1599,7 +1615,11 @@ export class RunDO extends MigratingDO {
         "SELECT repo_id FROM run_identity WHERE id = 1",
       )[0];
       if (identity && identity.repo_id !== repoId) return false;
-      if (this.#erased()) return true;
+      if (this.#erased()) {
+        // A tombstone from before the purge existed, or whose purge ended: purged (again).
+        if (!this.#purging()) this.#ensurePurge();
+        return true;
+      }
       if (!identity)
         this.engine.exec("INSERT INTO run_identity (id, repo_id) VALUES (1, ?)", repoId);
       for (const table of [
@@ -1621,14 +1641,97 @@ export class RunDO extends MigratingDO {
       ])
         this.engine.exec(`DELETE FROM ${table}`);
       this.engine.exec("INSERT INTO run_erasure (id, erased_at) VALUES (1, ?)", this.context.now());
+      this.#ensurePurge();
       return true;
     });
     if (!erased) return false;
     this.viewers.erased();
     this.#logs.erased();
     this.#model = undefined;
-    await this.ctx.storage.deleteAlarm();
     return true;
+  }
+
+  /** Whether the erased run's log purge is pending. */
+  #purging(): boolean {
+    return (
+      this.engine.rows(
+        "SELECT 1 FROM jobs WHERE job_id = ? AND state IN ('queued', 'running')",
+        RUN_JOB.logPurge,
+      ).length > 0
+    );
+  }
+
+  /**
+   * Queues the log purge `LOG_LATE_MS` from now: a log write in flight at the
+   * erasure has landed by then (or deleted its own object), so the purge finds it.
+   */
+  #ensurePurge(): void {
+    this.jobs.ensure("run_log_purge", RUN_JOB.logPurge, {
+      runAt: this.context.now() + LOG_LATE_MS,
+    });
+  }
+
+  /**
+   * One slice of the erased run's log purge: lists `runs/<run id>/` and deletes
+   * what it lists, at most `logPurgeCalls` R2 calls, until nothing is left. The
+   * prefix also finds chunks no index named (a write whose request failed). A
+   * failure is retried at the sweep's interval and never ends the job: an erased
+   * run has no sweep to restart it.
+   */
+  async #purgeSlice(): Promise<SliceResult> {
+    const runId = this.ctx.id.name;
+    if (!runId) {
+      this.#log.error("an erased run's log purge has no run id");
+      return { done: true };
+    }
+    const prefix = `runs/${runId}/`;
+    try {
+      for (let calls = 0; calls + 2 <= this.logPurgeCalls; calls += 2) {
+        await this.hooks.beforeLogPurgeCall?.();
+        // A list is a Class A operation (https://developers.cloudflare.com/r2/pricing/#class-a-operations).
+        this.context.metrics.count("r2.class_a", { bucket: "fyrden-ci", op: "log_purge_list" });
+        const page = await this.env.CI.list({ prefix, limit: 1000 });
+        if (page.objects.length === 0) return { done: true };
+        await this.hooks.beforeLogPurgeCall?.();
+        // R2 deletes are free (not Class A: https://developers.cloudflare.com/r2/pricing/#free-operations),
+        // but each is still a call against the invocation's internal budget.
+        countSubrequests("internal");
+        await this.env.CI.delete(page.objects.map((object) => object.key));
+      }
+      return { done: false, cursor: null, runAfterMs: 0 };
+    } catch (error) {
+      this.#log.warn("an erased run's log chunks not purged", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { done: false, cursor: null, runAfterMs: this.policy.sweepMs };
+    }
+  }
+
+  /**
+   * An erased run's alarm: its log purge, then, with nothing left pending, the
+   * finished job rows and the alarm go too, so the object holds only its
+   * identity and tombstone.
+   */
+  async #erasedAlarm(): Promise<void> {
+    // Any other job queued since the erasure has nothing to act on, and one due with no handler
+    // here would re-arm the alarm at once, again and again, until the purge ends.
+    this.engine.exec("DELETE FROM jobs WHERE job_id <> ?", RUN_JOB.logPurge);
+    await this.jobs.runDue(
+      { run_log_purge: { runSlice: () => this.#purgeSlice() } },
+      this.memory,
+      this.context.now() + ALARM_BUDGET_MS,
+    );
+    await this.#settleErased();
+  }
+
+  /** On an erased object with no purge pending: deletes the finished job rows and the alarm. */
+  async #settleErased(): Promise<void> {
+    const settled = this.#tx(() => {
+      if (this.#purging()) return false;
+      this.engine.exec("DELETE FROM jobs");
+      return true;
+    });
+    if (settled) await this.ctx.storage.deleteAlarm();
   }
 
   // ------------------------------------------------------------------ background work
@@ -2057,14 +2160,14 @@ export class RunDO extends MigratingDO {
   }
 
   override async alarm(): Promise<void> {
-    if (this.#erased()) {
-      await this.ctx.storage.deleteAlarm();
-      return;
-    }
+    // Measured either way: the invocation's call budget bounds an erased run's purge too.
     await measureInvocation(
       this.context.metrics,
       { where: "do", op: "alarm", doClass: "RunDO" },
-      () => this.jobs.runDue(this.#due(), this.memory, this.context.now() + ALARM_BUDGET_MS),
+      async () => {
+        if (this.#erased()) await this.#erasedAlarm();
+        else await this.jobs.runDue(this.#due(), this.memory, this.context.now() + ALARM_BUDGET_MS);
+      },
     );
   }
 
@@ -2109,6 +2212,16 @@ export class RunDO extends MigratingDO {
         const handler = handlers[kind];
         if (handler && !this.#erased())
           await this.jobs.runJob(jobId, handler, this.memory, real() + ALARM_BUDGET_MS);
+      }
+      // Erased: its log purge now rather than once a late write would have landed.
+      if (this.#erased()) {
+        await this.jobs.runJob(
+          RUN_JOB.logPurge,
+          { runSlice: () => this.#purgeSlice() },
+          this.memory,
+          real() + ALARM_BUDGET_MS,
+        );
+        await this.#settleErased();
       }
     } finally {
       clock.now = real;
