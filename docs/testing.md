@@ -336,6 +336,33 @@ local workerd commits a turn's writes before the next one. The guarantee relied 
 Cloudflare's: `sync()` resolves once pending writes complete. A deployed probe that
 writes, syncs and resets itself would verify it.
 
+## Log masking's matchers and how they were measured
+
+A task's log-mask matchers are kept between log requests (`MaskMatcherCache`,
+`apps/api/src/do/run/mask-cache.ts`), each holding a reservation of its estimate
+from the run object's memory pool. Two benches run in local workerd 1.20261101.1,
+only under `FYRDEN_BENCH=1`, and assert nothing about time. Neither is in CI, so
+rerun them when the masker, its matchers or workerd's version changes.
+
+| Bench | Command | Shows |
+|---|---|---|
+| Masker time | `FYRDEN_BENCH=1 pnpm --filter @fyrden/api exec vitest run test/ci.secrets.masking.test.ts -t "masker bench" --silent=false` | ms to mask 100 rows of 200 chars, cold and with the task's kept matchers; one upload of 240 `::add-mask::` rows; the request after it, extended or built again |
+| Kept matchers' retention | `FYRDEN_BENCH=1 node tools/bench/mask/run.ts` | V8 heap and backing stores a kept cache retains, after forced collection, against `MaskMatcherCache.bytes`, over nine mask shapes |
+
+Measured on 2026-11-22 on the Linux x64 dev VM, two rounds back to back of the
+change that added the cache against its base:
+
+| Case, full secret allowance (5 secrets, 32,430 bytes of masked forms) | Before | After |
+|---|---:|---:|
+| 100 rows of 200 chars, built from every mask (mean of 50) | 5.30, 5.20 ms | 4.84, 5.20 ms |
+| The same with the task's kept matchers (mean of 50) | — | 0.76, 0.86 ms |
+| One upload of 240 `::add-mask::` rows, each registering a value (mean of 3) | 3,790, 4,089 ms | 88, 96 ms |
+| The next request: kept and extended, or built from every mask (mean of 3) | built 31, 27 ms | extended 27, 30 ms; built 33, 36 ms |
+
+The estimate is 1.4 to 5 times what workerd retains in every shape (82 to 96 bytes
+a trie node at the caps); the constants and the shapes are in `mask.ts` and
+`tools/bench/mask/src/shapes.ts`.
+
 ## Writing git-core tests
 
 - Tests come first (see `AGENTS.md`). Parsers get a fast-check property suite

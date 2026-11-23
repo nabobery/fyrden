@@ -338,6 +338,8 @@ export interface MaskRowsOptions {
   readonly reserve?: { readonly values: number; readonly bytes: number } | undefined;
   /** Counts transition lookups made while scanning the rows, so tests can bound the work. */
   readonly work?: { lookups: number } | undefined;
+  /** The task's matchers kept from earlier calls, reused and extended by this one. */
+  readonly cache?: MaskMatcherCache | undefined;
 }
 
 export interface MaskRowsResult {
@@ -356,6 +358,15 @@ export interface MaskRowsResult {
   readonly added: readonly { readonly value: string; readonly index: number }[];
   /** `::add-mask::` values not registered because the task is at a cap. */
   readonly dropped: readonly { readonly index: number; readonly reason: "values" | "bytes" }[];
+}
+
+/** Matchers over some of the masks not in the base, and their states in the call. */
+interface Tier {
+  readonly masks: number[];
+  readonly long: Matcher;
+  readonly short: Matcher;
+  state: number;
+  local: number;
 }
 
 interface Entry {
@@ -379,8 +390,10 @@ interface Entry {
  * match of 4+ chars holds every row from where it begins (`settled`), unless
  * `force` stores them, masking it.
  *
- * Linear in the rows' length (Aho–Corasick over UTF-16 code units), plus one
- * rebuild of the matcher per registering row.
+ * Linear in the rows' length (Aho–Corasick over UTF-16 code units) times the
+ * matchers stepped: the masks in effect for the whole call (the base, kept in
+ * `options.cache` between calls) and at most log2 n + 1 tiers over the masks
+ * a row registers or activates.
  */
 export function maskRows(
   masks: readonly LogMask[],
@@ -398,21 +411,28 @@ export function maskRows(
   const reserved = options.reserve ?? { values: 0, bytes: 0 };
 
   const entries: Entry[] = [];
-  const pending = new Map<number, Entry[]>();
+  const pending = new Map<number, number[]>();
   const known = new Map<string, number>();
   let bytes = 0;
   let reservedValues = 0;
   let reservedBytes = 0;
   let secretValues = 0;
-  for (const mask of masks) {
+  const cache = options.cache ?? new MaskMatcherCache();
+  const variants = cache.prepare(masks);
+  for (const [k, mask] of masks.entries()) {
+    // From row 0, a mask of row 0 counts from the stream's start: the same as one already in effect.
+    const now = mask.fromIndex < start || (start === 0 && mask.fromIndex === 0);
     const entry: Entry = {
-      variants: variantsOf(mask.value),
+      variants: variants[k] as MaskVariant[],
       fromIndex: mask.fromIndex,
-      from: mask.fromIndex < start ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
+      from: now ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY,
     };
     entries.push(entry);
-    if (mask.fromIndex >= start)
-      pending.set(mask.fromIndex, [...(pending.get(mask.fromIndex) ?? []), entry]);
+    if (!now) {
+      const list = pending.get(mask.fromIndex);
+      if (list === undefined) pending.set(mask.fromIndex, [k]);
+      else list.push(k);
+    }
     known.set(
       mask.value,
       Math.min(known.get(mask.value) ?? Number.POSITIVE_INFINITY, mask.fromIndex),
@@ -459,13 +479,55 @@ export function maskRows(
   };
 
   const work = options.work;
-  let long = new Matcher(entries, true, work);
-  let short = new Matcher(entries, false, work);
+  const inBase: boolean[] = entries.map((entry) => entry.from === Number.NEGATIVE_INFINITY);
+  const base = cache.base(entries, inBase);
+  base.long.work = work;
+  base.short.work = work;
   const prefixOf = (c: LogMaskCarry | null): string =>
     c === null ? "" : (entries[c.mask]?.variants[c.variant]?.text.slice(0, c.length) ?? "");
+  // Masks not in the base, in tiers: a new tier takes in the one before it while that one is
+  // at most twice its size. So each tier is more than twice the next, a row steps at most
+  // log2 n + 1 of them, and each mask is inserted O(log n) times however many rows add masks.
+  const tiers: Tier[] = [];
+  const addTier = (masks: number[], prefix: string): void => {
+    let merged = masks;
+    while (tiers.length > 0 && (tiers.at(-1) as Tier).masks.length <= 2 * merged.length)
+      merged = [...(tiers.pop() as Tier).masks, ...merged];
+    merged.sort((a, b) => a - b);
+    const long = new Matcher(entries, true, merged);
+    const short = new Matcher(entries, false, merged);
+    long.work = work;
+    short.work = work;
+    tiers.push({ masks: merged, long, short, state: long.run(prefix), local: 0 });
+  };
 
-  let state = long.walk(prefixOf(resumed));
-  const carries: (LogMaskCarry | null)[] = [boundary(long.carry(state, 0), 0)];
+  let state = base.long.run(prefixOf(resumed));
+  const initial = entries.flatMap((entry, mask) =>
+    inBase[mask] !== true && entry.from !== Number.POSITIVE_INFINITY ? [mask] : [],
+  );
+  if (initial.length > 0) addTier(initial, prefixOf(resumed));
+  // The deepest partial that would count; at equal depth the lowest `from`, then the first mask.
+  const carryAt = (end: number): LogMaskCarry | null => {
+    let best = base.long.carry(state, end);
+    // From row 0 the base's masks count from offset 0, where masks of empty leading rows tie.
+    let bestFrom = start === 0 ? 0 : Number.NEGATIVE_INFINITY;
+    for (const tier of tiers) {
+      const found = tier.long.carryFrom(tier.state, end);
+      if (found === null) continue;
+      const [carry, from] = found;
+      if (
+        best === null ||
+        carry.length > best.length ||
+        (carry.length === best.length &&
+          (from < bestFrom || (from === bestFrom && carry.mask < best.mask)))
+      ) {
+        best = carry;
+        bestFrom = from;
+      }
+    }
+    return best;
+  };
+  const carries: (LogMaskCarry | null)[] = [boundary(carryAt(0), 0)];
   const added: { value: string; index: number }[] = [];
   const dropped: { index: number; reason: "values" | "bytes" }[] = [];
   const ranges = new Ranges();
@@ -474,71 +536,88 @@ export function maskRows(
   let pos = 0;
   let lastCut = 0;
 
-  rows.forEach((row, t) => {
-    const index = start + t;
-    rowStarts.push(pos);
-    let gapEnd = Math.min(gapRemaining, row.length);
-    if (gapEnd > 0 && isHighSurrogate(row.charCodeAt(gapEnd - 1))) {
-      if (gapEnd < row.length && isLowSurrogate(row.charCodeAt(gapEnd))) gapEnd++;
-      else if (gapEnd === row.length && gapRemaining === row.length) gapRemaining++;
-    }
-    ranges.add(pos, pos + gapEnd);
-    gapRemaining = Math.max(0, gapRemaining - row.length);
-    gaps.push(gapRemaining);
-    let changed = false;
-    for (const entry of pending.get(index) ?? []) {
-      entry.from = pos;
-      changed = true;
-    }
-    const data = commandData(row);
-    const value = data === null ? null : parseAddMask(row);
-    let commandEnd = -1;
-    if (data !== null && value !== null && data !== "") {
-      commandEnd = pos + COMMAND.length + data.length;
-      if (
-        value.length >= MASK_MIN_LENGTH &&
-        (known.get(value) ?? Number.POSITIVE_INFINITY) > index
-      ) {
-        const size = utf8Length(value);
-        const values =
-          entries.length -
-          secretValues -
-          reservedValues +
-          Math.max(reserved.values, reservedValues);
-        if (values >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
-        else if (bytes + Math.max(reserved.bytes, reservedBytes) + size > MASK_MAX_TEXT_BYTES)
-          dropped.push({ index, reason: "bytes" });
-        else {
-          entries.push({ variants: variantsOf(value), fromIndex: index, from: pos });
-          known.set(value, index);
-          bytes += size;
-          added.push({ value, index });
-          changed = true;
+  try {
+    rows.forEach((row, t) => {
+      const index = start + t;
+      rowStarts.push(pos);
+      let gapEnd = Math.min(gapRemaining, row.length);
+      if (gapEnd > 0 && isHighSurrogate(row.charCodeAt(gapEnd - 1))) {
+        if (gapEnd < row.length && isLowSurrogate(row.charCodeAt(gapEnd))) gapEnd++;
+        else if (gapEnd === row.length && gapRemaining === row.length) gapRemaining++;
+      }
+      ranges.add(pos, pos + gapEnd);
+      gapRemaining = Math.max(0, gapRemaining - row.length);
+      gaps.push(gapRemaining);
+      const fresh: number[] = [];
+      for (const mask of pending.get(index) ?? []) {
+        (entries[mask] as Entry).from = pos;
+        fresh.push(mask);
+      }
+      const data = commandData(row);
+      const value = data === null ? null : parseAddMask(row);
+      let commandEnd = -1;
+      if (data !== null && value !== null && data !== "") {
+        commandEnd = pos + COMMAND.length + data.length;
+        if (
+          value.length >= MASK_MIN_LENGTH &&
+          (known.get(value) ?? Number.POSITIVE_INFINITY) > index
+        ) {
+          const size = utf8Length(value);
+          const values =
+            entries.length -
+            secretValues -
+            reservedValues +
+            Math.max(reserved.values, reservedValues);
+          if (values >= MASK_MAX_VALUES) dropped.push({ index, reason: "values" });
+          else if (bytes + Math.max(reserved.bytes, reservedBytes) + size > MASK_MAX_TEXT_BYTES)
+            dropped.push({ index, reason: "bytes" });
+          else {
+            fresh.push(entries.length);
+            entries.push({ variants: variantsOf(value), fromIndex: index, from: pos });
+            known.set(value, index);
+            bytes += size;
+            added.push({ value, index });
+          }
         }
       }
-    }
-    if (changed) {
-      activations.push({ index, offset: pos });
-      // Partial matches in progress here are of earlier values only.
-      const prefix = prefixOf(long.carry(state, pos));
-      long = new Matcher(entries, true, work);
-      short = new Matcher(entries, false, work);
-      state = long.walk(prefix);
-    }
-    let local = 0;
-    for (let i = 0; i < row.length; i++) {
-      const unit = row.charCodeAt(i);
-      state = long.step(state, unit);
-      local = short.step(local, unit);
-      pos++;
-      const length = Math.max(long.longestMatch(state, pos), short.longestMatch(local, pos));
-      if (length > 0) ranges.add(Math.max(pos - length, lastCut), pos);
-      if (pos === commandEnd) ranges.add(commandEnd - (data as string).length, commandEnd);
-    }
-    const carried = boundary(long.carry(state, pos), pos);
-    carries.push(carried);
-    if (carried !== null && carried.length < MASK_HOLD_MIN_LENGTH) lastCut = pos;
-  });
+      if (fresh.length > 0) {
+        activations.push({ index, offset: pos });
+        // Partial matches in progress here are of earlier values only. Matchers left as they
+        // are keep their state: what they hold past this partial can never count.
+        addTier(fresh, prefixOf(carryAt(pos)));
+      }
+      let local = 0;
+      for (const tier of tiers) tier.local = 0;
+      for (let i = 0; i < row.length; i++) {
+        const unit = row.charCodeAt(i);
+        state = base.long.step(state, unit);
+        local = base.short.step(local, unit);
+        pos++;
+        let length = Math.max(
+          base.long.longestMatch(state, pos),
+          base.short.longestMatch(local, pos),
+        );
+        for (const tier of tiers) {
+          tier.state = tier.long.step(tier.state, unit);
+          tier.local = tier.short.step(tier.local, unit);
+          length = Math.max(
+            length,
+            tier.long.longestMatch(tier.state, pos),
+            tier.short.longestMatch(tier.local, pos),
+          );
+        }
+        if (length > 0) ranges.add(Math.max(pos - length, lastCut), pos);
+        if (pos === commandEnd) ranges.add(commandEnd - (data as string).length, commandEnd);
+      }
+      const carried = boundary(carryAt(pos), pos);
+      carries.push(carried);
+      if (carried !== null && carried.length < MASK_HOLD_MIN_LENGTH) lastCut = pos;
+    });
+  } finally {
+    // A kept matcher never counts into a later caller's work.
+    base.long.work = undefined;
+    base.short.work = undefined;
+  }
 
   let settled = rows.length;
   const tail = carries[rows.length] ?? null;
@@ -657,26 +736,56 @@ class Matcher {
   readonly #properRef: number[] = [-1];
   /** Deepest node on the failure chain (itself included) that some pattern continues past. */
   readonly #partialNode: number[] = [0];
-  readonly #refs: { mask: number; variant: number }[] = [];
+  readonly #refs: { readonly mask: number; readonly variant: number }[] = [];
 
-  readonly #work: { lookups: number } | undefined;
+  readonly #crosses: boolean;
 
-  constructor(entries: readonly Entry[], crosses: boolean, work?: { lookups: number }) {
-    entries.forEach((entry, mask) => {
-      if (entry.from === Number.POSITIVE_INFINITY) return;
+  /** Counts lookups while a call scans with this matcher; unset between calls. */
+  work: { lookups: number } | undefined;
+
+  /** The crossing (or row-local) variants of masks `masks`, ascending positions, that are in effect. */
+  constructor(entries: readonly Entry[], crosses: boolean, masks: readonly number[]) {
+    this.#crosses = crosses;
+    this.#add(entries, masks);
+  }
+
+  /** Patterns inserted. */
+  get patterns(): number {
+    return this.#refs.length;
+  }
+
+  /** Trie nodes, the root included. */
+  get nodes(): number {
+    return this.#unit.length;
+  }
+
+  /**
+   * Inserts the variants of masks `masks` (each after every mask inserted so far) and links
+   * the whole trie again: an existing node's failure link may now end at a new node.
+   */
+  extend(entries: readonly Entry[], masks: readonly number[]): void {
+    this.#add(entries, masks);
+  }
+
+  #add(entries: readonly Entry[], masks: readonly number[]): void {
+    const work = this.work;
+    this.work = undefined;
+    for (const mask of masks) {
+      const entry = entries[mask] as Entry;
+      if (entry.from === Number.POSITIVE_INFINITY) continue;
       entry.variants.forEach((variant, index) => {
-        if (variant.crosses !== crosses) return;
+        if (variant.crosses !== this.#crosses) return;
         const ref = this.#refs.length;
         this.#refs.push({ mask, variant: index });
         this.#insert(variant.text, entry.from, ref);
       });
-    });
+    }
     this.#link();
-    this.#work = work;
+    this.work = work;
   }
 
   #child(node: number, unit: number): number {
-    if (this.#work !== undefined) this.#work.lookups++;
+    if (this.work !== undefined) this.work.lookups++;
     return this.#edges.get(node * 0x10000 + unit) ?? 0;
   }
 
@@ -741,12 +850,10 @@ class Matcher {
     }
   }
 
-  /** The state for a prefix of a pattern, or the root when it is empty or unknown. */
-  walk(prefix: string): number {
+  /** The state after reading `text` from the root. */
+  run(text: string): number {
     let node = 0;
-    for (let i = 0; i < prefix.length && (i === 0 || node !== 0); i++) {
-      node = this.#child(node, prefix.charCodeAt(i));
-    }
+    for (let i = 0; i < text.length; i++) node = this.step(node, text.charCodeAt(i));
     return node;
   }
 
@@ -762,6 +869,21 @@ class Matcher {
     return 0;
   }
 
+  /** `carry`, with the lowest `from` of the patterns continuing past it. */
+  carryFrom(node: number, end: number): [LogMaskCarry, number] | null {
+    let at = this.#partialNode[node] as number;
+    while (at !== 0) {
+      const depth = this.#depth[at] as number;
+      const from = this.#proper[at] as number;
+      if (from <= end - depth) {
+        const ref = this.#refs[this.#properRef[at] as number] as { mask: number; variant: number };
+        return [{ mask: ref.mask, variant: ref.variant, length: depth }, from];
+      }
+      at = this.#partialNode[this.#fail[at] as number] as number;
+    }
+    return null;
+  }
+
   /** The deepest partial match in progress at stream offset `end` that would count if completed. */
   carry(node: number, end: number): LogMaskCarry | null {
     let at = this.#partialNode[node] as number;
@@ -775,4 +897,141 @@ class Matcher {
     }
     return null;
   }
+}
+
+/** What a call did with a task's kept matchers. */
+export type MaskMatcherOutcome = "hit" | "extended" | "built";
+
+/**
+ * A task's masks as of its last call, their variants, and the matchers over
+ * the masks in effect for that whole call (the base). A call whose masks
+ * start with these, unchanged, reuses the base, or extends it with masks that
+ * follow; any other call builds it again. Masks only append, so the usual
+ * call reuses it. Holds mask values and their variants in memory: keep it
+ * only as long as the masks themselves exist.
+ */
+export class MaskMatcherCache {
+  #masks: LogMask[] = [];
+  #variants: MaskVariant[][] = [];
+  #inBase: number[] = [];
+  #long: Matcher | undefined;
+  #short: Matcher | undefined;
+  /** UTF-16 units of the kept values and variants. */
+  #units = 0;
+  /** Variants kept, of every mask: those not in the base (pending, carried) included. */
+  #variantCount = 0;
+  /** Patterns in the base matchers. */
+  #patterns = 0;
+
+  /** What the last call did with the base. */
+  outcome: MaskMatcherOutcome | undefined;
+  /** Patterns the last call inserted into the base: none on a hit. */
+  inserted = 0;
+  /** Trie nodes the last call linked in the base: none on a hit. */
+  linked = 0;
+
+  /** An estimate of the heap this holds, in bytes, at or above what workerd retains for it. */
+  get bytes(): number {
+    const nodes = (this.#long?.nodes ?? 0) + (this.#short?.nodes ?? 0);
+    return (
+      CACHE_FIXED_BYTES +
+      nodes * CACHE_NODE_BYTES +
+      this.#patterns * CACHE_PATTERN_BYTES +
+      this.#variantCount * CACHE_VARIANT_BYTES +
+      this.#masks.length * CACHE_MASK_BYTES +
+      this.#units * CACHE_UNIT_BYTES
+    );
+  }
+
+  /** @internal The variants of each of `masks`, kept for those unchanged since the last call. */
+  prepare(masks: readonly LogMask[]): readonly MaskVariant[][] {
+    const kept = this.#masks;
+    if (kept.length > masks.length || kept.some((mask, k) => !sameMask(mask, masks[k] as LogMask)))
+      this.#clear();
+    for (let k = this.#masks.length; k < masks.length; k++) {
+      const mask = masks[k] as LogMask;
+      const variants = variantsOf(mask.value);
+      this.#masks.push({
+        value: mask.value,
+        fromIndex: mask.fromIndex,
+        reserved: mask.reserved === true,
+        secret: mask.secret === true,
+      });
+      this.#variants.push(variants);
+      this.#units += mask.value.length;
+      this.#variantCount += variants.length;
+      for (const variant of variants) this.#units += variant.text.length;
+    }
+    return this.#variants;
+  }
+
+  /** @internal The base matchers over the masks `inBase` marks, each in effect for the whole call. */
+  base(entries: readonly Entry[], inBase: readonly boolean[]): { long: Matcher; short: Matcher } {
+    const wanted: number[] = [];
+    inBase.forEach((yes, mask) => {
+      if (yes) wanted.push(mask);
+    });
+    const kept = this.#inBase;
+    const prefix = kept.length <= wanted.length && kept.every((mask, k) => wanted[k] === mask);
+    let long = this.#long;
+    let short = this.#short;
+    if (long !== undefined && short !== undefined && prefix && kept.length === wanted.length) {
+      this.outcome = "hit";
+      this.inserted = 0;
+      this.linked = 0;
+    } else {
+      const before = long !== undefined && short !== undefined && prefix ? this.#patterns : 0;
+      if (long !== undefined && short !== undefined && prefix) {
+        // Every new member follows every kept one, so insertion order stays ascending.
+        const added = wanted.slice(kept.length);
+        long.extend(entries, added);
+        short.extend(entries, added);
+        this.outcome = "extended";
+      } else {
+        long = new Matcher(entries, true, wanted);
+        short = new Matcher(entries, false, wanted);
+        this.outcome = "built";
+      }
+      this.#patterns = long.patterns + short.patterns;
+      this.inserted = this.#patterns - before;
+      this.linked = long.nodes + short.nodes - 2;
+    }
+    this.#long = long;
+    this.#short = short;
+    this.#inBase = wanted;
+    return { long, short };
+  }
+
+  #clear(): void {
+    this.#masks = [];
+    this.#variants = [];
+    this.#inBase = [];
+    this.#long = undefined;
+    this.#short = undefined;
+    this.#units = 0;
+    this.#variantCount = 0;
+    this.#patterns = 0;
+  }
+}
+
+// The estimate's constants. Measured in workerd 1.20261101.1 (`tools/bench/mask/run.ts`): a kept
+// cache retains 82 to 96 bytes per trie node, everything included, at the caps (few long
+// secrets, 200 short ones, 255 values sharing a prefix, both allowances); about 200 bytes per
+// short mask of a later row than the call's (variants kept, nothing in the tries); and 1 to 4
+// KiB with one short mask or none. The estimate is 1.4 to 5 times every shape's: room for a
+// hash table's next doubling.
+const CACHE_FIXED_BYTES = 4096;
+const CACHE_NODE_BYTES = 128;
+const CACHE_PATTERN_BYTES = 64;
+const CACHE_VARIANT_BYTES = 96;
+const CACHE_MASK_BYTES = 192;
+const CACHE_UNIT_BYTES = 2;
+
+function sameMask(a: LogMask, b: LogMask): boolean {
+  return (
+    a.value === b.value &&
+    a.fromIndex === b.fromIndex &&
+    (a.reserved === true) === (b.reserved === true) &&
+    (a.secret === true) === (b.secret === true)
+  );
 }

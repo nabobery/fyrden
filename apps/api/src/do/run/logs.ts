@@ -8,6 +8,8 @@ import {
   type LogMask,
   type LogMaskCarry,
   type LogMaskReach,
+  type MaskMatcherCache,
+  type MaskMatcherOutcome,
   type MaskRowsResult,
   maskCrossLength,
   maskGapLength,
@@ -43,6 +45,7 @@ import {
 import { ProtoError } from "../../runner/proto/wire.js";
 import type { TaskAnswer, TaskRef } from "../RunDO.js";
 import type { RunEngine } from "./engine.js";
+import { type MaskCacheOutcome, MaskMatcherCaches } from "./mask-cache.js";
 import { type LogLine, logLine, viewerHooks } from "./viewers.js";
 
 /*
@@ -61,8 +64,11 @@ import { type LogLine, logLine, viewerHooks } from "./viewers.js";
  * stored with it, so a resend after a reset masks the same. The values are
  * kept, sealed under the CI master key, until the log closes: when it
  * completes, or `LOG_LATE_MS` after its task ended incomplete, after which its
- * rows are refused. They are opened for each request that masks rows, and
- * never kept open between requests.
+ * rows are refused. They are opened for each request that masks rows. The
+ * matchers built from them (values and their encoded forms) are kept in
+ * memory between requests while the log is open (`mask-cache.ts`): never
+ * stored, dropped when the log closes, a final store commits, the run is
+ * erased or other work needs the memory, and gone with the instance.
  *
  * While a job is watched live, each request's rows that are final as masked
  * (stored now, or settled and left unacked) are published to its sockets:
@@ -187,6 +193,10 @@ export interface LogHooks {
   afterLogConfirm?: () => Promise<void> | void;
   /** After a mask write is sealed against the masks it read, before its transaction. */
   beforeMaskCommit?: (kind: MaskKind) => Promise<void> | void;
+  /** A log request's masks were read, before they are opened. */
+  beforeLogMasksOpen?: () => Promise<void> | void;
+  /** A log request masked rows, with what it did with the task's kept matchers. */
+  maskMatcher?: (task: number, outcome: MaskCacheOutcome) => void;
 }
 
 /** Where a request's final rows go: the job's live sockets (`viewers.ts`). */
@@ -210,6 +220,8 @@ export interface LogsHost {
   readonly log: Logger;
   /** Each request reserves before decoding; stored-log catch-up yields first when needed. */
   readonly memory: DoMemoryBudget;
+  /** The most the tasks' kept mask matchers may hold, by estimate (`MASK_CACHE_BYTES`). */
+  readonly maskCacheBytes: number;
   now(): number;
   erased(): boolean;
   tx<T>(fn: () => T): T;
@@ -282,8 +294,27 @@ export class RunLogs {
   readonly #busy = new Set<number>();
   /** When the oldest unacked row of each task was first seen; lost on a reset, which only restarts that clock. */
   readonly #firstSeen = new Map<number, number>();
+  /** Each task's mask matchers, kept between requests while its log is open. */
+  readonly #matchers: MaskMatcherCaches;
 
-  constructor(private readonly host: LogsHost) {}
+  constructor(private readonly host: LogsHost) {
+    this.#matchers = new MaskMatcherCaches(host.memory, () => host.maskCacheBytes);
+  }
+
+  /** The run was erased: no task's masks remain. */
+  erased(): void {
+    this.#matchers.dropAll();
+  }
+
+  /** Gives back the memory the tasks' kept mask matchers hold, for work that needs the room. */
+  dropMaskCaches(): void {
+    this.#matchers.dropAll();
+  }
+
+  /** The estimates of the kept mask matchers, in bytes (for tests). */
+  maskCacheBytes(): number {
+    return this.#matchers.bytes();
+  }
 
   /** The rows of task `task` stored contiguously from position 0. */
   ackOf(task: number): number {
@@ -565,7 +596,11 @@ export class RunLogs {
         due,
         CLOSE_PAGE,
       );
+      // Kept matchers go once their log closes, whether or not it has masks left to delete.
+      for (const task of this.#matchers.tasks())
+        if (closed(this.#log(task), now)) this.#matchers.drop(task);
       for (const { task } of tasks) {
+        this.#matchers.drop(task);
         host.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", task);
         host.engine.exec(
           "UPDATE ci_logs SET mask_carry = NULL, gap_remaining = 0 WHERE task = ?",
@@ -598,6 +633,7 @@ export class RunLogs {
    */
   async #masks(runId: string, task: number): Promise<LogMask[] | undefined> {
     const rows = this.#maskRows(task);
+    await this.host.hooks.beforeLogMasksOpen?.();
     const values = await this.#open(undefined, runId, task, rows);
     if (!values) {
       this.host.log.error("log masks do not open: the task's rows are not stored", { task });
@@ -655,11 +691,14 @@ export class RunLogs {
       reservation = fits ? host.memory.tryReserve(bytes) : undefined;
       if (!reservation && fits) {
         host.viewers.dropCaches();
+        this.#matchers.dropAll();
         reservation = host.memory.tryReserve(bytes);
       }
       if (!reservation && fits) {
         await priority.yieldMemory();
         if (host.erased()) return notFound();
+        // Another task's request may have kept its matchers during the wait.
+        this.#matchers.dropAll();
         reservation = host.memory.tryReserve(bytes);
       }
       if (!reservation) {
@@ -787,6 +826,7 @@ export class RunLogs {
     if (!stored) return acked(ackIndex);
     const masks = [...stored, ...fetchedMasks];
     const carry = parseCarry(log?.mask_carry ?? null);
+    const cache = this.#matchers.take(ref.task);
     const mask = (force: boolean): MaskRowsResult =>
       maskRows(masks, carry, decision.lines, {
         start: decision.start,
@@ -794,9 +834,14 @@ export class RunLogs {
         force,
         reserve: TOKEN_RESERVE,
         gapRemaining: log?.gap_remaining ?? 0,
+        cache,
       });
     const first = mask(false);
+    // The first pass's: a forced second pass over the same matchers is always a hit.
+    const outcome = cache.outcome;
     const settle = settleFlush(decision, first.settled, state, now);
+    const masked = settle.kind === "store" && settle.force ? mask(true) : first;
+    this.#keepMatchers(ref.task, cache, outcome);
     if (settle.kind === "hold") {
       this.#firstSeen.set(ref.task, settle.firstUnackedSeenAt);
       if (host.viewers.watched(ref.jobId))
@@ -807,7 +852,6 @@ export class RunLogs {
         );
       return acked(settle.ackIndex);
     }
-    const masked = settle.force ? mask(true) : first;
     const count = Math.min(settle.end - settle.start, decision.lines.length);
     const boundary = settle.final ? null : masked.carryAt(count);
     if (!this.#firstSeen.has(ref.task)) this.#firstSeen.set(ref.task, now);
@@ -856,6 +900,7 @@ export class RunLogs {
     const stored = await this.#masks(ref.runId, ref.task);
     if (!stored) return undefined;
     const fetched = await this.host.masks.masksFor(ref);
+    const cache = this.#matchers.take(ref.task);
     const masked = maskRows(
       [...stored, ...fetched.map((value) => ({ value, fromIndex: 0 }))],
       parseCarry(log?.mask_carry ?? null),
@@ -866,9 +911,27 @@ export class RunLogs {
         force: false,
         reserve: TOKEN_RESERVE,
         gapRemaining: log?.gap_remaining ?? 0,
+        cache,
       },
     );
+    this.#keepMatchers(ref.task, cache, cache.outcome);
     return masked.lines.slice(0, masked.settled);
+  }
+
+  /**
+   * Keeps the task's matchers after its masking calls, with no await since
+   * its masks were read: only while the run stands and the log still takes
+   * rows, so matchers holding mask values never outlive the masks (an
+   * erasure or a close may have run while the masks were opened).
+   */
+  #keepMatchers(
+    task: number,
+    cache: MaskMatcherCache,
+    outcome: MaskMatcherOutcome | undefined,
+  ): void {
+    const open = !this.host.erased() && !closed(this.#log(task), this.host.now());
+    const kept = open && this.#matchers.keep(task, cache);
+    this.host.hooks.maskMatcher?.(task, kept ? (outcome ?? "uncached") : "uncached");
   }
 
   /** Publishes final rows to the job's sockets (a test may pause first). */
@@ -1015,6 +1078,8 @@ export class RunLogs {
       );
       return final && this.complete(ref.task) ? "complete" : "won";
     });
+    // A committed final store deleted the task's masks, complete or only finalized.
+    if (final && (outcome === "won" || outcome === "complete")) this.#matchers.drop(ref.task);
     if (outcome !== "won" && outcome !== "complete") {
       host.log.info(
         outcome === "erased"

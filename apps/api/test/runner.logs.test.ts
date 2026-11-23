@@ -331,10 +331,15 @@ describe("UpdateLog", () => {
     await hook(runId, () => ({ beforeLogStore: () => held.hold() }));
     const first = sendLog(a, { taskId: taskA.id, index: 0, rows: big(0) }).then(ackOfRaw);
     await held.started;
-    const during = await inRun(runId, (r) => r.memory.stats());
+    // Kept mask matchers aside: a request that needs their room drops them.
+    const pool = (r: RunDO) => ({
+      ...r.memory.stats(),
+      reservedBytes: r.memory.stats().reservedBytes - r.maskCacheBytesHeld(),
+    });
+    const during = await inRun(runId, pool);
     expect(during.reservedBytes).toBeGreaterThan(11 * MiB);
     expect(await ackOf(b, { taskId: taskB.id, index: 0, rows: big(0) })).toBe(0);
-    const refused = await inRun(runId, (r) => r.memory.stats());
+    const refused = await inRun(runId, pool);
     // Retained input stays within the pool: the refused body reserved nothing.
     expect(refused.reservedBytes).toBe(during.reservedBytes);
     expect(refused.peakBytes).toBeLessThanOrEqual(17 * MiB);
@@ -342,7 +347,7 @@ describe("UpdateLog", () => {
     held.release();
     expect(await first).toBe(60);
     await hook(runId, () => ({}));
-    expect((await inRun(runId, (r) => r.memory.stats())).reservedBytes).toBe(0);
+    expect((await inRun(runId, pool)).reservedBytes).toBe(0);
     // The runner resends, and now there is room.
     expect(await ackOf(b, { taskId: taskB.id, index: 0, rows: big(0) })).toBe(60);
     expect((await storedLines(runId, numberB)).length).toBe(60);
@@ -651,7 +656,10 @@ describe("UpdateLog fencing", () => {
 
   it("a failed object write moves no ack and gives back its memory", async () => {
     const { runId, runner, task, number } = await withTask();
-    const before = await inRun(runId, (r) => r.memory.stats().reservedBytes);
+    const before = await inRun(
+      runId,
+      (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld(),
+    );
     await inRun(runId, (r) => {
       const host = r as unknown as { env: Env };
       const bucket = host.env.CI;
@@ -675,7 +683,9 @@ describe("UpdateLog fencing", () => {
       "unavailable",
       503,
     );
-    expect(await inRun(runId, (r) => r.memory.stats().reservedBytes)).toBe(before);
+    expect(await inRun(runId, (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld())).toBe(
+      before,
+    );
     expect(await logOf(runId, number)).toBeUndefined();
     expect(await objectsOf(runId, number)).toEqual([]);
     // The runner resends, and the write now succeeds.
