@@ -425,6 +425,29 @@ describe("workflow_dispatch", () => {
     expect(await dispatchRuns(f)).toHaveLength(3);
   });
 
+  it("replay one key across /api and /api/v3, which stock gh calls", async () => {
+    const f = await dispatchRepo();
+    const key = uniqueId("key");
+    const body = { ref: "main", inputs: { env: "prod" } };
+    const first = await dispatch(f, "ci.yml", body, { key });
+    const v3 = await exports.default.fetch(
+      `${ORIGIN}/api/v3${f.path}/actions/workflows/ci.yml/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `token ${f.owner.token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(v3.status).toBe(200);
+    expect(v3.headers.get("Idempotent-Replayed")).toBe("true");
+    expect(await v3.json()).toEqual(first.body);
+    expect(await dispatchRuns(f)).toHaveLength(1);
+  });
+
   it("make a run per request without an Idempotency-Key", async () => {
     const f = await dispatchRepo();
     const body = { ref: "main", inputs: { env: "prod" } };
