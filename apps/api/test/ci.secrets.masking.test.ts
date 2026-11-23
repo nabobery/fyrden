@@ -12,6 +12,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import * as domainCi from "@fyrden/domain/ci";
 import {
   buildVariants,
   checkSecretMasks,
@@ -595,17 +596,17 @@ describe("a mask appended during an UpdateLog's confirmation", () => {
     await inRun(t.runId, (r) => {
       r.hooks = {
         afterLogConfirm: async () => {
-          seen.atConfirm = r.memory.stats().reservedBytes;
+          seen.atConfirm = r.memory.stats().reservedBytes - r.maskCacheBytesHeld();
           expect(await r.addSecretMasks(t.number, [{ name: "LATE", value: secret }])).toEqual({
             ok: true,
           });
         },
         beforeLogStore: () => {
-          seen.later = r.memory.stats().reservedBytes;
+          seen.later = r.memory.stats().reservedBytes - r.maskCacheBytesHeld();
         },
       };
       viewerHooks.beforePublish = () => {
-        seen.later ??= r.memory.stats().reservedBytes;
+        seen.later ??= r.memory.stats().reservedBytes - r.maskCacheBytesHeld();
       };
     });
     return seen;
@@ -1363,7 +1364,9 @@ describe("admission with mask headroom", () => {
     const ack = await ackOf(t.runner, { taskId: t.wire, index: 0, rows });
     expect(ack).toBeGreaterThan(1);
     expect((await stored(t.runId, t.number))[0]).toBe("s ***");
-    expect(await inRun(t.runId, (r) => r.memory.stats().reservedBytes)).toBe(0);
+    expect(
+      await inRun(t.runId, (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld()),
+    ).toBe(0);
   });
 
   it("four large requests of different tasks with masks never wait on each other", async () => {
@@ -1423,7 +1426,9 @@ describe("admission with mask headroom", () => {
       });
     }
     for (const task of tasks) expect((await stored(runId, task.number))[0]).toBe("s ***");
-    expect(await inRun(runId, (r) => r.memory.stats().reservedBytes)).toBe(0);
+    expect(await inRun(runId, (r) => r.memory.stats().reservedBytes - r.maskCacheBytesHeld())).toBe(
+      0,
+    );
   });
 });
 
@@ -1480,8 +1485,10 @@ async function recordQueries(runId: string, fn: () => Promise<unknown>): Promise
  * What the masker costs in workerd at a job's full secret allowance (32 KiB of
  * masked forms), beside a job with no secret: the time to mask 100 rows of 200
  * characters, which is what each log request does with its rows, and the heap
- * the process reports around it. It asserts nothing about time, so it runs
- * only on request:
+ * the process reports around it; the same with the task's kept matchers; one
+ * upload of 240 `::add-mask::` rows, each registering a value; and the request
+ * after it, with the matchers kept and extended or built again. It asserts
+ * nothing about time, so it runs only on request:
  *
  *   FYRDEN_BENCH=1 pnpm --filter @fyrden/api exec vitest run test/ci.secrets.masking.test.ts -t "masker bench" --silent=false
  */
@@ -1550,6 +1557,79 @@ describe.runIf((env as { FYRDEN_BENCH?: string }).FYRDEN_BENCH)("masker bench", 
     benchLines.push(
       `masker, 100 rows of 200 chars, mean of ${runs}: no secrets ${none.ms.toFixed(3)} ms (heap ${mib(none.heap)}); ` +
         `${secrets.length} secrets, ${variantBytes} bytes of masked forms ${full.ms.toFixed(3)} ms (heap ${mib(full.heap)})`,
+    );
+
+    // Kept matchers, where the masker keeps them (`MaskMatcherCache`; a tree without it prints n/a).
+    const Cache = (domainCi as { MaskMatcherCache?: new () => object }).MaskMatcherCache;
+    const reserve = { values: 8, bytes: 1024 };
+    /** Mean ms of `call`, each run after its own untimed `setup`. */
+    const each = async (n: number, setup: () => void, call: () => void) => {
+      setup();
+      call();
+      let start = clock();
+      await io();
+      const ioTime = clock() - start;
+      let total = 0;
+      for (let i = 0; i < n; i++) {
+        setup();
+        start = clock();
+        call();
+        await io();
+        total += clock() - start - ioTime;
+      }
+      return total / n;
+    };
+    const ms = (v: number | undefined) => (v === undefined ? "n/a" : `${v.toFixed(3)} ms`);
+    let cache: object | undefined;
+    const cached =
+      Cache === undefined
+        ? undefined
+        : await each(
+            runs,
+            () => {
+              cache ??= new Cache();
+            },
+            () => maskRows(withSecrets, null, rows, { start: 0, reserve, cache } as never),
+          );
+    // One upload of 240 `::add-mask::` rows of 60 chars, at the full secret allowance: each row
+    // registers a value from its row on.
+    const upload = Array.from({ length: 240 }, () => `::add-mask::${random(60)}`);
+    const uploadRuns = 3;
+    const registering = await each(
+      uploadRuns,
+      () => {},
+      () => maskRows(withSecrets, null, upload, { start: 0, reserve }),
+    );
+    const registered = maskRows(withSecrets, null, upload, { start: 0, reserve }).added;
+    const stored: LogMask[] = [
+      ...withSecrets,
+      ...registered.map((a) => ({ value: a.value, fromIndex: a.index })),
+    ];
+    // The next request, 100 rows of 200 chars after the upload: with the upload's kept matchers
+    // (extended by the values it stored), or built again from every mask.
+    const next = (keep: object | undefined) =>
+      maskRows(stored, null, rows, { start: upload.length, reserve, cache: keep } as never);
+    let kept: object | undefined;
+    const extended =
+      Cache === undefined
+        ? undefined
+        : await each(
+            uploadRuns,
+            () => {
+              kept = new Cache();
+              maskRows(withSecrets, null, upload, { start: 0, reserve, cache: kept } as never);
+            },
+            () => next(kept),
+          );
+    const rebuilt = await each(
+      uploadRuns,
+      () => {},
+      () => next(undefined),
+    );
+    benchLines.push(
+      `masker, same 100 rows with the task's kept matchers, mean of ${runs}: ${ms(cached)}; ` +
+        `one upload registering ${registered.length} values, mean of ${uploadRuns}: ${ms(registering)}; ` +
+        `the next request after it: kept and extended ${ms(extended)}, built from every mask ${ms(rebuilt)}`,
     );
     expect(variantBytes).toBeLessThanOrEqual(MASK_SECRET_MAX_VARIANT_BYTES);
   });

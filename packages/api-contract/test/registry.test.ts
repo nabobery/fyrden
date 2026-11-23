@@ -151,7 +151,7 @@ describe("operations that answer nothing", () => {
     expect(statuses).toEqual([201, 204]);
   });
 
-  it("are documented with each status, none with a body", () => {
+  it("are documented with each status: 201 an empty JSON object, as GitHub's, the others no body", () => {
     const either = defineOperation({ ...write, successStatuses: [201, 204] });
     const created = defineOperation({
       ...write,
@@ -163,15 +163,20 @@ describe("operations that answer nothing", () => {
       paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
     };
     const ops = doc.paths["/repos/{owner}/{repo}"];
+    const created201 = {
+      description: "Created",
+      content: {
+        "application/json": {
+          schema: { type: "object", properties: {}, additionalProperties: false },
+        },
+      },
+    };
     expect(ops?.put?.responses).toEqual({
-      "201": { description: "Created" },
+      "201": created201,
       "204": { description: "No Content" },
       default: expect.anything(),
     });
-    expect(ops?.post?.responses).toEqual({
-      "201": { description: "Created" },
-      default: expect.anything(),
-    });
+    expect(ops?.post?.responses).toEqual({ "201": created201, default: expect.anything() });
   });
 });
 

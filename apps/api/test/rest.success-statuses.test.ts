@@ -1,7 +1,8 @@
 // An operation whose outcome decides its status (201 when it creates, 204
-// when it updates, as GitHub's secret PUT): REST answers each with no body
-// and replays each with its own status; MCP answers it as any operation that
-// answers nothing.
+// when it updates, as GitHub's secret PUT): REST answers 201 with an empty
+// JSON object, as GitHub does (clients such as `gh` decode every answer but
+// a 204's), and 204 with no body, and replays each with its own status; MCP
+// answers it as any operation that answers nothing.
 
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
@@ -101,13 +102,13 @@ async function send(method: string, path: string, key: string) {
 }
 
 describe("REST, an operation answering 201 or 204", () => {
-  it("answers 201 when it creates and 204 when it updates, with no body", async () => {
+  it("answers 201 with {} when it creates and 204 with no body when it updates", async () => {
     const name = uniqueId("thing");
     expect(await put(name, uniqueId("key"))).toEqual({
       status: 201,
       replayed: null,
-      contentType: null,
-      body: "",
+      contentType: "application/json",
+      body: "{}",
     });
     expect(await put(name, uniqueId("key"))).toEqual({
       status: 204,
@@ -127,8 +128,8 @@ describe("REST, an operation answering 201 or 204", () => {
     expect(await put(name, createKey)).toEqual({
       status: 201,
       replayed: "true",
-      contentType: null,
-      body: "",
+      contentType: "application/json",
+      body: "{}",
     });
     expect(await put(name, updateKey)).toEqual({
       status: 204,
@@ -140,10 +141,10 @@ describe("REST, an operation answering 201 or 204", () => {
   });
 });
 
-describe("REST, an operation answering a fixed 201 with no body", () => {
-  it("answers 201 with no body, and replays it as 201", async () => {
+describe("REST, an operation answering a fixed 201 and nothing else", () => {
+  it("answers 201 with {}, and replays it so", async () => {
     const key = uniqueId("key");
-    const answer = { status: 201, contentType: null, body: "" };
+    const answer = { status: 201, contentType: "application/json", body: "{}" };
     expect(await send("POST", "/test-things", key)).toEqual({ ...answer, replayed: null });
     const calls = createThing.mock.calls.length;
     expect(await send("POST", "/test-things", key)).toEqual({ ...answer, replayed: "true" });

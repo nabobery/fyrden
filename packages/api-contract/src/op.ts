@@ -55,12 +55,12 @@ export interface OperationDef<
    * resource, 202 where GitHub answers it, 204 or 205 (with `NoContent` as
    * the output) where GitHub answers nothing (205: Reset Content, as
    * GitHub's marking a notification thread read). A `NoContent` operation
-   * may also answer a fixed 201 with no body.
+   * may also answer a fixed 201, which REST sends as an empty JSON object.
    */
   successStatus?: 200 | 201 | 202 | 204 | 205;
   /**
-   * The statuses a `NoContent` operation answers with no body when the
-   * outcome decides it, as GitHub's secret `PUT` answers 201 when it
+   * The statuses a `NoContent` operation answers when the outcome decides
+   * it (REST sends a 201 as an empty JSON object, the others with no body), as GitHub's secret `PUT` answers 201 when it
    * creates and 204 when it updates. Its handler returns
    * `statusResult(status, null)`; it declares no `successStatus`.
    */
@@ -106,12 +106,26 @@ export type NoContentStatus = 201 | 204 | 205;
 /**
  * The output of an operation that answers nothing (`successStatus` 204, 205
  * or 201, or `successStatuses`): `null` to its handler, idempotency replays
- * and the SDK; REST sends no body, MCP a short text.
+ * and the SDK; MCP a short text. REST sends no body, except for a 201: an
+ * empty JSON object, as GitHub's (its `empty-object`), since clients such
+ * as `gh` decode the body of every answer but a 204.
  */
 export const NoContent = z.null().describe("No content.");
 
 export const answersNothing = (def: Pick<OperationDef, "output">): boolean =>
   def.output === NoContent;
+
+/** Whether an operation takes GitHub's page numbers: `page` and `per_page`. */
+export const takesPageNumbers = (def: Pick<OperationDef, "input">): boolean =>
+  "page" in def.input.shape && "per_page" in def.input.shape;
+
+/**
+ * Whether an operation takes page numbers and counts its items in
+ * `total_count`: its REST answer links the other pages (`Link`, as GitHub's),
+ * which clients such as `gh` follow.
+ */
+export const pagedByTotal = (def: Pick<OperationDef, "input" | "output">): boolean =>
+  takesPageNumbers(def) && def.output instanceof z.ZodObject && "total_count" in def.output.shape;
 
 /** Every status an operation answers on success. */
 export const successStatusesOf = (

@@ -54,6 +54,7 @@ import {
   RunLogs,
   type SecretMasksAnswer,
 } from "./run/logs.js";
+import { MASK_CACHE_BYTES } from "./run/mask-cache.js";
 import { loadModel, type RunModel } from "./run/model.js";
 import {
   type ReservationHooks,
@@ -260,6 +261,8 @@ export class RunDO extends MigratingDO {
   hooks: RunHooks = {};
   /** Values to mask in job logs that are fetched rather than stored (none yet). */
   maskSource: MaskSource = NO_MASK_SOURCE;
+  /** The most the tasks' kept log-mask matchers may hold. Tests may lower it. */
+  maskCacheBytes = MASK_CACHE_BYTES;
 
   readonly context: GitStorageContext;
   readonly jobs: JobQueue;
@@ -361,6 +364,7 @@ export class RunDO extends MigratingDO {
       get memory() {
         return host.memory;
       },
+      dropMaskCaches: () => host.#logs.dropMaskCaches(),
     });
     this.viewers = new LogViewers({
       env,
@@ -374,6 +378,7 @@ export class RunDO extends MigratingDO {
       sockets: (tag) => ctx.getWebSockets(tag),
       accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
       ensureSlice: () => host.jobs.ensure("ci_log_viewers", RUN_JOB.logViewers),
+      dropMaskCaches: () => host.#logs.dropMaskCaches(),
     });
     // A viewer's keepalive, answered by the runtime without a message for the object to handle.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -386,6 +391,9 @@ export class RunDO extends MigratingDO {
       metrics: this.context.metrics,
       log: this.#log,
       memory: this.memory,
+      get maskCacheBytes() {
+        return host.maskCacheBytes;
+      },
       now: () => host.context.now(),
       erased: () => host.#erased(),
       tx: (fn) => host.#tx(fn),
@@ -409,6 +417,11 @@ export class RunDO extends MigratingDO {
       this.#model = { source: run.workflow_source, model: loaded.model };
     }
     return this.#model.model;
+  }
+
+  /** The estimates of the tasks' kept log-mask matchers, in bytes (for tests). */
+  maskCacheBytesHeld(): number {
+    return this.#logs.maskCacheBytes();
   }
 
   #erased(): boolean {
@@ -1561,6 +1574,7 @@ export class RunDO extends MigratingDO {
     });
     if (!erased) return false;
     this.viewers.erased();
+    this.#logs.erased();
     this.#model = undefined;
     await this.ctx.storage.deleteAlarm();
     return true;

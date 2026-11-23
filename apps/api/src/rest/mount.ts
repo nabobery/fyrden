@@ -3,6 +3,7 @@ import {
   IDEMPOTENCY_KEY,
   type OperationDef,
   openApiDocument,
+  pagedByTotal,
   registry,
 } from "@fyrden/api-contract";
 import type { Context, Hono, MiddlewareHandler } from "hono";
@@ -19,8 +20,14 @@ import {
   sessionRefusal,
 } from "../ops/execute.js";
 import { handlers } from "../ops/handlers.js";
+import { pageLinks } from "./links.js";
 
 export const API_PREFIX = "/api";
+/**
+ * Where stock `gh` sends REST calls for a host other than github.com, as for
+ * GitHub Enterprise Server: every operation answers there too, the same way.
+ */
+export const API_V3_PREFIX = "/api/v3";
 export const API_VERSION = "0.0.0";
 
 type AppContext = Context<{ Bindings: Env; Variables: AuthVariables }>;
@@ -173,15 +180,37 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
     return problemResponse(c, result.problem, { ...retry, ...headers });
   }
   if (op.etag) return respondWithEtag(c, result.output, result.status ?? op.successStatus ?? 200);
-  // Nothing to answer: no body (a replay of it too).
-  if (answersNothing(op))
-    return c.body(null, (result.status ?? op.successStatus ?? 204) as StatusCode, headers);
+  // Nothing to answer: no body (a replay of it too), except a 201's `{}`, as
+  // GitHub's: clients such as `gh` decode the body of every answer but a 204.
+  if (answersNothing(op)) {
+    const status = (result.status ?? op.successStatus ?? 204) as StatusCode;
+    return status === 201 ? c.json({}, 201, headers) : c.body(null, status, headers);
+  }
   // A secret (a new token) is shown once: no cache keeps it.
   return c.json(
     result.output as Record<string, unknown>,
     (result.status ?? op.successStatus ?? 200) as ContentfulStatusCode,
     op.secretResponse ? { ...NO_STORE, ...headers } : headers,
   );
+}
+
+/**
+ * The `Link` header of a successful answer of an operation paged by `page`
+ * and `total_count`, from the page and page size the operation read (a
+ * `per_page` past a list's most is read as the most).
+ */
+function linkOf(
+  c: AppContext,
+  op: OperationDef,
+  input: unknown,
+  output: unknown,
+): string | undefined {
+  if (!pagedByTotal(op)) return undefined;
+  const read = op.input.safeParse(input);
+  if (!read.success) return undefined;
+  const { page, per_page: perPage } = read.data as { page: number; per_page: number };
+  const { total_count: total } = output as { total_count: number };
+  return pageLinks(new URL(c.req.url), page, perPage, total);
 }
 
 /** Registers one Hono route per registry operation under /api. */
@@ -221,17 +250,16 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     mountOperation(app, op, operationHandler(op));
 }
 
-/** Registers one operation's REST route under /api. */
+/** Registers one operation's REST route under /api and /api/v3. */
 export function mountOperation(
   app: Hono<{ Bindings: Env; Variables: AuthVariables }>,
   op: OperationDef,
   handler: OpHandler<OperationDef>,
 ): void {
-  const path =
-    API_PREFIX + op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
+  const path = op.path.replace(/\{([a-z_]+)\+\}/g, ":$1{.+}").replace(/\{([a-z_]+)\}/g, ":$1");
   app.on(
     op.method,
-    path,
+    [API_PREFIX + path, API_V3_PREFIX + path],
     caching(op),
     requireAuth("by-method", "api", gitTransport(op)),
     async (c) => {
@@ -248,13 +276,13 @@ export function mountOperation(
           "invalid_idempotency_key",
           "An Idempotency-Key is 1-255 printable ASCII characters.",
         );
-      return respond(
-        c,
-        op,
-        await executeOperation(op, handler, opContext(c), read.input, {
-          ...(key !== undefined && { idempotencyKey: key }),
-        }),
-      );
+      const result = await executeOperation(op, handler, opContext(c), read.input, {
+        ...(key !== undefined && { idempotencyKey: key }),
+      });
+      const res = await respond(c, op, result);
+      const link = result.ok ? linkOf(c, op, read.input, result.output) : undefined;
+      if (link !== undefined) res.headers.set("Link", link);
+      return res;
     },
   );
 }

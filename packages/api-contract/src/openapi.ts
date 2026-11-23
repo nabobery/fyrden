@@ -4,6 +4,7 @@ import {
   answersNothing,
   type OperationDef,
   openApiPath,
+  pagedByTotal,
   pathParams,
   type Registry,
   successStatusesOf,
@@ -20,6 +21,16 @@ function stripMeta(schema: JsonSchema): JsonSchema {
   const { $schema: _, id: __, ...rest } = schema;
   return rest;
 }
+
+/** The body of a 201 an operation that answers nothing sends, as GitHub's `empty-object`. */
+const EMPTY_OBJECT = { type: "object", properties: {}, additionalProperties: false };
+
+/** GitHub's pagination header, on an operation paged by `page` and `total_count`. */
+const LINK_HEADER = {
+  description:
+    'The other pages, as GitHub\'s: `<url>; rel="prev"`, `rel="next"`, `rel="last"` and `rel="first"`, each this request\'s URL with only `page` changed; absent when everything fits one page.',
+  schema: { type: "string" },
+};
 
 function operationObject(op: OperationDef): JsonSchema {
   const input = stripMeta(toSchema(op.input, "input"));
@@ -66,13 +77,23 @@ function operationObject(op: OperationDef): JsonSchema {
         successStatusesOf(op).map((status) => [
           String(status),
           answersNothing(op)
-            ? { description: STATUS_TEXT[status] }
+            ? status === 201
+              ? {
+                  description: STATUS_TEXT[status],
+                  content: { "application/json": { schema: EMPTY_OBJECT } },
+                }
+              : { description: STATUS_TEXT[status] }
             : {
                 description: STATUS_TEXT[status],
                 content: {
                   "application/json": { schema: stripMeta(toSchema(op.output, "output")) },
                 },
-                ...(op.etag && { headers: { ETag: { schema: { type: "string" } } } }),
+                ...((op.etag || pagedByTotal(op)) && {
+                  headers: {
+                    ...(op.etag && { ETag: { schema: { type: "string" } } }),
+                    ...(pagedByTotal(op) && { Link: LINK_HEADER }),
+                  },
+                }),
               },
         ]),
       ),

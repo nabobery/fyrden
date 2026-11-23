@@ -43,10 +43,10 @@ beforeAll(async () => {
   owner = await user();
 });
 
-async function put(path: string, body: Record<string, unknown>) {
+async function put(path: string, body: Record<string, unknown>, prefix = "/api") {
   const ctx = createExecutionContext();
   const res = await app.fetch(
-    new Request(`${ORIGIN}/api/test-files/${path}`, {
+    new Request(`${ORIGIN}${prefix}/test-files/${path}`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${owner.token}`,
@@ -82,6 +82,22 @@ describe("a body field named like a path parameter", () => {
     expect(await put("Octo/SECRET_A/README.md", { name: "SECRET_B" })).toMatchObject({
       status: 422,
     });
+  });
+
+  it("is read the same under /api/v3, a greedy parameter taking the rest of the path", async () => {
+    putFile.mockClear();
+    expect(
+      await put("Octo/SECRET_A/docs/a/README.md", { path: "docs/a/README.md" }, "/api/v3"),
+    ).toMatchObject({ status: 200 });
+    expect(putFile).toHaveBeenCalledOnce();
+    expect((putFile.mock.calls[0] as unknown[] | undefined)?.[1]).toMatchObject({
+      owner: "Octo",
+      name: "SECRET_A",
+      path: "docs/a/README.md",
+    });
+    expect(
+      await put("Octo/SECRET_A/docs/a/README.md", { path: "docs/a/readme.md" }, "/api/v3"),
+    ).toMatchObject({ status: 422, body: { code: "invalid_input" } });
   });
 });
 

@@ -1072,6 +1072,53 @@ describe("the run object's memory for a job's secrets", () => {
     expect(await reservedOf(runId)).toBe(prior);
   });
 
+  it("drops the tasks' kept log-mask matchers when reading a job's secrets needs their room", async () => {
+    const f = await orgRepo();
+    const value = await repoSecret(f, "A");
+    const after = job("b", ["needs: a", "env:", `  V0: ${expr("secrets.A")}`]);
+    const runId = await started(f, workflow([job("a"), after].join("\n")));
+    const runner = await registerRunner(f.org.login, f.owner);
+    const first = (await fetchTask(runner, 0)).task;
+    if (!first) throw new Error("no task for a");
+    // Job a's log request leaves its task's matchers kept; its log stays open after it ends.
+    const rows = Array.from({ length: 50 }, (_, k) => ({ content: `line ${k}` }));
+    const answer = await runnerCall(
+      "UpdateLog",
+      encodeUpdateLogRequest({ taskId: first.id, index: 0, rows }),
+      { credentials: runner },
+    );
+    expect(decodeUpdateLogResponse(await proto(answer)).ackIndex).toBe(50);
+    await updateTask(runner, first.id, Result.SUCCESS);
+    await drain(runId);
+    const kept = await inRun(runId, (r) => ({
+      cache: r.maskCacheBytesHeld(),
+      ...r.memory.stats(),
+    }));
+    expect(kept.cache).toBeGreaterThan(0);
+    // The pool holds all but what reading the secrets needs, less half the kept matchers: the
+    // assignment fits only once they are dropped.
+    const need = deliveryMemory({ kind: "names", names: ["A"] });
+    let held: Held;
+    const before = await inRun(runId, (r) => {
+      held = r.memory.tryReserve(
+        kept.totalBytes - kept.reservedBytes - need + Math.floor(kept.cache / 2),
+      );
+      if (!held) throw new Error("the pool did not take the filler");
+      const stats = r.memory.stats();
+      return { cache: r.maskCacheBytesHeld(), free: stats.totalBytes - stats.reservedBytes };
+    });
+    try {
+      // The matchers are still kept, and the assignment does not fit beside them.
+      expect(before.cache).toBe(kept.cache);
+      expect(before.free).toBeLessThan(need);
+      const task = (await fetchTask(runner, 0)).task;
+      expect(task && ownSecrets(task)).toEqual({ A: value });
+      expect(await inRun(runId, (r) => r.maskCacheBytesHeld())).toBe(0);
+    } finally {
+      await inRun(runId, () => held?.release());
+    }
+  });
+
   it("reserves room for the stored masks a re-offer opens and the copies masking and encoding make", () => {
     // The task's secret masks can hold the whole budget (256 KiB of value text): read sealed
     // (base64, 2 bytes a character), opened, and the new ones sealed again.
