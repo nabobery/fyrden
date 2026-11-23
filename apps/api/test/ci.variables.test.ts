@@ -27,14 +27,14 @@ async function userRepo() {
 }
 
 describe("repository variables", () => {
-  it("are created (201, no body), read, updated (204) and deleted (204)", async () => {
+  it("are created (201, {}), read, updated (204) and deleted (204)", async () => {
     const { owner, path } = await userRepo();
     const created = await api("POST", `${path}/actions/variables`, owner.token, {
       name: "region",
       value: "eu-west-1",
     });
     expect(created.status).toBe(201);
-    expect(await created.text()).toBe("");
+    expect(await created.text()).toBe("{}");
     expect(await json(api("GET", `${path}/actions/variables/REGION`, owner.token))).toMatchObject({
       status: 200,
       body: { name: "REGION", value: "eu-west-1", created_at: expect.any(String) },

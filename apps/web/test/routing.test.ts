@@ -7,6 +7,7 @@ describe("the web Worker's routing", () => {
   it("hands the API's paths to fyrden-api and keeps its own pages", () => {
     for (const path of [
       "/api/user",
+      "/api/v3/user",
       "/mcp",
       "/oauth/token",
       "/auth/sign-in",

@@ -80,7 +80,8 @@ describe("repository secrets", () => {
     const first = secretValue();
     const created = await putSecret(owner, path, "deploy_key", first);
     expect(created.status).toBe(201);
-    expect(await created.text()).toBe("");
+    // GitHub's empty object: `gh secret set` decodes every answer but a 204's.
+    expect(await created.text()).toBe("{}");
     const second = secretValue();
     const updated = await putSecret(owner, path, "DEPLOY_KEY", second);
     expect(updated.status).toBe(204);
