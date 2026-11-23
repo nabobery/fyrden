@@ -9,6 +9,7 @@ import {
   type LogMaskCarry,
   type LogMaskReach,
   type MaskMatcherCache,
+  type MaskMatcherOutcome,
   type MaskRowsResult,
   maskCrossLength,
   maskGapLength,
@@ -595,6 +596,9 @@ export class RunLogs {
         due,
         CLOSE_PAGE,
       );
+      // Kept matchers go once their log closes, whether or not it has masks left to delete.
+      for (const task of this.#matchers.tasks())
+        if (closed(this.#log(task), now)) this.#matchers.drop(task);
       for (const { task } of tasks) {
         this.#matchers.drop(task);
         host.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", task);
@@ -693,6 +697,8 @@ export class RunLogs {
       if (!reservation && fits) {
         await priority.yieldMemory();
         if (host.erased()) return notFound();
+        // Another task's request may have kept its matchers during the wait.
+        this.#matchers.dropAll();
         reservation = host.memory.tryReserve(bytes);
       }
       if (!reservation) {
@@ -831,9 +837,11 @@ export class RunLogs {
         cache,
       });
     const first = mask(false);
+    // The first pass's: a forced second pass over the same matchers is always a hit.
+    const outcome = cache.outcome;
     const settle = settleFlush(decision, first.settled, state, now);
     const masked = settle.kind === "store" && settle.force ? mask(true) : first;
-    this.#keepMatchers(ref.task, cache);
+    this.#keepMatchers(ref.task, cache, outcome);
     if (settle.kind === "hold") {
       this.#firstSeen.set(ref.task, settle.firstUnackedSeenAt);
       if (host.viewers.watched(ref.jobId))
@@ -906,7 +914,7 @@ export class RunLogs {
         cache,
       },
     );
-    this.#keepMatchers(ref.task, cache);
+    this.#keepMatchers(ref.task, cache, cache.outcome);
     return masked.lines.slice(0, masked.settled);
   }
 
@@ -916,10 +924,14 @@ export class RunLogs {
    * rows, so matchers holding mask values never outlive the masks (an
    * erasure or a close may have run while the masks were opened).
    */
-  #keepMatchers(task: number, cache: MaskMatcherCache): void {
+  #keepMatchers(
+    task: number,
+    cache: MaskMatcherCache,
+    outcome: MaskMatcherOutcome | undefined,
+  ): void {
     const open = !this.host.erased() && !closed(this.#log(task), this.host.now());
-    const outcome = open ? this.#matchers.keep(task, cache) : "uncached";
-    this.host.hooks.maskMatcher?.(task, outcome);
+    const kept = open && this.#matchers.keep(task, cache);
+    this.host.hooks.maskMatcher?.(task, kept ? (outcome ?? "uncached") : "uncached");
   }
 
   /** Publishes final rows to the job's sockets (a test may pause first). */

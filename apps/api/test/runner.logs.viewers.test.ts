@@ -1798,7 +1798,8 @@ describe("escaped chunk backfill", () => {
       }
     });
     const model = runnerModel(t);
-    expect(await model.send([row("\u0001".repeat(MIB))])).toBe(1);
+    const content = "\u0001".repeat(MIB);
+    expect(await model.send([row(content)])).toBe(1);
     expect(await inRun(t.runId, (r) => r.maskCacheBytesHeld())).toBeGreaterThan(1.5 * MIB);
     await forget(t.runId);
     const socket = await watch(t, t.f.owner.token, { checked: false });
@@ -1808,6 +1809,14 @@ describe("escaped chunk backfill", () => {
       expect(read.gets).toBe(1);
       expect(read.bytes).toBeGreaterThan(0);
       expect(await inRun(t.runId, (r) => r.maskCacheBytesHeld())).toBe(0);
+      // The row reaches the viewer in full, a part per acknowledgement.
+      for (let k = 0; k < 64 && position(socket).i < 1; k++) {
+        await ackAll(t.runId, socket);
+        await slice(t.runId);
+        await settle(socket);
+      }
+      expect(received(socket).map((line) => line.c)).toEqual([content]);
+      await expectStored(t, socket);
     } finally {
       socket.ws.close();
     }

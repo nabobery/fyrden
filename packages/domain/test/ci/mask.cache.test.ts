@@ -232,11 +232,10 @@ describe("maskRows with a kept matcher cache", () => {
     expect(cache.outcome).toBe("built");
     expect(cache.inserted).toBeGreaterThan(0);
     const rows = [`x ${SECRET} y`, TOKEN.slice(0, 20)];
-    maskRows(masks, null, rows, { start: 1, cache });
+    expectSame(masks, null, rows, { start: 1 }, cache);
     expect(cache.outcome).toBe("hit");
     expect(cache.inserted).toBe(0);
     expect(cache.linked).toBe(0);
-    expectSame(masks, null, rows, { start: 1 }, new MaskMatcherCache());
   });
 
   it("extends the matchers with a value an earlier request registered", () => {
@@ -384,6 +383,8 @@ describe("maskRows with a kept matcher cache", () => {
       carry: LogMaskCarry | null;
       rows: string[];
       start: number;
+      /** The first row's masked text, where a case depends on it. */
+      first?: string;
     }[] = [
       {
         // A value of row 1 and the same value of row 0, from row 0: the carry names the
@@ -417,22 +418,25 @@ describe("maskRows with a kept matcher cache", () => {
         start: 0,
       },
       {
-        // The carried prefix's suffix starts a match only another matcher holds.
+        // The carried prefix's suffix starts a match only another matcher holds: the carried
+        // mask does not complete, and the other activates 3 chars before the boundary.
         name: "a match recovered from the carried prefix's suffix",
         masks: [
-          { value: "abcdabce", fromIndex: 0 },
-          { value: "abcexyzw", fromIndex: 2 },
+          { value: "abcdabcf", fromIndex: 0 },
+          { value: "abcexyzw", fromIndex: 1 },
         ],
-        carry: { mask: 0, variant: 0, length: 7 },
-        rows: ["xyzw", "abcexyzw"],
+        carry: { mask: 0, variant: 0, length: 7, starts: [{ index: 1, offset: -3 }] },
+        rows: ["exyzw", "abcexyzw"],
         start: 2,
+        first: "***",
       },
     ];
     for (const c of cases) {
       it(`gives the oracle's results for ${c.name}, cold and kept`, () => {
         const cache = new MaskMatcherCache();
         for (let call = 0; call < 2; call++) {
-          expectSame(c.masks, c.carry, c.rows, { start: c.start }, cache);
+          const want = expectSame(c.masks, c.carry, c.rows, { start: c.start }, cache);
+          if (c.first !== undefined) expect(want.lines[0]).toBe(c.first);
           expectSame(c.masks, c.carry, c.rows, { start: c.start, force: true }, cache);
         }
       });

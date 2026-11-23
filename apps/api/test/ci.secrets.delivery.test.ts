@@ -1099,12 +1099,18 @@ describe("the run object's memory for a job's secrets", () => {
     // assignment fits only once they are dropped.
     const need = deliveryMemory({ kind: "names", names: ["A"] });
     let held: Held;
-    await inRun(runId, (r) => {
+    const before = await inRun(runId, (r) => {
       held = r.memory.tryReserve(
         kept.totalBytes - kept.reservedBytes - need + Math.floor(kept.cache / 2),
       );
+      if (!held) throw new Error("the pool did not take the filler");
+      const stats = r.memory.stats();
+      return { cache: r.maskCacheBytesHeld(), free: stats.totalBytes - stats.reservedBytes };
     });
     try {
+      // The matchers are still kept, and the assignment does not fit beside them.
+      expect(before.cache).toBe(kept.cache);
+      expect(before.free).toBeLessThan(need);
       const task = (await fetchTask(runner, 0)).task;
       expect(task && ownSecrets(task)).toEqual({ A: value });
       expect(await inRun(runId, (r) => r.maskCacheBytesHeld())).toBe(0);

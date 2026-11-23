@@ -55,11 +55,11 @@ export class MaskMatcherCaches {
     return kept.cache;
   }
 
-  /** Keeps `cache` as the task's matchers if the cap and the pool take its estimate. */
-  keep(task: number, cache: MaskMatcherCache): MaskCacheOutcome {
+  /** Keeps `cache` as the task's matchers if the cap and the pool take its estimate; whether it did. */
+  keep(task: number, cache: MaskMatcherCache): boolean {
     const bytes = cache.bytes;
     const cap = this.cap();
-    if (bytes > cap) return "uncached";
+    if (bytes > cap) return false;
     // Least recently used first: evict until the new entry fits under the cap.
     for (const [other, kept] of this.#entries) {
       if (this.#bytes + bytes <= cap) break;
@@ -72,10 +72,10 @@ export class MaskMatcherCaches {
       this.#remove(other, kept);
       reservation = this.memory.tryReserve(bytes);
     }
-    if (reservation === undefined) return "uncached";
+    if (reservation === undefined) return false;
     this.#entries.set(task, { cache, bytes, reservation });
     this.#bytes += bytes;
-    return cache.outcome ?? "uncached";
+    return true;
   }
 
   /** Drops the task's kept matchers (its masks were deleted). */
@@ -87,6 +87,11 @@ export class MaskMatcherCaches {
   /** Drops every task's kept matchers: the run was erased, or a log request needs the room. */
   dropAll(): void {
     for (const [task, kept] of [...this.#entries]) this.#remove(task, kept);
+  }
+
+  /** The tasks whose matchers are kept, least recently used first. */
+  tasks(): number[] {
+    return [...this.#entries.keys()];
   }
 
   /** The estimates of the kept matchers, in bytes (for tests and the bound). */

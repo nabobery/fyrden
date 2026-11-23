@@ -190,12 +190,26 @@ describe("kept log-mask matchers", () => {
     // `a` was the least recently used: built again, evicting `b`; `c` is still kept.
     expect(await send(a, 50)).toBe(100);
     expect(await send(c, 50)).toBe(100);
+    // `c`'s hit made `a` the least recently used: `b` evicts `a`, not `c`, which was kept first.
     expect(await send(b, 50)).toBe(100);
-    expect(seen).toEqual(["built", "built", "built", "built", "hit", "built"]);
+    expect(await send(c, 100)).toBe(150);
+    expect(seen).toEqual(["built", "built", "built", "built", "hit", "built", "hit"]);
     state = await held(runId);
     expect(state.cache).toBeLessThanOrEqual(cap);
     expect(state.reserved).toBe(state.cache);
     for (const t of tasks) expect((await contents(runId, t.number))[50]).toBe("v ***");
+  });
+
+  it("report the first pass's outcome when a store masks the rows again, forced", async () => {
+    const { runId, runner, task, number, token } = await withTask();
+    const seen = await outcomes(runId);
+    // A partial match over more rows than may be held: the store masks it, forced.
+    const partial = token.slice(0, 16).split("").map(row);
+    const rows = [...filler(0, 50 - partial.length), ...partial];
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows })).toBe(50);
+    expect(seen).toEqual(["built"]);
+    // The 13 rows held as a partial match are masked whole.
+    expect((await contents(runId, number)).slice(37)).toEqual(Array(13).fill("***"));
   });
 
   for (const lose of [false, true]) {
@@ -290,6 +304,18 @@ describe("kept log-mask matchers", () => {
 
   it("go when the close job deletes an incomplete log's masks", async () => {
     const { runId, runner, task } = await withTask();
+    expect(await ackOf(runner, { taskId: task.id, index: 0, rows: filler(0, 50) })).toBe(50);
+    await at(runId, T0 + MIN);
+    await updateTask(runner, task.id, Result.SUCCESS);
+    expect((await held(runId)).cache).toBeGreaterThan(0);
+    await at(runId, T0 + MIN + LATE_MS);
+    expect(await runDurableObjectAlarm(runStub(runId))).toBe(true);
+    expect(await held(runId)).toMatchObject({ cache: 0, reserved: 0 });
+  });
+
+  it("go when the close job visits a closed log with no masks to delete", async () => {
+    const { runId, runner, task, number } = await withTask();
+    await inRun(runId, (r) => r.engine.exec("DELETE FROM ci_log_masks WHERE task = ?", number));
     expect(await ackOf(runner, { taskId: task.id, index: 0, rows: filler(0, 50) })).toBe(50);
     await at(runId, T0 + MIN);
     await updateTask(runner, task.id, Result.SUCCESS);
