@@ -301,6 +301,28 @@ describe("workflow_dispatch", () => {
     expect(await jobsOf(runId)).toHaveLength(1);
   });
 
+  it("drop a run whose commit nothing roots any more by its start, answering commit_unreachable", async () => {
+    const f = await dispatchRepo();
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {
+        // The branch deleted and its reflog pruned before the start: a collection may be
+        // leaving the commit as garbage.
+        beforeStart: () => {
+          r.git.context.storage.sql.exec("DELETE FROM refs WHERE name = 'refs/heads/main'");
+          r.git.context.storage.sql.exec("DELETE FROM reflog");
+        },
+      };
+    });
+    const answer = await dispatch(f, "ci.yml", { ref: "main", inputs: { env: "prod" } });
+    expect([answer.status, answer.body.code]).toEqual([409, "commit_unreachable"]);
+    const [run] = await dispatchRuns(f);
+    expect(run).toMatchObject({ outcome: "commit_unreachable", started_at: null });
+    const recorded = await inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec("SELECT 1 FROM ci_runs").toArray(),
+    );
+    expect(recorded).toEqual([]);
+  });
+
   it("answer the run's id when its start fails after the record, and start it from the alarm", async () => {
     const f = await dispatchRepo();
     const clock = { now: Date.now() };

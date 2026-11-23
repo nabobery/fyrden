@@ -278,6 +278,11 @@ const DISPATCH_REFUSALS: Record<
     detail:
       "The repository changed owner before the run started, so the run was dropped and never runs. Dispatch again with a new Idempotency-Key.",
   },
+  commit_unreachable: {
+    status: 409,
+    detail:
+      "The ref's commit was deleted from the repository's history before the run started, so the run was dropped and never runs. Dispatch again with a new Idempotency-Key.",
+  },
   ref_not_found: { status: 422, detail: "No branch or tag has that name." },
   workflow_not_found: {
     status: 404,

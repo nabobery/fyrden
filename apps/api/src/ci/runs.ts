@@ -3,19 +3,18 @@ import type { RunSpec } from "../do/run/spec.js";
 
 export type { RunSpec } from "../do/run/spec.js";
 
-export type StartRunAnswer =
-  | CreateAnswer
-  | {
-      readonly ok: false;
-      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
-    };
+type RegisterRefusal =
+  | "repo_not_found"
+  | "repo_transferring"
+  | "repo_not_ready"
+  | "owner_changed"
+  | "commit_unreachable";
+
+export type StartRunAnswer = CreateAnswer | { readonly ok: false; readonly code: RegisterRefusal };
 
 type RegisterAnswer =
   | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
-    };
+  | { readonly ok: false; readonly code: RegisterRefusal };
 
 /**
  * The owner (and owner generation) a spec was built under: its first
@@ -34,6 +33,7 @@ export interface RunRegistrar {
     readonly sha: string;
     readonly path: string;
     readonly builtUnder?: BuiltUnder;
+    readonly reachableVia?: string;
   }): Promise<RegisterAnswer>;
 }
 
@@ -54,12 +54,17 @@ export async function startRun(
 /**
  * `startRun` with the repository given: the repository object starting its
  * own runs passes itself, so recording the run is no call to itself.
+ * `reachableVia` is the object a ref named when the trigger read the
+ * commit (the commit, or an annotated tag's object): a first registration
+ * refuses it as `commit_unreachable` once no ref and no reflog entry within
+ * the retention names it, as garbage collection may no longer keep the commit.
  */
 export async function startRunFrom(
   repo: RunRegistrar,
   env: { readonly RUN: DurableObjectNamespace<RunDO> },
   spec: RunSpec,
   builtUnder?: BuiltUnder,
+  reachableVia?: string,
 ): Promise<StartRunAnswer> {
   const reserved = await env.RUN.getByName(spec.runId).reserve(spec);
   if (!reserved.ok) return reserved;
@@ -68,6 +73,7 @@ export async function startRunFrom(
     sha: spec.sha,
     path: spec.workflow.path,
     ...(builtUnder && { builtUnder }),
+    ...(reachableVia !== undefined && { reachableVia }),
   });
   if (!registered.ok) return registered;
   // The RPC stub's type of a union answer is not assignable to the union; it is the union.
