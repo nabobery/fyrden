@@ -71,7 +71,12 @@ import { systemClock, type WatchClock } from "../git/import/watch.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
-import { scheduleAfterCommit, scheduleGc } from "../git/maintenance/schedule.js";
+import {
+  GC_JOB_ID,
+  inProgress,
+  scheduleAfterCommit,
+  scheduleGc,
+} from "../git/maintenance/schedule.js";
 import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
@@ -88,6 +93,7 @@ import { internalCallLimit, jobPolicy } from "../invocation-calls.js";
 import { ClaimReleases } from "../network/claim-releases.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
+  collectLater,
   IMPORT_POLICY,
   type ImportDeps,
   type ImportPolicy,
@@ -2614,7 +2620,12 @@ export class RepoDO extends MigratingDO {
         storage.sql.exec("DELETE FROM ci_run_specs WHERE run_id = ?", input.runId);
         return rows > 0;
       });
-      if (forgotten) scheduleGc(this.git, this.git.context.now() + this.maintenance.gcDelayMs);
+      if (forgotten) {
+        // A collection under way snapshotted the run's commit as a root and keeps it: the next
+        // one, asked for to run once that one ends, lets it go.
+        if (inProgress(this.git, GC_JOB_ID)) collectLater(this.git);
+        else scheduleGc(this.git, this.git.context.now() + this.maintenance.gcDelayMs);
+      }
       return { ok: true };
     });
   }
@@ -3836,6 +3847,18 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
+   * The commits of the CI runs this repository records, kept by garbage
+   * collection while it holds them: a queued job checks one out, and a re-run
+   * may until the run's retention ends. Retention bounds them.
+   */
+  gcRunRoots(): Oid[] {
+    return this.git.context.storage.sql
+      .exec<{ sha: string }>("SELECT DISTINCT sha FROM ci_runs")
+      .toArray()
+      .map((row) => oidFromHex(row.sha) as Oid);
+  }
+
+  /**
    * The deployment's CI cutoff (see `ciSince`). An unreadable one applies
    * none, and says so; so does one more than {@link MAX_CUTOFF_LEAD_MS}
    * ahead of the clock: it names when CI was switched on, so one that far
@@ -4332,6 +4355,7 @@ export class RepoDO extends MigratingDO {
         retire: this.retireOptions,
         gc: this.gcHooks,
         roots: () => this.gcRoots(),
+        heldRoots: () => this.gcRunRoots(),
       }),
     } satisfies Partial<Record<JobKind, JobHandler>>;
   }

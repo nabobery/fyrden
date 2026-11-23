@@ -83,6 +83,11 @@ export interface GcCursor {
   readonly seq: number;
   /** Roots marked after the refs: the reflog's and the further ones the repository names. */
   readonly reflogRoots: number;
+  /**
+   * Roots marked with them only if a source pack holds them. Absent from a
+   * run snapshotted before they existed, which is started again.
+   */
+  readonly heldRoots?: number;
   /** Indexes into `sources`: what the `gc` output keeps (reachable objects). */
   readonly gcSources?: readonly number[];
   /** Indexes into `sources`: live packs split (their unreachable objects go to the garbage output). */
@@ -97,6 +102,7 @@ export interface GcCursor {
 const ALL_BITS = "bits";
 const REFS_BITS = "refs";
 const REFLOG_ROOTS = "reflog-roots";
+const HELD_ROOTS = "held-roots";
 const MARK = "mark";
 
 export interface GcHooks {
@@ -116,12 +122,14 @@ export function gcHandler(
   hooks: GcHooks = {},
   /** Further roots, walked with the reflog's. */
   roots: () => readonly Oid[] = () => [],
+  /** Further roots walked with them only if a source pack holds them (CI runs' commits). */
+  heldRoots: () => readonly Oid[] = () => [],
 ): JobHandler {
   return {
     runSlice: async (job) => {
       const cursor = decodeJson<GcCursor>(job.cursor);
       await hooks.onSlice?.(cursor?.v === 1 ? cursor : undefined);
-      return new GcSlice(git, policy(), log, blocks?.(), hooks, roots).run(
+      return new GcSlice(git, policy(), log, blocks?.(), hooks, roots, heldRoots).run(
         job,
         cursor?.v === 1 ? cursor : undefined,
       );
@@ -140,6 +148,7 @@ class GcSlice {
     readonly blocks: BlockCache | undefined,
     readonly hooks: GcHooks = {},
     readonly roots: () => readonly Oid[] = () => [],
+    readonly heldRoots: () => readonly Oid[] = () => [],
   ) {
     this.deadline = git.context.now() + policy.sliceMs;
   }
@@ -147,6 +156,8 @@ class GcSlice {
   async run(job: Job, cursor: GcCursor | undefined): Promise<SliceResult> {
     try {
       if (!cursor) return await this.#snapshot();
+      // Snapshotted before CI runs' commits were roots: it may condemn one a run names.
+      if (cursor.heldRoots === undefined) return await this.#restart(cursor);
       switch (cursor.phase) {
         case "mark-refs":
         case "mark-all":
@@ -196,7 +207,10 @@ class GcSlice {
          ORDER BY state DESC, created_at, pack_id`,
       )
       .toArray();
-    if (!sources.some((s) => s.state === "live")) return { done: true };
+    // Nothing live and no CI run's commit to keep: nothing to collect. A run's commit only in
+    // garbage is marked from it, and so rescued to a live pack, as fetch reads only live ones.
+    const heldRoots = this.heldRoots();
+    if (!sources.some((s) => s.state === "live") && heldRoots.length === 0) return { done: true };
     const state = git.refStore.state();
     const reflog = storage.sql
       .exec<{ old_oid: ArrayBuffer | null; new_oid: ArrayBuffer | null }>(
@@ -222,6 +236,14 @@ class GcSlice {
     // from, or an update after `reflogSeq` the swap's catch-up walks from, reach it. And a
     // later run reads it before condemning anything this run leaves garbage.
     for (const oid of this.roots()) roots.set(Array.from(oid).join(","), oid);
+    // Read with them, for the same reason: a CI run recorded after this read names a commit a
+    // ref or a reflog entry within the retention reached when it was recorded (its first
+    // registration requires it), which this run or the swap's catch-up walks.
+    const held = new Map<string, Oid>();
+    for (const oid of heldRoots) {
+      const key = Array.from(oid).join(",");
+      if (!roots.has(key)) held.set(key, oid);
+    }
     // In the same synchronous block as the reflog and the roots: a root recorded during the await
     // below and its ref deleted then would be in neither, and the catch-up follows only new ids.
     const refRoots = [...git.refStore.readRefsSync().refs.values()];
@@ -232,6 +254,15 @@ class GcSlice {
       at += 20;
     }
     if (roots.size > 0) await putScratch(git, runId, REFLOG_ROOTS, packed, this.counter);
+    if (held.size > 0) {
+      const heldPacked = new Uint8Array(held.size * 20);
+      let h = 0;
+      for (const oid of held.values()) {
+        heldPacked.set(oid, h);
+        h += 20;
+      }
+      await putScratch(git, runId, HELD_ROOTS, heldPacked, this.counter);
+    }
     // Sources: live packs ('live' > 'garbage', so first), then garbage packs, each oldest first.
     const cursor: GcCursor = {
       v: 1,
@@ -248,6 +279,7 @@ class GcSlice {
       })),
       seq: 0,
       reflogRoots: roots.size,
+      heldRoots: held.size,
     };
     await this.hooks.afterSnapshot?.();
     return this.#mark(cursor, refRoots);
@@ -279,6 +311,17 @@ class GcSlice {
           const packed = await getScratch(git, cursor.runId, REFLOG_ROOTS, this.counter);
           const oids: Oid[] = [];
           for (let at = 0; at < packed.length; at += 20) oids.push(oidFromBytes(packed, at));
+          session.mark.push(oids);
+        }
+        if ((cursor.heldRoots ?? 0) > 0) {
+          const packed = await getScratch(git, cursor.runId, HELD_ROOTS, this.counter);
+          const oids: Oid[] = [];
+          for (let at = 0; at < packed.length; at += 20) {
+            const oid = oidFromBytes(packed, at);
+            // Marked only if held: one gone (collected long ago, or only ever in a fork) would
+            // stop the whole collection as a missing object.
+            if (session.sources.some((pack) => pack.idx.find(oid) >= 0)) oids.push(oid);
+          }
           session.mark.push(oids);
         }
       }
