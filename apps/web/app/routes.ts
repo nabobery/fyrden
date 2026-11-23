@@ -48,5 +48,23 @@ export default [
   route(":owner/:repo/pull/:number/reviewers", "routes/repo.pull.reviewers.tsx"),
   route(":owner/:repo/pull/:number/code-owners", "routes/repo.pull.code-owners.tsx"),
   route(":owner/:repo/settings", "routes/repo.settings.tsx"),
+  // Edit pages end in /edit: matching ignores case, so `…/actions/:name` would
+  // send a secret named NEW to the new page.
+  route(":owner/:repo/settings/secrets/actions", "routes/ci.secrets.tsx", { id: "repo.secrets" }),
+  route(":owner/:repo/settings/secrets/actions/new", "routes/ci.secret.tsx", {
+    id: "repo.secret.new",
+  }),
+  route(":owner/:repo/settings/secrets/actions/:name/edit", "routes/ci.secret.tsx", {
+    id: "repo.secret.edit",
+  }),
+  route(":owner/:repo/settings/variables/actions", "routes/ci.variables.tsx", {
+    id: "repo.variables",
+  }),
+  route(":owner/:repo/settings/variables/actions/new", "routes/ci.variable.tsx", {
+    id: "repo.variable.new",
+  }),
+  route(":owner/:repo/settings/variables/actions/:name/edit", "routes/ci.variable.tsx", {
+    id: "repo.variable.edit",
+  }),
   route(":owner/:repo/watching", "routes/repo.watching.tsx"),
 ] satisfies RouteConfig;

@@ -1,5 +1,5 @@
 import { Form, redirect, useActionData } from "react-router";
-import { RepoHeader } from "../components/repo-header.js";
+import { SettingsShell } from "../components/settings-shell.js";
 import { apiCall, apiGet, assertSameOrigin, readForm } from "../lib/api.server.js";
 import type { Repo } from "../lib/types.js";
 import type { Route } from "./+types/repo.settings";
@@ -58,8 +58,7 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
   const { repo, origin, rulesets } = loaderData;
   const expires = repo.expires_at ? new Date(repo.expires_at).toISOString().slice(0, 10) : "";
   return (
-    <main>
-      <RepoHeader repo={repo} origin={origin} active="settings" />
+    <SettingsShell scope={{ kind: "repository", repo, origin }} active="general">
       <section className="panel" aria-labelledby="general">
         <h2 id="general">General</h2>
         <Form method="post">
@@ -130,6 +129,6 @@ export default function Settings({ loaderData }: Route.ComponentProps) {
           {result.error}
         </p>
       )}
-    </main>
+    </SettingsShell>
   );
 }
