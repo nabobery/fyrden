@@ -15,6 +15,7 @@ import {
   type CiSchedulesDeps,
   latestOccurrence,
 } from "../src/do/repo/ci-schedules.js";
+import { ABSORB_PAGE, ABSORB_STEPS, CI_TRIGGERS_JOB } from "../src/do/repo/ci-triggers.js";
 import { ciSince } from "../src/runner/service.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, json, user } from "./helpers/api.js";
@@ -34,6 +35,7 @@ import {
 } from "./helpers/ci-triggers.js";
 import { ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
+import { logs } from "./setup/log-capture.js";
 
 const CI = ".github/workflows/nightly.yml";
 const MINUTE = 60_000;
@@ -1158,3 +1160,311 @@ function warned(warn: { mock: { calls: unknown[][] } }, message: string): boolea
     }
   });
 }
+
+describe("schedule refreshes whose evaluation failed", () => {
+  /** A user `f`'s owner made a collaborator with `permission`. */
+  async function collaborator(f: CiRepo, permission: "push" | "admin" = "push") {
+    const who = await user();
+    expect(
+      (await api("PUT", `${f.path}/collaborators/${who.handle}`, f.owner.token, { permission }))
+        .status,
+    ).toBe(200);
+    return who;
+  }
+
+  /** Closes the newest pending schedule refresh as `outcome`, as giving its evaluation up does. */
+  const failRefresh = (f: CiRepo, outcome: string | null = "evaluation_failed", facts?: object) =>
+    inRepo(f.stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      const { id } = sql
+        .exec<{ id: number }>(
+          "SELECT max(id) AS id FROM ci_events WHERE kind = 'schedule_refresh' AND state = 'pending'",
+        )
+        .one();
+      sql.exec(
+        `UPDATE ci_events SET state = 'done', outcome = ?, done_at = ?,
+           facts = coalesce(?, facts) WHERE id = ?`,
+        outcome,
+        r.git.context.now(),
+        facts ? JSON.stringify(facts) : null,
+        id,
+      );
+      return id;
+    });
+
+  const watermark = (f: CiRepo) =>
+    inRepo(
+      f.stub,
+      (r: RepoDO) =>
+        r.git.context.storage.sql
+          .exec<{ refreshed_event: number }>(
+            "SELECT coalesce(max(refreshed_event), 0) AS refreshed_event FROM ci_schedule_state",
+          )
+          .one().refreshed_event,
+    );
+
+  /** Runs the trigger job once (one slice and what follows in its invocation), counting what it does. */
+  const counted = (f: CiRepo) =>
+    inRepo(f.stub, async (r: RepoDO) => {
+      const metrics = r.git.context.metrics as { count: (...args: unknown[]) => void };
+      const original = { count: metrics.count, apply: r.ciSchedules.apply };
+      const seen = { applied: [] as number[], dropped: 0 };
+      metrics.count = (...args: unknown[]) => {
+        if (args[0] === "ci.schedule_refresh_dropped") seen.dropped += (args[2] as number) ?? 1;
+        return original.count.apply(metrics, args);
+      };
+      r.ciSchedules.apply = (eventId, ...rest) => {
+        seen.applied.push(eventId);
+        return original.apply.call(r.ciSchedules, eventId, ...rest);
+      };
+      try {
+        const ran = await r.git.jobs.runJob(
+          CI_TRIGGERS_JOB,
+          r.ciTriggers.handler(),
+          r.git.memory,
+          r.git.context.now() + 60_000,
+        );
+        return { ...seen, state: ran.state };
+      } finally {
+        metrics.count = original.count;
+        r.ciSchedules.apply = original.apply;
+      }
+    });
+
+  it("keep the pusher of a failed refresh as the actor of the file they changed", async () => {
+    for (const outcome of ["evaluation_failed", "retries_exhausted"]) {
+      const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+      const writer = await collaborator(f);
+      await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+      await failRefresh(f, outcome);
+      await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+      await runTriggers(f.stub);
+      expect(await rowsOf(f), outcome).toMatchObject([{ actor_id: writer.principalId }]);
+    }
+  });
+
+  it("give a file a failed refresh changed, and a later push changed again, to the later pusher", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    await failRefresh(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# z\n` }, "again");
+    await runTriggers(f.stub);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: f.owner.principalId }]);
+  });
+
+  it("apply failed refreshes oldest first, each once, and none a newer refresh already passed", async () => {
+    const second = ".github/workflows/weekly.yml";
+    const f = await scheduleRepo({
+      [CI]: scheduled(["*/5 * * * *"]),
+      [second]: scheduled(["0 * * * *"], "weekly"),
+    });
+    const [one, two] = [await collaborator(f), await collaborator(f)];
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# 1\n` }, "1", one);
+    const first = await failRefresh(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# 2\n` }, "2", two);
+    const failed = await failRefresh(f);
+    await commitLive(
+      f,
+      "main",
+      { [second]: `${scheduled(["0 * * * *"], "weekly")}# 1\n` },
+      "3",
+      one,
+    );
+    const last = await failRefresh(f);
+    // A refresh newer than the first was applied already: the first is not applied after it.
+    await inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec(
+        "UPDATE ci_schedule_state SET refreshed_event = ? WHERE id = 1",
+        first,
+      ),
+    );
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    const ran = await counted(f);
+    expect(ran.applied.slice(0, 2)).toEqual([failed, last]);
+    expect(ran.applied).toHaveLength(3);
+    expect(await rowsOf(f)).toMatchObject([
+      { workflow_path: CI, actor_id: two.principalId },
+      { workflow_path: second, actor_id: one.principalId },
+    ]);
+    // Applied once: the next refresh applies only itself.
+    await commitLive(f, "main", { "c.txt": "c\n" }, "unrelated again");
+    expect((await counted(f)).applied).toHaveLength(1);
+  });
+
+  it("apply a failed change of the default branch as one: every row the changer's", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const admin = await collaborator(f, "admin");
+    const main = (await json<{ sha: string }>(api("GET", `${f.path}/commits/main`, f.owner.token)))
+      .body.sha;
+    await pushLive(f, [{ old: ZERO, new: main, ref: "refs/heads/release" }]);
+    await runTriggers(f.stub);
+    expect(
+      (await live(f, () => api("PATCH", f.path, admin.token, { default_branch: "release" })))
+        .status,
+    ).toBe(200);
+    await failRefresh(f);
+    await commitLive(f, "release", { "b.txt": "b\n" }, "unrelated");
+    await runTriggers(f.stub);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: admin.principalId }]);
+  });
+
+  it("drop a failed refresh whose commit cannot be read, once, and refresh from the next one", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    // Its commit is gone (a force-push and a collection since).
+    const gone = await failRefresh(f, "evaluation_failed", { source: "push", sha: "1".repeat(40) });
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    const ran = await counted(f);
+    expect(ran.dropped).toBe(1);
+    expect(ran.applied).toHaveLength(1);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: f.owner.principalId }]);
+    expect(await watermark(f)).toBeGreaterThan(gone);
+    expect(
+      logs.entries().find((e) => e.msg === "a failed schedule refresh could not be read: dropped"),
+    ).toMatchObject({ event: gone });
+    await commitLive(f, "main", { "c.txt": "c\n" }, "unrelated again");
+    expect((await counted(f)).dropped).toBe(0);
+  });
+
+  it("retry the newer refresh, dropping nothing, when a read fails temporarily", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    await failRefresh(f);
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {
+        beforeRead: () => {
+          throw new Error("the object store could not be reached");
+        },
+      };
+    });
+    const ran = await counted(f);
+    expect(ran.dropped).toBe(0);
+    expect((await eventsOf(f.stub, { refreshes: true })).at(-1)).toMatchObject({
+      kind: "schedule_refresh",
+      state: "pending",
+      attempts: 1,
+    });
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {};
+    });
+    f.clock.now += 60 * MINUTE;
+    await runTriggers(f.stub);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: writer.principalId }]);
+  });
+
+  it("spend at most a slice's steps on failed refreshes, resuming after the last one done", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    const total = ABSORB_STEPS + 2;
+    for (let i = 0; i < total; i++) {
+      await commitLive(f, "main", { [`f${i}.txt`]: "x\n" }, `${i}`, writer);
+      await failRefresh(f, "evaluation_failed", { source: "push", sha: "1".repeat(40) });
+    }
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    await failRefresh(f);
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    const first = await counted(f);
+    expect(first).toMatchObject({ dropped: ABSORB_STEPS, applied: [], state: "queued" });
+    const second = await counted(f);
+    expect(second.dropped).toBe(total - ABSORB_STEPS);
+    expect(second.applied).toHaveLength(2);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: writer.principalId }]);
+  });
+
+  it("read the inbox between the last refresh and this one in pages, a slice's steps at a time", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const from = await watermark(f);
+    // Decided events since the last refresh, none of them a failed refresh.
+    const backlog = ABSORB_STEPS * ABSORB_PAGE + 10;
+    await inRepo(f.stub, (r: RepoDO) => {
+      const sql = r.git.context.storage.sql;
+      for (let i = 0; i < backlog; i++)
+        sql.exec(
+          `INSERT INTO ci_events (key, kind, state, outcome, facts, created_at, done_at)
+           VALUES (?, 'push', 'done', 'not_a_commit', '{}', 1, ?)`,
+          `backlog:${i}`,
+          r.git.context.now(),
+        );
+    });
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    const first = await counted(f);
+    expect(first).toMatchObject({ applied: [], state: "queued" });
+    expect(await watermark(f)).toBe(from + ABSORB_STEPS * ABSORB_PAGE);
+    expect((await counted(f)).applied).toHaveLength(1);
+  });
+
+  it("move the watermark on a refresh that schedules nothing", async () => {
+    const f = await scheduleRepo({ "b.txt": "b\n" });
+    await commitLive(f, "main", { "c.txt": "c\n" }, "unrelated");
+    await runTriggers(f.stub);
+    const [last] = (await eventsOf(f.stub, { refreshes: true }))
+      .filter((e) => e.kind === "schedule_refresh")
+      .slice(-1);
+    expect(await watermark(f)).toBe(last?.id);
+  });
+
+  it("keep a failed refresh past the retention until it is applied, then prune it", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    const failed = await failRefresh(f);
+    const exists = () =>
+      inRepo(
+        f.stub,
+        (r: RepoDO) =>
+          r.git.context.storage.sql.exec("SELECT 1 FROM ci_events WHERE id = ?", failed).toArray()
+            .length > 0,
+      );
+    f.clock.now += 8 * DAY;
+    await runTriggers(f.stub);
+    expect(await exists()).toBe(true);
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    await runTriggers(f.stub);
+    expect(await rowsOf(f)).toMatchObject([{ actor_id: writer.principalId }]);
+    // The next slice (a slice prunes as it starts) deletes it, applied.
+    await commitLive(f, "main", { "c.txt": "c\n" }, "unrelated again");
+    await runTriggers(f.stub);
+    expect(await exists()).toBe(false);
+  });
+
+  it("prune a decided refresh that did not fail at the retention, whatever the watermark", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+    // Decided without an outcome, and passed by no later refresh.
+    const decided = await failRefresh(f, null);
+    expect(await watermark(f)).toBeLessThan(decided);
+    f.clock.now += 8 * DAY;
+    // A push to another branch: a slice (which prunes as it starts), and no refresh.
+    const main = (await json<{ sha: string }>(api("GET", `${f.path}/commits/main`, f.owner.token)))
+      .body.sha;
+    await pushLive(f, [{ old: ZERO, new: main, ref: "refs/heads/feature" }]);
+    await runTriggers(f.stub);
+    expect((await eventsOf(f.stub, { refreshes: true })).map((e) => e.id)).not.toContain(decided);
+  });
+
+  it("apply a failed refresh from before the CI cutoff: it starts no run", async () => {
+    const f = await scheduleRepo({ [CI]: scheduled(["*/5 * * * *"]) });
+    const writer = await collaborator(f);
+    await commitLive(f, "main", { [CI]: `${scheduled(["*/5 * * * *"])}# y\n` }, "w", writer);
+    const failed = await failRefresh(f);
+    const recorded = (await eventsOf(f.stub, { refreshes: true })).find((e) => e.id === failed);
+    // The cutoff falls after the failed refresh was recorded, and before the next one.
+    const since = (recorded?.created_at as number) + 1;
+    await setVar(f.stub, "FYRDEN_CI_SINCE", String(since));
+    try {
+      await commitLive(f, "main", { "b.txt": "b\n" }, "unrelated");
+      const next = (await eventsOf(f.stub, { refreshes: true })).at(-1);
+      expect(next?.created_at as number).toBeGreaterThanOrEqual(since);
+      const before = (await eventRunsOf(f.stub)).length;
+      await runTriggers(f.stub);
+      expect(await rowsOf(f)).toMatchObject([{ actor_id: writer.principalId }]);
+      expect(await eventRunsOf(f.stub)).toHaveLength(before);
+    } finally {
+      await setVar(f.stub, "FYRDEN_CI_SINCE", undefined);
+    }
+  });
+});

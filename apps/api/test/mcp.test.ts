@@ -1,6 +1,6 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
-import { mcpTools, registry } from "@fyrden/api-contract";
+import { mcpInput, mcpTools, registry } from "@fyrden/api-contract";
 import {
   createMcpHandler,
   McpServer,
@@ -11,6 +11,7 @@ import { createApp } from "../src/app.js";
 import { mcpOriginAllowed, withConvertedJsonSchema } from "../src/mcp/mount.js";
 import { api, json, user } from "./helpers/api.js";
 import { createRepo } from "./helpers/git-http.js";
+import { callTool } from "./helpers/mcp.js";
 import { principalWithToken } from "./helpers/principals.js";
 import { logs } from "./setup/log-capture.js";
 
@@ -154,6 +155,10 @@ describe("MCP endpoint", () => {
     const again = async () =>
       JSON.stringify(await result<{ tools: unknown[] }>(await rpc("tools/list")));
     expect(await again()).toBe(await again());
+    // A keyed tool's input (the operation's, with its idempotency_key) is the same object each time.
+    const keyed = tool("dispatch_workflow");
+    expect(mcpInput(keyed)).not.toBe(keyed.input);
+    expect(withConvertedJsonSchema(mcpInput(keyed))).toBe(withConvertedJsonSchema(mcpInput(keyed)));
   });
 
   it("lists tools without converting a schema again, across servers (the SDK uses the memo)", async () => {
@@ -402,5 +407,25 @@ describe("large tool calls", () => {
     }>(res);
     expect(call.isError ?? false, call.content[0]?.text).toBe(false);
     expect(call.structuredContent.content.size).toBe(3_200_000);
+  });
+});
+
+describe("idempotent tool calls", () => {
+  it("never answer a secret twice: a git token replayed with its key is named, not shown", async () => {
+    const owner = await user();
+    const key = crypto.randomUUID();
+    const first = await callTool(owner.token, "create_git_token", { idempotency_key: key });
+    expect(first.isError, first.text).toBe(false);
+    expect(first.text).toContain("fyrden_git_");
+    const again = await callTool(owner.token, "create_git_token", { idempotency_key: key });
+    expect(again.isError).toBe(true);
+    expect(again.text).not.toContain("fyrden_git_");
+    expect(JSON.parse(again.text)).toMatchObject({ code: "secret_already_disclosed" });
+    // A key is the token's own: another token's same key is another request.
+    const other = await callTool((await user()).token, "create_git_token", {
+      idempotency_key: key,
+    });
+    expect(other.isError, other.text).toBe(false);
+    expect(other.text).toContain("fyrden_git_");
   });
 });

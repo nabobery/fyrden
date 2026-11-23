@@ -9,8 +9,13 @@ import { type Oid, oidFromHex, PackError } from "@fyrden/git-core";
 import { uniqueId } from "@fyrden/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import { CI_TRIGGERS_JOB, TRIGGER_WORK } from "../src/do/repo/ci-triggers.js";
-import { UnreadableObjectError } from "../src/do/repo/held-reads.js";
+import {
+  CI_TRIGGERS_JOB,
+  EXHAUSTED_RETRY_MS,
+  MAX_EVENT_ATTEMPTS,
+  TRIGGER_WORK,
+} from "../src/do/repo/ci-triggers.js";
+import { ReadsMemoryBusy, UnreadableObjectError } from "../src/do/repo/held-reads.js";
 import { workflowFileCheckName } from "../src/do/run/plan-check.js";
 import { api, json, user } from "./helpers/api.js";
 import {
@@ -19,6 +24,7 @@ import {
   commit,
   countingDirectory,
   countingRuns,
+  type EventRow,
   eventRunsOf,
   eventsOf,
   githubOf,
@@ -44,6 +50,7 @@ import {
   T0,
   workflow,
 } from "./helpers/runs.js";
+import { logs } from "./setup/log-capture.js";
 
 const CI = ".github/workflows/ci.yml";
 
@@ -777,6 +784,100 @@ describe("failures while deciding an event", () => {
     expect(runs[0]?.started_at).not.toBeNull();
   });
 
+  /** The push event's row, as the inbox holds it. */
+  const pushEvent = async (f: CiRepo) =>
+    (await eventsOf(f.stub)).find((e) => e.kind === "push") as EventRow;
+  const setAttempts = (f: CiRepo, attempts: number) =>
+    inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec(
+        "UPDATE ci_events SET attempts = ? WHERE kind = 'push'",
+        attempts,
+      ),
+    );
+
+  it("give up an event whose reads keep failing temporarily at the attempt cap, as retries_exhausted", async () => {
+    const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+    const later = await frozen(f);
+    await inRepo(f.stub, (r: RepoDO) =>
+      r.git.context.storage.sql.exec("DELETE FROM ci_events WHERE kind = 'schedule_refresh'"),
+    );
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {
+        beforeRead: () => {
+          throw new Error("the object store could not be reached");
+        },
+      };
+    });
+    await runTriggers(f.stub);
+    expect(await pushEvent(f)).toMatchObject({ state: "pending", attempts: 1, faults: 0 });
+    // Every failure counts one attempt; the ones up to just below the cap are skipped.
+    await setAttempts(f, MAX_EVENT_ATTEMPTS - 2);
+    later();
+    await runTriggers(f.stub);
+    expect(await pushEvent(f)).toMatchObject({
+      state: "pending",
+      attempts: MAX_EVENT_ATTEMPTS - 1,
+    });
+    later();
+    const seen = await inRepo(f.stub, async (r: RepoDO) => {
+      const metrics = r.git.context.metrics as { count: (...args: unknown[]) => void };
+      const original = metrics.count;
+      const outcomes: unknown[] = [];
+      metrics.count = (...args: unknown[]) => {
+        if (args[0] === "ci.trigger_outcome") outcomes.push(args[1]);
+        return original.apply(metrics, args);
+      };
+      try {
+        await r.git.jobs.runJob(
+          CI_TRIGGERS_JOB,
+          r.ciTriggers.handler(),
+          r.git.memory,
+          r.git.context.now() + 60_000,
+        );
+      } finally {
+        metrics.count = original;
+      }
+      return outcomes;
+    });
+    expect(seen).toEqual([{ outcome: "retries_exhausted" }]);
+    expect(await pushEvent(f)).toMatchObject({
+      state: "done",
+      outcome: "retries_exhausted",
+      attempts: MAX_EVENT_ATTEMPTS,
+    });
+    expect(await eventRunsOf(f.stub)).toEqual([]);
+    expect(
+      logs.entries().find((e) => e.msg === "a CI trigger event kept failing and was given up"),
+    ).toMatchObject({ outcome: "retries_exhausted", attempts: MAX_EVENT_ATTEMPTS });
+  });
+
+  it("count no retry while the isolate's memory is busy toward the cap", async () => {
+    const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+    const later = await frozen(f);
+    await setAttempts(f, MAX_EVENT_ATTEMPTS - 1);
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {
+        beforeRead: () => {
+          throw new ReadsMemoryBusy();
+        },
+      };
+    });
+    for (let i = 0; i < 3; i++) {
+      await runTriggers(f.stub);
+      expect(await pushEvent(f)).toMatchObject({
+        state: "pending",
+        attempts: MAX_EVENT_ATTEMPTS - 1,
+      });
+      later();
+    }
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {};
+    });
+    await runTriggers(f.stub);
+    expect(await pushEvent(f)).toMatchObject({ state: "done", outcome: null });
+    expect(await eventRunsOf(f.stub)).toHaveLength(1);
+  });
+
   it("complete a run whose create answer was lost, through read failures after it", async () => {
     const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
     const later = await frozen(f);
@@ -877,6 +978,30 @@ describe("failures while deciding an event", () => {
   });
 });
 
+describe("the evidence seam", () => {
+  it("fail the inbox's reads on request, and decide each pending event once per call", async () => {
+    const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+    // A clock that stands still: no retry falls due again within a call.
+    await inRepo(f.stub, (r: RepoDO) => {
+      const now = r.git.context.now();
+      (r.git.context as { now: () => number }).now = () => now;
+    });
+    expect(await f.stub.ciTriggerFaults("transient")).toEqual({ ok: true });
+    const push = async () => {
+      const answer = await f.stub.ciTriggersNow();
+      if (!answer.ok) throw new Error(answer.code);
+      return answer.events.find((e) => e.kind === "push");
+    };
+    expect(await push()).toMatchObject({ state: "pending", attempts: 1, faults: 0 });
+    expect(await push()).toMatchObject({ state: "pending", attempts: 2, faults: 0 });
+    await f.stub.ciTriggerFaults("fault");
+    expect(await push()).toMatchObject({ state: "pending", attempts: 3, faults: 1 });
+    await f.stub.ciTriggerFaults(null);
+    expect(await push()).toMatchObject({ state: "done", outcome: null, attempts: 3 });
+    expect(await eventRunsOf(f.stub)).toHaveLength(1);
+  });
+});
+
 describe("runs allocated before their start is confirmed", () => {
   async function frozen(f: CiRepo) {
     const clock = { now: Date.now() };
@@ -917,6 +1042,87 @@ describe("runs allocated before their start is confirmed", () => {
     expect(await viewOf(runId)).toMatchObject({ workflowPath: CI, event: "push" });
     expect(await eventsOf(f.stub)).toMatchObject([{ state: "done" }]);
   }
+
+  /** The clock's time now, and the event's retry deadline and attempts. */
+  const deadline = (f: CiRepo) =>
+    inRepo(f.stub, (r: RepoDO) => ({
+      now: r.git.context.now(),
+      ...r.git.context.storage.sql
+        .exec<{ next_at: number; attempts: number; state: string }>(
+          "SELECT next_at, attempts, state FROM ci_events WHERE kind = 'push'",
+        )
+        .one(),
+    }));
+
+  /** Drives an event with an unconfirmed run past the cap; its start keeps failing. */
+  async function pastTheCap(f: CiRepo, later: () => void) {
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.git.context.storage.sql.exec(
+        "UPDATE ci_events SET attempts = ? WHERE kind = 'push'",
+        MAX_EVENT_ATTEMPTS - 1,
+      );
+      r.ciTriggers.hooks = {
+        beforeStart: () => {
+          throw new Error("the run object could not be reached");
+        },
+      };
+    });
+    const hours = EXHAUSTED_RETRY_MS / (60 * 60_000);
+    for (let attempt = MAX_EVENT_ATTEMPTS; attempt < MAX_EVENT_ATTEMPTS + 2; attempt++) {
+      for (let i = 0; i < hours; i++) later();
+      await runTriggers(f.stub);
+      const at = await deadline(f);
+      expect(at).toMatchObject({ state: "pending", attempts: attempt });
+      // Never given up while its run may exist: tried again, less often.
+      expect(at.next_at - at.now).toBe(EXHAUSTED_RETRY_MS);
+    }
+    // Not due before then.
+    for (let i = 0; i < hours - 1; i++) later();
+    await runTriggers(f.stub);
+    expect(await deadline(f)).toMatchObject({ attempts: MAX_EVENT_ATTEMPTS + 1 });
+    await inRepo(f.stub, (r: RepoDO) => {
+      r.ciTriggers.hooks = {};
+    });
+  }
+
+  it("keep an event whose run was allocated but never created past the attempt cap, and start it", async () => {
+    const { f, later, runId } = await unconfirmed();
+    await pastTheCap(f, later);
+    await confirmed(f, later, runId);
+  });
+
+  it("keep an event whose run's create answer was lost past the attempt cap, and confirm it", async () => {
+    const f = await ciRepo({ [CI]: workflowFile("push"), "a.txt": "one\n" });
+    const later = await frozen(f);
+    await inRepo(f.stub, (r: RepoDO) => {
+      const real = env.RUN;
+      let lost = true;
+      // The run object commits the create, and its answer never arrives.
+      const runs = {
+        getByName: (name: string) => {
+          const stub = real.getByName(name);
+          return {
+            reserve: (spec: Parameters<typeof stub.reserve>[0]) => stub.reserve(spec),
+            create: async (spec: Parameters<typeof stub.create>[0]) => {
+              const answer = await stub.create(spec);
+              if (lost) {
+                lost = false;
+                throw new Error("the connection to the run object was lost");
+              }
+              return answer;
+            },
+          };
+        },
+      } as unknown as typeof env.RUN;
+      r.ciTriggers.bindings = { RUN: runs, DIRECTORY: env.DIRECTORY, ORG: env.ORG };
+    });
+    await runTriggers(f.stub);
+    const [allocated] = await eventRunsOf(f.stub);
+    expect(allocated?.started_at).toBeNull();
+    expect(await viewOf(allocated?.run_id ?? "")).toMatchObject({ workflowPath: CI });
+    await pastTheCap(f, later);
+    await confirmed(f, later, allocated?.run_id ?? "");
+  });
 
   it("confirm the run from what was stored with it once its workflow can no longer be read", async () => {
     const { f, later, runId } = await unconfirmed();

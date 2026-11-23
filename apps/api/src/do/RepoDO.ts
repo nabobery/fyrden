@@ -39,7 +39,7 @@ import {
   type ReviewEvent,
   rootIdentity,
 } from "@fyrden/domain";
-import { type BlockCache, type LsRefsArgs, type Oid, oidToHex } from "@fyrden/git-core";
+import { type BlockCache, type LsRefsArgs, type Oid, oidToHex, PackError } from "@fyrden/git-core";
 import {
   admissionStatements,
   discretionaryAllowance,
@@ -717,6 +717,7 @@ export class RepoDO extends MigratingDO {
       applySchedules: (eventId, files, actor, headChange) =>
         this.ciSchedules.apply(eventId, files, actor, headChange),
       skipSchedules: (eventId) => this.ciSchedules.skip(eventId),
+      passSchedules: (eventId) => this.ciSchedules.pass(eventId),
       noteSchedulesOff: () => this.ciSchedules.noteOff(),
       resumeSchedules: () => this.ciSchedules.resume(),
       refreshAccess: () => this.acl.pullForWrite(),
@@ -2619,6 +2620,105 @@ export class RepoDO extends MigratingDO {
         this.git.context.now() + ALARM_BUDGET_MS,
       );
       return { ok: true };
+    });
+  }
+
+  /**
+   * For tests and the evidence run only (no route of fyrden-api reaches
+   * it): until called again with `null`, every read of the repository's
+   * objects by the trigger inbox fails, as a store that cannot be reached
+   * (`transient`, retried and counted) or a pack that cannot be decoded
+   * (`fault`). Kept in this object's memory, so an eviction clears it.
+   */
+  ciTriggerFaults(mode: "transient" | "fault" | null): Promise<{ ok: true }> {
+    return this.#measured("ciTriggerFaults", () => {
+      if (mode !== null && mode !== "transient" && mode !== "fault")
+        throw new Error(`unknown fault mode: ${String(mode)}`);
+      const { beforeRead: _, ...hooks } = this.ciTriggers.hooks;
+      this.ciTriggers.hooks =
+        mode === null
+          ? hooks
+          : {
+              ...hooks,
+              beforeRead: () => {
+                throw mode === "transient"
+                  ? new Error("injected: the object store could not be reached")
+                  : new PackError("bad-zlib", "injected: an entry's zlib stream is corrupt");
+              },
+            };
+      return { ok: true as const };
+    });
+  }
+
+  /**
+   * For tests and the evidence run only (no route of fyrden-api reaches
+   * it): makes every pending inbox event due, as its retry deadline passing
+   * would, decides the inbox once as the alarm would, and answers the inbox
+   * and the schedule entries. A retry moves its event's deadline past now,
+   * so each event is normally evaluated once a call; one whose backoff
+   * passes while the call still runs may be evaluated again, so callers
+   * check attempts as they find them.
+   */
+  ciTriggersNow(): Promise<
+    | {
+        ok: true;
+        events: {
+          id: number;
+          kind: string;
+          state: string;
+          outcome: string | null;
+          attempts: number;
+          faults: number;
+        }[];
+        schedules: {
+          workflow_path: string;
+          cron: string;
+          actor_id: string;
+          disabled: string | null;
+        }[];
+      }
+    | { ok: false; code: "ci_off" }
+  > {
+    return this.#measured("ciTriggersNow", async () => {
+      if (!runnersOn(this.env)) return { ok: false as const, code: "ci_off" as const };
+      const sql = this.git.context.storage.sql;
+      const now = this.git.context.now();
+      sql.exec(
+        "UPDATE ci_events SET next_at = ? WHERE state = 'pending' AND next_at > ?",
+        now,
+        now,
+      );
+      await this.git.jobs.runJob(
+        CI_TRIGGERS_JOB,
+        this.ciTriggers.handler(),
+        this.git.memory,
+        now + ALARM_BUDGET_MS,
+      );
+      return {
+        ok: true as const,
+        events: sql
+          .exec<{
+            id: number;
+            kind: string;
+            state: string;
+            outcome: string | null;
+            attempts: number;
+            faults: number;
+          }>("SELECT id, kind, state, outcome, attempts, faults FROM ci_events ORDER BY id")
+          .toArray()
+          .map((row) => ({ ...row })),
+        schedules: sql
+          .exec<{
+            workflow_path: string;
+            cron: string;
+            actor_id: string;
+            disabled: string | null;
+          }>(
+            "SELECT workflow_path, cron, actor_id, disabled FROM ci_schedules ORDER BY workflow_path, cron",
+          )
+          .toArray()
+          .map((row) => ({ ...row })),
+      };
     });
   }
 

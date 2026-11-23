@@ -1217,17 +1217,19 @@ carry a port (`localhost:8443`), and `gh` reaches it over https only.
 ## Idempotent requests
 
 A REST write (any method but GET) sent with an `Idempotency-Key` header runs
-once per token and key; it is optional, as on GitHub. MCP tool calls take no
-key. The key is checked after the token (revocation included), the rate
-limit, the token's scopes and the input; a replay returns the answer the
-same token already got, without checking its access to the repository
-again.
+once per token and key; it is optional, as on GitHub. The MCP tool of such a
+write takes the same key as its optional `idempotency_key` argument, under
+the same rules: it is one claim, so a REST request and a tool call by the
+same token with the same key and input answer each other's replay. The key
+is checked after the token (revocation included), the rate limit, the
+token's scopes and the input; a replay returns the answer the same token
+already got, without checking its access to the repository again.
 
 | What | Value |
 |---|---|
-| Key | 1-255 printable ASCII characters (else 422 `invalid_idempotency_key`), per token |
+| Key | 1-255 visible ASCII characters, no spaces (`!` to `~`; else REST answers 422 `invalid_idempotency_key`; MCP answers the tool's argument error, as for any invalid argument), per token |
 | Kept | 24 hours, then forgotten (the cron deletes expired keys) |
-| A retry of the same request | The first answer again, with `Idempotent-Replayed: true`; nothing runs twice |
+| A retry of the same request | The first answer again (over REST with `Idempotent-Replayed: true`); nothing runs twice |
 | The same key, another request | 422 `idempotency_key_reused` (another operation, or another input) |
 | While the first still runs | 409 `idempotency_key_in_use` with `Retry-After: 5` |
 | When the first may or may not have taken effect | 409 `idempotent_outcome_unknown`: it failed unexpectedly, or was still marked running after 10 minutes. Check, then use a new key |
@@ -1317,6 +1319,7 @@ Self-hosted runners (the stock gitea/runner, v6.0.0 and v5.4.1) speak its Connec
 | What | Value |
 |---|---|
 | Switch | `FYRDEN_CI_RUNNERS` (a Worker variable): `on` or `off`; unset or empty, on for Paid and off for Free, whose capacity numbers are proposed (see CI capacity); any other value is off, so `off` is the way to turn Paid's runners off. `fyrden deploy` sets it on every deploy: `--ci-runners on\|off`, else the plan's default. While off, registering answers `failed_precondition`, minting a registration token answers 409 `runners_off`, triggers record nothing (`ci_off`), and a runner polling for work is told there is none (it keeps polling rather than exiting, so turning the switch off is reversible); runners already registered keep their credentials. Jobs already queued stay queued and end at their 24-hour queue deadline. A deploy that switches runners on (the live version's are off, or there is none) sets `FYRDEN_CI_SINCE` to its time (or `--ci-since`): scheduled ticks due before it never fire and trigger events still pending from before it are closed, so an off period replays nothing. A deploy that leaves runners on keeps the live version's value, so it closes nothing; when the live state cannot be read (or two versions share the traffic), it stops before uploading and asks for `--ci-since` |
+| Trigger events retried | A push, pull request, schedule or dispatch whose decision fails is tried again after 5 seconds, doubling to 15 minutes. A failure that repeats whatever is retried (a pack that cannot be decoded, say) gives the event up after 20 (`evaluation_failed`); any failure, a temporary one too (storage or a run object that cannot be reached), after 100 tries in all, about a day (`retries_exhausted`). An event that allocated a run whose start is not confirmed is never given up, since the run may exist: past 100 tries it is tried every 6 hours. A wait for the isolate's memory, or for an earlier schedule refresh, counts no try. A schedule refresh given up either way is applied by the next refresh first, with its own pusher as the actor of the files it changed, at most 8 a slice; one whose commit still cannot be read then is dropped (`ci.schedule_refresh_dropped`), and its files go to the next pusher who changes them. Until then it is kept past the 7 days decided events are kept (all Proposed) |
 | Upgrade from runs without origin metadata | RunDO v6 and directory migration 0053 fail closed: earlier runs have unknown origin (`trust=untrusted`, `fork=1`), and earlier pending jobs and offers have no repository binding. They are not backfilled or made eligible from repository visibility. Already delivered tasks can heartbeat and finish. Unclaimed jobs cancel at the existing 24-hour deadline for each queued job instance; an assigned task whose answer was lost normally fails after ten minutes without a heartbeat (or an earlier job timeout). Normal task-end and dispatch cleanup revoke tokens and withdraw pending rows. Later dependent jobs have their own queue deadlines, so this is not a 24-hour bound on the whole workflow. Rerunning an old run retains its unknown origin; create a fresh run through a validated event or manual dispatch to recover. Tested locally with migration defaults, pending-row withdrawal, delivered-task completion, dependent jobs and reruns; no deployed upgrade measurement |
 | Registration tokens | `POST /orgs/{org}/actions/runners/registration-token` (organization owners; `self_hosted_runners:write`), shown once. Each registers one runner and expires after an hour (Proposed; GitHub's tokens also last an hour but register any number of runners). A Register whose answer is lost spends its token: the runner it created never declares, shows in `GET /orgs/{org}/actions/runners` without a declared time, and an owner deletes it and mints another token |
 | Runner credentials | Returned once to the runner at registration and kept only as a hash. `DELETE /orgs/{org}/actions/runners/{runner_id}` revokes one; the runner's next call answers `unauthenticated` and the runner stops |

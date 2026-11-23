@@ -23,6 +23,7 @@ import {
   viewOf,
 } from "./helpers/ci-triggers.js";
 import { ORIGIN } from "./helpers/git-http.js";
+import { callTool } from "./helpers/mcp.js";
 import { ZERO } from "./helpers/push-fixtures.js";
 import { inRepo } from "./helpers/repo-git.js";
 import { at, drain, inRun, jobsOf, T0 } from "./helpers/runs.js";
@@ -424,6 +425,29 @@ describe("workflow_dispatch", () => {
     expect(await dispatchRuns(f)).toHaveLength(3);
   });
 
+  it("replay one key across /api and /api/v3, which stock gh calls", async () => {
+    const f = await dispatchRepo();
+    const key = uniqueId("key");
+    const body = { ref: "main", inputs: { env: "prod" } };
+    const first = await dispatch(f, "ci.yml", body, { key });
+    const v3 = await exports.default.fetch(
+      `${ORIGIN}/api/v3${f.path}/actions/workflows/ci.yml/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `token ${f.owner.token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    expect(v3.status).toBe(200);
+    expect(v3.headers.get("Idempotent-Replayed")).toBe("true");
+    expect(await v3.json()).toEqual(first.body);
+    expect(await dispatchRuns(f)).toHaveLength(1);
+  });
+
   it("make a run per request without an Idempotency-Key", async () => {
     const f = await dispatchRepo();
     const body = { ref: "main", inputs: { env: "prod" } };
@@ -622,5 +646,88 @@ describe("workflow_dispatch", () => {
             .one().last,
       ),
     ).toBe(999_999_998);
+  });
+});
+
+describe("workflow_dispatch over MCP", () => {
+  /** The tool's arguments for `ci.yml` on main, with `more`. */
+  const args = (f: CiRepo, more: Record<string, unknown> = {}) => ({
+    owner: f.owner.handle,
+    repo: f.repo.name,
+    workflow_id: "ci.yml",
+    ref: "main",
+    inputs: { env: "prod" },
+    ...more,
+  });
+  const claims = async (key: string) =>
+    (
+      await env.DIRECTORY.prepare("SELECT count(*) AS n FROM idempotency_keys WHERE key = ?")
+        .bind(key)
+        .first<{ n: number }>()
+    )?.n;
+
+  it("make one run of the same idempotency_key twice, answering the same run", async () => {
+    const f = await dispatchRepo();
+    const key = uniqueId("key");
+    const first = await callTool(
+      f.owner.token,
+      "dispatch_workflow",
+      args(f, { idempotency_key: key }),
+    );
+    expect(first.isError, first.text).toBe(false);
+    const again = await callTool(
+      f.owner.token,
+      "dispatch_workflow",
+      args(f, { idempotency_key: key }),
+    );
+    expect(again).toEqual(first);
+    expect(await dispatchRuns(f)).toHaveLength(1);
+    // The key is the claim's, not part of the request: other inputs are another request.
+    const other = await callTool(
+      f.owner.token,
+      "dispatch_workflow",
+      args(f, { inputs: { env: "staging" }, idempotency_key: key }),
+    );
+    expect(other.isError).toBe(true);
+    expect(JSON.parse(other.text)).toMatchObject({ code: "idempotency_key_reused" });
+    expect(await dispatchRuns(f)).toHaveLength(1);
+  });
+
+  it("replay across REST and MCP for the same token, key and request", async () => {
+    const f = await dispatchRepo();
+    const key = uniqueId("key");
+    const rest = await dispatch(f, "ci.yml", { ref: "main", inputs: { env: "prod" } }, { key });
+    expect(rest.status).toBe(200);
+    const mcp = await callTool(
+      f.owner.token,
+      "dispatch_workflow",
+      args(f, { idempotency_key: key }),
+    );
+    expect(mcp.structured).toEqual(rest.body);
+    expect(await dispatchRuns(f)).toHaveLength(1);
+  });
+
+  it("make a run per call without a key, as before", async () => {
+    const f = await dispatchRepo();
+    const one = await callTool(f.owner.token, "dispatch_workflow", args(f));
+    const two = await callTool(f.owner.token, "dispatch_workflow", args(f));
+    expect([one.isError, two.isError]).toEqual([false, false]);
+    expect(one.structured?.workflow_run_id).not.toBe(two.structured?.workflow_run_id);
+    expect(await dispatchRuns(f)).toHaveLength(2);
+  });
+
+  it("refuse a key that is not 1-255 visible ASCII characters before anything runs", async () => {
+    const f = await dispatchRepo();
+    for (const key of ["", "has space", "x".repeat(256), "é"]) {
+      const answer = await callTool(
+        f.owner.token,
+        "dispatch_workflow",
+        args(f, { idempotency_key: key }),
+      );
+      expect(answer.isError, key).toBe(true);
+      expect(answer.text, key).toContain("idempotency_key");
+      expect(await claims(key), key).toBe(0);
+    }
+    expect(await dispatchRuns(f)).toHaveLength(0);
   });
 });
