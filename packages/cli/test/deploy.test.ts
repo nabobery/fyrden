@@ -554,6 +554,7 @@ describe("fyrden deploy", () => {
           fleet: 1,
           daily: "worker_requests=9000",
           maxJobMinutes: 60,
+          runRetentionDays: 30,
         },
       }).d,
     );
@@ -563,10 +564,16 @@ describe("fyrden deploy", () => {
       FYRDEN_CI_FLEET: "1",
       FYRDEN_CI_DAILY: "worker_requests=9000",
       FYRDEN_CI_MAX_JOB_MINUTES: "60",
+      FYRDEN_CI_RUN_RETENTION_DAYS: "30",
     });
     await deploy(deps(fake.runner, { plan: "free" }).d);
     vars = (await generatedConfig()).vars as Record<string, string>;
-    for (const name of ["FYRDEN_CI_FLEET", "FYRDEN_CI_DAILY", "FYRDEN_CI_MAX_JOB_MINUTES"])
+    for (const name of [
+      "FYRDEN_CI_FLEET",
+      "FYRDEN_CI_DAILY",
+      "FYRDEN_CI_MAX_JOB_MINUTES",
+      "FYRDEN_CI_RUN_RETENTION_DAYS",
+    ])
       expect(vars, name).not.toHaveProperty(name);
   });
 

@@ -21,6 +21,12 @@ export interface MaintenanceWiring {
   readonly gc?: GcHooks;
   /** What garbage collection keeps besides what the refs and the reflog reach. */
   readonly roots: () => readonly Oid[];
+  /**
+   * Further roots kept only if the repository holds them (its CI runs'
+   * commits, some of which may be gone): one missing is skipped, never
+   * stopping the collection.
+   */
+  readonly heldRoots?: () => readonly Oid[];
 }
 
 /** The job handlers of repack and garbage collection, for the object's alarm. */
@@ -30,7 +36,15 @@ export function maintenanceHandlers(
 ): Partial<Record<JobKind, JobHandler>> {
   return {
     repack: repackHandler(git, wiring.policy, wiring.log, wiring.blocks),
-    gc: gcHandler(git, wiring.policy, wiring.log, wiring.blocks, wiring.gc, wiring.roots),
+    gc: gcHandler(
+      git,
+      wiring.policy,
+      wiring.log,
+      wiring.blocks,
+      wiring.gc,
+      wiring.roots,
+      wiring.heldRoots,
+    ),
     reachability: reachabilityHandler(git, wiring.policy, wiring.blocks),
     retire_packs: packRetireHandler(git, wiring.retire),
   };

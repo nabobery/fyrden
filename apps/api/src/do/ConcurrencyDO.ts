@@ -81,6 +81,17 @@ export class ConcurrencyDO extends MigratingDO {
     return scopes.map((scope) => this.concurrency.release(scope));
   }
 
+  /**
+   * Forgets a run retiring at the end of its retention: releases what it
+   * holds or waits for (a pending run is promoted) and deletes its
+   * receipts, signals and lease. Repeating it changes nothing; an erased
+   * coordinator holds nothing to forget.
+   */
+  async forgetRun(runId: string): Promise<void> {
+    if (this.#erased()) return;
+    this.concurrency.forgetRun(runId);
+  }
+
   /** A permanent fence: delayed repository calls cannot create grants after deletion. */
   async erase(): Promise<void> {
     this.context.storage.transactionSync(() => {

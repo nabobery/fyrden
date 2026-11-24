@@ -137,6 +137,14 @@ export async function started(f: Fixture, source: string, extra: Partial<RunSpec
   return spec.runId;
 }
 
+/**
+ * When the run was created, on the clock it was created by. A run that
+ * completed then (one whose workflow failed to plan) is past its retention
+ * at `T0`, years later: such a test moves its clock from here instead.
+ */
+export const createdAt = (runId: string): Promise<number> =>
+  inRun(runId, (run) => (run.engine.run() as { created_at: number }).created_at);
+
 /** A fixed base time for run clocks, after the suite's held clock. */
 export const T0 = Date.UTC(2030, 0, 1);
 

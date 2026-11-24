@@ -88,6 +88,7 @@ export async function runJob(
         retire: repo.retireOptions,
         gc: repo.gcHooks,
         roots: () => repo.gcRoots(),
+        heldRoots: () => repo.gcRunRoots(),
       });
       const ran = await git.jobs.runJob(jobId, handlers[kind] as never, git.memory, 0);
       if (ran.state === "busy") return "busy";

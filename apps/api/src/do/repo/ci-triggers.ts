@@ -106,6 +106,7 @@ export type DispatchAnswer =
         | "repo_not_ready"
         | "repo_transferring"
         | "owner_changed"
+        | "commit_unreachable"
         | "ref_not_found"
         | "workflow_not_found"
         | "workflow_not_dispatchable"
@@ -248,6 +249,12 @@ interface Pass {
   readonly kind: PassKind;
   readonly sha: string;
   readonly ref: string;
+  /**
+   * The object the ref named when the commit was read (the commit, or an
+   * annotated tag's object): its first registration requires it still rooted.
+   * Absent on passes an earlier version resolved.
+   */
+  readonly via?: string;
 }
 
 /** Names the contexts carry, resolved once before the event's first run. */
@@ -1139,6 +1146,7 @@ export class CiTriggers {
               file.oid,
               snapshotOwner(names),
               build,
+              ref.oid,
             );
             this.deps.git.jobs.ensure(CI_TRIGGERS_JOB, CI_TRIGGERS_JOB);
             return { eventId: id, runId: spec.runId };
@@ -1181,6 +1189,7 @@ export class CiTriggers {
    */
   #dispatched(run: { readonly run_id: string; readonly outcome: string | null }): DispatchAnswer {
     if (run.outcome === "owner_changed") return { ok: false, code: "owner_changed" };
+    if (run.outcome === "commit_unreachable") return { ok: false, code: "commit_unreachable" };
     return { ok: true, runId: run.run_id };
   }
 
@@ -1413,6 +1422,7 @@ export class CiTriggers {
     blob: string,
     owner: SnapshotOwner,
     build: (runId: string, runNumber: number) => RunSpec,
+    via?: string,
   ): RunSpec {
     const now = this.#now();
     return this.deps.git.context.storage.transactionSync(() => {
@@ -1450,6 +1460,7 @@ export class CiTriggers {
           ...spec,
           workflow: { path: spec.workflow.path, source: "" },
           snapshotOwner: owner,
+          ...(via !== undefined && { reachableVia: via }),
         }),
         spec.workflow.source,
       );
@@ -1670,14 +1681,20 @@ class Evaluation {
         continue;
       }
       if (this.#budget.starts >= MAX_STARTS_PER_SLICE) return { kind: "starts" };
-      const { snapshotOwner: owner, ...spec } = JSON.parse(run.spec) as RunSpec & {
+      const {
+        snapshotOwner: owner,
+        reachableVia: via,
+        ...spec
+      } = JSON.parse(run.spec) as RunSpec & {
         snapshotOwner?: SnapshotOwner;
+        reachableVia?: string;
       };
       const stopped = await this.#launch(
         run.trigger_kind,
         run.workflow_path,
         { ...spec, workflow: { path: spec.workflow.path, source: run.source } },
         owner,
+        via,
       );
       if (stopped) return stopped;
     }
@@ -1749,7 +1766,7 @@ class Evaluation {
       const facts = this.#facts<PushFacts>();
       const commit = await peel(reader, facts.after);
       if (!commit) return "not_a_commit";
-      passes = [{ kind: "push", sha: commit, ref: facts.ref }];
+      passes = [{ kind: "push", sha: commit, ref: facts.ref, via: facts.after }];
     } else if (this.#row.kind === "schedule_refresh") {
       // The schedules at the tip the change left, as whoever made it.
       const facts = this.#facts<RefreshFacts>();
@@ -1763,15 +1780,25 @@ class Evaluation {
     } else if (this.#row.kind === "schedule") {
       // The default tip at this first evaluation, recorded, so a retry runs the same commit.
       const tip = tipOf(defaultBranch);
-      passes = tip ? [{ kind: "schedule", sha: tip, ref: defaultRef }] : [];
+      passes = tip ? [{ kind: "schedule", sha: tip, ref: defaultRef, via: tip }] : [];
     } else if (this.#row.kind === "pull_request") {
       const facts = this.#facts<PullFacts>();
       passes = [
-        { kind: "pull_request", sha: facts.head_sha, ref: `refs/pull/${facts.number}/head` },
+        {
+          kind: "pull_request",
+          sha: facts.head_sha,
+          ref: `refs/pull/${facts.number}/head`,
+          via: facts.head_sha,
+        },
       ];
       const tip = tipOf(defaultBranch);
       if (tip)
-        passes.push({ kind: "pull_request_target", sha: tip, ref: `${BRANCH}${defaultBranch}` });
+        passes.push({
+          kind: "pull_request_target",
+          sha: tip,
+          ref: `${BRANCH}${defaultBranch}`,
+          via: tip,
+        });
       baseTip = tipOf(facts.base_ref);
     } else return "unsupported_event";
     const resolved: Resolved = { passes, defaultBranch, baseTip, ...(refresh && { refresh }) };
@@ -2265,7 +2292,7 @@ class Evaluation {
     );
     let spec: RunSpec;
     try {
-      spec = this.#allocate(pass.kind, file.path, file.oid, recorded, build);
+      spec = this.#allocate(pass.kind, file.path, file.oid, recorded, build, pass.via);
     } catch (error) {
       if (!(error instanceof InvalidSpec)) throw error;
       // Nothing was allocated (the transaction rolled back).
@@ -2276,7 +2303,7 @@ class Evaluation {
       this.#outcome = "invalid_spec";
       return undefined;
     }
-    return this.#launch(pass.kind, file.path, spec, recorded);
+    return this.#launch(pass.kind, file.path, spec, recorded, pass.via);
   }
 
   /** The owner the event was recorded under; absent on rows an older version recorded. */
@@ -2350,6 +2377,7 @@ class Evaluation {
     path: string,
     spec: RunSpec,
     owner: SnapshotOwner | undefined,
+    via: string | undefined,
   ): Promise<Stopped | "gone" | undefined> {
     this.#budget.starts++;
     const binding = await approvalBinding(spec);
@@ -2361,6 +2389,7 @@ class Evaluation {
         this.#t.boundTo(),
         spec,
         owner && { owner: owner.id, ...(owner.gen !== undefined && { ownerGen: owner.gen }) },
+        via,
       );
     } catch (error) {
       this.#t.repo.log().warn("starting a CI run failed", { error, runId: spec.runId });
@@ -2427,6 +2456,15 @@ class Evaluation {
         });
         this.#mark(kind, path, "owner_changed");
         return undefined;
+      case "commit_unreachable":
+        // No ref or reflog entry within the retention names its commit: a collection may be
+        // leaving it as garbage, so the run is never recorded and never starts.
+        this.#t.repo.log().warn("a CI run's commit is no longer reachable; it was dropped", {
+          runId: spec.runId,
+          sha: spec.sha,
+        });
+        this.#mark(kind, path, "commit_unreachable");
+        return undefined;
     }
   }
 
@@ -2466,8 +2504,9 @@ class Evaluation {
     blob: string,
     owner: SnapshotOwner,
     build: (runId: string, runNumber: number) => RunSpec,
+    via: string | undefined,
   ): RunSpec {
-    return this.#t.allocateRun(this.#row.id, kind, path, blob, owner, build);
+    return this.#t.allocateRun(this.#row.id, kind, path, blob, owner, build, via);
   }
 
   /**

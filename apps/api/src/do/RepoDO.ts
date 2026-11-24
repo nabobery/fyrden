@@ -39,7 +39,14 @@ import {
   type ReviewEvent,
   rootIdentity,
 } from "@fyrden/domain";
-import { type BlockCache, type LsRefsArgs, type Oid, oidToHex, PackError } from "@fyrden/git-core";
+import {
+  type BlockCache,
+  type LsRefsArgs,
+  type Oid,
+  oidFromHex,
+  oidToHex,
+  PackError,
+} from "@fyrden/git-core";
 import {
   admissionStatements,
   discretionaryAllowance,
@@ -64,7 +71,12 @@ import { systemClock, type WatchClock } from "../git/import/watch.js";
 import type { GcHooks } from "../git/maintenance/gc-job.js";
 import { maintenanceHandlers } from "../git/maintenance/handlers.js";
 import { MAINTENANCE_DEFAULTS, type MaintenancePolicy } from "../git/maintenance/policy.js";
-import { scheduleAfterCommit, scheduleGc } from "../git/maintenance/schedule.js";
+import {
+  GC_JOB_ID,
+  inProgress,
+  scheduleAfterCommit,
+  scheduleGc,
+} from "../git/maintenance/schedule.js";
 import { packCapCompactionHandler } from "../git/maintenance/tail-merge-job.js";
 import { type PackCapPolicy, packCapPolicy } from "../git/maintenance/tail-merge-plan.js";
 import type { PushDecision } from "../git/push/commit.js";
@@ -81,6 +93,7 @@ import { internalCallLimit, jobPolicy } from "../invocation-calls.js";
 import { ClaimReleases } from "../network/claim-releases.js";
 import type { DetachHooks } from "../network/detach.js";
 import {
+  collectLater,
   IMPORT_POLICY,
   type ImportDeps,
   type ImportPolicy,
@@ -2506,43 +2519,57 @@ export class RepoDO extends MigratingDO {
    * under: a first registration under another answers `owner_changed`, so a
    * transfer that landed meanwhile never starts a run with the former
    * owner's variables; a run already recorded is answered as before.
+   * A trigger also gives `reachableVia`, the object a ref named when it read
+   * the commit (the commit itself, or an annotated tag's object): a first
+   * registration answers `commit_unreachable` unless a ref names it now or a
+   * reflog entry within the retention does. Garbage collection roots exactly
+   * those (a ref moved after its snapshot is walked by its catch-up), so a
+   * run recorded during a collection never names a commit the collection
+   * may leave as garbage.
    */
   registerRun(input: {
     readonly runId: string;
     readonly sha: string;
     readonly path: string;
     readonly builtUnder?: { readonly owner: string; readonly ownerGen?: number };
+    readonly reachableVia?: string;
   }): Promise<
     | { readonly ok: true }
     | {
         readonly ok: false;
-        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready" | "owner_changed";
+        readonly code:
+          | "repo_not_found"
+          | "repo_transferring"
+          | "repo_not_ready"
+          | "owner_changed"
+          | "commit_unreachable";
       }
   > {
     return this.#measured("registerRun", async () => {
-      if (!isUlid(input.runId) || !isFullSha(input.sha) || !input.path || input.path.length > 1024)
+      if (
+        !isUlid(input.runId) ||
+        !isFullSha(input.sha) ||
+        !input.path ||
+        input.path.length > 1024 ||
+        (input.reachableVia !== undefined && !isFullSha(input.reachableVia))
+      )
         throw new TypeError("invalid run registration");
-      const refused = this.#writeRefusal();
-      // A repository still being generated from its template refuses writes as not found, yet
-      // is not deleted, and a restore can bring that state back under runs that exist: runs
-      // ask here whether the repository is deleted, so it answers not ready.
-      if (refused?.code === "repo_not_found" && !this.#refusesReads())
-        return { ok: false, code: "repo_not_ready" };
-      if (refused)
-        return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
-      if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };
+      const refused = this.#runRecordRefusal();
+      if (refused) return refused;
+      const recorded =
+        this.git.context.storage.sql
+          .exec("SELECT 1 FROM ci_runs WHERE run_id = ?", input.runId)
+          .toArray().length > 0;
       const built = input.builtUnder;
-      if (built) {
+      if (built && !recorded) {
         const account = this.events.account();
         const moved =
           account?.ownerId !== built.owner ||
           (built.ownerGen !== undefined && account.ownerGen !== built.ownerGen);
-        const recorded =
-          this.git.context.storage.sql
-            .exec("SELECT 1 FROM ci_runs WHERE run_id = ?", input.runId)
-            .toArray().length > 0;
-        if (moved && !recorded) return { ok: false, code: "owner_changed" };
+        if (moved) return { ok: false, code: "owner_changed" };
       }
+      if (!recorded && input.reachableVia !== undefined && !this.#rooted(input.reachableVia))
+        return { ok: false, code: "commit_unreachable" };
       this.git.context.storage.sql.exec(
         `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
         input.runId,
@@ -2552,6 +2579,92 @@ export class RepoDO extends MigratingDO {
       );
       return { ok: true };
     });
+  }
+
+  /**
+   * Forgets a run retiring at the end of its retention, before it erases
+   * itself: releases the concurrency scopes it holds or waits for (a pending
+   * run is promoted) and deletes its receipts, signals and lease; ends an
+   * approval still waiting as `expired`, so its pull request waits on
+   * nothing; then deletes its record (no longer a garbage-collection root:
+   * a collection is scheduled), its approval and its stored spec. Repeating
+   * it changes nothing. Refused as `registerRun` is, so `repo_not_found`
+   * means deleted.
+   */
+  forgetRun(input: { readonly runId: string }): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+  > {
+    return this.#measured("forgetRun", async () => {
+      if (!isUlid(input.runId)) throw new TypeError("invalid run id");
+      const before = this.#runRecordRefusal();
+      if (before) return before;
+      this.git.context.metrics.count("do.request", { class: "ConcurrencyDO", method: "forgetRun" });
+      await this.env.CONCURRENCY.getByName(this.#repoId()).forgetRun(input.runId);
+      if (this.ciApprovals.waitingRun(input.runId)) {
+        // The approvers the item is resolved for are read from a fresh ACL (else told later).
+        await this.acl.pullForWrite();
+        this.ciApprovals.settle(input.runId, "expired");
+      }
+      const after = this.#runRecordRefusal();
+      if (after) return after;
+      const storage = this.git.context.storage;
+      const forgotten = storage.transactionSync(() => {
+        const rows = storage.sql
+          .exec("DELETE FROM ci_runs WHERE run_id = ? RETURNING run_id", input.runId)
+          .toArray().length;
+        this.ciApprovals.forget(input.runId);
+        storage.sql.exec("DELETE FROM ci_run_specs WHERE run_id = ?", input.runId);
+        return rows > 0;
+      });
+      if (forgotten) {
+        // A collection under way snapshotted the run's commit as a root and keeps it: the next
+        // one, asked for to run once that one ends, lets it go.
+        if (inProgress(this.git, GC_JOB_ID)) collectLater(this.git);
+        else scheduleGc(this.git, this.git.context.now() + this.maintenance.gcDelayMs);
+      }
+      return { ok: true };
+    });
+  }
+
+  /**
+   * Why a run's record cannot be written now. A repository still being
+   * generated from its template refuses writes as not found, yet is not
+   * deleted, and a restore can bring that state back under runs that exist:
+   * runs ask here whether the repository is deleted, so it answers not ready.
+   */
+  #runRecordRefusal():
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+    | undefined {
+    const refused = this.#writeRefusal();
+    if (refused?.code === "repo_not_found" && !this.#refusesReads())
+      return { ok: false, code: "repo_not_ready" };
+    if (refused) return { ok: false, code: refused.code as "repo_not_found" | "repo_transferring" };
+    if (!this.events.hasIdentity()) return { ok: false, code: "repo_not_ready" };
+    return undefined;
+  }
+
+  /** Whether garbage collection roots object `hex`: a ref names it, or a reflog entry within the retention. */
+  #rooted(hex: string): boolean {
+    const sql = this.git.context.storage.sql;
+    const oid = oidFromHex(hex);
+    if (sql.exec("SELECT 1 FROM refs WHERE oid = ? LIMIT 1", oid).toArray().length > 0) return true;
+    return (
+      sql
+        .exec(
+          "SELECT 1 FROM reflog WHERE at >= ? AND (old_oid = ? OR new_oid = ?) LIMIT 1",
+          this.git.context.now() - this.maintenance.reflogRetentionMs,
+          oid,
+          oid,
+        )
+        .toArray().length > 0
+    );
   }
 
   /**
@@ -3734,6 +3847,18 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
+   * The commits of the CI runs this repository records, kept by garbage
+   * collection while it holds them: a queued job checks one out, and a re-run
+   * may until the run's retention ends. Retention bounds them.
+   */
+  gcRunRoots(): Oid[] {
+    return this.git.context.storage.sql
+      .exec<{ sha: string }>("SELECT DISTINCT sha FROM ci_runs")
+      .toArray()
+      .map((row) => oidFromHex(row.sha) as Oid);
+  }
+
+  /**
    * The deployment's CI cutoff (see `ciSince`). An unreadable one applies
    * none, and says so; so does one more than {@link MAX_CUTOFF_LEAD_MS}
    * ahead of the clock: it names when CI was switched on, so one that far
@@ -4230,6 +4355,7 @@ export class RepoDO extends MigratingDO {
         retire: this.retireOptions,
         gc: this.gcHooks,
         roots: () => this.gcRoots(),
+        heldRoots: () => this.gcRunRoots(),
       }),
     } satisfies Partial<Record<JobKind, JobHandler>>;
   }
@@ -4287,6 +4413,7 @@ export class RepoDO extends MigratingDO {
       log: () => this.#log(),
       detachHooks: () => this.detachHooks,
       roots: () => this.releases.roots(),
+      heldRoots: () => this.gcRunRoots(),
     });
     return this.#networkOps;
   }
