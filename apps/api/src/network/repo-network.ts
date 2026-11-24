@@ -35,6 +35,11 @@ export interface RepoNetworkWiring {
   readonly detachHooks: () => DetachHooks;
   /** What the repository keeps besides what its refs reach. */
   readonly roots: () => readonly Oid[];
+  /**
+   * Further roots kept only if a pack it reads holds them (its CI runs'
+   * commits, some of which may be gone): one missing is skipped.
+   */
+  readonly heldRoots?: () => readonly Oid[];
 }
 
 /** Most commit rows one page of a fork's graph copy carries. Proposed. */
@@ -149,6 +154,7 @@ export class RepoNetwork {
       blocks: this.wiring.blocks,
       hooks: this.wiring.detachHooks,
       roots: this.wiring.roots,
+      ...(this.wiring.heldRoots && { heldRoots: this.wiring.heldRoots }),
       notify: detachNotifier(this.wiring.env, this.wiring.repoId),
     });
   }

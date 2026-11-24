@@ -191,6 +191,11 @@ button.danger {
   padding: 0 0.5rem;
   font-size: 12px;
 }
+/* An Actions variable's value in a list: line breaks kept, long values wrapped. */
+.ci-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 /* A label by name only (its colour comes with the labels page, contrast checked). */
 .label-chip {
   border: 1px solid var(--border);

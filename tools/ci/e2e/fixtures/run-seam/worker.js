@@ -224,6 +224,11 @@ export default {
     switch (action) {
       case "queued":
         return json(await run.queued(100));
+      // The run's weekly check (and a retirement it begins) as at `body.at`, through
+      // `RunDO.ciReconcileAt`, which no route of fyrden-api reaches: a local check of retention.
+      case "retire":
+        if (!Number.isSafeInteger(body.at)) return json({ error: "at must be a time in ms" }, 400);
+        return json(await run.ciReconcileAt(body.at));
       case "assign":
         return json(await run.assign(body.jobId, body.key));
       case "update":

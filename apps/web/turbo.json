@@ -2,16 +2,25 @@
   "$schema": "../../node_modules/turbo/schema.json",
   "extends": ["//"],
   // routes.pull-conflicts.test.tsx imports the API's body limit, to agree with
-  // it, so the tests and the compiler both read it.
+  // it, so the tests and the compiler both read it; sealed-box.test.ts reads the
+  // API's sealed-box fixture, Go's known answer.
   "tasks": {
     "typecheck": {
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/api/src/http/body.ts"]
     },
     "test": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/api/src/http/body.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/api/src/http/body.ts",
+        "$TURBO_ROOT$/apps/api/test/fixtures/ci-sealed-box/sealed-box.json"
+      ]
     },
     "test:coverage": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/apps/api/src/http/body.ts"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/api/src/http/body.ts",
+        "$TURBO_ROOT$/apps/api/test/fixtures/ci-sealed-box/sealed-box.json"
+      ]
     }
   }
 }

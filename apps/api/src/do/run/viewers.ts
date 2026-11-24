@@ -758,7 +758,11 @@ export class LogViewers {
     const { host } = this;
     const runId = this.#runId();
     viewerHooks.sliceRan?.(runId);
-    if (host.erased()) return { done: true };
+    if (host.erased()) {
+      // An expired run is answered as no run before it is erased: its sockets close as then.
+      this.erased();
+      return { done: true };
+    }
     let sockets = this.#open();
     if (sockets.length === 0) {
       this.dropCaches();

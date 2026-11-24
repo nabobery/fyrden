@@ -42,6 +42,10 @@ export const METRICS = {
   // because its commit still could not be read (its files go to the next
   // pusher who changes them).
   "ci.schedule_refresh_dropped": [],
+  // A CI run retired at the end of its retention with work still owed outside
+  // it, one point per kind dropped: owed = checks | dispatch | concurrency |
+  // task_end | reservations.
+  "ci.run_retired_owed": ["owed"],
   // A repository object's operations started on its memory pool, one point
   // each: the wait in ms (0 when granted at once) and the bytes asked for, by
   // consumer = blame | fetch_plan | push_index, outcome = granted | timed_out

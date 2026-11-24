@@ -16,6 +16,10 @@ export interface GcFixtures {
   /** The same objects stored as three packs (old history, newer history, the rest). */
   readonly packs: readonly string[];
   readonly side: string;
+  /** A pack of `side`'s commit object alone, without its tree or parents. */
+  readonly sideCommitPack: string;
+  /** A pack of every other object. */
+  readonly withoutSideCommitPack: string;
   readonly f2: string;
   readonly rewritten: string;
   /** Every object in the pack, sorted. */

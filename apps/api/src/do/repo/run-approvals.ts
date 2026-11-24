@@ -246,6 +246,19 @@ export class CiApprovals {
     });
   }
 
+  /** Whether run `runId` waits for approval. */
+  waitingRun(runId: string): boolean {
+    return this.#row(runId)?.state === "waiting";
+  }
+
+  /**
+   * Deletes run `runId`'s row, retiring with the run. A waiting row is
+   * settled first (`settle`), so the pull request's item no longer counts it.
+   */
+  forget(runId: string): void {
+    this.#sql().exec("DELETE FROM ci_approvals WHERE run_id = ?", runId);
+  }
+
   /** Whether a run of pull request `number` waits for approval (its writers' item is open). */
   waiting(number: number): boolean {
     return (

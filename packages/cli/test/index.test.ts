@@ -140,6 +140,24 @@ describe("parseDeployArgs: CI", () => {
       expect(parseDeployArgs(["--plan", "free", "--ci-max-job-minutes", bad])).toBeUndefined();
   });
 
+  it("takes how long finished runs are kept, on either plan, as the API reads it", () => {
+    expect(parseDeployArgs(["--ci-run-retention-days", "30"])).toEqual({
+      plan: "paid",
+      ci: { runRetentionDays: 30 },
+    });
+    expect(parseDeployArgs(["--plan", "free", "--ci-run-retention-days", "400"])).toEqual({
+      plan: "free",
+      ci: { runRetentionDays: 400 },
+    });
+    expect(parseDeployArgs(["--ci-run-retention-days", "7"])?.ci).toEqual({ runRetentionDays: 7 });
+    // Leading zeros read as the API reads them.
+    expect(parseDeployArgs(["--ci-run-retention-days", "007"])?.ci).toEqual({
+      runRetentionDays: 7,
+    });
+    for (const bad of ["0", "6", "401", "1000", "30.5", "-30", "thirty", ""])
+      expect(parseDeployArgs(["--ci-run-retention-days", bad])).toBeUndefined();
+  });
+
   it("takes when CI was switched on, as the API reads it, only with runners on", () => {
     expect(parseDeployArgs(["--ci-since", "2026-11-22T09:00:00Z"])).toEqual({
       plan: "paid",

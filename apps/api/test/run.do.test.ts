@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { startRun } from "../src/ci/runs.js";
 import type { AssignAnswer } from "../src/do/RunDO.js";
+import { RUN_JOB } from "../src/do/run/engine.js";
 import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
@@ -479,7 +480,12 @@ describe("erasure", () => {
       ok: false,
       code: "run_erased",
     });
-    expect(await inRun(runId, (r) => r.jobs.nextAt())).toBeNull();
+    // Nothing is left to run but the purge of its log chunks.
+    expect(
+      await inRun(runId, (r) =>
+        r.engine.rows<{ job_id: string }>("SELECT job_id FROM jobs WHERE state = 'queued'"),
+      ),
+    ).toEqual([{ job_id: RUN_JOB.logPurge }]);
   });
 
   it("refuses create on an erased object that never held a run", async () => {

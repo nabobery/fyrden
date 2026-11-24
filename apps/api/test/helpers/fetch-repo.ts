@@ -1,7 +1,11 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { createWorkersZlib } from "@fyrden/adapters-cloudflare";
-import { packObjectKey, promotePendingCommits } from "@fyrden/adapters-cloudflare/git";
+import {
+  packObjectKey,
+  promotePendingCommits,
+  type RepoGitStorage,
+} from "@fyrden/adapters-cloudflare/git";
 import { createFakeDataset } from "@fyrden/adapters-cloudflare/obs/testing";
 import {
   addPendingCommits,
@@ -48,73 +52,80 @@ const text = (data: Uint8Array) => new TextDecoder().decode(data).replace(/\n$/,
  * flagged as maintenance flags packs every object of which the refs reach.
  * Returns the pack ids, oldest first.
  */
-export async function loadFixture(
+export function loadFixture(
   stub: DurableObjectStub<RepoDO>,
+  fixture: FetchFixtureRepo,
+  options: { allReachable?: boolean } = {},
+): Promise<PackId[]> {
+  return inRepo(stub, ({ git }) => storeFixture(git, fixture, options));
+}
+
+/** As {@link loadFixture}, for a caller already inside the repository object. */
+export async function storeFixture(
+  git: RepoGitStorage,
   fixture: FetchFixtureRepo,
   { allReachable = true }: { allReachable?: boolean } = {},
 ): Promise<PackId[]> {
-  return inRepo(stub, async ({ git }) => {
-    const packIds: PackId[] = [];
-    for (const hex of fixture.packs) {
-      const bytes = fromHex(hex);
-      const parsed = await parsePack(
-        (async function* () {
-          yield bytes;
-        })(),
-        {
-          zlib: createWorkersZlib(),
-          memory: git.memory,
-          readRange: async (offset, length) => bytes.subarray(offset, offset + length),
-        },
-      );
-      const idx = await writeIdx(parsed.entries, parsed.checksum, {
-        createHasher: () => createSha1Hasher({ detectCollisions: false }),
-      });
-      const count = parsed.entries.count;
-      parsed.release();
-      const writer = git.packStore.beginPack();
-      await writer.write(bytes);
-      await writer.finish();
-      await git.bucket.put(packObjectKey(git.networkId(), writer.packId, "idx"), idx.bytes);
-      idx.release();
-      // Created in the fixture's order, a millisecond apart, whatever the clock did: what is
-      // ordered by age (repack, tail merges) comes out the same for every copy of a fixture.
-      git.context.storage.sql.exec(
-        `UPDATE packs SET object_count = ?, all_reachable = ?, created_at = created_at + ?
-         WHERE pack_id = ?`,
-        count,
-        allReachable ? 1 : 0,
-        packIds.length,
-        writer.packId,
-      );
-      packIds.push(writer.packId);
-    }
-    const uploadId = uniqueId("fixture");
-    await addPendingCommits(
-      git.commitGraph,
-      uploadId,
-      fixture.commits.map((c) => ({
-        oid: oidFromHex(c.oid),
-        tree: oidFromHex(c.tree),
-        parents: c.parents.map(oidFromHex),
-        commitTime: c.time,
-      })),
+  const packIds: PackId[] = [];
+  for (const hex of fixture.packs) {
+    const bytes = fromHex(hex);
+    const parsed = await parsePack(
+      (async function* () {
+        yield bytes;
+      })(),
+      {
+        zlib: createWorkersZlib(),
+        memory: git.memory,
+        readRange: async (offset, length) => bytes.subarray(offset, offset + length),
+      },
     );
-    promotePendingCommits(git.context, uploadId);
-    const refUpdates: RefUpdate[] = fixture.refs.map((ref) => ({
-      name: ref.name,
-      oldOid: null,
-      newOid: oidFromHex(ref.oid),
-    }));
-    const result = git.refStore.commitSync({
-      addPacks: packIds,
-      removePacks: [],
-      refUpdates,
-      expectedVersion: git.refStore.readRefsSync().version,
+    const idx = await writeIdx(parsed.entries, parsed.checksum, {
+      createHasher: () => createSha1Hasher({ detectCollisions: false }),
     });
-    if (!result.ok) throw new Error(`commit failed: ${JSON.stringify(result)}`);
-    return packIds;
+    const count = parsed.entries.count;
+    parsed.release();
+    const writer = git.packStore.beginPack();
+    await writer.write(bytes);
+    await writer.finish();
+    await git.bucket.put(packObjectKey(git.networkId(), writer.packId, "idx"), idx.bytes);
+    idx.release();
+    // Created in the fixture's order, a millisecond apart, whatever the clock did: what is
+    // ordered by age (repack, tail merges) comes out the same for every copy of a fixture.
+    git.context.storage.sql.exec(
+      `UPDATE packs SET object_count = ?, all_reachable = ?, created_at = created_at + ?
+         WHERE pack_id = ?`,
+      count,
+      allReachable ? 1 : 0,
+      packIds.length,
+      writer.packId,
+    );
+    packIds.push(writer.packId);
+  }
+  const uploadId = uniqueId("fixture");
+  await addPendingCommits(
+    git.commitGraph,
+    uploadId,
+    fixture.commits.map((c) => ({
+      oid: oidFromHex(c.oid),
+      tree: oidFromHex(c.tree),
+      parents: c.parents.map(oidFromHex),
+      commitTime: c.time,
+    })),
+  );
+  promotePendingCommits(git.context, uploadId);
+  const refUpdates: RefUpdate[] = fixture.refs.map((ref) => ({
+    name: ref.name,
+    oldOid: null,
+    newOid: oidFromHex(ref.oid),
+  }));
+  const result = git.refStore.commitSync({
+    addPacks: packIds,
+    removePacks: [],
+    refUpdates,
+    expectedVersion: git.refStore.readRefsSync().version,
   });
+  if (!result.ok) throw new Error(`commit failed: ${JSON.stringify(result)}`);
+  return packIds;
 }
 
 export interface ParsedFetchResponse {

@@ -249,6 +249,7 @@ export async function approveWorkflowRunOperation(
     return {};
   }
   if (answer.ok) return {};
+  if (answer.code === "run_not_found") throw runNotFound();
   // The run ended unapproved in between: the repository records how, and nothing was approved.
   const ended = ((await runStub(ctx, input.run_id, "get").get()) as RunView | undefined)?.approval;
   if (ended && (ended.state === "cancelled" || ended.state === "expired")) {
@@ -277,6 +278,11 @@ const DISPATCH_REFUSALS: Record<
     status: 409,
     detail:
       "The repository changed owner before the run started, so the run was dropped and never runs. Dispatch again with a new Idempotency-Key.",
+  },
+  commit_unreachable: {
+    status: 409,
+    detail:
+      "The ref's commit was deleted from the repository's history before the run started, so the run was dropped and never runs. Dispatch again with a new Idempotency-Key.",
   },
   ref_not_found: { status: 422, detail: "No branch or tag has that name." },
   workflow_not_found: {

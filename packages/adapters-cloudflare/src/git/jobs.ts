@@ -52,6 +52,8 @@ export const JOB_KINDS = [
   "ci_log_viewers",
   "run_concurrency",
   "run_reconcile",
+  "run_retire",
+  "run_log_purge",
   "concurrency",
   "ci_triggers",
   "ci_approvals",
