@@ -144,9 +144,10 @@ export async function startWebStack(
     const bootstrapSecret = `web-${crypto.randomUUID()}`;
     const signingSeed = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
     const emailKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+    const ciSecretsKey = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64");
     await writeFile(
       envFile,
-      `BOOTSTRAP_SECRET=${bootstrapSecret}\nSIGNING_KEY=${signingSeed}\nEMAIL_KEY=${emailKey}\n`,
+      `BOOTSTRAP_SECRET=${bootstrapSecret}\nSIGNING_KEY=${signingSeed}\nEMAIL_KEY=${emailKey}\nCI_SECRETS_KEY=${ciSecretsKey}\n`,
     );
     if (config !== apiConfig) {
       const original = await readFile(apiConfig, "utf8");

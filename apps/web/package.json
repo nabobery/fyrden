@@ -18,6 +18,8 @@
     "@fyrden/adapters-cloudflare": "workspace:*",
     "@fyrden/api-contract": "workspace:*",
     "@fyrden/domain": "workspace:*",
+    "@noble/ciphers": "catalog:",
+    "@noble/hashes": "catalog:",
     "@pierre/diffs": "1.6.2",
     "@pierre/highlights": "0.3.0",
     "isbot": "5.2.2",
