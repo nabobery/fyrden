@@ -12,6 +12,7 @@ import type {
   deleteOrgVariable,
   deleteRepoSecret,
   deleteRepoVariable,
+  getCiDataKey,
   getOrgSecret,
   getOrgSecretPublicKey,
   getOrgVariable,
@@ -30,6 +31,7 @@ import type {
   Output,
   removeOrgSecretRepo,
   removeOrgVariableRepo,
+  replaceCiDataKey,
   rewrapCiSecrets,
   setOrgSecret,
   setOrgSecretRepos,
@@ -564,5 +566,61 @@ export async function rewrapCiSecretsOperation(
     remaining,
     unreadable,
     next_cursor: results.length === REWRAP_ACCOUNTS ? (results.at(-1)?.id ?? null) : null,
+  };
+}
+
+/** An account an administrator recovers: suspended ones too, since suspending one must not block it. */
+async function adminAccount(ctx: OpContext, handle: string) {
+  const account = await findAccount(ctx.env, handle, {
+    metrics: ctx.metrics,
+    includeDisabled: true,
+  });
+  if (!account)
+    throw new OperationError(404, "account_not_found", `No account ${handle} was found.`);
+  return account;
+}
+
+/** The `admin.ci.data_key.get` operation (instance administrators; the executor checked it). */
+export async function getCiDataKeyOperation(
+  ctx: OpContext,
+  input: Input<typeof getCiDataKey>,
+): Promise<Output<typeof getCiDataKey>> {
+  const account = await adminAccount(ctx, input.account);
+  ctx.metrics.count("do.request", { class: "OrgDO", method: "ciDataKeyStatus" });
+  const status = await ctx.env.ORG.getByName(account.id).ciDataKeyStatus();
+  return {
+    account_id: account.id,
+    generation: status.generation,
+    created_at: status.createdAt === null ? null : iso(status.createdAt),
+    secrets: status.secrets,
+    unreadable_secrets: status.unreadableSecrets,
+    unreadable: status.unreadable.map((s) => ({ scope: s.scope, name: s.name })),
+    unreadable_truncated: status.unreadableTruncated,
+  };
+}
+
+/** The `admin.ci.data_key.replace` operation (instance administrators; the executor checked it). */
+export async function replaceCiDataKeyOperation(
+  ctx: OpContext,
+  input: Input<typeof replaceCiDataKey>,
+): Promise<Output<typeof replaceCiDataKey>> {
+  const account = await adminAccount(ctx, input.account);
+  if (account.id !== input.account_id)
+    throw new OperationError(
+      409,
+      "account_changed",
+      `${input.account} is not account ${input.account_id} any more: read its status again.`,
+    );
+  const stub = ctx.env.ORG.getByName(account.id);
+  ctx.metrics.count("do.request", { class: "OrgDO", method: "ciReplaceDataKey" });
+  // Audited in the same transaction, and delivered to the directory now or by the object's alarm.
+  const done = settled(await stub.ciReplaceDataKey(actorOf(ctx), input.generation));
+  ctx.metrics.count("do.request", { class: "OrgDO", method: "deliverAudit" });
+  await stub.deliverAudit().catch(() => {});
+  return {
+    account_id: account.id,
+    generation: done.generation,
+    replaced_generation: done.replacedGeneration,
+    replaced_at: iso(done.replacedAt),
   };
 }

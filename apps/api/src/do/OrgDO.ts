@@ -31,6 +31,8 @@ import {
 import {
   AccountCi,
   type CiActor,
+  type CiDataKeyReplaced,
+  type CiDataKeyStatus,
   type CiKind,
   type CiPage,
   type CiRepoViewItem,
@@ -76,6 +78,10 @@ export const accountHooks: {
   ciKeyPrepared?: (account: OrgDO) => Promise<void>;
   /** After a CI data key is wrapped again, before its guarded commit. */
   ciRewrapPrepared?: (account: OrgDO) => Promise<void>;
+  /** After a rewrap read the data keys it counts, before it counts them. */
+  ciRewrapCounted?: (account: OrgDO) => Promise<void>;
+  /** After a replacement CI data key is wrapped, before its guarded commit. */
+  ciReplacePrepared?: (account: OrgDO) => Promise<void>;
   /** When a run asks for a job's secrets, before anything is read. */
   ciSecretsRead?: (account: OrgDO) => Promise<void>;
 } = {};
@@ -1249,6 +1255,8 @@ export class OrgDO extends MigratingDO {
           prepared: accountHooks.ciPrepared,
           keyPrepared: accountHooks.ciKeyPrepared,
           rewrapPrepared: accountHooks.ciRewrapPrepared,
+          rewrapCounted: accountHooks.ciRewrapCounted,
+          replacePrepared: accountHooks.ciReplacePrepared,
           secretsRead: accountHooks.ciSecretsRead,
         }[point];
         await hook?.(this);
@@ -1367,6 +1375,19 @@ export class OrgDO extends MigratingDO {
     expectedKeyId?: string,
   ): Promise<{ rewrapped: number; remaining: number; unreadable: number }> {
     return this.#ci.rewrap(expectedKeyId);
+  }
+
+  /**
+   * Replaces the account's CI data key: starts generation `generation + 1`
+   * and retires every older one (see `AccountCi.replaceDataKey`).
+   */
+  ciReplaceDataKey(actor: CiActor, generation: number): Promise<CiResult<CiDataKeyReplaced>> {
+    return this.#ci.replaceDataKey(actor, generation);
+  }
+
+  /** The account's newest CI data key generation and its unreadable secrets. */
+  ciDataKeyStatus(): Promise<CiDataKeyStatus> {
+    return this.#ci.dataKeyStatus();
   }
 
   #quotas(): AccountQuotas {

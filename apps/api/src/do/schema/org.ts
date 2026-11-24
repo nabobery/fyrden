@@ -364,4 +364,14 @@ export const orgSchema: readonly DoMigration[] = [
       CREATE INDEX ci_minutes_month ON ci_minutes (month, agent_id);
     `,
   },
+  {
+    version: 13,
+    // A data key generation retired by a replacement (src/do/org/ci-secrets.ts
+    // `replaceDataKey`): its wrapped key erased, and the generation that retired it.
+    name: "ci_data_key_replacement",
+    sql: `
+      ALTER TABLE ci_data_keys ADD COLUMN replaced_at INTEGER;
+      ALTER TABLE ci_data_keys ADD COLUMN replaced_by INTEGER;
+    `,
+  },
 ];

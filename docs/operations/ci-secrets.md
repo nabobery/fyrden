@@ -117,7 +117,12 @@ Never remove a retired key while any data key still uses it. The rewrap
 call's `remaining` count says how many still do; remove the key only after
 a pass reports `remaining` 0 and `unreadable` 0, and after the 30 days. The
 one exception is the line of a key that is also `CI_SECRETS_KEY` (step 6):
-it still opens as the current key.
+it still opens as the current key. A generation retired by
+[a replacement](#a-compromised-account-data-key) holds no key any more and
+is counted in neither total. An account object still running a version from
+before replacement existed counts a retired generation as `unreadable`, so
+only a sweep started after such a version has left (the 5 minutes of step 2)
+shows a clean total.
 
 If `CI_SECRETS_KEY` or `CI_SECRETS_KEY_NEXT` is set but is not a 32-byte
 base64 key (for example an empty `CI_SECRETS_KEY_NEXT`, or a value that is
@@ -149,14 +154,104 @@ stays `unreadable`. Nothing else about the account changes.
 
 If the old key turns up, put it in `CI_SECRETS_KEYS_RETIRED`: every secret
 of the old generation that was not set again opens again, because each
-secret records the generation it belongs to.
+secret records the generation it belongs to. A generation retired by
+[a replacement](#a-compromised-account-data-key) is the exception: its data
+key was erased, so no key reopens it.
 
 ## A compromised account data key
 
-If an account's data key may have been exposed (for example, a copy of its
-Durable Object storage leaked together with the master key), rotating the
-master key does not help: rewrapping encrypts the same data key again, and
-the keys derived from it stay the same. The account needs a new generation,
-with a new data key, and every one of its secrets set again under that
-generation. Change the underlying credentials too, since their values may
-be known.
+Rotating the master key does not help when an account's data key may have
+been exposed: rewrapping encrypts the same data key again, and the keys
+derived from it stay the same. The account needs a new data key
+generation, and every one of its secrets set again with a **new** value.
+
+**First, decide what leaked.** Replacing an account's data key is enough
+only when the account's stored data leaked without the master key, and the
+deployment itself was not compromised. If the master key leaked too (for
+example, a copy of the account's Durable Object storage together with
+`CI_SECRETS_KEY`), or the deployment or a runner host was compromised,
+contain that access first and [rotate the master key](#rotating-the-key):
+the new generation is wrapped under the current master key, so whoever holds
+that key could open the new values as well. Then assess the other accounts,
+and replace each exposed account's data key as below.
+
+To replace an account's data key (instance administrators):
+
+1. Read its status:
+   `GET /api/admin/accounts/{account}/ci/data-key`. It answers the
+   account's id (`account_id`), its newest generation (`generation`), how
+   many secrets it holds and how many do not open (`unreadable_secrets`),
+   with the first 100 of those by scope (`org` or a repository id) and
+   name. A suspended account is found.
+2. Replace it:
+   `POST /api/admin/accounts/{account}/ci/data-key/replace` with
+   `{"account_id": "<account_id>", "generation": <generation>}`. It makes a
+   new generation and retires the one named and every older one: their
+   wrapped data keys are erased. This cannot be undone, except by restoring
+   the account's storage to before it. From then on:
+   - the old secrets are listed with `unreadable: true` and are never sent
+     to a job; a job that uses one fails with `secrets_unavailable` until it
+     is set again;
+   - a value sealed for the old public key is refused (`bad_key_id`); `gh`
+     reads the new public key on its next `gh secret set`;
+   - variables are not changed.
+
+   A job whose secrets were read before the replacement got the old values,
+   which is one reason the credentials must change (step 4).
+   - 409 `generation_changed`: the named generation is not the newest (for
+     example a lost key made a new one meanwhile). Read the status again and
+     replace the newest; that retires the older ones too, so the exposed one
+     cannot reopen if its master key comes back. Any secret set under the
+     newer generation in between must be set again too.
+   - 409 `account_changed`: the handle now belongs to another account. Find
+     the account again; do not replace that one.
+   - 409 `idempotent_outcome_unknown`: send the same body again with a new
+     `Idempotency-Key` (or none). Naming a generation already replaced
+     answers that replacement again and changes nothing, so a retry is safe.
+   - 503 `ci_key_unavailable`: the CI master key is missing or misconfigured;
+     fix it and send the request again.
+3. Read the status again: `generation` must now be greater than the one you
+   replaced.
+4. For each secret: revoke the exposed credential where it was issued, make
+   a new one, and set the **new** value (`gh secret set`). Setting the old
+   value again only makes it readable, it does not make it safe; and
+   revoking it at its provider after setting it again leaves Fyrden with a
+   dead credential.
+5. Done when the status shows a generation past the one replaced, every
+   exposed credential is revoked and replaced, and `unreadable_secrets` is 0
+   (or the remaining secrets are deleted).
+
+To see which jobs were given which secrets, read the delivery audit. Each
+assignment that delivers secrets writes one `ci.secrets.deliver` row to the
+directory's `audit_log`, in the same batch that records the task, before
+the runner gets anything: its `target_id` is the account id and its
+`details` name the repository, run, job and task, and each secret's scope
+(`org` or a repository id), name and data key generation, never a value.
+
+```sh
+npx wrangler d1 execute fyrden-directory --remote --command \
+  "SELECT at, details FROM audit_log WHERE action = 'ci.secrets.deliver' AND target_id = '<account_id>' ORDER BY seq"
+```
+
+Rows are archived to R2 and leave D1 7 days after archiving: older ones
+are in the `fyrden-assets` bucket under `audit/instance/<yyyy>/<mm>/<dd>/directory-…`
+(one NDJSON row per line), not under the account's own audit prefix. A row
+says a job **may** have received a secret (an assignment recorded and then
+refused still has one). A secret with no row was still exposed to whoever
+holds the old data key: change every credential of a replaced generation,
+not only the delivered ones.
+
+What the replacement does not remove:
+
+- Point-in-time recovery can restore the account's storage as it was up to
+  30 days before, retired data key included. After any such restore,
+  replace again with a new `Idempotency-Key` (or none), and check with the
+  status call: an answer from before the restore proves nothing about the
+  restored storage, and repeating the same request with the same token and
+  key replays its saved answer, replacing nothing, until the key expires
+  (24 hours after the original request started).
+- Each old secret's ciphertext stays stored until the secret is set again or
+  deleted. Whoever already holds the old data key can still open a copy of
+  it; only changing the credential protects it.
+- Variables are stored as plain text: a leak of the account's storage
+  exposed them too. Change any that matter.

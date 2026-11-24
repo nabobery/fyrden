@@ -19,7 +19,7 @@ CREATE TABLE ci_data_keys (
         master_key_id TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         lost_at INTEGER
-      ) STRICT;
+      , replaced_at INTEGER, replaced_by INTEGER) STRICT;
 CREATE TABLE ci_minutes (
         key TEXT PRIMARY KEY CHECK (length(key) BETWEEN 1 AND 200),
         agent_id TEXT,
