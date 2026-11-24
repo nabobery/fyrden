@@ -4413,6 +4413,7 @@ export class RepoDO extends MigratingDO {
       log: () => this.#log(),
       detachHooks: () => this.detachHooks,
       roots: () => this.releases.roots(),
+      heldRoots: () => this.gcRunRoots(),
     });
     return this.#networkOps;
   }
