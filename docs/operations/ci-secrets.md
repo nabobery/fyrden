@@ -245,8 +245,11 @@ What the replacement does not remove:
 
 - Point-in-time recovery can restore the account's storage as it was up to
   30 days before, retired data key included. After any such restore,
-  replace again, and check with the status call: an answer from before the
-  restore proves nothing about the restored storage.
+  replace again with a new `Idempotency-Key` (or none), and check with the
+  status call: an answer from before the restore proves nothing about the
+  restored storage, and repeating the same request with the same token and
+  key replays its saved answer, replacing nothing, until the key expires
+  (24 hours after the original request started).
 - Each old secret's ciphertext stays stored until the secret is set again or
   deleted. Whoever already holds the old data key can still open a copy of
   it; only changing the credential protects it.
