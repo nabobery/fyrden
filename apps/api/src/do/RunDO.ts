@@ -2005,8 +2005,8 @@ export class RunDO extends MigratingDO {
     return {
       done: false,
       cursor: null,
-      runAfterMs:
-        untilExpiry > 0 ? Math.min(this.policy.reconcileMs, untilExpiry) : this.policy.reconcileMs,
+      // Past it already (the registration's await crossed it): at once, so the check retires it.
+      runAfterMs: Math.max(0, Math.min(this.policy.reconcileMs, untilExpiry)),
     };
   }
 
@@ -2155,7 +2155,11 @@ export class RunDO extends MigratingDO {
     )
       owed.push("concurrency");
     if (run.task_end_acked < run.task_end_seq) owed.push("task_end");
-    if (this.#reservations.owed()) owed.push("reservations");
+    // Any not settled, due now or later (`RunReservations.owed` counts only the due, and schedules).
+    if (
+      this.engine.rows("SELECT 1 FROM ci_reservations WHERE state <> 'settled' LIMIT 1").length > 0
+    )
+      owed.push("reservations");
     return owed;
   }
 

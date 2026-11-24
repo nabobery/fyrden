@@ -307,6 +307,56 @@ describe("retiring an expired run", () => {
     expect((await state(runId)).erased).toBe(true);
   });
 
+  it("counts a reservation not settled as owed, due or not", async () => {
+    const { runId } = await completedRun();
+    const counted = await inRun(runId, async (run) => {
+      run.policy = { ...run.policy, retentionMs: RETENTION };
+      // A reservation still to be asked for, its retry far ahead: not due, still owed.
+      run.engine.exec(
+        "INSERT INTO ci_reservations (job_id, seq, state, retry_at) VALUES (9999, 1, 'wanted', ?)",
+        T0 + 100 * DAY,
+      );
+      const metrics = run.context.metrics as { count: (...args: unknown[]) => void };
+      const original = metrics.count;
+      const seen: unknown[] = [];
+      metrics.count = (...args: unknown[]) => {
+        if (args[0] === "ci.run_retired_owed") seen.push(args[1]);
+        return original.apply(metrics, args);
+      };
+      (run.context as { now: () => number }).now = () => T0 + RETENTION;
+      try {
+        await run.alarm();
+      } finally {
+        metrics.count = original;
+      }
+      return seen;
+    });
+    expect(counted).toEqual([{ owed: "reservations" }]);
+  });
+
+  it("retires at once when the check's registration crosses the expiry", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, SOURCE);
+    const retention = 10 * DAY;
+    await inRun(runId, (run) => {
+      run.policy = { ...run.policy, retentionMs: retention };
+    });
+    await finish(runId, "build");
+    const erased = await inRun(runId, async (run) => {
+      run.policy = { ...run.policy, retentionMs: retention };
+      // The weekly check, due before the expiry; its registration returns after it.
+      let t = T0 + 7 * DAY;
+      (run.context as { now: () => number }).now = () => t;
+      run.hooks.beforeRepoCall = (op) => {
+        if (op === "registerRun") t = T0 + retention + 1;
+      };
+      await run.alarm();
+      await run.alarm();
+      return run.engine.rows("SELECT 1 FROM run_erasure").length > 0;
+    });
+    expect(erased).toBe(true);
+  });
+
   it("erases the run as gone when its repository answers it deleted", async () => {
     const { runId } = await completedRun();
     await at(runId, T0 + RETENTION);
