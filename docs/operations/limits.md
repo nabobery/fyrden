@@ -404,7 +404,7 @@ alarm. These periods are defaults and are not configurable in this version:
 |---|---|
 | Packs replaced by a repack or collection | 30 days after they were replaced, and never while a clone that started before still reads them |
 | Unreachable objects (moved to a garbage pack by collection; a pull request's recorded base, `base.sha`, counts as reachable) | Condemned 1 day after the garbage pack was last touched, then deleted after the 30-day retention |
-| Reflog entries | After 90 days, by a pass that commits schedule (at most daily). Objects reachable only from the reflog are kept until then |
+| Reflog entries | After 90 days, by a pass that commits schedule (at most daily). Objects reachable only from the reflog are kept until then, also when a fork detaches from its network |
 | Uncommitted uploads and their stored bytes | 24 hours after the upload started |
 | Stored fetch responses (regenerated or framed packs) | 1 hour after the last clone that read them |
 | Outputs of an interrupted repack | 24 hours |
