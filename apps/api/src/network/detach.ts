@@ -14,6 +14,7 @@ import {
   MissingObjectError,
   type Oid,
   oidFromBytes,
+  oidToHex,
   type PackId,
 } from "@fyrden/git-core";
 import { newRunId } from "../git/maintenance/ids.js";
@@ -44,7 +45,8 @@ import {
  *    network already holds, written by a push since the detach began or by
  *    an earlier round, is not copied again).
  * 3. Verify, slice by slice within the slice budget, that the new
- *    network's packs hold the whole closure (a mark through them alone);
+ *    network's packs hold the whole closure (a mark through them alone),
+ *    noting which CI runs' commits it covered;
  *    then list, again slice by slice, the commit-graph rows of commits they
  *    do not hold (they leave with the old network) into scratch objects.
  * 4. Swap, under the commit lock (a write freeze: pushes wait, then are
@@ -52,7 +54,9 @@ import {
  *    mark was replaced, run another round (a catch-up: only objects not yet
  *    in the new network are written); after a few rounds the freeze is kept
  *    across the catch-up so it ends. Otherwise, in one transaction (which
- *    checks the lock and the refs again): the outputs go live, every pack
+ *    checks the lock and the refs again, and goes back to the verify for a
+ *    run recorded since whose commit that did not cover): the outputs go
+ *    live, every pack
  *    of the old network leaves the view (superseded; the retire job
  *    releases the network's claims or deletes unshared bytes after the
  *    retention), the commit graph keeps only commits the new packs hold,
@@ -106,6 +110,8 @@ export interface DetachCursor {
    * an earlier version began, which is started again before its swap.
    */
   readonly heldRoots?: true | undefined;
+  /** Verify: how many CI runs' commits it covers, listed in a scratch object (none: not written). */
+  readonly held?: number | undefined;
 }
 
 export interface DetachHooks {
@@ -136,6 +142,7 @@ const BITS = "dbits";
 const KEEP = "dkeep";
 const VERIFY = "dverify";
 const DROP = "ddrop";
+const HELD = markName("dheld", 1);
 /** Commit-graph rows read per query while pruning. */
 const PRUNE_PAGE = 1_000;
 const OID_BYTES = 20;
@@ -260,6 +267,7 @@ class DetachSlice {
       check: undefined,
       after: undefined,
       drops: undefined,
+      held: undefined,
       heldRoots: true,
     };
     return this.#mark(
@@ -403,9 +411,19 @@ class DetachSlice {
     const { git } = this;
     if (this.#moved(cursor)) return this.#next({ ...cursor, phase: "swap" });
     const check = cursor.check ?? 0;
-    const prune: DetachCursor = { ...cursor, phase: "prune", after: undefined, drops: 0 };
-    const refs = [...git.refStore.readRefsSync().refs.values(), ...this.wiring.roots()];
-    if (refs.length === 0) return this.#next(prune);
+    let held = cursor.held ?? 0;
+    const roots: Oid[] = [];
+    if (check === 0) {
+      roots.push(...git.refStore.readRefsSync().refs.values(), ...this.wiring.roots());
+      // The runs' commits the round's sources hold, as read now: one recorded after the round's
+      // mark and not copied is missing here, and the round is done again.
+      const inSources = await this.#heldInSources(cursor);
+      roots.push(...inSources);
+      held = inSources.length;
+      if (held > 0) await putScratch(git, cursor.runId, HELD, concatOids(inSources), this.counter);
+    }
+    const prune: DetachCursor = { ...cursor, phase: "prune", after: undefined, drops: 0, held };
+    if (check === 0 && roots.length === 0) return this.#next(prune);
     const packs = this.#newPacks(cursor);
     if (packs.length === 0) return this.#closureMissing(cursor);
     let session: MarkSession | undefined;
@@ -414,12 +432,10 @@ class DetachSlice {
         outside: "error",
         ...(check > 0 ? { from: markName(VERIFY, check) } : {}),
       });
-      // The runs' commits the round's sources hold, as read now: one recorded after the round's
-      // mark and not copied is missing here, and the round is done again.
-      if (check === 0) session.mark.push([...refs, ...(await this.#heldInSources(cursor))]);
+      if (check === 0) session.mark.push(roots);
       if (!(await session.run())) {
         await session.save(markName(VERIFY, check + 1));
-        return this.#next({ ...cursor, check: check + 1 });
+        return this.#next({ ...cursor, check: check + 1, held });
       }
     } catch (error) {
       if (error instanceof MissingObjectError) return this.#closureMissing(cursor);
@@ -476,11 +492,7 @@ class DetachSlice {
     let drops = cursor.drops ?? 0;
     if (drop.length > 0) {
       drops++;
-      const bytes = new Uint8Array(drop.length * OID_BYTES);
-      drop.forEach((oid, i) => {
-        bytes.set(oid, i * OID_BYTES);
-      });
-      await putScratch(git, cursor.runId, markName(DROP, drops), bytes, this.counter);
+      await putScratch(git, cursor.runId, markName(DROP, drops), concatOids(drop), this.counter);
     }
     return this.#next(
       done
@@ -519,22 +531,33 @@ class DetachSlice {
         check: undefined,
         after: undefined,
         drops: undefined,
+        held: undefined,
       };
-      const held = await this.#runRootsHeld(cursor);
-      let committed: "ok" | "lapsed" | "run_root_lost";
+      const runRoots = await this.#unverifiedRunRoots(cursor);
+      let committed: "ok" | "lapsed" | "run_root_unverified";
       try {
-        committed = this.#commit(job, cursor, notify, lock, dropCommits, held.lost);
+        committed = this.#commit(job, cursor, notify, lock, dropCommits, runRoots.any);
       } finally {
-        held.release();
+        runRoots.release();
       }
       if (committed === "lapsed") {
         // The lock lapsed while the dropped rows were read: look again.
         return { done: false, cursor: encodeJson(cursor), runAfterMs: 0 };
       }
-      if (committed === "run_root_lost") {
-        // A run recorded since the round's checks names a commit the new packs lack: again.
-        await deleteRun(git, cursor.runId);
-        return this.#next(this.#round(cursor, undefined));
+      if (committed === "run_root_unverified") {
+        // A run recorded since the verify: verified again with its commit, marking again only if
+        // the new packs lack part of what it reaches.
+        const freeze = cursor.freeze ? git.locks.renew(lock, FREEZE_MS) : undefined;
+        keepLock = freeze !== undefined;
+        return this.#next({
+          ...cursor,
+          phase: "verify",
+          freeze,
+          check: undefined,
+          after: undefined,
+          drops: undefined,
+          held: undefined,
+        });
       }
       git.context.metrics.count("git.maintenance", { job: "detach", what: "swapped" }, 1);
       await this.wiring.hooks?.().afterSwap?.();
@@ -555,6 +578,7 @@ class DetachSlice {
       check: undefined,
       after: undefined,
       drops: undefined,
+      held: undefined,
     };
   }
 
@@ -574,9 +598,9 @@ class DetachSlice {
   /**
    * The swap transaction, with the job's next cursor (`notify`): `lapsed`,
    * changing nothing, when the lock lapsed or the refs moved since the
-   * mark (an await in between); `run_root_lost` when a CI run's commit the
-   * old packs hold is missing from the new ones (a run recorded after the
-   * round's checks), read in this transaction. Throws, rolling back, when
+   * mark (an await in between); `run_root_unverified` when a CI run names a
+   * commit the round's packs hold and its verify did not cover (a run
+   * recorded since), read in this transaction. Throws, rolling back, when
    * this run lost the job to another.
    */
   #commit(
@@ -585,14 +609,14 @@ class DetachSlice {
     notify: DetachCursor,
     lock: LockHandle,
     dropCommits: readonly ArrayBuffer[],
-    runRootLost: () => boolean,
-  ): "ok" | "lapsed" | "run_root_lost" {
+    runRootUnverified: () => boolean,
+  ): "ok" | "lapsed" | "run_root_unverified" {
     const { git } = this;
     const { storage } = git.context;
     return storage.transactionSync(() => {
       if (!git.locks.isHeld(lock) || git.refStore.state().version !== cursor.version)
         return "lapsed";
-      if (runRootLost()) return "run_root_lost";
+      if (runRootUnverified()) return "run_root_unverified";
       for (const output of cursor.outputs)
         if (git.registry.transition(output, ["indexing"], "live") === 0)
           throw new Error(`detach output ${output} is not finished`);
@@ -617,34 +641,44 @@ class DetachSlice {
   }
 
   /**
-   * The old and new packs' indexes, loaded before the swap, and the check
-   * the swap transaction makes with them: whether a CI run's commit, as
-   * recorded then, is held by the old packs and not by the new ones. Release
-   * them after the transaction.
+   * The round's packs' indexes and the runs' commits its verify covered,
+   * loaded before the swap, and the check the swap transaction makes with
+   * them: whether a CI run recorded then names a commit those packs hold
+   * that the verify did not cover. A commit a pack of the new network holds
+   * counts too, as its tree or parents may be in the old ones only. The
+   * refs' own commits were covered: the swap checks that the refs have not
+   * moved. Release them after the transaction.
    */
-  async #runRootsHeld(cursor: DetachCursor): Promise<{ lost: () => boolean; release: () => void }> {
+  async #unverifiedRunRoots(
+    cursor: DetachCursor,
+  ): Promise<{ any: () => boolean; release: () => void }> {
+    const { git } = this;
     const roots = this.wiring.heldRoots;
-    if (!roots) return { lost: () => false, release: () => {} };
-    const old = await LoadedPacks.load(
-      this.git,
-      cursor.sources.filter((s) => s.old).map((s) => s.id),
+    if (!roots) return { any: () => false, release: () => {} };
+    const verified = new Set<string>();
+    if (cursor.held) {
+      const bytes = await getScratch(git, cursor.runId, HELD, this.counter);
+      for (let at = 0; at + OID_BYTES <= bytes.length; at += OID_BYTES)
+        verified.add(bytesHex(bytes.subarray(at, at + OID_BYTES)));
+    }
+    const loaded = await LoadedPacks.load(
+      git,
+      cursor.sources.map((s) => s.id),
       this.counter,
     );
-    let fresh: LoadedPacks;
-    try {
-      fresh = await LoadedPacks.load(this.git, this.#newPacks(cursor), this.counter);
-    } catch (error) {
-      old.release();
-      throw error;
-    }
-    const holds = (packs: LoadedPacks, oid: Oid) =>
-      packs.packs.some((pack) => pack.idx.find(oid) >= 0);
     return {
-      lost: () => roots().some((oid) => holds(old, oid) && !holds(fresh, oid)),
-      release: () => {
-        old.release();
-        fresh.release();
+      any: () => {
+        const added = roots().filter(
+          (oid) =>
+            !verified.has(oidToHex(oid)) && loaded.packs.some((pack) => pack.idx.find(oid) >= 0),
+        );
+        if (added.length === 0) return false;
+        const tips = new Set(
+          Array.from(git.refStore.readRefsSync().refs.values(), (oid) => oidToHex(oid)),
+        );
+        return added.some((oid) => !tips.has(oidToHex(oid)));
       },
+      release: () => loaded.release(),
     };
   }
 
@@ -663,6 +697,14 @@ const hexBytes = (hex: string) =>
   Uint8Array.from(hex.match(/../g) ?? [], (h) => Number.parseInt(h, 16));
 const bytesHex = (bytes: Uint8Array) =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+
+function concatOids(oids: readonly Uint8Array[]): Uint8Array {
+  const bytes = new Uint8Array(oids.length * OID_BYTES);
+  oids.forEach((oid, i) => {
+    bytes.set(oid, i * OID_BYTES);
+  });
+  return bytes;
+}
 
 /** The roots of `held` a pack of `session` holds. */
 function heldIn(session: MarkSession, held: readonly Oid[]): Oid[] {

@@ -119,6 +119,8 @@ export default function setup(project: TestProject): () => void {
     repo,
     packs: [packOf(old), packOf(newer), packOf(rest)],
     side,
+    sideCommitPack: packOf([side]),
+    withoutSideCommitPack: packOf(all.filter((o) => o !== side)),
     f2,
     rewritten,
     all,
