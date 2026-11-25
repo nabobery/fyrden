@@ -601,6 +601,11 @@ describe("the runner operations", () => {
         created_at: expect.any(Number),
         declared_at: expect.any(Number),
         revoked_at: null,
+        repository_access: "all",
+        selected_count: 0,
+        allows_public: false,
+        allows_forks: false,
+        task_assigned_at: null,
         revoked_reason: null,
       },
     ]);

@@ -12,7 +12,7 @@ import {
   releaseCi,
   settleCi,
 } from "../../ci/budget.js";
-import { eligibleJob } from "../../runner/registry.js";
+import { anyRunnerMayTake } from "../../runner/access.js";
 import type { CiMinutesAnswer } from "../org/ci-minutes.js";
 import type { RunEngine, RunPolicy, RunRow } from "./engine.js";
 
@@ -22,9 +22,10 @@ import type { RunEngine, RunPolicy, RunRow } from "./engine.js";
  * cheaper refusal: it writes nothing and asks no account). Its
  * `ci_reservations` row's states:
  *
- *   wanted   -> wanted    a job no runner may take (a fork job, a public or
- *                        inactive repository): no store asked; checked again
- *                        on the run's next dispatch pass
+ *   wanted   -> wanted    a job no runner may take (an inactive repository, or
+ *                        a fork job or a public repository's while no runner
+ *                        takes those): no store asked; checked again on the
+ *                        run's next dispatch pass
  *   wanted   -> minutes   ledger granted (Free), or at once on Paid
  *   wanted   -> refused   ledger refused (nothing written)
  *   minutes  -> reserved  account granted; published, assignable in its window
@@ -729,8 +730,8 @@ export class RunReservations {
         )
         .bind(JSON.stringify(actors)),
       db
-        .prepare(`SELECT ${eligibleJob("?1", "?2")} AS eligible`)
-        .bind(run.fork === 0 ? 0 : 1, run.repo_id),
+        .prepare(`SELECT ${anyRunnerMayTake("?1", "?2", "?3")} AS eligible`)
+        .bind(run.repo_id, run.fork === 0 ? 0 : 1, this.host.now()),
     ]);
     return {
       eligible: (eligible?.results[0] as { eligible: number } | undefined)?.eligible === 1,

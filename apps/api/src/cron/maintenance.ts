@@ -8,6 +8,7 @@ import { advanceDeletions } from "../repos/deletion.js";
 import { settleStaleGenerations } from "../repos/generate.js";
 import { advanceTransfers } from "../repos/transfer.js";
 import { reapIdempotencyKeys } from "../rest/idempotency.js";
+import { clearStaleAccess } from "../runner/access.js";
 import { stampSpentRunners } from "../runner/registry.js";
 import { archiveDirectoryAudit } from "./directory-audit-archiver.js";
 import { reapExpiredRepos } from "./expiry-reaper.js";
@@ -21,7 +22,8 @@ export const MAINTENANCE_OBJECT = "instance";
  * reaps idempotency keys, OAuth leftovers, the read model's expired writer
  * leases and failed envelopes kept their time, prunes CI's ledger, stamps
  * ephemeral runners past their end revoked (so the index of runners that
- * may serve stays small), and advances transfers;
+ * may serve stays small), clears the access of revoked runners, and
+ * advances transfers;
  * while the read model's maintenance holds ordinary work back, not the
  * tasks that write it (deletions' cleanups, abandoned generations'
  * settling, transfers' fences, pruning failed envelopes). Each
@@ -63,6 +65,7 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
       await pruneCiBudget(env.DIRECTORY);
     })(),
     stampSpentRunners(env.DIRECTORY, Date.now(), undefined, metrics),
+    clearStaleAccess(env.DIRECTORY, undefined, metrics),
   ]);
   const failed = results.filter((r) => r.status === "rejected");
   for (const failure of failed)

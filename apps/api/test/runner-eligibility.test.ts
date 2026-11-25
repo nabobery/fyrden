@@ -1,7 +1,8 @@
-// Which jobs a runner may be given, decided by the server alone: never a
-// public repository's job, never a fork job (a pull request whose head is
-// in another repository, whatever the trust), whatever labels the runner
-// declares and whether or not the run was approved. Visibility is read by
+// Which jobs a runner that opted in to nothing may be given, decided by the
+// server alone: never a public repository's job, never a fork job (a pull
+// request whose head is in another repository, whatever the trust),
+// whatever labels the runner declares and whether or not the run was
+// approved (runner-access.test.ts has the opt-ins). Visibility is read by
 // the claim itself and by every re-offer, so a repository made public
 // after its job was queued is covered; a re-offer refused for that reason
 // leaves the job queued, and a lost answer whose task was already
@@ -14,16 +15,17 @@ import { approvalBinding } from "../src/ci/approval.js";
 import type { RunSpec } from "../src/do/run/spec.js";
 import { dispatchHooks } from "../src/runner/dispatch.js";
 import { Result } from "../src/runner/proto/messages.js";
-import { api, json } from "./helpers/api.js";
 import { encodeFetchTaskRequest } from "./helpers/runner-proto.js";
 import {
   fetchTask,
   jobTokensOf,
+  type OrgFixture,
   orgRepo,
   pendingOf,
   type RegisteredRunner,
   registerRunner,
   runnerCall,
+  siblingRepo,
   tasksOfRun,
   tasksVersionOf,
   updateTask,
@@ -31,7 +33,6 @@ import {
 import {
   advance,
   drain,
-  type Fixture,
   inRun,
   job,
   jobsOf,
@@ -46,8 +47,6 @@ const one = workflow(job("a"));
 const pullWorkflow = (event: string) =>
   `name: ci\non: ${event}\njobs:\n${job("a", ["permissions: write-all"])}`;
 
-type OrgFixture = Fixture & { org: { id: string; login: string } };
-
 afterEach(() => {
   delete dispatchHooks.afterClaim;
 });
@@ -56,24 +55,6 @@ const setVisibility = (f: OrgFixture, visibility: "public" | "internal" | "priva
   env.DIRECTORY.prepare("UPDATE repos SET visibility = ? WHERE id = ?")
     .bind(visibility, f.repo.id)
     .run();
-
-/** Another repository of the fixture's organization, with one commit on main. */
-async function siblingRepo(f: OrgFixture): Promise<OrgFixture> {
-  const repo = await json<{ id: string; name: string }>(
-    api("POST", `/orgs/${f.org.login}/repos`, f.owner.token, { name: uniqueId("r") }),
-  );
-  expect(repo.status).toBe(201);
-  const path = `/repos/${f.org.login}/${repo.body.name}`;
-  const commit = await json<{ commit: { sha: string } }>(
-    api("POST", `${path}/file-commits`, f.owner.token, {
-      branch: "main",
-      message: "one",
-      changes: [{ path: "a.txt", content: "one\n" }],
-    }),
-  );
-  expect(commit.status).toBe(201);
-  return { ...f, repo: repo.body, path, sha: commit.body.commit.sha };
-}
 
 /** The account's tasks version made non-zero: a run's job published, then cancelled and withdrawn. */
 async function primed(f: OrgFixture): Promise<number> {

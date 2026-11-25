@@ -29,6 +29,7 @@ import {
   FLEET_POLLS_SPENT,
   INVALID_MESSAGE,
   NAME_REQUIRED,
+  NEEDS_EPHEMERAL,
   POLLS_UNACCOUNTED,
   RATE_LIMITED,
   REGISTRATION_OFF,
@@ -231,11 +232,14 @@ async function register(call: CallContext): Promise<Response> {
       version: request.version,
       labels: request.labels,
       ephemeral: request.ephemeral,
+      requestId: call.c.get("requestId"),
       fleet: call.admission.fleet,
     },
     call.metrics,
   );
   if (registered.status === "refused") throw new Refusal("permission_denied", REGISTRATION_REFUSED);
+  if (registered.status === "needs_ephemeral")
+    throw new Refusal("failed_precondition", NEEDS_EPHEMERAL);
   if (registered.status !== "registered")
     throw new Refusal(
       "resource_exhausted",

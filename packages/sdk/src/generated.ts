@@ -9412,6 +9412,14 @@ export type OrgsTeamsReposRemoveOutput = {
 export type OrgsRunnersRegistrationTokensCreateInput = {
   /** The organization's handle. */
   org: string;
+  /** Which of the organization's repositories the runner may take jobs of: `all`, or `selected` (those listed). Public ones only with `allows_public` too. */
+  repository_access?: "all" | "selected";
+  /** With `repository_access` `selected`: the repositories, 100 at most. */
+  selected_repository_ids?: string[];
+  /** Whether the runner may take jobs of public repositories. A public repository's workflows can run code its maintainers did not write (actions, dependencies); on a long-lived runner, what one job leaves behind reaches the jobs after it. */
+  allows_public?: boolean;
+  /** Whether the runner may take jobs of pull requests from forks (`pull_request` and `pull_request_target`), once approved. Only an ephemeral runner may: it is given one job. A machine registered again is still the same machine, so use a fresh one each time. A fork of a public repository needs `allows_public` as well. */
+  allows_forks?: boolean;
 };
 
 /** Output of `orgs.runners.registration_tokens.create`. */
@@ -9422,10 +9430,24 @@ export type OrgsRunnersRegistrationTokensCreateOutput = {
   expires_at: number;
 };
 
+/** Input of `orgs.runners.registration_tokens.cancel`: Cancel unused runner registration tokens. */
+export type OrgsRunnersRegistrationTokensCancelInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.runners.registration_tokens.cancel`. */
+export type OrgsRunnersRegistrationTokensCancelOutput = {
+  /** How many tokens were cancelled. */
+  cancelled: number;
+};
+
 /** Input of `orgs.runners.list`: List an organization's self-hosted runners. */
 export type OrgsRunnersListInput = {
   /** The organization's handle. */
   org: string;
+  /** `serving`: neither revoked nor an ephemeral runner past its end. It says nothing of whether the runner is connected. */
+  status?: "all" | "serving" | "revoked";
   /** Page size, 1-100. */
   per_page?: number;
   /** From a previous page's `next_cursor`. */
@@ -9449,12 +9471,146 @@ export type OrgsRunnersListOutput = {
     declared_at: number | null;
     /** Unix time in milliseconds: when it was deleted or revoked, or when an ephemeral runner's report window ended (set automatically); its credential stopped working then. */
     revoked_at: number | null;
+    /** Which of the organization's repositories the runner may take jobs of: `all`, or `selected` (those listed). Public ones only with `allows_public` too. */
+    repository_access: "all" | "selected";
+    /** How many repositories it lists (0 unless `repository_access` is `selected`). */
+    selected_count: number;
+    /** Whether the runner may take jobs of public repositories. A public repository's workflows can run code its maintainers did not write (actions, dependencies); on a long-lived runner, what one job leaves behind reaches the jobs after it. */
+    allows_public: boolean;
+    /** Whether the runner may take jobs of pull requests from forks (`pull_request` and `pull_request_target`), once approved. Only an ephemeral runner may: it is given one job. A machine registered again is still the same machine, so use a fresh one each time. A fork of a public repository needs `allows_public` as well. */
+    allows_forks: boolean;
+    /** Unix time in milliseconds: when an ephemeral runner was assigned its one job; null before, and for a long-lived runner. */
+    task_assigned_at: number | null;
     /** Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while no revocation is recorded: an ephemeral runner past its report window may read null for a few minutes until maintenance records it `spent`, though its credentials already stopped working. */
     revoked_reason: "deleted" | "poll_rate" | "fleet_cap" | "spent" | null;
   })[];
   /** Pass as `cursor` for the next page; null on the last page. */
   next_cursor: string | null;
 };
+
+/** Input of `orgs.runners.get`: Get a self-hosted runner. */
+export type OrgsRunnersGetInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The runner's id. */
+  runner_id: number;
+};
+
+/** Output of `orgs.runners.get`. */
+export type OrgsRunnersGetOutput = {
+  id: number;
+  name: string;
+  /** As the runner last declared them. */
+  labels: string[];
+  /** The runner's version, as it last declared it. */
+  version: string;
+  /** Registered to take one job. */
+  ephemeral: boolean;
+  /** Unix time in milliseconds: when it registered. */
+  created_at: number;
+  /** Unix time in milliseconds: when its daemon last started; null when it never has (a registration whose answer was lost: delete it). */
+  declared_at: number | null;
+  /** Unix time in milliseconds: when it was deleted or revoked, or when an ephemeral runner's report window ended (set automatically); its credential stopped working then. */
+  revoked_at: number | null;
+  /** Which of the organization's repositories the runner may take jobs of: `all`, or `selected` (those listed). Public ones only with `allows_public` too. */
+  repository_access: "all" | "selected";
+  /** How many repositories it lists (0 unless `repository_access` is `selected`). */
+  selected_count: number;
+  /** Whether the runner may take jobs of public repositories. A public repository's workflows can run code its maintainers did not write (actions, dependencies); on a long-lived runner, what one job leaves behind reaches the jobs after it. */
+  allows_public: boolean;
+  /** Whether the runner may take jobs of pull requests from forks (`pull_request` and `pull_request_target`), once approved. Only an ephemeral runner may: it is given one job. A machine registered again is still the same machine, so use a fresh one each time. A fork of a public repository needs `allows_public` as well. */
+  allows_forks: boolean;
+  /** Unix time in milliseconds: when an ephemeral runner was assigned its one job; null before, and for a long-lived runner. */
+  task_assigned_at: number | null;
+  /** Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while no revocation is recorded: an ephemeral runner past its report window may read null for a few minutes until maintenance records it `spent`, though its credentials already stopped working. */
+  revoked_reason: "deleted" | "poll_rate" | "fleet_cap" | "spent" | null;
+  /** The repositories it lists, by name (none unless `repository_access` is `selected`). */
+  repositories: ({
+    id: string;
+    name: string;
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+  })[];
+};
+
+/** Input of `orgs.runners.access.update`: Change which jobs a self-hosted runner may be given. */
+export type OrgsRunnersAccessUpdateInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The runner's id. */
+  runner_id: number;
+  /** Which of the organization's repositories the runner may take jobs of: `all`, or `selected` (those listed). Public ones only with `allows_public` too. */
+  repository_access?: "all" | "selected";
+  /** With `repository_access` `selected`: the repositories, 100 at most. */
+  selected_repository_ids?: string[];
+  /** Whether the runner may take jobs of public repositories. A public repository's workflows can run code its maintainers did not write (actions, dependencies); on a long-lived runner, what one job leaves behind reaches the jobs after it. */
+  allows_public?: boolean;
+  /** Whether the runner may take jobs of pull requests from forks (`pull_request` and `pull_request_target`), once approved. Only an ephemeral runner may: it is given one job. A machine registered again is still the same machine, so use a fresh one each time. A fork of a public repository needs `allows_public` as well. */
+  allows_forks?: boolean;
+};
+
+/** Output of `orgs.runners.access.update`. */
+export type OrgsRunnersAccessUpdateOutput = {
+  id: number;
+  name: string;
+  /** As the runner last declared them. */
+  labels: string[];
+  /** The runner's version, as it last declared it. */
+  version: string;
+  /** Registered to take one job. */
+  ephemeral: boolean;
+  /** Unix time in milliseconds: when it registered. */
+  created_at: number;
+  /** Unix time in milliseconds: when its daemon last started; null when it never has (a registration whose answer was lost: delete it). */
+  declared_at: number | null;
+  /** Unix time in milliseconds: when it was deleted or revoked, or when an ephemeral runner's report window ended (set automatically); its credential stopped working then. */
+  revoked_at: number | null;
+  /** Which of the organization's repositories the runner may take jobs of: `all`, or `selected` (those listed). Public ones only with `allows_public` too. */
+  repository_access: "all" | "selected";
+  /** How many repositories it lists (0 unless `repository_access` is `selected`). */
+  selected_count: number;
+  /** Whether the runner may take jobs of public repositories. A public repository's workflows can run code its maintainers did not write (actions, dependencies); on a long-lived runner, what one job leaves behind reaches the jobs after it. */
+  allows_public: boolean;
+  /** Whether the runner may take jobs of pull requests from forks (`pull_request` and `pull_request_target`), once approved. Only an ephemeral runner may: it is given one job. A machine registered again is still the same machine, so use a fresh one each time. A fork of a public repository needs `allows_public` as well. */
+  allows_forks: boolean;
+  /** Unix time in milliseconds: when an ephemeral runner was assigned its one job; null before, and for a long-lived runner. */
+  task_assigned_at: number | null;
+  /** Why it was revoked: `deleted` by an owner; `poll_rate`, it asked for work more often than the deployment allows in a UTC day; `fleet_cap`, past the deployment's runner fleet size; `spent`, an ephemeral runner whose one job and report window ended. Null while no revocation is recorded: an ephemeral runner past its report window may read null for a few minutes until maintenance records it `spent`, though its credentials already stopped working. */
+  revoked_reason: "deleted" | "poll_rate" | "fleet_cap" | "spent" | null;
+  /** The repositories it lists, by name (none unless `repository_access` is `selected`). */
+  repositories: ({
+    id: string;
+    name: string;
+    full_name: string;
+    visibility: "public" | "internal" | "private";
+  })[];
+};
+
+/** Input of `orgs.runners.repositories.add`: Add a repository to a selected self-hosted runner. */
+export type OrgsRunnersRepositoriesAddInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The runner's id. */
+  runner_id: number;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). */
+  repository_id: string;
+};
+
+/** Output of `orgs.runners.repositories.add`. */
+export type OrgsRunnersRepositoriesAddOutput = null;
+
+/** Input of `orgs.runners.repositories.remove`: Remove a repository from a selected self-hosted runner. */
+export type OrgsRunnersRepositoriesRemoveInput = {
+  /** The organization's handle. */
+  org: string;
+  /** The runner's id. */
+  runner_id: number;
+  /** A repository's id (`rep_…`, from `GET /repos/{owner}/{repo}`). */
+  repository_id: string;
+};
+
+/** Output of `orgs.runners.repositories.remove`. */
+export type OrgsRunnersRepositoriesRemoveOutput = null;
 
 /** Input of `orgs.runners.delete`: Delete a self-hosted runner. */
 export type OrgsRunnersDeleteInput = {
@@ -9948,7 +10104,12 @@ export const OPERATIONS = {
   "orgs.teams.repos.set": { method: "PUT", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.teams.repos.remove": { method: "DELETE", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.runners.registration_tokens.create": { method: "POST", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
+  "orgs.runners.registration_tokens.cancel": { method: "DELETE", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
   "orgs.runners.list": { method: "GET", path: "/orgs/{org}/actions/runners", pathParams: ["org"], idempotent: false, items: "runners" },
+  "orgs.runners.get": { method: "GET", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: false },
+  "orgs.runners.access.update": { method: "PATCH", path: "/orgs/{org}/actions/runners/{runner_id}/access", pathParams: ["org","runner_id"], idempotent: true },
+  "orgs.runners.repositories.add": { method: "PUT", path: "/orgs/{org}/actions/runners/{runner_id}/repositories/{repository_id}", pathParams: ["org","runner_id","repository_id"], idempotent: true, noContent: [204] },
+  "orgs.runners.repositories.remove": { method: "DELETE", path: "/orgs/{org}/actions/runners/{runner_id}/repositories/{repository_id}", pathParams: ["org","runner_id","repository_id"], idempotent: true, noContent: [204] },
   "orgs.runners.delete": { method: "DELETE", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: true, noContent: [204] },
   "uploads.create": { method: "POST", path: "/repos/{owner}/{repo}/uploads", pathParams: ["owner","repo"], idempotent: true },
   "uploads.get": { method: "GET", path: "/repos/{owner}/{repo}/uploads/{upload_id}", pathParams: ["owner","repo","upload_id"], idempotent: false },
@@ -10496,11 +10657,21 @@ export interface Operations {
   "orgs.teams.repos.set": { input: OrgsTeamsReposSetInput; output: OrgsTeamsReposSetOutput };
   /** Take a team's role on a repository away. Takes a team's role on a repository away; its members keep the roles they have otherwise (members of the organization read). Repositories told of the change stop counting it at once; every repository stops within 60 seconds for writes and 5 minutes for reads. Owners only. */
   "orgs.teams.repos.remove": { input: OrgsTeamsReposRemoveInput; output: OrgsTeamsReposRemoveOutput };
-  /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner serves every repository of the organization whose jobs its labels match. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. On Free, a registration token is refused with 409 `runner_fleet_full` while the deployment's runner fleet is full (`FYRDEN_CI_FLEET`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused. */
+  /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner starts with the access given here: by default every private and internal repository of the organization, no public one and no fork job; its labels only narrow that. A token with `allows_forks` registers only an ephemeral runner (`--ephemeral`); any other Register is refused and does not spend it. 422 `unknown_repository` for an id that is not an active repository of the organization, 422 `invalid_input` for `selected_repository_ids` without `repository_access` `selected`. A repository that left the organization before Register is dropped. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. On Free, a registration token is refused with 409 `runner_fleet_full` while the deployment's runner fleet is full (`FYRDEN_CI_FLEET`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused. */
   "orgs.runners.registration_tokens.create": { input: OrgsRunnersRegistrationTokensCreateInput; output: OrgsRunnersRegistrationTokensCreateOutput };
-  /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too; never their credentials. Owners only. */
+  /** Cancel unused runner registration tokens. Cancels every registration token of the organization that has registered no runner and has not expired: for one that may have leaked, or was made by someone who left. Each is refused from then on. Runners already registered stay (delete those). Audited when there was any. Owners only. GitHub has no such endpoint. */
+  "orgs.runners.registration_tokens.cancel": { input: OrgsRunnersRegistrationTokensCancelInput; output: OrgsRunnersRegistrationTokensCancelOutput };
+  /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too unless `status` says otherwise; never their credentials. Owners, and an agent acting for one that granted it `self_hosted_runners:read`. */
   "orgs.runners.list": { input: OrgsRunnersListInput; output: OrgsRunnersListOutput };
-  /** Delete a self-hosted runner. Revokes a runner's credential at once: its next call is refused and the runner stops. It stays listed, with `revoked_at`. Deleting it again changes nothing. Owners only. */
+  /** Get a self-hosted runner. One runner of the organization, with the repositories it lists; never its credential. 404 `runner_not_found`. Owners, and an agent acting for one that granted it `self_hosted_runners:read`. */
+  "orgs.runners.get": { input: OrgsRunnersGetInput; output: OrgsRunnersGetOutput };
+  /** Change which jobs a self-hosted runner may be given. Changes the fields given and keeps the rest. `selected_repository_ids` replaces the list of a runner that is, or becomes, `selected` (409 `access_not_selected` otherwise); `all` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (to end it, force-cancel its run and see that it stopped, or stop the machine). After a widening, a job that waited because no runner could take it is checked again within five minutes, and offered once it can be reserved. 422 `forks_need_ephemeral` for `allows_forks` on a runner that is not ephemeral; 422 `invalid_input` with nothing to change. 404 `runner_not_found`; 409 `runner_revoked` for a runner that no longer serves; 422 `unknown_repository` for an id that is not an active repository of the organization. Audited. Owners only. */
+  "orgs.runners.access.update": { input: OrgsRunnersAccessUpdateInput; output: OrgsRunnersAccessUpdateOutput };
+  /** Add a repository to a selected self-hosted runner. Adds a repository to the list of a runner whose `repository_access` is `selected` (409 `access_not_selected` otherwise). 422 `too_many_repositories` past 100. Adding one it lists changes nothing. 404 `runner_not_found`; 409 `runner_revoked` for a runner that no longer serves; 422 `unknown_repository` for an id that is not an active repository of the organization. Audited. Owners only. */
+  "orgs.runners.repositories.add": { input: OrgsRunnersRepositoriesAddInput; output: OrgsRunnersRepositoriesAddOutput };
+  /** Remove a repository from a selected self-hosted runner. Takes a repository out of the list of a runner whose `repository_access` is `selected` (409 `access_not_selected` otherwise), from its next job on. Removing one it does not list changes nothing. 404 `runner_not_found`; 409 `runner_revoked` for a runner that no longer serves. Audited. Owners only. */
+  "orgs.runners.repositories.remove": { input: OrgsRunnersRepositoriesRemoveInput; output: OrgsRunnersRepositoriesRemoveOutput };
+  /** Delete a self-hosted runner. Revokes a runner's credential at once: its next call is refused, and an idle runner stops. A job it is running goes on on its machine: to end it, force-cancel its run and see that it has stopped before deleting the runner, or stop the machine. It stays listed, with `revoked_at`, its access cleared. Deleting it again changes nothing. Audited. Owners only. */
   "orgs.runners.delete": { input: OrgsRunnersDeleteInput; output: OrgsRunnersDeleteOutput };
   /** Start a chunked pack upload. Starts an upload session for a pack too large for one push request: declare the pack's size and the ref updates it carries, upload the parts, then complete. Needs write access to the repository. `fyrden push --chunked` does all of this. */
   "uploads.create": { input: UploadsCreateInput; output: UploadsCreateOutput };

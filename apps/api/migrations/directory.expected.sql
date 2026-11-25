@@ -95,7 +95,17 @@ CREATE TABLE ci_runner_registrations (
   token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, created_by TEXT NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
   consumed_at INTEGER, consume_nonce TEXT
-) STRICT;
+, repository_access TEXT NOT NULL DEFAULT 'all'
+  CHECK (repository_access IN ('all', 'selected')), selected_repos TEXT NOT NULL DEFAULT '[]'
+  CHECK (json_valid(selected_repos) AND json_type(selected_repos) = 'array'), allows_public INTEGER NOT NULL DEFAULT 0
+  CHECK (allows_public IN (0, 1)), allows_forks INTEGER NOT NULL DEFAULT 0
+  CHECK (allows_forks IN (0, 1))) STRICT;
+
+-- table ci_runner_repos
+CREATE TABLE ci_runner_repos (
+  runner_id INTEGER NOT NULL, repo_id TEXT NOT NULL,
+  PRIMARY KEY (runner_id, repo_id)
+) STRICT, WITHOUT ROWID;
 
 -- table ci_runners
 CREATE TABLE ci_runners (
@@ -106,7 +116,10 @@ CREATE TABLE ci_runners (
   task_confirmed_at INTEGER,             -- an ephemeral runner's one task was confirmed
   expires_at INTEGER                     -- a spent ephemeral runner's end: its task's completion + 10 min
 , poll_day INTEGER NOT NULL DEFAULT 0 CHECK (poll_day >= 0), poll_used INTEGER NOT NULL DEFAULT 0 CHECK (poll_used >= 0), revoked_reason TEXT
-  CHECK (revoked_reason IN ('deleted', 'poll_rate', 'fleet_cap', 'spent'))) STRICT;
+  CHECK (revoked_reason IN ('deleted', 'poll_rate', 'fleet_cap', 'spent')), repository_access TEXT NOT NULL DEFAULT 'all'
+  CHECK (repository_access IN ('all', 'selected')), allows_public INTEGER NOT NULL DEFAULT 0
+  CHECK (allows_public IN (0, 1)), allows_forks INTEGER NOT NULL DEFAULT 0
+  CHECK (allows_forks IN (0, 1) AND (allows_forks = 0 OR ephemeral = 1)), task_assigned_at INTEGER) STRICT;
 
 -- table ci_tasks
 CREATE TABLE ci_tasks (
@@ -903,14 +916,29 @@ CREATE INDEX ci_pending_claims ON ci_pending_jobs (account_id, claim_until) WHER
 -- index ci_pending_nonce
 CREATE INDEX ci_pending_nonce ON ci_pending_jobs (claim_nonce) WHERE claim_nonce IS NOT NULL;
 
+-- index ci_runner_registrations_unused
+CREATE INDEX ci_runner_registrations_unused ON ci_runner_registrations (account_id, expires_at)
+  WHERE consumed_at IS NULL;
+
+-- index ci_runner_repos_repo
+CREATE INDEX ci_runner_repos_repo ON ci_runner_repos (repo_id);
+
 -- index ci_runners_account
 CREATE INDEX ci_runners_account ON ci_runners (account_id, id);
 
 -- index ci_runners_live
 CREATE INDEX ci_runners_live ON ci_runners (expires_at, id) WHERE revoked_at IS NULL;
 
+-- index ci_runners_open
+CREATE INDEX ci_runners_open ON ci_runners (account_id, id)
+  WHERE task_assigned_at IS NULL AND (allows_public = 1 OR allows_forks = 1);
+
 -- index ci_runners_polls
 CREATE INDEX ci_runners_polls ON ci_runners (poll_day) WHERE revoked_at IS NOT NULL;
+
+-- index ci_runners_stale_access
+CREATE INDEX ci_runners_stale_access ON ci_runners (id)
+  WHERE revoked_at IS NOT NULL AND (allows_public = 1 OR allows_forks = 1);
 
 -- index ci_tasks_runner_open
 CREATE INDEX ci_tasks_runner_open ON ci_tasks (runner_id) WHERE confirmed_at IS NULL AND superseded_at IS NULL AND ended_at IS NULL;
@@ -1146,6 +1174,14 @@ CREATE INDEX watch_preferences_repo ON watch_preferences (repo_id, principal_id)
 
 -- index webauthn_challenges_expiry
 CREATE INDEX webauthn_challenges_expiry ON webauthn_challenges (expires_at);
+
+-- trigger ci_tasks_recorded
+CREATE TRIGGER ci_tasks_recorded AFTER UPDATE OF task ON ci_tasks
+WHEN NEW.task IS NOT NULL
+BEGIN
+  UPDATE ci_runners SET task_assigned_at = unixepoch() * 1000
+    WHERE id = NEW.runner_id AND ephemeral = 1 AND task_assigned_at IS NULL;
+END;
 
 -- trigger grants_revoked
 CREATE TRIGGER grants_revoked AFTER UPDATE OF revoked_at ON grants
