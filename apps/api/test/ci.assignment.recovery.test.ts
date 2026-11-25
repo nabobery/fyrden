@@ -4,10 +4,15 @@
 // then says of the offer: never recorded, its job is queued again; recorded,
 // everything is left alone. Such a failure never fails a job. Failures are
 // injected through hooks, or by a trigger of the directory, and the run's clock
-// is the test's. Failed deliveries are in ci.secrets.recovery.test.ts.
+// is the test's. An assignment whose run object was reset is reported by the
+// Worker that called it: a call that fails there stands in for one, with an
+// eviction where the object's memory matters. Failed deliveries are in ci.secrets.recovery.test.ts.
+import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RunDO } from "../src/do/RunDO.js";
 import {
+  type AssignTaskAnswer,
   DELIVERY_RECOVERY_MS,
   RECORD_TASK_SQL,
   SUPERSEDE_SECOND_TASK_SQL,
@@ -40,6 +45,7 @@ import {
   fetchTask,
   gate,
   jobTokensOf,
+  ON,
   type OrgFixture,
   orgRepo,
   pendingOf,
@@ -89,10 +95,60 @@ async function made(source = reading(), ephemeral = false): Promise<Made> {
   return { f, runner, runId, value };
 }
 
+type Stub = DurableObjectStub<RunDO>;
+type AssignArgs = Parameters<RunDO["assignTask"]>;
+
+/**
+ * Runs whose `assignTask` and `assignmentLost`, as the Worker calls them, are
+ * `assign` and `lost`; what was reported to them.
+ */
+function runsWith(
+  assign: (stub: Stub, runId: string, ...args: AssignArgs) => Promise<AssignTaskAnswer>,
+  lost: (stub: Stub, wireId: number, jobId: number) => Promise<void> = async (stub, ...args) => {
+    await stub.assignmentLost(...args);
+  },
+) {
+  const reports: [number, number][] = [];
+  let stubs = 0;
+  const RUN = {
+    getByName(runId: string) {
+      stubs++;
+      const stub = runStub(runId);
+      // A stub that threw stays broken.
+      let broken: unknown;
+      return {
+        assignTask: (...args: AssignArgs) =>
+          assign(stub, runId, ...args).catch((error) => {
+            broken = error;
+            throw error;
+          }),
+        async assignmentLost(wireId: number, jobId: number) {
+          if (broken) throw broken;
+          reports.push([wireId, jobId]);
+          await lost(stub, wireId, jobId);
+        },
+      };
+    },
+  } as unknown as Env["RUN"];
+  return { overrides: { ...ON, RUN }, reports, stubs: () => stubs };
+}
+
+/** The Worker's report of a failed call never arrives: the run is left to its own catch. */
+const unreported = () =>
+  runsWith(
+    async (stub, _runId, ...args) => await stub.assignTask(...args),
+    async () => undefined,
+  ).overrides;
+
 /** A poll whose assignment fails: the runner is told to ask again. */
-async function pollFails(runner: RegisteredRunner, version = 0) {
-  const res = await runnerCall("FetchTask", encodeFetchTaskRequest({ tasksVersion: version }), {
+async function pollFails(
+  runner: RegisteredRunner,
+  options: { overrides?: Partial<Env>; background?: ExecutionContext } = {},
+) {
+  const res = await runnerCall("FetchTask", encodeFetchTaskRequest({ tasksVersion: 0 }), {
     credentials: runner,
+    overrides: unreported(),
+    ...options,
   });
   await connectError(res, "unavailable", 503);
 }
@@ -376,7 +432,7 @@ describe("a record that committed and then threw", () => {
     expect(await tasksOfRun(p.runId)).toHaveLength(1);
   });
 
-  it("an error after the directory's answer stores nothing", async () => {
+  it("an error after the directory's answer: the run stores nothing of its own", async () => {
     const m = await made();
     await hooked(m.runId, { afterMint: down });
     await pollFails(m.runner);
@@ -654,4 +710,263 @@ describe("a run that ends meanwhile", () => {
       await nothingDelivered(p.f, p.runId);
     },
   );
+});
+
+describe("an assignment the Worker's call of failed", () => {
+  const wasReset = (more: object = {}) =>
+    Object.assign(new Error("the run object was reset"), { remote: true, ...more });
+
+  /** A poll whose assignment ran as `assign` and failed, reported. */
+  async function lostCall(
+    m: Made,
+    assign: (stub: Stub, runId: string, ...args: AssignArgs) => Promise<never>,
+  ): Promise<Unrecorded> {
+    const runs = runsWith(assign);
+    await pollFails(m.runner, { overrides: runs.overrides });
+    const [offer] = await tasksOfRun(m.runId);
+    const { jobId } = await jobA(m.runId);
+    if (!offer) throw new Error("no offer");
+    expect(runs.reports).toEqual([[offer.id, jobId]]);
+    const task = await inRun(m.runId, (r) => r.engine.instance(jobId)?.task);
+    return { ...m, wireId: offer.id, jobId, task: task ?? 0 };
+  }
+
+  /** The object was reset after it assigned the job, before it asked the directory to record it. */
+  const resetBeforeRecord = async (_: Stub, runId: string, ...args: AssignArgs) => {
+    const [wireId, jobId, , accountId] = args;
+    const assigned = await inRun(runId, (r) => r.assign(jobId, `t${wireId}`, accountId).ok);
+    expect(assigned).toBe(true);
+    await reset(runId);
+    throw wasReset();
+  };
+
+  it.each(KINDS)(
+    "by a reset before its record, %s: queued again, delivered once",
+    async (...kind) => {
+      const [, source, ephemeral] = kind;
+      const p = await lostCall(await made(source(), ephemeral), resetBeforeRecord);
+      expect(await failuresOf(p.runId)).toEqual([
+        { wire_id: p.wireId, job_id: p.jobId, task: p.task, error: "" },
+      ]);
+      await advance(p.runId, DELIVERY_RECOVERY_MS - 1);
+      expect(await jobA(p.runId)).toMatchObject({ status: "in_progress" });
+      await advance(p.runId, 1);
+      await expectQueued(p);
+      expect(await credentialOf(p.runner)).toEqual(UNSPENT);
+      expect(outcomesOf(p.wireId)).toEqual(["scheduled", "requeued"]);
+      expect((await fetchTask(p.runner, 0)).task).toBeDefined();
+      expect(await deliveries(p.f)).toHaveLength(source === reading ? 1 : 0);
+    },
+  );
+
+  it("by a reset after a refused record, before its job was queued again: queued again", async () => {
+    const p = await lostCall(await made(), async (stub, runId, ...args) => {
+      await giveUp(args[0]);
+      return resetBeforeRecord(stub, runId, ...args);
+    });
+    await later(p.runId);
+    await expectQueued(p);
+    expect(outcomesOf(p.wireId)).toEqual(["scheduled", "requeued"]);
+  });
+
+  it("after it succeeded: everything is left alone", async () => {
+    const m = await made(reading(), true);
+    const p = await lostCall(m, async (stub, _runId, ...args) => {
+      expect(await stub.assignTask(...args)).toHaveProperty("task");
+      throw wasReset();
+    });
+    const tokens = await jobTokensOf(p.wireId);
+    const credential = await credentialOf(p.runner);
+    expect(tokens.map((t) => t.revoked_at)).toEqual([null]);
+    await later(p.runId);
+    await expectKept(p);
+    expect(await jobTokensOf(p.wireId)).toEqual(tokens);
+    expect(await credentialOf(p.runner)).toEqual(credential);
+    expect(await deliveries(p.f)).toHaveLength(1);
+    expect(outcomesOf(p.wireId)).toEqual(["scheduled", "kept_recorded"]);
+  });
+
+  it.each(["before", "after"])(
+    "while it still runs, released %s the recovery: one delivery at most, its token kept",
+    async (when) => {
+      const m = await made();
+      const held = gate();
+      await hooked(m.runId, { beforeTaskRecord: () => held.hold() });
+      let slow: Promise<unknown> = Promise.resolve();
+      try {
+        const p = await lostCall(m, async (stub, _runId, ...args) => {
+          slow = stub.assignTask(...args);
+          await reached(held, slow);
+          throw wasReset();
+        });
+        await hooked(p.runId, {});
+        const finish = async () => {
+          held.release();
+          return slow;
+        };
+        if (when === "before") {
+          expect(await finish()).toHaveProperty("task");
+          await later(p.runId);
+          await expectKept(p);
+          expect((await jobTokensOf(p.wireId)).map((t) => t.revoked_at)).toEqual([null]);
+        } else {
+          await later(p.runId);
+          await expectQueued(p);
+          const task = (await fetchTask(p.runner, 0)).task;
+          if (!task) throw new Error("not delivered");
+          expect(await finish()).toEqual({ refused: "released" });
+          await later(p.runId);
+          expect(await jobA(p.runId)).toMatchObject({ status: "in_progress" });
+          expect((await jobTokensOf(task.id)).map((t) => t.revoked_at)).toEqual([null]);
+        }
+        expect(await deliveries(p.f)).toHaveLength(1);
+      } finally {
+        held.release();
+        await Promise.allSettled([slow]);
+      }
+    },
+  );
+
+  it("and stored by the run too: one row, one recovery", async () => {
+    const m = await made();
+    await hooked(m.runId, { beforeTaskRecord: down });
+    const p = await lostCall(m, async (stub, _runId, ...args) => {
+      await stub.assignTask(...args);
+      throw wasReset();
+    });
+    await hooked(p.runId, {});
+    expect(await failuresOf(p.runId)).toHaveLength(1);
+    expect(outcomesOf(p.wireId)).toEqual(["scheduled"]);
+    await later(p.runId);
+    await expectQueued(p);
+  });
+
+  it("by an overloaded object is not reported", async () => {
+    const m = await made();
+    const runs = runsWith(async () => {
+      throw wasReset({ overloaded: true });
+    });
+    await pollFails(m.runner, { overrides: runs.overrides });
+    expect(runs.reports).toEqual([]);
+    expect(runs.stubs()).toBe(1);
+  });
+
+  it("is told to the runner before its report is answered, which the request outlives to send", async () => {
+    const m = await made();
+    const held = gate();
+    const runs = runsWith(resetBeforeRecord, async (stub, ...args) => {
+      await held.hold();
+      await stub.assignmentLost(...args);
+    });
+    const background = createExecutionContext();
+    let over = false;
+    let waiting: Promise<void> = Promise.resolve();
+    try {
+      await pollFails(m.runner, { overrides: runs.overrides, background });
+      expect(runs.reports).toHaveLength(1);
+      await held.started;
+      waiting = waitOnExecutionContext(background).then(() => {
+        over = true;
+      });
+      expect(await failuresOf(m.runId)).toEqual([]);
+      expect(over).toBe(false);
+    } finally {
+      held.release();
+      await waiting;
+    }
+    expect(await failuresOf(m.runId)).toHaveLength(1);
+  });
+
+  it("is told to the runner when its report fails too", async () => {
+    const m = await made();
+    const runs = runsWith(resetBeforeRecord, async () => {
+      throw new Error("not reached");
+    });
+    await pollFails(m.runner, { overrides: runs.overrides });
+    expect(runs.reports).toHaveLength(1);
+    expect(await failuresOf(m.runId)).toEqual([]);
+    expect(
+      logs
+        .entries()
+        .filter((e) => e.msg === "failed assignment not reported" && e.runId === m.runId),
+    ).toEqual([expect.objectContaining({ level: "warn", error: "not reached" })]);
+  });
+
+  it("that succeeds reports nothing and asks the run once", async () => {
+    const m = await made();
+    let calls = 0;
+    const runs = runsWith(async (stub, _runId, ...args) => {
+      calls++;
+      return await stub.assignTask(...args);
+    });
+    expect((await fetchTask(m.runner, 0, { overrides: runs.overrides })).task).toBeDefined();
+    expect([calls, runs.stubs(), runs.reports.length]).toEqual([1, 1, 0]);
+    expect(await recoveryJob(m.runId)).toBeUndefined();
+  });
+
+  describe("reported", () => {
+    const assignedHere = async (source = reading()) => {
+      const m = await made(source);
+      const { jobId } = await jobA(m.runId);
+      const wireId = 900_000_000 + jobId;
+      const answer = await inRun(m.runId, (r) => r.assign(jobId, `t${wireId}`, m.f.org.id));
+      if (!answer.ok) throw new Error(answer.code);
+      return { ...m, jobId, wireId, task: answer.task.task };
+    };
+
+    it("for another offer, another job, or an unknown one: nothing is stored", async () => {
+      const p = await assignedHere();
+      await runStub(p.runId).assignmentLost(p.wireId + 1, p.jobId);
+      await runStub(p.runId).assignmentLost(p.wireId, p.jobId + 1);
+      expect(await failuresOf(p.runId)).toEqual([]);
+      expect(await recoveryJob(p.runId)).toBeUndefined();
+    });
+
+    it("before the job was assigned: nothing is stored", async () => {
+      const m = await made();
+      const { jobId } = await jobA(m.runId);
+      await runStub(m.runId).assignmentLost(1, jobId);
+      expect(await failuresOf(m.runId)).toEqual([]);
+    });
+
+    it("twice, and late: one row, at its first time", async () => {
+      const p = await assignedHere();
+      await runStub(p.runId).assignmentLost(p.wireId, p.jobId);
+      const at = await recordedAt(p.runId);
+      const due = await nextRunAt(p.runId);
+      await advance(p.runId, 5 * S);
+      await runStub(p.runId).assignmentLost(p.wireId, p.jobId);
+      expect(await failuresOf(p.runId)).toEqual([
+        { wire_id: p.wireId, job_id: p.jobId, task: p.task, error: "" },
+      ]);
+      expect(await recordedAt(p.runId)).toBe(at);
+      expect(await nextRunAt(p.runId)).toEqual(due);
+    });
+
+    it("for a task that ended, or a run erased: nothing is stored", async () => {
+      const p = await assignedHere();
+      await runStub(p.runId).cancel(p.f.owner.principalId, "force");
+      await runStub(p.runId).assignmentLost(p.wireId, p.jobId);
+      expect(await failuresOf(p.runId)).toEqual([]);
+      const q = await assignedHere();
+      await runStub(q.runId).erase(q.f.repo.id);
+      await runStub(q.runId).assignmentLost(q.wireId, q.jobId);
+      expect(await failuresOf(q.runId)).toEqual([]);
+    });
+
+    it("about an older task of the offer: the newer one's is stored, and settled like any other", async () => {
+      const p = await notRecorded();
+      await giveUp(p.wireId);
+      expect(await assignAgain(p)).toEqual({ refused: "released" });
+      await env.DIRECTORY.prepare("UPDATE ci_tasks SET superseded_at = NULL WHERE id = ?")
+        .bind(p.wireId)
+        .run();
+      expect(await assignAgain(p)).toHaveProperty("task");
+      await runStub(p.runId).assignmentLost(p.wireId, p.jobId);
+      const task = await inRun(p.runId, (r) => r.engine.instance(p.jobId)?.task);
+      expect((await failuresOf(p.runId)).map((r) => r.task)).toEqual([task]);
+      await later(p.runId);
+      await expectKept({ ...p, task: task ?? 0 });
+    });
+  });
 });

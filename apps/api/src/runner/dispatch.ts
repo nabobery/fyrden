@@ -48,6 +48,8 @@ export interface FetchContext {
   readonly now: number;
   /** The request's `connect-timeout-ms` header. */
   readonly timeoutHeader: string | undefined;
+  /** Keeps `work` running once the runner is answered, or has gone. */
+  waitUntil(work: Promise<void>): void;
 }
 
 /** A failure to reach the run after its job was claimed: the runner retries, and is offered the task again. */
@@ -324,6 +326,33 @@ async function assignTask(
       runId,
       error: error instanceof Error ? error.message : String(error),
     });
+    // An overloaded object is asked nothing more: the job is left to its heartbeat deadline.
+    if ((error as { overloaded?: unknown } | null)?.overloaded !== true)
+      call.waitUntil(assignmentLost(call, runId, taskId, jobId));
     throw new TaskUnavailable();
+  }
+}
+
+/**
+ * Tells the run that a call of its assignment failed, so a job it left
+ * assigned (its object was reset meanwhile) is settled by what the directory
+ * says of its offer. Once, as best it can: on a new stub, since one that
+ * threw stays broken.
+ */
+async function assignmentLost(
+  call: FetchContext,
+  runId: string,
+  taskId: number,
+  jobId: number,
+): Promise<void> {
+  call.metrics.count("do.request", { class: "RunDO", method: "assignmentLost" });
+  try {
+    await call.env.RUN.getByName(runId).assignmentLost(taskId, jobId);
+  } catch (error) {
+    call.log.warn("failed assignment not reported", {
+      taskId,
+      runId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }

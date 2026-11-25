@@ -49,7 +49,8 @@ import {
  * is asked to end its offer, so that one whose end did not commit, whose
  * answer was lost, or whose object was reset before its job was failed is
  * settled later (`recoverySlice`) by what the directory then says. So is an
- * assignment that threw before it learned whether the directory recorded it.
+ * assignment that threw before it learned whether the directory recorded it,
+ * and one whose caller reports that its call failed (`assignmentLost`).
  */
 
 /** The error of a job whose secrets are not delivered because its repository changed owner. */
@@ -330,6 +331,9 @@ interface MapRow {
   confirmed_at: number | null;
 }
 
+/** The key a job is assigned under for an offer. */
+const assignKey = (wireId: number): string => `t${wireId}`;
+
 export class RunDispatch {
   constructor(private readonly host: DispatchHost) {}
 
@@ -365,6 +369,13 @@ export class RunDispatch {
     } finally {
       held.reservation?.release();
     }
+  }
+
+  /** Has the job's task under the offer, if it has one, settled by the recovery. */
+  assignmentLost(wireId: number, jobId: number): void {
+    const row = this.host.engine.instance(jobId);
+    if (row && row.task !== null && row.assign_key === assignKey(wireId))
+      this.#notRecorded(wireId, { jobId, task: row.task });
   }
 
   async #assignTask(
@@ -445,7 +456,7 @@ export class RunDispatch {
         return { refused: "secrets_unreachable" };
       }
     }
-    const assigned = host.assign(jobId, `t${wireId}`, accountId);
+    const assigned = host.assign(jobId, assignKey(wireId), accountId);
     if (!assigned.ok) return { refused: assigned.code };
     const ref = assigned.task;
     held.unrecorded = ref;
@@ -863,7 +874,7 @@ export class RunDispatch {
 
   /**
    * Stores that the assignment of task `ref` threw before it learned whether the directory
-   * recorded it, to be settled by the recovery. A failed delivery of the same task keeps its error
+   * recorded it, or that its caller never had its answer, to be settled by the recovery. A failed delivery of the same task keeps its error
    * and its time; what another task left under the same offer (its job was queued again, so it is
    * never acted on) is replaced. A failure to store it is logged: the assignment's own error is
    * the one thrown.
