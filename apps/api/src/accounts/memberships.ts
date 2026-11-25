@@ -1,3 +1,4 @@
+import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import type { OrgRole } from "@fyrden/domain";
 
 /*
@@ -60,4 +61,66 @@ export function recordAllMembers(
       .bind(orgId, ids(members)),
     db.prepare(UPSERT).bind(orgId, JSON.stringify(members)),
   ];
+}
+
+const PASS_EVERY_MS = 24 * 60 * 60 * 1000;
+const ORGS_PER_RUN = 10;
+
+interface Pass {
+  readonly lastAsked: string | null;
+  readonly started_at: number;
+}
+
+/**
+ * One run of the pass that makes every organization's record equal to its
+ * members, started once a day: what a restore or a lost write left wrong,
+ * and the organizations older than the record. One that fails waits for the
+ * next pass; the run then throws.
+ */
+export async function reconcileMemberships(
+  env: Env,
+  options: { readonly now: number; readonly metrics?: Metrics },
+): Promise<void> {
+  const { now, metrics } = options;
+  const db = env.DIRECTORY.withSession("first-primary");
+  metrics?.count("d1.query", { db: "directory", op: "membership_pass" });
+  const saved = await db
+    .prepare("SELECT value FROM deployment_settings WHERE name = 'membership_reconcile'")
+    .first<{ value: string }>();
+  let pass = saved ? (JSON.parse(saved.value) as Pass) : null;
+  if (!pass || pass.lastAsked === null) {
+    if (pass && now - pass.started_at < PASS_EVERY_MS) return;
+    pass = { lastAsked: "", started_at: now };
+  }
+  metrics?.count("d1.query", { db: "directory", op: "membership_pass_orgs" });
+  const { results: orgs } = await db
+    .prepare(
+      `SELECT id FROM principals WHERE id > max('org_', ?1) AND id < 'org\`' AND type = 'org'
+         AND disabled_at IS NULL ORDER BY id LIMIT ?2`,
+    )
+    .bind(pass.lastAsked, ORGS_PER_RUN)
+    .all<{ id: string }>();
+  metrics?.count("do.request", { class: "OrgDO", method: "mirrorMembers" }, orgs.length);
+  const failures: unknown[] = [];
+  for (const { id } of orgs)
+    await env.ORG.getByName(id)
+      .mirrorMembers()
+      .catch((error: unknown) => {
+        createLogger({ op: "memberships.reconcile", orgId: id }).warn("recording failed", {
+          error,
+        });
+        failures.push(error);
+      });
+  const last = orgs.length === ORGS_PER_RUN ? (orgs.at(-1)?.id ?? null) : null;
+  const next: Pass = { lastAsked: last, started_at: pass.started_at };
+  metrics?.count("d1.query", { db: "directory", op: "membership_pass_save" });
+  await env.DIRECTORY.prepare(
+    `INSERT INTO deployment_settings (name, value, updated_at)
+     VALUES ('membership_reconcile', ?1, ?2)
+     ON CONFLICT (name) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+  )
+    .bind(JSON.stringify(next), now)
+    .run();
+  if (failures.length > 0)
+    throw new Error(`recording the members of ${failures.length} organization(s) failed`);
 }

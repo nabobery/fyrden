@@ -2,6 +2,8 @@ import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { reconcileMemberships } from "../src/accounts/memberships.js";
+import { MAINTENANCE_OBJECT } from "../src/cron/maintenance.js";
 import { accountHooks, type OrgDO } from "../src/do/OrgDO.js";
 import { allocateEpoch } from "../src/events/epochs.js";
 import { newId } from "../src/services.js";
@@ -395,5 +397,124 @@ describe("the directory's record of an organization's members", () => {
     });
     await stub.mirrorMembers();
     expect(await mirrored(owner.principalId)).toEqual({});
+  });
+});
+
+describe("the daily pass over every organization's members", () => {
+  const SETTING = "membership_reconcile";
+  const DAY = 24 * 60 * 60 * 1000;
+
+  type Pass = { lastAsked: string | null; started_at: number };
+  const state = async (): Promise<Pass | null> => {
+    const row = await env.DIRECTORY.prepare("SELECT value FROM deployment_settings WHERE name = ?")
+      .bind(SETTING)
+      .first<{ value: string }>();
+    return row && (JSON.parse(row.value) as Pass);
+  };
+  const reset = () =>
+    env.DIRECTORY.prepare("DELETE FROM deployment_settings WHERE name = ?").bind(SETTING).run();
+  const clear = (org: Org) =>
+    env.DIRECTORY.prepare("DELETE FROM memberships WHERE org_id = ?").bind(org.id).run();
+
+  async function finish(run: () => Promise<unknown>): Promise<number> {
+    for (let runs = 1; runs <= 100; runs++) {
+      await run();
+      if ((await state())?.lastAsked === null) return runs;
+    }
+    throw new Error("the pass does not end");
+  }
+  const runAt =
+    (now: number, from: Env = env) =>
+    () =>
+      reconcileMemberships(from, { now });
+
+  const asking = (mirror: (id: string) => Promise<void>): Env =>
+    new Proxy(env, {
+      get: (target, prop) =>
+        prop === "ORG"
+          ? { getByName: (id: string) => ({ mirrorMembers: () => mirror(id) }) }
+          : Reflect.get(target, prop),
+    });
+
+  it("records the members of organizations that have none recorded, a bounded number a run", async () => {
+    await reset();
+    const owner = await user();
+    const orgs: Org[] = [];
+    for (let i = 0; i < 11; i++) orgs.push(await newOrg(owner));
+    for (const org of orgs) await clear(org);
+    expect(await finish(runAt(1))).toBeGreaterThan(1);
+    for (const org of orgs)
+      expect(await mirrored(org.id)).toEqual({ [owner.principalId]: "owner" });
+  });
+
+  it("asks each organization once, in order, and goes on where it got to", async () => {
+    await reset();
+    const owner = await user();
+    for (let i = 0; i < 11; i++) await newOrg(owner);
+    const asked: string[] = [];
+    const counting = asking(async (id) => {
+      asked.push(id);
+    });
+    const runs = await finish(runAt(1, counting));
+    expect(asked).toEqual([...new Set(asked)].sort());
+    const { n } = (await env.DIRECTORY.prepare(
+      "SELECT count(*) AS n FROM principals WHERE type = 'org' AND disabled_at IS NULL",
+    ).first<{ n: number }>()) ?? { n: 0 };
+    expect(asked).toHaveLength(n);
+    expect(runs).toBe(Math.floor(n / 10) + 1);
+  });
+
+  it("starts again a day after it started, not before", async () => {
+    await reset();
+    await newOrg(await user());
+    const now = Date.now();
+    await finish(runAt(now));
+    const asked: string[] = [];
+    const counting = asking(async (id) => {
+      asked.push(id);
+    });
+    await reconcileMemberships(counting, { now: now + DAY - 1 });
+    expect(asked).toEqual([]);
+    await reconcileMemberships(counting, { now: now + DAY });
+    expect(asked.length).toBeGreaterThan(0);
+    expect((await state())?.started_at).toBe(now + DAY);
+  });
+
+  it("goes past an organization that fails, and fails once its others are done", async () => {
+    await reset();
+    const owner = await user();
+    const orgs = [await newOrg(owner), await newOrg(owner)];
+    const asked: string[] = [];
+    const failing = asking(async (id) => {
+      asked.push(id);
+      if (id === orgs[0]?.id) throw new Error("away");
+    });
+    let failed = 0;
+    await finish(() => runAt(1, failing)().catch(() => failed++));
+    expect(failed).toBe(1);
+    expect(asked).toEqual(expect.arrayContaining(orgs.map((o) => o.id)));
+  });
+
+  it("leaves out organizations that are disabled", async () => {
+    await reset();
+    const org = await newOrg(await user());
+    await env.DIRECTORY.prepare("UPDATE principals SET disabled_at = 1 WHERE id = ?")
+      .bind(org.id)
+      .run();
+    const asked: string[] = [];
+    const counting = asking(async (id) => {
+      asked.push(id);
+    });
+    await finish(runAt(1, counting));
+    expect(asked).not.toContain(org.id);
+  });
+
+  it("runs with the deployment's maintenance", async () => {
+    await reset();
+    const owner = await user();
+    const org = await newOrg(owner);
+    await clear(org);
+    await finish(() => env.MAINTENANCE.getByName(MAINTENANCE_OBJECT).run());
+    expect(await mirrored(org.id)).toEqual({ [owner.principalId]: "owner" });
   });
 });
