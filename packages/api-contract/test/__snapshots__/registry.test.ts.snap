@@ -20080,7 +20080,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks": {
       "get": {
-        "description": "The repository's webhooks. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "The repository's webhooks. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.list",
         "parameters": [
           {
@@ -20245,7 +20245,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "post": {
-        "description": "Adds a webhook (at most 20 a repository) and sends it a \`ping\`. Fyrden signs deliveries with Standard Webhooks (\`webhook-id\`, \`webhook-timestamp\`, \`webhook-signature\`), with a secret the server makes: it is in this answer only. Events: \`push\`, \`pull_request\`, \`pull_request_review\`, \`pull_request_review_comment\`, \`issue_comment\`, \`issues\`, \`label\`, \`milestone\`, \`release\`, or \`*\`. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Adds a webhook (at most 20 a repository) and sends it a \`ping\`. Fyrden signs deliveries with Standard Webhooks (\`webhook-id\`, \`webhook-timestamp\`, \`webhook-signature\`), with a secret the server makes: it is in this answer only. Events: \`push\`, \`pull_request\`, \`pull_request_review\`, \`pull_request_review_comment\`, \`issue_comment\`, \`issues\`, \`label\`, \`milestone\`, \`release\`, \`status\`, or \`*\` (every event, those added later too). Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.create",
         "parameters": [
           {
@@ -20312,11 +20312,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "label",
                         "milestone",
                         "release",
+                        "status",
                         "*",
                       ],
                       "type": "string",
                     },
-                    "maxItems": 10,
+                    "maxItems": 11,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -20478,7 +20479,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}": {
       "delete": {
-        "description": "Removes a webhook; its waiting deliveries are cancelled. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Removes a webhook; its waiting deliveries are cancelled. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.delete",
         "parameters": [
           {
@@ -20567,7 +20568,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "get": {
-        "description": "One webhook. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "One webhook. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.get",
         "parameters": [
           {
@@ -20740,7 +20741,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
       "patch": {
-        "description": "Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Changes a webhook's URL, events or state (turning it on clears why the server turned it off). Deliveries waiting for an attempt go to the new URL. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.update",
         "parameters": [
           {
@@ -20797,11 +20798,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "label",
                         "milestone",
                         "release",
+                        "status",
                         "*",
                       ],
                       "type": "string",
                     },
-                    "maxItems": 10,
+                    "maxItems": 11,
                     "type": "array",
                   },
                   "config": {
@@ -20830,11 +20832,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "label",
                         "milestone",
                         "release",
+                        "status",
                         "*",
                       ],
                       "type": "string",
                     },
-                    "maxItems": 10,
+                    "maxItems": 11,
                     "minItems": 1,
                     "type": "array",
                   },
@@ -20850,11 +20853,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "label",
                         "milestone",
                         "release",
+                        "status",
                         "*",
                       ],
                       "type": "string",
                     },
-                    "maxItems": 10,
+                    "maxItems": 11,
                     "type": "array",
                   },
                 },
@@ -21004,7 +21008,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries": {
       "get": {
-        "description": "The webhook's deliveries of the last 30 days, newest first. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "The webhook's deliveries of the last 30 days, newest first. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.deliveries.list",
         "parameters": [
           {
@@ -21189,7 +21193,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}": {
       "get": {
-        "description": "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "One delivery: its body and its attempts, newest first, a page at a time (where each was sent, what came back, the first 4 KiB of the response). A delivery makes 50 attempts at most. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.deliveries.get",
         "parameters": [
           {
@@ -21466,7 +21470,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/deliveries/{delivery_id}/attempts": {
       "post": {
-        "description": "Sends a finished delivery (\`done\` or \`failed\`) once more: its original body, the same \`webhook-id\`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 \`delivery_pending\`), while a 410 from its receiver is turning the hook off (409 \`hook_being_disabled\`), for a delivery that was cancelled or dropped (422 \`not_redeliverable\`), once its body is gone (422 \`payload_gone\`), once it has made 50 attempts (422 \`too_many_attempts\`), for an inactive hook (422 \`hook_inactive\`), and while the hook has 1,000 deliveries waiting (409 \`too_many_outstanding\`). Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Sends a finished delivery (\`done\` or \`failed\`) once more: its original body, the same \`webhook-id\`, signed with the hook's current secrets at a fresh timestamp. One attempt, not retried; queued, the answer comes before it is made. Refused while it is pending (409 \`delivery_pending\`), while a 410 from its receiver is turning the hook off (409 \`hook_being_disabled\`), for a delivery that was cancelled or dropped (422 \`not_redeliverable\`), once its body is gone (422 \`payload_gone\`), once it has made 50 attempts (422 \`too_many_attempts\`), for an inactive hook (422 \`hook_inactive\`), and while the hook has 1,000 deliveries waiting (409 \`too_many_outstanding\`). Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.deliveries.redeliver",
         "parameters": [
           {
@@ -21621,7 +21625,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/pings": {
       "post": {
-        "description": "Sends the webhook a \`ping\` delivery. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Sends the webhook a \`ping\` delivery. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.pings.create",
         "parameters": [
           {
@@ -21712,7 +21716,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/secret": {
       "post": {
-        "description": "Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Fyrden: a new signing secret (in this answer only). Deliveries are signed with both the new and the previous secret for a week, or until the previous one is dropped. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.secret.rotate",
         "parameters": [
           {
@@ -21803,7 +21807,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/hooks/{hook_id}/secret/previous": {
       "delete": {
-        "description": "Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with \`issues:read\`, \`pull_requests:read\` and \`contents:write\` (a webhook carries issue, pull request and draft release contents).",
+        "description": "Fyrden: stops signing deliveries with the secret a rotation replaced. Administrators only, with \`issues:read\`, \`pull_requests:read\`, \`contents:write\`, \`actions:read\` and \`statuses:read\` (a webhook carries issue, pull request, draft release, CI run and status contents).",
         "operationId": "repos.hooks.secret.drop",
         "parameters": [
           {

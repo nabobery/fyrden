@@ -1,7 +1,8 @@
 // Who may manage a repository's webhooks and read their deliveries: a hook
-// exports issue and pull request contents, so every hook operation needs,
-// besides its hook permission, the content permissions (`issues:read`,
-// `pull_requests:read`, `contents:write`) in the caller's own scopes.
+// exports issue, pull request, CI run and status contents, so every hook
+// operation needs, besides its hook permission, the content permissions
+// (`issues:read`, `pull_requests:read`, `contents:write`, `actions:read`,
+// `statuses:read`) in the caller's own scopes.
 import { env, exports } from "cloudflare:workers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attemptDelivery } from "../src/webhooks/deliver.js";
@@ -30,7 +31,13 @@ async function tokenWith(scopes: string[]): Promise<string> {
 }
 
 const HOOKS = ["repository_hooks:read", "repository_hooks:write"];
-const CONTENT = ["issues:read", "pull_requests:read", "contents:write"];
+const CONTENT = [
+  "issues:read",
+  "pull_requests:read",
+  "contents:write",
+  "actions:read",
+  "statuses:read",
+];
 
 /** Every hook operation, as the token `token` asks it. */
 async function everyOperation(token: string, hook: number, delivery: string) {
@@ -70,9 +77,7 @@ describe("managing webhooks and reading their deliveries", () => {
     const { hook, delivery } = await hookWithDelivery();
     for (const scopes of [
       HOOKS,
-      [...HOOKS, "issues:read"],
-      [...HOOKS, "pull_requests:read"],
-      [...HOOKS, "issues:read", "pull_requests:read"],
+      ...CONTENT.map((missing) => [...HOOKS, ...CONTENT.filter((scope) => scope !== missing)]),
     ]) {
       const statuses = await everyOperation(await tokenWith(scopes), hook, delivery);
       expect(Object.values(statuses).every((status) => status === 403)).toBe(true);

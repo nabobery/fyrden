@@ -33,6 +33,7 @@ import {
   targetUrl,
 } from "@fyrden/domain";
 import { type Oid, oidFromHex } from "@fyrden/git-core";
+import { captureStatus } from "../../webhooks/ci-captures.js";
 import { type CheckOrigin, parseCheckKey } from "../run/check-key.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
@@ -218,7 +219,7 @@ export class RepoChecks {
   constructor(
     private readonly deps: {
       readonly git: RepoGitStorage;
-      readonly events: Pick<RepoEvents, "emitActivity">;
+      readonly events: Pick<RepoEvents, "emitActivity" | "emitToHooks">;
       /** The checks the active rulesets on a base branch require (none when no rule names any). */
       readonly required?: (baseRef: string) => readonly RequiredStatusCheck[];
       /** Whether CI run `runId` is kept, so that a check may name it. */
@@ -294,7 +295,9 @@ export class RepoChecks {
         now,
       );
       this.reconcileHeads(sha, caller.actor);
-      return statusRecord(made);
+      const record = statusRecord(made);
+      this.deps.events.emitToHooks("status.created", caller.actor, () => captureStatus(record));
+      return record;
     });
     return { ok: true, status };
   }

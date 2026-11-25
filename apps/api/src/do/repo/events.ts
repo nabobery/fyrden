@@ -800,6 +800,17 @@ export class RepoEvents {
     );
   }
 
+  /**
+   * In the caller's transaction: an event only webhooks read. With no hook
+   * taking it, nothing is written and `capture` is not called. Answers
+   * whether one took it.
+   */
+  emitToHooks(type: string, actor: RefActor | null, capture: CaptureBuilder): boolean {
+    if (this.#hooksFor(type, null).length === 0) return false;
+    this.emitActivity(type, actor, {}, capture);
+    return true;
+  }
+
   /** Whether an event about the repository's entities may be emitted now (see `#assertCanEmit`). */
   canEmit(): boolean {
     const meta = this.#meta();
