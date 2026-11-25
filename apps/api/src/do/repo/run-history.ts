@@ -1,11 +1,12 @@
 import { isUlid, type RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
-import { isFullSha } from "@fyrden/domain";
+import { isFullSha, ulid } from "@fyrden/domain";
 import {
   type AttemptConclusion,
   RUN_PHASES,
   type RunFacts,
   type RunPhase,
   runStateSeq,
+  type TimeRange,
 } from "@fyrden/domain/ci";
 
 /*
@@ -73,8 +74,49 @@ const CONCLUSIONS: readonly AttemptConclusion[] = ["success", "failure", "cancel
 /** Longest text of a report's fields, in UTF-16 units: a branch is the longest. */
 const MAX_TEXT = 2048;
 
+/** Rows one page of runs reads at most. Proposed. */
+export const RUN_PAGE_SCAN = 500;
+/** A workflow's newest rows looked at for one that was reported. Proposed. */
+const LATEST_SCAN = 50;
+
+/** Which runs a page lists: all that match every field given. */
+export interface RunFilter {
+  readonly sha?: string;
+  /** Workflow files: one, or the same name in each workflow directory. */
+  readonly paths?: readonly [string] | readonly [string, string];
+  readonly phases?: readonly RunPhase[];
+  readonly conclusion?: AttemptConclusion;
+  readonly branch?: string;
+  readonly event?: string;
+  readonly actor?: string;
+  /** When they were triggered (their ids' time). */
+  readonly triggered?: TimeRange;
+}
+
+/** A page of runs, newest first; `next` the run id to continue before. */
+export interface RunPage {
+  readonly runs: RunReport[];
+  readonly next: string | null;
+}
+
+/** A page of workflows with runs, by path; `next` the path to continue after. */
+export interface WorkflowPage {
+  readonly workflows: {
+    readonly path: string;
+    /** Its latest reported run's; null for none among its newest. */
+    readonly name: string | null;
+    /** Null for none, and for one expired and not forgotten yet. */
+    readonly latest: RunReport | null;
+  }[];
+  readonly next: string | null;
+}
+
 export class RunHistory {
-  constructor(private readonly git: RepoGitStorage) {}
+  constructor(
+    private readonly git: RepoGitStorage,
+    /** How long a run is kept after it completed: past it, it is answered as no run. */
+    private readonly retentionMs: () => number,
+  ) {}
 
   /**
    * In the caller's transaction: records what `report` says of a run the
@@ -126,6 +168,123 @@ export class RunHistory {
       .toArray();
     return row && reportOf(row);
   }
+
+  /**
+   * Reported runs matching `filter`, before run id `before`, newest first.
+   * Reads one range of one index, `RUN_PAGE_SCAN` rows of it at most: a
+   * page that reads that many ends there, however few it holds.
+   */
+  list(filter: RunFilter, before: string | null, limit: number): RunPage {
+    const { query, bindings } = rangeOf(filter, before);
+    const cursor = this.git.context.storage.sql.exec<RunRow>(query, ...bindings);
+    const expired = this.#expiry();
+    const runs: RunReport[] = [];
+    let scanned = 0;
+    let last: string | null = null;
+    for (const row of cursor) {
+      // One row past what the page holds or reads only says there is more.
+      if (runs.length === limit || scanned === RUN_PAGE_SCAN) return { runs, next: last };
+      scanned++;
+      last = row.run_id;
+      if (row.state_seq > 0 && !expired(row) && matches(row, filter)) runs.push(reportOf(row));
+    }
+    return { runs, next: null };
+  }
+
+  /** Workflow files with runs, after path `after`, `limit` at most: each a few rows, however many runs it has. */
+  workflows(after: string, limit: number): WorkflowPage {
+    const { sql } = this.git.context.storage;
+    const pathAfter = (path: string) =>
+      sql
+        .exec<{ workflow_path: string }>(
+          "SELECT workflow_path FROM ci_runs WHERE workflow_path > ? ORDER BY workflow_path LIMIT 1",
+          path,
+        )
+        .toArray()[0]?.workflow_path;
+    const expired = this.#expiry();
+    const workflows: WorkflowPage["workflows"] = [];
+    let path = pathAfter(after);
+    while (path !== undefined) {
+      const last = workflows.at(-1);
+      if (last && workflows.length === limit) return { workflows, next: last.path };
+      const row = this.#latestOf(path);
+      const run = row && reportOf(row);
+      workflows.push({
+        path,
+        name: run?.name ?? null,
+        latest: run && !expired(row) ? run : null,
+      });
+      path = pathAfter(path);
+    }
+    return { workflows, next: null };
+  }
+
+  #latestOf(path: string): RunRow | undefined {
+    const cursor = this.git.context.storage.sql.exec<RunRow>(
+      "SELECT * FROM ci_runs WHERE workflow_path = ? ORDER BY run_id DESC LIMIT ?",
+      path,
+      LATEST_SCAN,
+    );
+    for (const row of cursor) if (row.state_seq > 0) return row;
+    return undefined;
+  }
+
+  /** Whether a run's retention has ended, so that it is answered as no run while it is retired. */
+  #expiry(): (row: RunRow) => boolean {
+    const since = this.git.context.now() - this.retentionMs();
+    return (row) => row.completed_at !== null && row.completed_at <= since;
+  }
+}
+
+/** The one index range that holds every run of `filter`, before `before`, newest first. */
+function rangeOf(
+  filter: RunFilter,
+  before: string | null,
+): { readonly query: string; readonly bindings: (string | number)[] } {
+  const bindings: (string | number)[] = [];
+  const bind = (value: string | number) => {
+    bindings.push(value);
+    return `?${bindings.length}`;
+  };
+  const bounds: string[] = [];
+  const { from = null, until = null } = filter.triggered ?? {};
+  // A run id's first characters are its time, so the least id of a time bounds the ids from it on.
+  const upper = [before, until === null ? null : leastIdAt(until)].filter((id) => id !== null);
+  for (const id of upper) bounds.push(`run_id < ${bind(id)}`);
+  if (from !== null) bounds.push(`run_id >= ${bind(leastIdAt(from))}`);
+  const select = (...where: string[]) => {
+    const all = [...where, ...bounds];
+    return `SELECT * FROM ci_runs${all.length > 0 ? ` WHERE ${all.join(" AND ")}` : ""}`;
+  };
+  const order = ` ORDER BY run_id DESC LIMIT ${bind(RUN_PAGE_SCAN + 1)}`;
+  if (filter.sha !== undefined)
+    return { query: select(`sha = ${bind(filter.sha)}`) + order, bindings };
+  if (filter.paths) {
+    const parts = filter.paths.map((path) => select(`workflow_path = ${bind(path)}`));
+    return { query: parts.join(" UNION ALL ") + order, bindings };
+  }
+  if (filter.phases?.every((phase) => phase !== "completed"))
+    return {
+      query: select("status IN ('waiting', 'queued', 'pending', 'in_progress')") + order,
+      bindings,
+    };
+  return { query: select() + order, bindings };
+}
+
+const MAX_ULID_TIME = 2 ** 48 - 1;
+const leastIdAt = (ms: number) =>
+  ulid(Math.min(Math.max(ms, 0), MAX_ULID_TIME), (n) => new Uint8Array(n));
+
+function matches(row: RunRow, filter: RunFilter): boolean {
+  return (
+    (filter.sha === undefined || row.sha === filter.sha) &&
+    (filter.paths === undefined || filter.paths.some((path) => path === row.workflow_path)) &&
+    (filter.phases === undefined || filter.phases.some((phase) => phase === row.status)) &&
+    (filter.conclusion === undefined || row.conclusion === filter.conclusion) &&
+    (filter.branch === undefined || row.head_branch === filter.branch) &&
+    (filter.event === undefined || row.event === filter.event) &&
+    (filter.actor === undefined || row.actor_id === filter.actor)
+  );
 }
 
 /** A report as a caller gives it, checked: one that is not one is a bug in its caller. */

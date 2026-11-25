@@ -8269,6 +8269,79 @@ export type StatusesCreateOutput = {
   };
 };
 
+/** Input of `actions.runs.list`: List workflow runs for a repository. */
+export type ActionsRunsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Only runs of this branch (`head_branch`), forks' included. */
+  branch?: string;
+  /** Only runs this event triggered, such as `push` or `pull_request`. */
+  event?: string;
+  /** Only runs of this status or conclusion. `completed` includes a run waiting for approval; `action_required`: only those. GitHub's other values are taken and match nothing: no run here has them. */
+  status?: "completed" | "action_required" | "cancelled" | "failure" | "neutral" | "skipped" | "stale" | "success" | "timed_out" | "in_progress" | "queued" | "requested" | "waiting" | "pending";
+  /** A handle: only runs this user or agent triggered (`actor`, kept by re-runs). */
+  actor?: string;
+  /** Only runs of this commit. */
+  head_sha?: string;
+  /** Only runs triggered at these times, in GitHub's syntax: `2026-11-20` (that UTC day), `>=2026-11-20`, `<2026-11-20T10:00:00Z`, `2026-11-18..2026-11-20`, `2026-11-18..*`. */
+  created?: string;
+  /** Not supported (422 `unsupported_parameter`): Fyrden has no check suites. */
+  check_suite_id?: unknown;
+  /** Not supported (422 `unsupported_parameter`): a run carries no pull requests but the one that triggered it. */
+  exclude_pull_requests?: unknown;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `actions.runs.list`. */
+export type ActionsRunsListOutput = {
+  workflow_runs: ({
+    id: string;
+    /** The workflow's count of its runs, kept by re-runs; null for a run without one. */
+    run_number: number | null;
+    /** The workflow's name, or its file's path. */
+    name: string;
+    /** The workflow's `run-name`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters. */
+    display_title: string;
+    /** The current attempt: 1, then one more per re-run. */
+    run_attempt: number;
+    head_sha: string;
+    /** The branch the run is for: a pull request's head branch (in `fork`'s case a branch of another repository), else its ref's; null for a tag. */
+    head_branch: string | null;
+    event: string;
+    /** The workflow file. */
+    path: string;
+    /** Fyrden: the pull request whose event triggered the run. */
+    pull_request: {
+      number: number;
+    } | null;
+    /** Fyrden: whether the run is a fork's: its pull request's head is in another repository. */
+    fork: boolean;
+    /** `pending`: waiting for its concurrency group. */
+    status: "queued" | "pending" | "in_progress" | "completed";
+    /** `action_required`: the run waits for a maintainer's approval. */
+    conclusion: "success" | "failure" | "cancelled" | "action_required" | null;
+    /** Who triggered the run: its jobs act with this principal's rights on every attempt. */
+    actor: {
+      id: string;
+    };
+    /** Who started the current attempt. */
+    triggering_actor: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    run_started_at: number | null;
+    completed_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `actions.runs.get`: Get a workflow run. */
 export type ActionsRunsGetInput = {
   /** The owner's handle. */
@@ -8282,14 +8355,26 @@ export type ActionsRunsGetInput = {
 /** Output of `actions.runs.get`. */
 export type ActionsRunsGetOutput = {
   id: string;
+  /** The workflow's count of its runs, kept by re-runs; null for a run without one. */
+  run_number: number | null;
+  /** The workflow's name, or its file's path. */
+  name: string;
+  /** The workflow's `run-name`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters. */
+  display_title: string;
   /** The current attempt: 1, then one more per re-run. */
   run_attempt: number;
   head_sha: string;
-  /** The branch the run is for, if its ref is one. */
+  /** The branch the run is for: a pull request's head branch (in `fork`'s case a branch of another repository), else its ref's; null for a tag. */
   head_branch: string | null;
   event: string;
   /** The workflow file. */
   path: string;
+  /** Fyrden: the pull request whose event triggered the run. */
+  pull_request: {
+    number: number;
+  } | null;
+  /** Fyrden: whether the run is a fork's: its pull request's head is in another repository. */
+  fork: boolean;
   /** `pending`: waiting for its concurrency group. */
   status: "queued" | "pending" | "in_progress" | "completed";
   /** `action_required`: the run waits for a maintainer's approval. */
@@ -8337,6 +8422,37 @@ export type ActionsRunsGetOutput = {
   }[];
 };
 
+/** Input of `actions.runs.graph.get`: Get a workflow run's job graph. */
+export type ActionsRunsGraphGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+  /** An attempt; the current by default. */
+  attempt?: number;
+};
+
+/** Output of `actions.runs.graph.get`. */
+export type ActionsRunsGraphGetOutput = {
+  run_id: string;
+  run_attempt: number;
+  /** Each after the jobs it needs. */
+  jobs: ({
+    /** The job's id in the workflow file. */
+    key: string;
+    /** Its name, without what an expression in it would add. */
+    name: string;
+    /** The keys of the jobs it waits for. */
+    needs: string[];
+    /** `pending`: the jobs it needs have not ended. `in_progress`: it has jobs, queued or running. */
+    status: "pending" | "in_progress" | "completed";
+    /** As its dependents see it: a failure `continue-on-error` allows is a success. */
+    conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+  })[];
+};
+
 /** Input of `actions.runs.jobs.list`: List jobs for a workflow run. */
 export type ActionsRunsJobsListInput = {
   /** The owner's handle. */
@@ -8361,6 +8477,8 @@ export type ActionsRunsJobsListOutput = {
     run_id: string;
     run_attempt: number;
     name: string;
+    /** Fyrden: the job's id in the workflow file; a matrix's combinations share one. */
+    job_key: string;
     status: "pending" | "queued" | "in_progress" | "completed";
     conclusion: "success" | "failure" | "cancelled" | "skipped" | "timed_out" | null;
     started_at: number | null;
@@ -8456,6 +8574,147 @@ export type ActionsRunsApproveInput = {
 
 /** Output of `actions.runs.approve`. */
 export type ActionsRunsApproveOutput = Record<string, never>;
+
+/** Input of `actions.workflows.list`: List repository workflows with runs. */
+export type ActionsWorkflowsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `actions.workflows.list`. */
+export type ActionsWorkflowsListOutput = {
+  workflows: ({
+    /** The workflow's file name, as the other operations take it. */
+    id: string;
+    /** The workflow file. */
+    path: string;
+    /** The workflow's name as its latest run had it; null until one is reported. */
+    name: string | null;
+    /** Fyrden: its latest run; null while that one has not been reported, or is about to expire. */
+    latest_run: {
+      id: string;
+      /** The workflow's count of its runs, kept by re-runs; null for a run without one. */
+      run_number: number | null;
+      /** The workflow's name, or its file's path. */
+      name: string;
+      /** The workflow's `run-name`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters. */
+      display_title: string;
+      /** The current attempt: 1, then one more per re-run. */
+      run_attempt: number;
+      head_sha: string;
+      /** The branch the run is for: a pull request's head branch (in `fork`'s case a branch of another repository), else its ref's; null for a tag. */
+      head_branch: string | null;
+      event: string;
+      /** The workflow file. */
+      path: string;
+      /** Fyrden: the pull request whose event triggered the run. */
+      pull_request: {
+        number: number;
+      } | null;
+      /** Fyrden: whether the run is a fork's: its pull request's head is in another repository. */
+      fork: boolean;
+      /** `pending`: waiting for its concurrency group. */
+      status: "queued" | "pending" | "in_progress" | "completed";
+      /** `action_required`: the run waits for a maintainer's approval. */
+      conclusion: "success" | "failure" | "cancelled" | "action_required" | null;
+      /** Who triggered the run: its jobs act with this principal's rights on every attempt. */
+      actor: {
+        id: string;
+      };
+      /** Who started the current attempt. */
+      triggering_actor: {
+        id: string;
+      };
+      created_at: number;
+      updated_at: number;
+      run_started_at: number | null;
+      completed_at: number | null;
+    } | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
+/** Input of `actions.workflows.runs.list`: List workflow runs for a workflow. */
+export type ActionsWorkflowsRunsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The workflow's file name, such as `ci.yml`; Fyrden has no numeric workflow ids. */
+  workflow_id: string;
+  /** Only runs of this branch (`head_branch`), forks' included. */
+  branch?: string;
+  /** Only runs this event triggered, such as `push` or `pull_request`. */
+  event?: string;
+  /** Only runs of this status or conclusion. `completed` includes a run waiting for approval; `action_required`: only those. GitHub's other values are taken and match nothing: no run here has them. */
+  status?: "completed" | "action_required" | "cancelled" | "failure" | "neutral" | "skipped" | "stale" | "success" | "timed_out" | "in_progress" | "queued" | "requested" | "waiting" | "pending";
+  /** A handle: only runs this user or agent triggered (`actor`, kept by re-runs). */
+  actor?: string;
+  /** Only runs of this commit. */
+  head_sha?: string;
+  /** Only runs triggered at these times, in GitHub's syntax: `2026-11-20` (that UTC day), `>=2026-11-20`, `<2026-11-20T10:00:00Z`, `2026-11-18..2026-11-20`, `2026-11-18..*`. */
+  created?: string;
+  /** Not supported (422 `unsupported_parameter`): Fyrden has no check suites. */
+  check_suite_id?: unknown;
+  /** Not supported (422 `unsupported_parameter`): a run carries no pull requests but the one that triggered it. */
+  exclude_pull_requests?: unknown;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `actions.workflows.runs.list`. */
+export type ActionsWorkflowsRunsListOutput = {
+  workflow_runs: ({
+    id: string;
+    /** The workflow's count of its runs, kept by re-runs; null for a run without one. */
+    run_number: number | null;
+    /** The workflow's name, or its file's path. */
+    name: string;
+    /** The workflow's `run-name`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters. */
+    display_title: string;
+    /** The current attempt: 1, then one more per re-run. */
+    run_attempt: number;
+    head_sha: string;
+    /** The branch the run is for: a pull request's head branch (in `fork`'s case a branch of another repository), else its ref's; null for a tag. */
+    head_branch: string | null;
+    event: string;
+    /** The workflow file. */
+    path: string;
+    /** Fyrden: the pull request whose event triggered the run. */
+    pull_request: {
+      number: number;
+    } | null;
+    /** Fyrden: whether the run is a fork's: its pull request's head is in another repository. */
+    fork: boolean;
+    /** `pending`: waiting for its concurrency group. */
+    status: "queued" | "pending" | "in_progress" | "completed";
+    /** `action_required`: the run waits for a maintainer's approval. */
+    conclusion: "success" | "failure" | "cancelled" | "action_required" | null;
+    /** Who triggered the run: its jobs act with this principal's rights on every attempt. */
+    actor: {
+      id: string;
+    };
+    /** Who started the current attempt. */
+    triggering_actor: {
+      id: string;
+    };
+    created_at: number;
+    updated_at: number;
+    run_started_at: number | null;
+    completed_at: number | null;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
 
 /** Input of `actions.workflows.dispatch`: Create a workflow dispatch event. */
 export type ActionsWorkflowsDispatchInput = {
@@ -10069,13 +10328,17 @@ export const OPERATIONS = {
   "repos.commits.get": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref+}", pathParams: ["owner","repo","ref"], idempotent: false },
   "repos.compare": { method: "GET", path: "/repos/{owner}/{repo}/compare/{basehead+}", pathParams: ["owner","repo","basehead"], idempotent: false },
   "statuses.create": { method: "POST", path: "/repos/{owner}/{repo}/statuses/{sha}", pathParams: ["owner","repo","sha"], idempotent: true },
+  "actions.runs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs", pathParams: ["owner","repo"], idempotent: false, items: "workflow_runs" },
   "actions.runs.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}", pathParams: ["owner","repo","run_id"], idempotent: false },
+  "actions.runs.graph.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/graph", pathParams: ["owner","repo","run_id"], idempotent: false },
   "actions.runs.jobs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", pathParams: ["owner","repo","run_id"], idempotent: false, items: "jobs" },
   "actions.runs.cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.force_cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.rerun": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.jobs.live_ticket": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/live", pathParams: ["owner","repo","run_id","job_id"], idempotent: true },
   "actions.runs.approve": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/approve", pathParams: ["owner","repo","run_id"], idempotent: true },
+  "actions.workflows.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/workflows", pathParams: ["owner","repo"], idempotent: false, items: "workflows" },
+  "actions.workflows.runs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", pathParams: ["owner","repo","workflow_id"], idempotent: false, items: "workflow_runs" },
   "actions.workflows.dispatch": { method: "POST", path: "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches", pathParams: ["owner","repo","workflow_id"], idempotent: true },
   "repos.blame.get": { method: "GET", path: "/repos/{owner}/{repo}/blame", pathParams: ["owner","repo"], idempotent: false },
   "repos.contents.root": { method: "GET", path: "/repos/{owner}/{repo}/contents", pathParams: ["owner","repo"], idempotent: false, items: "entries" },
@@ -10589,8 +10852,12 @@ export interface Operations {
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };
   /** Create a commit status. Posts a status on a commit: `state` is `pending`, `success`, `failure` or `error`, under a `context` (default `default`, compared ignoring case) that tells one system's statuses from another's. The commit must be one this repository has (422 `commit_not_found`). A commit takes 1,000 statuses of one context and 10,000 in all (422 `status_limit`), and 1,000 status summaries (each publisher's contexts, counted across publishers; 422 `check_limit`). The status is attributed to the principal that posts it (for an agent acting for a user, the agent): it is the status's publisher, and the creator this answers with. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:write` permission. */
   "statuses.create": { input: StatusesCreateInput; output: StatusesCreateOutput };
+  /** List workflow runs for a repository. The repository's CI runs, each as its current attempt stands. Newest first by run id (when each was triggered). A page reads at most 500 runs, so with filters it can hold fewer than `per_page`, even none, with a `next_cursor`: follow it until it is null. A run is listed within seconds of starting and for as long as it is kept; its state is the one it last reported, seconds old at most in normal running (`actions.runs.get` is current), and `updated_at` is when that state was reached. Runs from before this deployment recorded runs' states appear within a week of its upgrade. No `total_count`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
+  "actions.runs.list": { input: ActionsRunsListInput; output: ActionsRunsListOutput };
   /** Get a workflow run. A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
   "actions.runs.get": { input: ActionsRunsGetInput; output: ActionsRunsGetOutput };
+  /** Get a workflow run's job graph. Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission. */
+  "actions.runs.graph.get": { input: ActionsRunsGraphGetInput; output: ActionsRunsGraphGetOutput };
   /** List jobs for a workflow run. The jobs of a run's attempt (the current one by default), by id: one per matrix combination, and one for a job that never ran (skipped or failed before it started). GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
   "actions.runs.jobs.list": { input: ActionsRunsJobsListInput; output: ActionsRunsJobsListOutput };
   /** Cancel a workflow run. Cancels a run: queued jobs end, running jobs whose `if:` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose `if:` still holds (such as `if: always()`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 `run_not_cancellable` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
@@ -10603,6 +10870,10 @@ export interface Operations {
   "actions.runs.jobs.live_ticket": { input: ActionsRunsJobsLiveTicketInput; output: ActionsRunsJobsLiveTicketOutput };
   /** Approve a workflow run from a fork. Lets a run from a fork's first-time contributor start: it waits (`status: completed`, `conclusion: action_required`, `approval.state: waiting`) until a user with write access approves it. Approving again answers the same; a run that is not waiting (it needed no approval, or was superseded by a newer push, cancelled or expired) is 409 `approval_not_pending`. Only users may approve. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.runs.approve": { input: ActionsRunsApproveInput; output: ActionsRunsApproveOutput };
+  /** List repository workflows with runs. The workflow files with runs kept, in path order, each with its latest run. A file that never ran, or whose runs all expired, is not listed (GitHub lists the default branch's files): read `.github/workflows` for those. No `total_count`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
+  "actions.workflows.list": { input: ActionsWorkflowsListInput; output: ActionsWorkflowsListOutput };
+  /** List workflow runs for a workflow. The runs of one workflow file, as `actions.runs.list` lists them: those of `.github/workflows` and of `.fyrden/workflows` under that name. A file with no runs kept answers none. Newest first by run id (when each was triggered). A page reads at most 500 runs, so with filters it can hold fewer than `per_page`, even none, with a `next_cursor`: follow it until it is null. A run is listed within seconds of starting and for as long as it is kept; its state is the one it last reported, seconds old at most in normal running (`actions.runs.get` is current), and `updated_at` is when that state was reached. Runs from before this deployment recorded runs' states appear within a week of its upgrade. No `total_count`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
+  "actions.workflows.runs.list": { input: ActionsWorkflowsRunsListInput; output: ActionsWorkflowsRunsListOutput };
   /** Create a workflow dispatch event. Runs a workflow that has a `workflow_dispatch` trigger, at `ref` (a branch or tag name, or a full ref), with `inputs` checked against the ones it declares (typed in the run's `inputs` context, strings in `github.event.inputs`). `workflow_id` is the workflow's file name, such as `ci.yml`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at `ref` runs. One run per request, and per `Idempotency-Key` (MCP: `idempotency_key`) within its window: the answer names the run even when its start is still being retried. 404 `workflow_not_found`; 422 `ref_not_found`, `workflow_not_dispatchable` (no `workflow_dispatch` trigger), `invalid_inputs` and `invalid_workflow` (each with `errors`); 409 `repo_not_ready`; 409 `repo_transferring` while a transfer moves the repository, or once it was transferred or renamed after the request was authorized (once any active transfer ends, look the repository up again and dispatch with a new `Idempotency-Key`: the same key answers the refusal again); 409 `owner_changed` when it changed owner before the run started, so the run was dropped (a run answered before that and dropped later is never created: looking it up answers 404 `run_not_found`); 409 `commit_unreachable` when no branch, tag or recent ref history named its commit any more when the run started, so the run was dropped (the same lookup answers 404); and 409 `ci_off` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.workflows.dispatch": { input: ActionsWorkflowsDispatchInput; output: ActionsWorkflowsDispatchOutput };
   /** Blame a file. Which commit introduced each line of a file, at a branch, tag or commit (the default branch without `ref`), as `git blame` says, or why a line has no answer (`unresolved`, with its reason). Renames aren't followed: wherever git would or might follow one, the lines are `unresolved`. That's usually `rename_possible`, possibly an earlier reason such as `parent_too_large`. `rename_possible` is given where a parent lacks the file and its change removes another path, or, in a merge, where a parent might hold an identical copy under another name, or where checking that costs too much. A file is blamed in slices across requests: without a window, pass `next_continuation` back as `continuation` until it is null, whatever `state` says, since a finished blame can still have ranges to page through. Ranges come in the order they were settled, not in line order. With `line_start` and `line_end` (at most 5,000 lines apart), the ranges over those lines come in line order, clipped, and `next_continuation` is always null: a window never continues. Lines of the window no range covers are still pending; while `state` is `partial`, ask for the same window again, naming the returned `commit`, not the ref, and each request walks further. `blame_busy` (503) carries `retry_after`: wait that long and ask again, and the blame resumes where it was. The 422 refusals (`file_too_large`, `object_limit`, `work_limit`, `ref_unreadable`) are final for that commit and path. */

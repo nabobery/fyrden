@@ -293,7 +293,7 @@ import {
   CiApprovals,
   type SettleAnswer,
 } from "./repo/run-approvals.js";
-import { RunHistory, type RunReport, validRunReport } from "./repo/run-history.js";
+import { type RunFilter, RunHistory, type RunReport, validRunReport } from "./repo/run-history.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -329,6 +329,7 @@ import {
   type WebhookBlobsRead,
 } from "./repo/webhook-blobs.js";
 import type { WriteContext, WriteRefusal } from "./repo/write-context.js";
+import { runRetentionMs } from "./run/retention.js";
 import { repoSchema } from "./schema/repo.js";
 
 /**
@@ -744,7 +745,9 @@ export class RepoDO extends MigratingDO {
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
-    this.runs = new RunHistory(this.git);
+    this.runs = new RunHistory(this.git, () =>
+      runRetentionMs(this.env, (m) => this.#log().warn(m)),
+    );
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
@@ -2617,6 +2620,20 @@ export class RepoDO extends MigratingDO {
         recorded: this.git.context.storage.transactionSync(() => this.runs.apply(state)),
       };
     });
+  }
+
+  /** A page of the CI runs matching `filter`, newest first; null once the repository is deleted. */
+  listRuns(filter: RunFilter, before: string | null, limit: number) {
+    return this.#measured("listRuns", () =>
+      this.#refusesReads() ? null : this.runs.list(filter, before, limit),
+    );
+  }
+
+  /** A page of the workflows with CI runs, by path; null once the repository is deleted. */
+  listRunWorkflows(after: string, limit: number) {
+    return this.#measured("listRunWorkflows", () =>
+      this.#refusesReads() ? null : this.runs.workflows(after, limit),
+    );
   }
 
   /**

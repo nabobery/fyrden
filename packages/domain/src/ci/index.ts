@@ -17,6 +17,7 @@ export * from "./mask.js";
 export * from "./matrix.js";
 export * from "./parse.js";
 export * from "./payload.js";
+export * from "./run-filter.js";
 export * from "./run-state.js";
 export * from "./run-summary.js";
 export * from "./runner.js";

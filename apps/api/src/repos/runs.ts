@@ -1,23 +1,30 @@
-import { newUlid } from "@fyrden/adapters-cloudflare/git";
+import { isUlid, newUlid } from "@fyrden/adapters-cloudflare/git";
 import type {
   approveWorkflowRun,
   cancelWorkflowRun,
   dispatchWorkflow,
   forceCancelWorkflowRun,
   getWorkflowRun,
+  getWorkflowRunGraph,
   Input,
+  listRunsOfWorkflow,
   listWorkflowRunJobs,
+  listWorkflowRuns,
+  listWorkflows,
   Output,
   rerunWorkflowRun,
 } from "@fyrden/api-contract";
+import { parseCreatedFilter, runPhase, WORKFLOW_DIRECTORIES } from "@fyrden/domain/ci";
 import type { RepoDO } from "../do/RepoDO.js";
-import type { JobView, RunDO, RunView } from "../do/RunDO.js";
+import type { GraphJob, JobView, RunDO, RunView } from "../do/RunDO.js";
 import type { DispatchAnswer } from "../do/repo/ci-triggers.js";
+import type { RunFilter, RunPage, RunReport, WorkflowPage } from "../do/repo/run-history.js";
 import { publicOrigin } from "../email/notifications.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { type RepoEntry, settledRepo } from "./directory.js";
+import { principalsByLogin } from "./reviews.js";
 
 /*
  * The Worker side of the `actions.runs.*` operations. A run's object owns
@@ -46,31 +53,46 @@ function actingPrincipal(ctx: OpContext): string {
   return ctx.auth.act?.[0] ?? ctx.auth.principalId;
 }
 
-const BRANCH = "refs/heads/";
+type RunSummary = Output<typeof listWorkflowRuns>["workflow_runs"][number];
+
+/** A run as its repository last heard of it. A held one shows as GitHub shows it: completed, its action required. */
+function runSummary(run: RunReport): RunSummary {
+  return {
+    id: run.runId,
+    run_number: run.runNumber,
+    name: run.name,
+    display_title: run.title,
+    run_attempt: run.attempt,
+    head_sha: run.sha,
+    head_branch: run.headBranch,
+    event: run.event,
+    path: run.path,
+    pull_request: run.pullNumber === null ? null : { number: run.pullNumber },
+    fork: run.fork,
+    ...(run.phase === "waiting"
+      ? { status: "completed" as const, conclusion: "action_required" as const }
+      : { status: run.phase, conclusion: run.conclusion }),
+    actor: { id: run.actor },
+    triggering_actor: { id: run.triggeringActor },
+    created_at: run.createdAt,
+    updated_at: run.updatedAt,
+    run_started_at: run.startedAt,
+    completed_at: run.completedAt,
+  };
+}
 
 function runOutput(view: RunView): Output<typeof getWorkflowRun> {
   return {
-    id: view.runId,
-    run_attempt: view.attempt,
-    head_sha: view.sha,
-    head_branch: view.ref.startsWith(BRANCH) ? view.ref.slice(BRANCH.length) : null,
-    event: view.event,
-    path: view.workflowPath,
-    // A held run shows as GitHub shows one: completed, its action required.
-    ...(view.approval?.state === "waiting" && view.status !== "completed"
-      ? { status: "completed" as const, conclusion: "action_required" as const }
-      : { status: view.status, conclusion: view.conclusion }),
+    ...runSummary({
+      ...view,
+      path: view.workflowPath,
+      phase: runPhase(view.status, view.approval?.state === "waiting"),
+    }),
     approval: view.approval && {
       state: view.approval.state,
       decided_by: view.approval.decidedBy === null ? null : { id: view.approval.decidedBy },
       decided_at: view.approval.decidedAt,
     },
-    actor: { id: view.actor },
-    triggering_actor: { id: view.triggeringActor },
-    created_at: view.createdAt,
-    updated_at: view.updatedAt,
-    run_started_at: view.startedAt,
-    completed_at: view.completedAt,
     errors: view.errors.map((e) => ({ ...e })),
     faults: view.faults.map((f) => ({ ...f })),
   };
@@ -128,6 +150,7 @@ export async function listWorkflowRunJobsOperation(
       run_id: view.runId,
       run_attempt: job.attempt,
       name: job.name,
+      job_key: job.jobKey,
       status: jobStatus(job.status),
       conclusion: job.conclusion,
       started_at: job.startedAt,
@@ -138,6 +161,171 @@ export async function listWorkflowRunJobsOperation(
       waiting_for: job.waitingFor,
     })),
     next_cursor: page.next === null ? null : encodeCursor(`${attempt}:${page.next}`),
+  };
+}
+
+const repoGone = (entry: RepoEntry) =>
+  new OperationError(
+    404,
+    "repo_not_found",
+    `No repository ${entry.ownerHandle}/${entry.name} was found.`,
+  );
+
+/** What a `status` filter asks of a run; undefined for a value no run here has. */
+const STATUS_FILTERS: Readonly<
+  Partial<
+    Record<
+      NonNullable<Input<typeof listWorkflowRuns>["status"]>,
+      Pick<RunFilter, "phases" | "conclusion">
+    >
+  >
+> = {
+  queued: { phases: ["queued"] },
+  pending: { phases: ["pending"] },
+  in_progress: { phases: ["in_progress"] },
+  completed: { phases: ["completed", "waiting"] },
+  action_required: { phases: ["waiting"] },
+  success: { conclusion: "success" },
+  failure: { conclusion: "failure" },
+  cancelled: { conclusion: "cancelled" },
+};
+
+/**
+ * The runs a list's input asks for, of workflow files `paths` when given;
+ * undefined when none can match (a status no run has, an actor no one is).
+ */
+async function runFilter(
+  ctx: OpContext,
+  input: Input<typeof listWorkflowRuns>,
+  paths: RunFilter["paths"],
+): Promise<RunFilter | undefined> {
+  const status = input.status === undefined ? {} : STATUS_FILTERS[input.status];
+  if (!status) return undefined;
+  const triggered = input.created === undefined ? undefined : parseCreatedFilter(input.created);
+  if (input.created !== undefined && !triggered)
+    throw new OperationError(
+      422,
+      "invalid_filter",
+      "created takes a date, a time or a range in GitHub's syntax, such as >=2026-11-20.",
+    );
+  let actor: string | undefined;
+  if (input.actor !== undefined) {
+    actor = (await principalsByLogin(ctx, [input.actor], true)).get(input.actor.toLowerCase());
+    if (actor === undefined) return undefined;
+  }
+  return {
+    ...status,
+    ...(paths && { paths }),
+    ...(triggered && { triggered }),
+    ...(actor !== undefined && { actor }),
+    ...(input.head_sha !== undefined && { sha: input.head_sha }),
+    ...(input.branch !== undefined && { branch: input.branch }),
+    ...(input.event !== undefined && { event: input.event }),
+  };
+}
+
+async function listRuns(
+  ctx: OpContext,
+  input: Input<typeof listWorkflowRuns>,
+  paths?: RunFilter["paths"],
+): Promise<Output<typeof listWorkflowRuns>> {
+  for (const name of ["check_suite_id", "exclude_pull_requests"] as const)
+    if (input[name] !== undefined)
+      throw new OperationError(422, "unsupported_parameter", `${name} is not supported.`);
+  const before = decodeCursor(input.cursor, isUlid);
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
+  const filter = await runFilter(ctx, input, paths);
+  if (!filter) return { workflow_runs: [], next_cursor: null };
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "listRuns" });
+  const page = (await ctx.env.REPO.getByName(entry.id).listRuns(
+    filter,
+    before === "" ? null : before,
+    input.per_page,
+  )) as RunPage | null;
+  if (!page) throw repoGone(entry);
+  return {
+    workflow_runs: page.runs.map(runSummary),
+    next_cursor: page.next === null ? null : encodeCursor(page.next),
+  };
+}
+
+/** The `actions.runs.list` operation. The cursor is the last run id read. */
+export function listWorkflowRunsOperation(
+  ctx: OpContext,
+  input: Input<typeof listWorkflowRuns>,
+): Promise<Output<typeof listWorkflowRuns>> {
+  return listRuns(ctx, input);
+}
+
+/** The `actions.workflows.runs.list` operation. */
+export function listRunsOfWorkflowOperation(
+  ctx: OpContext,
+  input: Input<typeof listRunsOfWorkflow>,
+): Promise<Output<typeof listRunsOfWorkflow>> {
+  const [first, second] = WORKFLOW_DIRECTORIES;
+  return listRuns(ctx, input, [`${first}/${input.workflow_id}`, `${second}/${input.workflow_id}`]);
+}
+
+/** The `actions.workflows.list` operation. The cursor is the last path read. */
+export async function listWorkflowsOperation(
+  ctx: OpContext,
+  input: Input<typeof listWorkflows>,
+): Promise<Output<typeof listWorkflows>> {
+  const after = decodeCursor(input.cursor, (path) => path.length > 0 && path.length <= 1024);
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
+  ctx.metrics.count("do.request", { class: "RepoDO", method: "listRunWorkflows" });
+  const page = (await ctx.env.REPO.getByName(entry.id).listRunWorkflows(
+    after,
+    input.per_page,
+  )) as WorkflowPage | null;
+  if (!page) throw repoGone(entry);
+  return {
+    workflows: page.workflows.map(({ path, name, latest }) => ({
+      id: path.slice(path.lastIndexOf("/") + 1),
+      path,
+      name,
+      latest_run: latest && runSummary(latest),
+    })),
+    next_cursor: page.next === null ? null : encodeCursor(page.next),
+  };
+}
+
+/** A workflow job as GitHub's statuses name it; `pending` while the jobs it needs have not ended. */
+function graphStatus(job: GraphJob) {
+  switch (job.status) {
+    case "waiting":
+      return "pending" as const;
+    case "running":
+      return "in_progress" as const;
+    default:
+      return "completed" as const;
+  }
+}
+
+/** The `actions.runs.graph.get` operation. */
+export async function getWorkflowRunGraphOperation(
+  ctx: OpContext,
+  input: Input<typeof getWorkflowRunGraph>,
+): Promise<Output<typeof getWorkflowRunGraph>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
+  const answer = (await runStub(ctx, input.run_id, "graph").graph(
+    entry.id,
+    input.attempt,
+  )) as unknown as ReturnType<RunDO["graph"]>;
+  if (!answer.ok) {
+    if (answer.code === "run_not_found") throw runNotFound();
+    throw new OperationError(404, "attempt_not_found", "The run has no such attempt.");
+  }
+  return {
+    run_id: input.run_id,
+    run_attempt: answer.attempt,
+    jobs: answer.jobs.map((job) => ({
+      key: job.key,
+      name: job.name,
+      needs: [...job.needs],
+      status: graphStatus(job),
+      conclusion: job.outcome,
+    })),
   };
 }
 

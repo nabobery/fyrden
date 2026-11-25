@@ -75,7 +75,7 @@ import {
   runCiPolicy,
   type WaitingFor,
 } from "./run/reservations.js";
-import { runRetentionDays } from "./run/retention.js";
+import { runRetentionMs } from "./run/retention.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -118,7 +118,7 @@ export interface TaskRef {
   readonly task: number;
 }
 
-export interface RunView {
+export interface RunView extends RunFacts {
   readonly runId: string;
   readonly repoId: string;
   readonly sha: string;
@@ -199,6 +199,16 @@ export interface JobView {
   readonly error: string | null;
   /** Why a queued job is not offered to runners yet: its CI minutes or the day's capacity; null otherwise. */
   readonly waitingFor: WaitingFor | null;
+}
+
+/** A job of the workflow in an attempt's graph. */
+export interface GraphJob {
+  readonly key: string;
+  readonly name: string;
+  readonly needs: readonly string[];
+  readonly status: NodeRow["status"];
+  /** As its dependents see it; null until it is terminal. */
+  readonly outcome: NeedResult | null;
 }
 
 export type CreateAnswer =
@@ -321,8 +331,7 @@ export class RunDO extends MigratingDO {
     );
     this.policy = {
       ...RUN_DEFAULTS,
-      retentionMs:
-        runRetentionDays(env, (message) => this.#log.warn(message)) * 24 * 60 * 60 * 1000,
+      retentionMs: runRetentionMs(env, (message) => this.#log.warn(message)),
     };
     const host = this;
     this.engine = new RunEngine({
@@ -799,6 +808,7 @@ export class RunDO extends MigratingDO {
       "SELECT kind, error, first_at, count FROM run_faults WHERE resolved_at IS NULL ORDER BY first_at",
     );
     return {
+      ...this.#runFacts(run),
       runId: run.run_id,
       repoId: run.repo_id,
       sha: run.sha,
@@ -929,6 +939,36 @@ export class RunDO extends MigratingDO {
         waitingFor: row.status === "queued" ? row.waiting_for : null,
       })),
       next: rows.length > limit ? (page.at(-1) as InstanceRow).job_id : null,
+    };
+  }
+
+  /**
+   * The jobs of an attempt of repository `repoId`'s run (the current attempt
+   * by default) as its workflow writes them, each after the jobs it needs.
+   */
+  graph(
+    repoId: string,
+    attempt?: number,
+  ):
+    | { readonly ok: true; readonly attempt: number; readonly jobs: readonly GraphJob[] }
+    | { readonly ok: false; readonly code: "run_not_found" | "attempt_not_found" } {
+    const run = this.engine.run();
+    if (this.#hidden() || run?.repo_id !== repoId) return { ok: false, code: "run_not_found" };
+    const n = attempt ?? run.attempt;
+    if (!this.engine.attempt(n)) return { ok: false, code: "attempt_not_found" };
+    const nodes = this.engine.nodes(n);
+    // A workflow that could not run has no jobs, and does not plan.
+    const graph = nodes.length > 0 ? this.#loadModel().plan.graph : undefined;
+    return {
+      ok: true,
+      attempt: n,
+      jobs: nodes.map((node) => ({
+        key: node.job_key,
+        name: node.name,
+        needs: graph?.job(node.job_key)?.needs ?? [],
+        status: node.status,
+        outcome: nodeOutcome(node) ?? null,
+      })),
     };
   }
 

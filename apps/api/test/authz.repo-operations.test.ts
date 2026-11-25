@@ -276,6 +276,10 @@ const CASES: Record<
   "statuses.list": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   "statuses.combined": { input: {}, expected: { status: 404, code: "ref_not_found" } },
   // No such run: past authorization, every run operation answers it as missing.
+  "actions.runs.list": { input: {}, expected: { status: 200 } },
+  "actions.workflows.list": { input: {}, expected: { status: 200 } },
+  "actions.workflows.runs.list": { input: {}, expected: { status: 200 } },
+  "actions.runs.graph.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.list": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.live_ticket": { input: {}, expected: { status: 404, code: "run_not_found" } },
