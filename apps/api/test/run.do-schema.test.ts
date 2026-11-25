@@ -21,6 +21,7 @@ import runV5 from "./fixtures/do-schemas/RunDO/v5.sql?raw";
 import runV6 from "./fixtures/do-schemas/RunDO/v6.sql?raw";
 import runV7 from "./fixtures/do-schemas/RunDO/v7.sql?raw";
 import runV8 from "./fixtures/do-schemas/RunDO/v8.sql?raw";
+import runV9 from "./fixtures/do-schemas/RunDO/v9.sql?raw";
 
 const versions: Record<number, string> = {
   0: runV0,
@@ -32,6 +33,7 @@ const versions: Record<number, string> = {
   6: runV6,
   7: runV7,
   8: runV8,
+  9: runV9,
 };
 
 describe("RunDO schema", () => {

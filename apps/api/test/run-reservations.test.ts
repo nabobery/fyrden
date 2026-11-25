@@ -97,6 +97,7 @@ type Reservation = {
   refusals: number;
   waiting_for: string | null;
   ineligible_at: number | null;
+  started_at: number | null;
   asked_for: string | null;
 };
 
@@ -338,6 +339,7 @@ describe("a job queued before its run reserved", () => {
     // deployment's upgrade migrates it, now on Free.
     await inRun(runId, (r) => {
       expect(r.engine.instance(jobId)?.timeout_ms).toBe(360 * MIN);
+      r.engine.exec("DROP TABLE ci_delivery_failures");
       r.engine.exec("DROP TABLE ci_reservations");
       r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_checks");
       r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_gets");
@@ -918,6 +920,54 @@ describe("the end of a job", () => {
       worker_requests: 45 * 21,
       do_requests: CI_JOB_FIXED.do_requests + 45 * 21,
     });
+  });
+
+  it.each(["in progress", "cancelling"])(
+    "releases a job %s that failed before any runner was given it, in both stores",
+    async (status) => {
+      const t = await today();
+      const f = await repoWithCommit();
+      const runId = await startedAt(f, one, t);
+      const answer = await assign(runId, "a", "k", f.owner.principalId);
+      if (!answer.ok) throw new Error(answer.code);
+      if (status === "cancelling") await runStub(runId).cancel(f.owner.principalId, "graceful");
+      await moveTo(t + 90_000, runId);
+      expect(await inRun(runId, (r) => r.failTask(answer.task, "its secrets do not open"))).toBe(
+        true,
+      );
+      expect(await jobNamed(runId, "a")).toMatchObject({ status: "completed" });
+      await drain(runId);
+      const { jobId } = await jobNamed(runId, "a");
+      const key = `${runId}/j${jobId}/r1`;
+      expect(await reservationOf(runId, "a")).toMatchObject({ state: "settled", started_at: null });
+      expect(await minutesOf(f.owner.principalId, runId)).toEqual([
+        { key, reserved: 180, used: 0, state: "released" },
+      ]);
+      expect((await receiptsOf(runId)).map((r) => r.state)).toEqual(["released"]);
+      expect(await dayOf(t)).toMatchObject({
+        do_requests: CI_JOB_FIXED.do_requests,
+        worker_requests: 0,
+      });
+    },
+  );
+
+  it("keeps a finished job's settlement when a failure of its delivery comes late", async () => {
+    const t = await today();
+    const f = await repoWithCommit();
+    const runId = await startedAt(f, one, t);
+    const answer = await assign(runId, "a", "k", f.owner.principalId);
+    if (!answer.ok) throw new Error(answer.code);
+    await moveTo(t + 20 * MIN, runId);
+    expect(
+      (await runStub(runId).completeTask(answer.task, { result: "success", logComplete: true })).ok,
+    ).toBe(true);
+    expect(await inRun(runId, (r) => r.failTask(answer.task, "its secrets do not open"))).toBe(
+      false,
+    );
+    await drain(runId);
+    expect(await minutesOf(f.owner.principalId, runId)).toMatchObject([
+      { used: 20, state: "settled" },
+    ]);
   });
 
   it("releases a job cancelled while queued, with no task, in both stores", async () => {

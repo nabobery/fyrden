@@ -35,7 +35,7 @@ import type { RunEngine, RunPolicy, RunRow } from "./engine.js";
  *   reserved -> running   a new assignment (RunDO.assign)
  *   reserved -> wanted    window lapsed or account moved: both released, seq + 1
  *   any      -> ending    the instance ended, with a task or none
- *   ending   -> settled   running: settled in both stores; else released in both
+ *   ending   -> settled   settled in both stores if a runner had it; else released in both
  *
  * Every call carries the row's key, its inputs fixed in the row before the
  * first call. A call without an answer leaves the row as it was, so the
@@ -258,6 +258,18 @@ export class RunReservations {
     );
     this.host.engine.bumpQueue();
     this.host.ensureSlice();
+  }
+
+  /**
+   * Instance `jobId` ended, in the caller's transaction, before any runner
+   * was given it: its reservation is released unused, not settled for the
+   * time it was assigned.
+   */
+  neverGiven(jobId: number): void {
+    this.host.engine.exec(
+      "UPDATE ci_reservations SET started_at = NULL WHERE job_id = ? AND state = 'ending'",
+      jobId,
+    );
   }
 
   /**

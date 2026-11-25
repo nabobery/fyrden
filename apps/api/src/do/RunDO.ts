@@ -379,6 +379,8 @@ export class RunDO extends MigratingDO {
       jobTokenMasksOpen: (task) => host.#logs.jobTokensOpen(task),
       secretsRequest: (jobId) => host.secretsRequest(jobId),
       addSecretMasks: (task, secrets) => host.#logs.addSecretMasks(task, secrets),
+      ensureRecovery: (runAt) => host.jobs.ensure("ci_delivery", RUN_JOB.delivery, { runAt }),
+      durable: () => ctx.storage.sync(),
       failTask: (ref, error) => host.failTask(ref, error),
       requeueTask: (ref) => host.requeueTask(ref),
       get memory() {
@@ -1070,19 +1072,21 @@ export class RunDO extends MigratingDO {
    * Ends task `ref`'s instance as failed with `error`, before any runner was
    * given it (its secrets could not be delivered, and the run ended its offer
    * in the directory while it was never recorded); false when the task is
-   * not current or has ended. Its local mapping, if any, is kept, and the
+   * not current or has ended. Its local mapping, if any, is kept, the
    * task's end spends no runner's credential for an offer the directory
-   * never recorded.
+   * never recorded, and its reservation is released unused.
    */
   failTask(ref: TaskRef, error: string): boolean {
     return this.#tx(() => {
       const found = this.#task(ref);
       if (!("row" in found) || found.row.status === "completed") return false;
-      return this.engine.applyInstance(
+      const failed = this.engine.applyInstance(
         found.row,
         { kind: "complete", result: "failure" },
         { error },
       );
+      if (failed) this.#reservations.neverGiven(found.row.job_id);
+      return failed;
     });
   }
 
@@ -1637,6 +1641,7 @@ export class RunDO extends MigratingDO {
         "ci_log_tickets",
         "run_approval",
         "ci_reservations",
+        "ci_delivery_failures",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1837,6 +1842,7 @@ export class RunDO extends MigratingDO {
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
       ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
+      ci_delivery: { runSlice: (job) => this.#dispatch.recoverySlice(job) },
       ci_reserve: { runSlice: (job) => this.#reservations.slice(job) },
       ci_log_close: { runSlice: async () => this.#logs.closeSlice() },
       ci_log_viewers: { runSlice: () => this.viewers.slice() },
@@ -2133,6 +2139,10 @@ export class RunDO extends MigratingDO {
     }
     if (run.task_end_acked < run.task_end_seq) {
       this.jobs.ensure("ci_task_end", RUN_JOB.taskEnd);
+      return true;
+    }
+    if (this.engine.rows("SELECT 1 FROM ci_delivery_failures LIMIT 1").length > 0) {
+      this.jobs.ensure("ci_delivery", RUN_JOB.delivery);
       return true;
     }
     return this.#reservations.owed();

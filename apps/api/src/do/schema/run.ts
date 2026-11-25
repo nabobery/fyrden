@@ -63,6 +63,11 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   counts them). `ineligible_at`: found a job no runner may take, so it
  *   asks no store until the run checks again. `rebind`: made for an account
  *   that no longer owns the repository, so released and made again.
+ *
+ * v9 (failed deliveries):
+ * - `ci_delivery_failures`: a failed delivery of a job's secrets not settled
+ *   yet: the directory's offer, the task it names, and the error its job gets
+ *   if the offer ended. Only the failure of that task is ever acted on.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -424,6 +429,22 @@ export const runSchema: readonly DoMigration[] = [
         CHECK (read_gets >= 0 AND (read_gets IS NULL) = (read_bytes IS NULL));
       ALTER TABLE ci_log_tickets ADD COLUMN read_checks INTEGER
         CHECK (read_checks >= 0 AND (read_checks IS NULL) = (read_bytes IS NULL));
+    `,
+  },
+  {
+    version: 9,
+    // A failed delivery of a job's secrets not settled yet (src/do/run/dispatch.ts): the
+    // directory's offer, and the task it names. `error` is the job's error: names and sizes,
+    // never a value.
+    name: "ci_delivery_failures",
+    sql: `
+      CREATE TABLE ci_delivery_failures (
+        wire_id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL,
+        task INTEGER NOT NULL,
+        error TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL
+      ) STRICT;
     `,
   },
 ];
