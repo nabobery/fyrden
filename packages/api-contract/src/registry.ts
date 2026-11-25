@@ -275,7 +275,15 @@ import {
   listRulesets,
   updateRuleset,
 } from "../ops/rulesets.js";
-import { createRunnerRegistrationToken, deleteRunner, listRunners } from "../ops/runners.js";
+import {
+  addRunnerRepo,
+  createRunnerRegistrationToken,
+  deleteRunner,
+  getRunner,
+  listRunners,
+  removeRunnerRepo,
+  updateRunnerAccess,
+} from "../ops/runners.js";
 import {
   backfillSearch,
   checkSearchIndex,
@@ -581,6 +589,10 @@ export const registry = defineRegistry([
   removeTeamRepo,
   createRunnerRegistrationToken,
   listRunners,
+  getRunner,
+  updateRunnerAccess,
+  addRunnerRepo,
+  removeRunnerRepo,
   deleteRunner,
   createUpload,
   getUpload,

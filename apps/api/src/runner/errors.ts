@@ -25,6 +25,9 @@ export const REGISTRATION_OFF = "runner registration is turned off on this deplo
 export const REGISTRATION_REFUSED =
   "the registration token is not valid: it is unknown, expired or already used";
 
+export const NEEDS_EPHEMERAL =
+  "this registration token allows fork jobs, so it registers only an ephemeral runner: register with --ephemeral";
+
 export const FLEET_FULL =
   "this deployment's runner fleet is full; delete a runner before registering another";
 

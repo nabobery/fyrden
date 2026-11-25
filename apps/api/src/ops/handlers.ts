@@ -331,9 +331,13 @@ import {
   setRepoSubscriptionOperation,
 } from "../repos/watching.js";
 import {
+  addRunnerRepoOperation,
   createRunnerRegistrationTokenOperation,
   deleteRunnerOperation,
+  getRunnerOperation,
   listRunnersOperation,
+  removeRunnerRepoOperation,
+  updateRunnerAccessOperation,
 } from "../runner/operations.js";
 import { backfillSearchOperation, setSearchIndexingOperation } from "../search/backfill.js";
 import {
@@ -560,6 +564,10 @@ export const handlers: Handlers = {
   // Self-hosted runners (runner/operations).
   "orgs.runners.registration_tokens.create": createRunnerRegistrationTokenOperation,
   "orgs.runners.list": listRunnersOperation,
+  "orgs.runners.get": getRunnerOperation,
+  "orgs.runners.access.update": updateRunnerAccessOperation,
+  "orgs.runners.repositories.add": addRunnerRepoOperation,
+  "orgs.runners.repositories.remove": removeRunnerRepoOperation,
   "orgs.runners.delete": deleteRunnerOperation,
 
   // Forks share the parent's packs in its fork network (network/).

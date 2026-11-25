@@ -3,7 +3,19 @@
 
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { CI_TODAY, servingRunners } from "../ci/budget.js";
-import { clearAccess, mayTake, serves, tookItsTask } from "./access.js";
+import {
+  accessFields,
+  accessJson,
+  clearAccess,
+  listedRepos,
+  mayTake,
+  ownsAll,
+  type RunnerAccess,
+  type RunnerActor,
+  serves,
+  storedRepos,
+  tookItsTask,
+} from "./access.js";
 
 /** A runner as its credentials prove it. */
 export interface AuthenticatedRunner {
@@ -31,6 +43,9 @@ export interface ListedRunner {
   readonly declaredAt: number | null;
   readonly revokedAt: number | null;
   readonly revokedReason: RevokedReason | null;
+  readonly access: RunnerAccess;
+  readonly selectedCount: number;
+  readonly taskAssignedAt: number | null;
 }
 
 /** Why a runner was revoked: deleted by an owner, polling past its budget, past the fleet's cap, or spent. */
@@ -43,6 +58,14 @@ export type RevokedReason = "deleted" | "poll_rate" | "fleet_cap" | "spent";
 export interface FleetLimit {
   readonly cap: number;
   readonly pollBudget: number;
+}
+
+interface AccessRow {
+  repository_access: "all" | "selected";
+  allows_public: number;
+  allows_forks: number;
+  task_assigned_at: number | null;
+  selected_count: number;
 }
 
 interface RunnerRow {
@@ -64,7 +87,11 @@ interface RunnerRow {
 const count = (metrics: Metrics | undefined, op: string) =>
   metrics?.count("d1.query", { db: "directory", op });
 
-/** Records a registration token (by its hash) that registers one runner for `accountId` until `expiresAt`. */
+/**
+ * Records a registration token (by its hash) that registers one runner for
+ * `accountId` until `expiresAt`, with `access`, and audits it. False when
+ * the account does not own one of the selected repositories.
+ */
 export async function createRegistration(
   db: D1Database,
   registration: {
@@ -73,23 +100,52 @@ export async function createRegistration(
     createdBy: string;
     now: number;
     expiresAt: number;
+    access: RunnerAccess;
+    selectedRepos: readonly string[];
+    requestId: string;
   },
   metrics?: Metrics,
-): Promise<void> {
+): Promise<boolean> {
   count(metrics, "runner_registration_create");
-  await db
-    .prepare(
-      `INSERT INTO ci_runner_registrations (token_hash, account_id, created_by, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      registration.tokenHash,
-      registration.accountId,
-      registration.createdBy,
-      registration.now,
-      registration.expiresAt,
-    )
-    .run();
+  const { access } = registration;
+  const selected = JSON.stringify(registration.selectedRepos);
+  const [made] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO ci_runner_registrations (token_hash, account_id, created_by, created_at,
+           expires_at, repository_access, selected_repos, allows_public, allows_forks)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 WHERE ${ownsAll("?2", "?7")}`,
+      )
+      .bind(
+        registration.tokenHash,
+        registration.accountId,
+        registration.createdBy,
+        registration.now,
+        registration.expiresAt,
+        access.repositoryAccess,
+        selected,
+        access.allowsPublic ? 1 : 0,
+        access.allowsForks ? 1 : 0,
+      ),
+    // changes() is the insert's, run just before on the same connection.
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?1, ?2, NULL, 'ci.runner.registration.create', ?3, ?4, ?5 WHERE changes() > 0`,
+      )
+      .bind(
+        registration.now,
+        registration.createdBy,
+        registration.accountId,
+        JSON.stringify({
+          ...accessJson(access),
+          selected_repository_ids: registration.selectedRepos,
+          expires_at: registration.expiresAt,
+        }),
+        registration.requestId,
+      ),
+  ]);
+  return (made?.meta.changes ?? 0) > 0;
 }
 
 /**
@@ -124,8 +180,10 @@ const fleetState = (now: string, cap: string) =>
 export const REGISTER_RUNNER_SQL = registerRunnerSql(true);
 
 function registerRunnerSql(capped: boolean): string {
-  return `INSERT INTO ci_runners (uuid, account_id, token_hash, name, version, labels, ephemeral, created_at)
-         SELECT ?1, account_id, ?2, ?3, ?4, ?5, ?6, ?7 FROM ci_runner_registrations
+  return `INSERT INTO ci_runners (uuid, account_id, token_hash, name, version, labels, ephemeral, created_at,
+           repository_access, allows_public, allows_forks)
+         SELECT ?1, account_id, ?2, ?3, ?4, ?5, ?6, ?7, repository_access, allows_public, allows_forks
+         FROM ci_runner_registrations
          ${capped ? `, ${fleetState("?7", "?10")} f` : ""}
          WHERE token_hash = ?8 AND consume_nonce = ?9
          ${capped ? `AND ${fleetHasRoom("?10", "?11")}` : ""}
@@ -164,6 +222,8 @@ export type Registration =
   | { readonly status: "registered"; readonly id: number; readonly accountId: string }
   /** The token was unknown, spent or expired. */
   | { readonly status: "refused" }
+  /** The token allows fork jobs and the runner is not ephemeral: it may be used again. */
+  | { readonly status: "needs_ephemeral" }
   /** The token was good but the fleet had no room: it may be used again. */
   | { readonly status: "fleet_full" | "polls_spent" };
 
@@ -174,7 +234,10 @@ export type Registration =
  * runner is inserted only from the row bearing it, so a batch that lost a race
  * for the token inserts nothing. Under a `fleet` limit, the runner is
  * inserted only while the fleet has room, read in the same statement; when
- * it has none, the same batch gives the token back.
+ * it has none, the same batch gives the token back. The runner starts with
+ * the token's access (of its selected repositories, those the account still
+ * owns), and the same batch audits it as the token's creator's. A token that
+ * allows fork jobs is consumed only for an ephemeral runner.
  */
 export async function registerRunner(
   db: D1Database,
@@ -188,6 +251,7 @@ export async function registerRunner(
     version: string;
     labels: readonly string[];
     ephemeral: boolean;
+    requestId: string;
     fleet: FleetLimit | null;
   },
   metrics?: Metrics,
@@ -211,19 +275,50 @@ export async function registerRunner(
   const consume = db
     .prepare(
       `UPDATE ci_runner_registrations SET consumed_at = ?1, consume_nonce = ?2
-       WHERE token_hash = ?3 AND consumed_at IS NULL AND expires_at > ?1`,
+       WHERE token_hash = ?3 AND consumed_at IS NULL AND expires_at > ?1
+         AND (allows_forks = 0 OR ?4 = 1)`,
     )
-    .bind(runner.now, runner.nonce, runner.registrationHash);
+    .bind(runner.now, runner.nonce, runner.registrationHash, runner.ephemeral ? 1 : 0);
+  // After the insert, from its row and the token it consumed: nothing when none was inserted.
+  const followed = [
+    db
+      .prepare(
+        `INSERT INTO ci_runner_repos (runner_id, repo_id)
+         SELECT r.id, e.id FROM ci_runners r, ci_runner_registrations t, json_each(t.selected_repos) v
+           JOIN repos e ON e.id = v.value AND e.owner_id = t.account_id AND e.state = 'active'
+         WHERE r.uuid = ?1 AND t.token_hash = ?2 AND t.consume_nonce = ?3
+           AND t.repository_access = 'selected'`,
+      )
+      .bind(runner.uuid, runner.registrationHash, runner.nonce),
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?4, t.created_by, NULL, 'ci.runner.register', CAST(r.id AS TEXT),
+           json_object('account_id', r.account_id, 'name', r.name,
+             'ephemeral', json(iif(r.ephemeral = 1, 'true', 'false')), ${accessFields("r")},
+             'selected_repository_ids', json(${storedRepos("r")})), ?5
+         FROM ci_runners r JOIN ci_runner_registrations t ON t.token_hash = ?2 AND t.consume_nonce = ?3
+         WHERE r.uuid = ?1`,
+      )
+      .bind(runner.uuid, runner.registrationHash, runner.nonce, runner.now, runner.requestId),
+    // Whether the token is good, for an ephemeral runner alone.
+    db
+      .prepare(
+        `SELECT 1 FROM ci_runner_registrations WHERE token_hash = ?1 AND consumed_at IS NULL
+           AND expires_at > ?2 AND allows_forks = 1 AND ?3 = 0`,
+      )
+      .bind(runner.registrationHash, runner.now, runner.ephemeral ? 1 : 0),
+  ];
   if (!fleet) {
-    const [, inserted] = await db.batch([consume, insert]);
+    const [, inserted, , , needs] = await db.batch([consume, insert, ...followed]);
     const row = inserted?.results[0] as { id: number; account_id: string } | undefined;
-    return row
-      ? { status: "registered", id: row.id, accountId: row.account_id }
-      : { status: "refused" };
+    if (row) return { status: "registered", id: row.id, accountId: row.account_id };
+    return { status: (needs?.results.length ?? 0) > 0 ? "needs_ephemeral" : "refused" };
   }
-  const [, inserted, givenBack, room] = await db.batch([
+  const [, inserted, , , needs, givenBack, room] = await db.batch([
     consume,
     insert,
+    ...followed,
     db
       .prepare(
         `UPDATE ci_runner_registrations SET consumed_at = NULL, consume_nonce = NULL
@@ -236,7 +331,8 @@ export async function registerRunner(
   ]);
   const row = inserted?.results[0] as { id: number; account_id: string } | undefined;
   if (row) return { status: "registered", id: row.id, accountId: row.account_id };
-  if ((givenBack?.results.length ?? 0) === 0) return { status: "refused" };
+  if ((givenBack?.results.length ?? 0) === 0)
+    return { status: (needs?.results.length ?? 0) > 0 ? "needs_ephemeral" : "refused" };
   const state = room?.results[0] as { serving: number; spent: number } | undefined;
   // Given back for want of room; when the room read shows some, a slot freed in between.
   return { status: state && roomOf(fleet, state) === "polls_spent" ? "polls_spent" : "fleet_full" };
@@ -501,22 +597,17 @@ export async function declareRunner(
     .run();
 }
 
-/** Up to `limit` of an account's runners after the runner `afterId`, oldest first. */
-export async function listRunners(
-  db: D1Database,
-  page: { accountId: string; afterId: number; limit: number },
-  metrics?: Metrics,
-): Promise<ListedRunner[]> {
-  count(metrics, "runners_list");
-  const { results } = await db
-    .withSession("first-primary")
-    .prepare(
-      `SELECT id, name, labels, version, ephemeral, created_at, declared_at, revoked_at, revoked_reason
-       FROM ci_runners WHERE account_id = ? AND id > ? ORDER BY id LIMIT ?`,
-    )
-    .bind(page.accountId, page.afterId, page.limit)
-    .all<Omit<RunnerRow, "uuid" | "account_id" | "token_hash" | "expires_at">>();
-  return results.map((row) => ({
+export type RunnerStatus = "all" | "serving" | "revoked";
+
+const LISTED = `r.id, r.name, r.labels, r.version, r.ephemeral, r.created_at, r.declared_at,
+  r.revoked_at, r.revoked_reason, r.repository_access, r.allows_public, r.allows_forks,
+  r.task_assigned_at,
+  CASE WHEN r.repository_access = 'selected' THEN ${listedRepos("r")} ELSE 0 END AS selected_count`;
+
+type ListedRow = Omit<RunnerRow, "uuid" | "account_id" | "token_hash" | "expires_at"> & AccessRow;
+
+function listed(row: ListedRow): ListedRunner {
+  return {
     id: row.id,
     name: row.name,
     labels: parseLabels(row.labels),
@@ -526,22 +617,104 @@ export async function listRunners(
     declaredAt: row.declared_at,
     revokedAt: row.revoked_at,
     revokedReason: row.revoked_reason,
-  }));
+    access: {
+      repositoryAccess: row.repository_access,
+      allowsPublic: row.allows_public === 1,
+      allowsForks: row.allows_forks === 1,
+    },
+    selectedCount: row.selected_count,
+    taskAssignedAt: row.task_assigned_at,
+  };
+}
+
+/**
+ * Up to `limit` of an account's runners of `status` at `now` after the
+ * runner `afterId`, oldest first. Serving ones are found among the runners
+ * that may serve, never through revoked history.
+ */
+export async function listRunners(
+  db: D1Database,
+  page: {
+    accountId: string;
+    afterId: number;
+    limit: number;
+    status: RunnerStatus;
+    now: number;
+  },
+  metrics?: Metrics,
+): Promise<ListedRunner[]> {
+  count(metrics, "runners_list");
+  const from =
+    page.status === "serving"
+      ? `ci_runners r INDEXED BY ci_runners_live WHERE r.account_id = ?1 AND r.id > ?2 AND ${serves("r", "?4")}`
+      : `ci_runners r WHERE r.account_id = ?1 AND r.id > ?2
+         AND ${page.status === "revoked" ? `NOT (${serves("r", "?4")})` : "?4 = ?4"}`;
+  const { results } = await db
+    .withSession("first-primary")
+    .prepare(`SELECT ${LISTED} FROM ${from} ORDER BY r.id LIMIT ?3`)
+    .bind(page.accountId, page.afterId, page.limit, page.now)
+    .all<ListedRow>();
+  return results.map(listed);
+}
+
+export interface ListedRepo {
+  readonly id: string;
+  readonly name: string;
+  readonly visibility: "public" | "internal" | "private";
+}
+
+/** One of the account's runners, with the repositories it lists, by name. */
+export async function readRunner(
+  db: D1Database,
+  runner: { accountId: string; id: number },
+  metrics?: Metrics,
+): Promise<(ListedRunner & { readonly repositories: readonly ListedRepo[] }) | undefined> {
+  count(metrics, "runner_read");
+  const [found, repos] = await db.withSession("first-primary").batch([
+    db
+      .prepare(`SELECT ${LISTED} FROM ci_runners r WHERE r.id = ?1 AND r.account_id = ?2`)
+      .bind(runner.id, runner.accountId),
+    db
+      .prepare(
+        `SELECT e.id, e.name, e.visibility FROM ci_runner_repos s
+           JOIN ci_runners r ON r.id = s.runner_id AND r.account_id = ?2
+             AND r.repository_access = 'selected'
+           JOIN repos e ON e.id = s.repo_id AND e.owner_id = ?2 AND e.state = 'active'
+         WHERE s.runner_id = ?1 ORDER BY e.name COLLATE NOCASE`,
+      )
+      .bind(runner.id, runner.accountId),
+  ]);
+  const row = found?.results[0] as ListedRow | undefined;
+  return row && { ...listed(row), repositories: (repos?.results ?? []) as unknown as ListedRepo[] };
 }
 
 /**
  * Revokes the account's runner `id` at `now`, as deleted (a runner revoked
- * already keeps its first time and reason), and clears its access. False
- * when the account has no such runner.
+ * already keeps its first time and reason), audits it, and clears its
+ * access. False when the account has no such runner.
  */
 export async function revokeRunner(
   db: D1Database,
-  revoked: { accountId: string; id: number; now: number },
+  revoked: { accountId: string; id: number; now: number; actor: RunnerActor },
   metrics?: Metrics,
 ): Promise<boolean> {
   count(metrics, "runner_revoke");
   const own = "SELECT id FROM ci_runners WHERE id = ?1 AND account_id = ?2";
-  const [updated] = await db.batch([
+  const [, updated] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?3, ?4, NULL, 'ci.runner.delete', CAST(id AS TEXT),
+           json_object('account_id', account_id, 'name', name), ?5
+         FROM ci_runners WHERE id = ?1 AND account_id = ?2 AND revoked_at IS NULL`,
+      )
+      .bind(
+        revoked.id,
+        revoked.accountId,
+        revoked.now,
+        revoked.actor.principalId,
+        revoked.actor.requestId,
+      ),
     db
       .prepare(
         `UPDATE ci_runners SET revoked_at = COALESCE(revoked_at, ?1),

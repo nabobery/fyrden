@@ -224,7 +224,8 @@ export const PERMISSIONS = {
   "self_hosted_runners:write": {
     resource: "account",
     minAccountRole: "owner",
-    summary: "Register self-hosted runners for an account (registration tokens), and remove them.",
+    summary:
+      "Register self-hosted runners for an account (registration tokens), choose which jobs they may be given, and remove them.",
     principals: ["user"],
     implies: ["self_hosted_runners:read"],
     writes: true,

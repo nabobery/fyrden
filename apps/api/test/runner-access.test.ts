@@ -54,6 +54,7 @@ import {
   workflow,
 } from "./helpers/runs.js";
 
+const ACTOR = { principalId: "usr_test", requestId: "req_test" };
 const one = workflow(job("a"));
 const two = workflow([job("a"), job("b")].join("\n"));
 
@@ -253,7 +254,12 @@ describe("what a runner's access lets it be given", () => {
       version: 0,
       now: Date.now(),
     };
-    await revokeRunner(env.DIRECTORY, { accountId: f.org.id, id: runner.id, now: Date.now() });
+    await revokeRunner(env.DIRECTORY, {
+      accountId: f.org.id,
+      id: runner.id,
+      now: Date.now(),
+      actor: ACTOR,
+    });
     expect(await claimPending(env.DIRECTORY, claim)).toBeUndefined();
     expect(await tasksOfRun(runId)).toEqual([]);
   });
@@ -581,7 +587,12 @@ describe("access left behind", () => {
         .bind(revoked, runner.id)
         .run();
       expect(
-        await revokeRunner(env.DIRECTORY, { accountId: f.org.id, id: runner.id, now: 9 }),
+        await revokeRunner(env.DIRECTORY, {
+          accountId: f.org.id,
+          id: runner.id,
+          now: 9,
+          actor: ACTOR,
+        }),
       ).toBe(true);
       expect(await rowOf(runner)).toMatchObject({ allows_public: 0, allows_forks: 0 });
       expect(await selections(runner.id)).toBe(0);
@@ -593,7 +604,12 @@ describe("access left behind", () => {
     const runner = await opener(f);
     await selectRepos(runner, [f.repo.id]);
     expect(
-      await revokeRunner(env.DIRECTORY, { accountId: uniqueId("acct"), id: runner.id, now: 9 }),
+      await revokeRunner(env.DIRECTORY, {
+        accountId: uniqueId("acct"),
+        id: runner.id,
+        now: 9,
+        actor: ACTOR,
+      }),
     ).toBe(false);
     expect(await rowOf(runner)).toMatchObject({ allows_public: 1, allows_forks: 1 });
     expect(await selections(runner.id)).toBe(1);
