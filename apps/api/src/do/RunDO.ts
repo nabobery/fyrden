@@ -1070,19 +1070,21 @@ export class RunDO extends MigratingDO {
    * Ends task `ref`'s instance as failed with `error`, before any runner was
    * given it (its secrets could not be delivered, and the run ended its offer
    * in the directory while it was never recorded); false when the task is
-   * not current or has ended. Its local mapping, if any, is kept, and the
+   * not current or has ended. Its local mapping, if any, is kept, the
    * task's end spends no runner's credential for an offer the directory
-   * never recorded.
+   * never recorded, and its reservation is released unused.
    */
   failTask(ref: TaskRef, error: string): boolean {
     return this.#tx(() => {
       const found = this.#task(ref);
       if (!("row" in found) || found.row.status === "completed") return false;
-      return this.engine.applyInstance(
+      const failed = this.engine.applyInstance(
         found.row,
         { kind: "complete", result: "failure" },
         { error },
       );
+      if (failed) this.#reservations.neverGiven(found.row.job_id);
+      return failed;
     });
   }
 
