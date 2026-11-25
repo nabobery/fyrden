@@ -87,7 +87,7 @@ export default function NewRunner({ loaderData }: Route.ComponentProps) {
   const refused = result && "errors" in result ? result : null;
   const errors = refused?.errors ?? {};
   const command = (ephemeral: boolean) =>
-    `gitea-runner register --no-interactive --instance ${origin} --token ${made?.token}${
+    `gitea-runner register --config config.yaml --no-interactive --instance ${origin} --token ${made?.token}${
       ephemeral ? " --ephemeral" : ""
     }`;
   return (
@@ -99,8 +99,10 @@ export default function NewRunner({ loaderData }: Route.ComponentProps) {
         <section className="panel" role="status" aria-labelledby="token">
           <h2 id="token">Register the runner</h2>
           <p>
-            Run this on the machine within the hour. The token registers one runner and is not shown
-            again.
+            On the machine, first save the runner's configuration as <code>config.yaml</code>. The
+            runner loads it only when passed <code>--config</code>, and its defaults mount the
+            machine's Docker socket into Docker job containers. Then run this within the hour. The
+            token registers one runner and is not shown again.
           </p>
           <h3>{made.forks ? "An ephemeral runner" : "An ephemeral runner (one job)"}</h3>
           <pre className="secret">
@@ -119,7 +121,9 @@ export default function NewRunner({ loaderData }: Route.ComponentProps) {
             </>
           )}
           <p className="muted">
-            Then start it with <code>gitea-runner daemon</code>.
+            Then start it with <code>gitea-runner daemon --config config.yaml</code>. The settings a
+            runner needs, above all one that takes public or fork jobs, are in the self-hosted
+            runners guide (<code>docs/ci/runners.md</code>).
           </p>
         </section>
       )}

@@ -82,6 +82,9 @@ describe("making a registration token", () => {
     });
     const page = renderPage(NewRunner, `${PAGE}/new`, { org: "acme", origin: ORIGIN }, made);
     expect(page).toContain(`--instance ${ORIGIN} --token ${TOKEN} --ephemeral`);
+    // The runner reads no configuration it is not given, so both commands give it.
+    expect(page).toContain("gitea-runner register --config config.yaml ");
+    expect(page).toContain("gitea-runner daemon --config config.yaml");
     // A token that takes forks shows no long-lived command.
     expect(page.split(TOKEN)).toHaveLength(2);
   });
