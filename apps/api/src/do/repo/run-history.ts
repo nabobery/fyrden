@@ -5,17 +5,21 @@ import {
   RUN_PHASES,
   type RunFacts,
   type RunPhase,
+  runMoves,
   runStateSeq,
   type TimeRange,
 } from "@fyrden/domain/ci";
+import { captureWorkflowRun } from "../../webhooks/ci-captures.js";
+import type { RepoEvents } from "./events.js";
 
 /*
  * The repository's record of its CI runs' states (`ci_runs`). A run's
  * object owns the run and reports it here; the record only moves forward
  * (`runStateSeq`), so a report that comes late or twice changes nothing, and
  * a report alone never records a run the repository does not hold. `apply`
- * is where a run's recorded state changes, in the caller's transaction:
- * what else must follow a change belongs there.
+ * is where a run's recorded state changes, in the caller's transaction, and
+ * where webhooks are told of it: `told` remembers what they were told, apart
+ * from the state, which the weekly check records too without telling.
  */
 
 /** A run as its object reports it: what its trigger fixed, and where its current attempt stands. */
@@ -40,6 +44,24 @@ export interface RunReport extends RunFacts {
   readonly completedAt: number | null;
 }
 
+/** How an attempt before a report's own ended. */
+export interface AttemptEnd {
+  readonly attempt: number;
+  readonly conclusion: AttemptConclusion;
+  readonly triggeringActor: string;
+  readonly startedAt: number | null;
+  readonly completedAt: number;
+}
+
+export interface RunNews {
+  /** Attempts before the reported one that ended, which may not have been reported. */
+  readonly earlier?: readonly AttemptEnd[];
+}
+
+interface Told {
+  readonly stateSeq: number;
+}
+
 type RunRow = {
   run_id: string;
   sha: string;
@@ -53,6 +75,7 @@ type RunRow = {
   head_branch: string | null;
   completed_at: number | null;
   summary: string | null;
+  told: string | null;
 };
 
 /** What `ci_runs.summary` holds: shown, never read by a filter. */
@@ -114,16 +137,69 @@ export interface WorkflowPage {
 export class RunHistory {
   constructor(
     private readonly git: RepoGitStorage,
+    private readonly events: Pick<RepoEvents, "emitToHooks">,
     /** How long a run is kept after it completed: past it, it is answered as no run. */
     private readonly retentionMs: () => number,
   ) {}
 
   /**
    * In the caller's transaction: records what `report` says of a run the
-   * repository holds, unless it holds that state or a later one already;
-   * whether it did.
+   * repository holds, unless it holds that state or a later one already
+   * (whether it did), and tells webhooks what they were not told of it yet.
    */
-  apply(report: RunReport): boolean {
+  apply(report: RunReport, news: RunNews = {}): boolean {
+    const held = this.#held(report.runId);
+    if (!held) return false;
+    const told = toldOf(held);
+    return this.#record(held, report, this.#tell(told, report, news.earlier ?? []));
+  }
+
+  /**
+   * In the caller's transaction: records the state of a run registering
+   * itself, as `apply` does, telling no one. A run the repository held (not
+   * `inserted` by this registration) still has told what it had.
+   */
+  register(report: RunReport, inserted: boolean): void {
+    const held = this.#held(report.runId);
+    if (!held) return;
+    const told = inserted ? { stateSeq: runStateSeq(report.attempt, report.phase) } : toldOf(held);
+    this.#record(held, report, told);
+  }
+
+  #held(runId: string): Pick<RunRow, "state_seq" | "told"> | undefined {
+    return this.git.context.storage.sql
+      .exec<Pick<RunRow, "state_seq" | "told">>(
+        "SELECT state_seq, told FROM ci_runs WHERE run_id = ?",
+        runId,
+      )
+      .toArray()[0];
+  }
+
+  #tell(told: Told, report: RunReport, earlier: readonly AttemptEnd[]): Told {
+    const ends = new Map(earlier.map((end) => [end.attempt, end]));
+    const { told: stateSeq, moves } = runMoves(told.stateSeq, report, [...ends.keys()]);
+    for (const { attempt, action } of moves) {
+      const end = ends.get(attempt);
+      const run: RunReport = end
+        ? { ...report, ...end, phase: "completed", updatedAt: end.completedAt }
+        : report;
+      this.events.emitToHooks(
+        `workflow_run.${action}`,
+        { principal: run.triggeringActor, via: "api" },
+        () => captureWorkflowRun(run),
+      );
+    }
+    return { stateSeq };
+  }
+
+  #record(held: Pick<RunRow, "state_seq" | "told">, report: RunReport, told: Told): boolean {
+    const seq = runStateSeq(report.attempt, report.phase);
+    const toldText = JSON.stringify(told);
+    if (seq <= held.state_seq) {
+      if (told.stateSeq !== toldOf(held).stateSeq)
+        this.#count("UPDATE ci_runs SET told = ? WHERE run_id = ?", toldText, report.runId);
+      return false;
+    }
     const summary: Summary = {
       attempt: report.attempt,
       triggeringActor: report.triggeringActor,
@@ -135,11 +211,10 @@ export class RunHistory {
       updatedAt: report.updatedAt,
       startedAt: report.startedAt,
     };
-    const seq = runStateSeq(report.attempt, report.phase);
-    const cursor = this.git.context.storage.sql.exec(
+    this.#count(
       `UPDATE ci_runs SET state_seq = ?1, status = ?2, conclusion = ?3, event = ?4, actor_id = ?5,
-         head_branch = ?6, completed_at = ?7, summary = ?8, created_at = ?9
-       WHERE run_id = ?10 AND state_seq < ?1`,
+         head_branch = ?6, completed_at = ?7, summary = ?8, created_at = ?9, told = ?11
+       WHERE run_id = ?10`,
       seq,
       report.phase,
       report.conclusion,
@@ -150,15 +225,18 @@ export class RunHistory {
       JSON.stringify(summary),
       report.createdAt,
       report.runId,
+      toldText,
     );
-    const written = cursor.rowsWritten;
-    if (written > 0)
-      this.git.context.metrics.count(
-        "do.rows_written",
-        { class: this.git.context.doClass, op: "ci_runs.state" },
-        written,
-      );
-    return written > 0;
+    return true;
+  }
+
+  #count(query: string, ...bindings: (string | number | null)[]): void {
+    const { rowsWritten } = this.git.context.storage.sql.exec(query, ...bindings);
+    this.git.context.metrics.count(
+      "do.rows_written",
+      { class: this.git.context.doClass, op: "ci_runs.state" },
+      rowsWritten,
+    );
   }
 
   /** A run as last reported; undefined for one not recorded, or not reported yet. */
@@ -295,6 +373,10 @@ function matches(row: RunRow, filter: RunFilter): boolean {
   );
 }
 
+function toldOf(row: Pick<RunRow, "state_seq" | "told">): Told {
+  return row.told === null ? { stateSeq: row.state_seq } : (JSON.parse(row.told) as Told);
+}
+
 /** A report as a caller gives it, checked: one that is not one is a bug in its caller. */
 export function validRunReport(report: RunReport): RunReport {
   const fail = (what: string): never => {
@@ -335,4 +417,22 @@ function reportOf(row: RunRow): RunReport {
     completedAt: row.completed_at,
     ...summary,
   };
+}
+
+export function validRunNews(news: RunNews, report: RunReport): RunNews {
+  const fail = (what: string): never => {
+    throw new TypeError(`invalid run report: ${what}`);
+  };
+  const { earlier = [] } = news;
+  let last = 0;
+  for (const end of earlier) {
+    if (!Number.isSafeInteger(end.attempt) || end.attempt <= last || end.attempt >= report.attempt)
+      fail("earlier attempt");
+    last = end.attempt;
+    if (!CONCLUSIONS.includes(end.conclusion)) fail("earlier conclusion");
+    const actor = end.triggeringActor;
+    if (typeof actor !== "string" || actor === "" || actor.length > MAX_TEXT) fail("earlier actor");
+    if (!Number.isFinite(end.completedAt)) fail("earlier completedAt");
+  }
+  return news;
 }

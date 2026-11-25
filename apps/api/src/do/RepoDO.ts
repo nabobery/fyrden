@@ -293,7 +293,14 @@ import {
   CiApprovals,
   type SettleAnswer,
 } from "./repo/run-approvals.js";
-import { type RunFilter, RunHistory, type RunReport, validRunReport } from "./repo/run-history.js";
+import {
+  type RunFilter,
+  RunHistory,
+  type RunNews,
+  type RunReport,
+  validRunNews,
+  validRunReport,
+} from "./repo/run-history.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -745,7 +752,7 @@ export class RepoDO extends MigratingDO {
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
-    this.runs = new RunHistory(this.git, () =>
+    this.runs = new RunHistory(this.git, this.events, () =>
       runRetentionMs(this.env, (m) => this.#log().warn(m)),
     );
     this.checks = new RepoChecks({
@@ -2605,7 +2612,7 @@ export class RepoDO extends MigratingDO {
           input.path,
           this.git.context.now(),
         );
-        if (state) this.runs.apply(state);
+        if (state) this.runs.register(state, !recorded);
       });
       return { ok: true };
     });
@@ -2617,7 +2624,10 @@ export class RepoDO extends MigratingDO {
    * repository holds (`recorded`), so a report that lands after the run was
    * forgotten brings nothing back. Refused as `registerRun` is.
    */
-  reportRun(report: RunReport): Promise<
+  reportRun(
+    report: RunReport,
+    news: RunNews = {},
+  ): Promise<
     | { readonly ok: true; readonly recorded: boolean }
     | {
         readonly ok: false;
@@ -2626,12 +2636,14 @@ export class RepoDO extends MigratingDO {
   > {
     return this.#measured("reportRun", async () => {
       const state = validRunReport(report);
+      const checked = validRunNews(news, state);
       const refused = this.#runRecordRefusal();
       if (refused) return refused;
-      return {
-        ok: true,
-        recorded: this.git.context.storage.transactionSync(() => this.runs.apply(state)),
-      };
+      const recorded = this.git.context.storage.transactionSync(() =>
+        this.runs.apply(state, checked),
+      );
+      this.#armOutbox();
+      return { ok: true, recorded };
     });
   }
 

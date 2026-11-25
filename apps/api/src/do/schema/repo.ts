@@ -1949,4 +1949,12 @@ export const repoSchema: readonly DoMigration[] = [
         WHERE status IN ('waiting', 'queued', 'pending', 'in_progress');
     `,
   },
+  {
+    version: 56,
+    // Null, as every row from before this version: webhooks count as told up to its `state_seq`.
+    name: "ci_runs_told",
+    sql: `
+      ALTER TABLE ci_runs ADD COLUMN told TEXT CHECK (told IS NULL OR json_valid(told));
+    `,
+  },
 ];

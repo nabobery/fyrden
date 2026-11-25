@@ -15,6 +15,7 @@ import {
 } from "@fyrden/adapters-cloudflare/obs";
 import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
+  type AttemptConclusion,
   effectiveScope,
   type InstanceConclusion,
   jobPayload,
@@ -36,7 +37,7 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
-import type { RunReport } from "./repo/run-history.js";
+import type { AttemptEnd, RunReport } from "./repo/run-history.js";
 import { planCheckKey } from "./run/check-key.js";
 import {
   type AssignTaskAnswer,
@@ -1986,15 +1987,29 @@ export class RunDO extends MigratingDO {
       : undefined;
   }
 
+  #endsOwed(attempt: number): AttemptEnd[] {
+    return this.engine
+      .rows<AttemptRow>("SELECT * FROM run_attempts WHERE attempt < ? ORDER BY attempt", attempt)
+      .filter((row) => runStateSeq(row.attempt, "completed") > this.#reported)
+      .map((row) => ({
+        attempt: row.attempt,
+        conclusion: row.conclusion as AttemptConclusion,
+        triggeringActor: row.triggering_actor_id,
+        startedAt: row.started_at,
+        completedAt: row.completed_at as number,
+      }));
+  }
+
   /** Reports the run's state when it moved; the repository keeps the latest of what it is told. */
   async #reportState(): Promise<void> {
     const report = this.#stateOwed();
     if (!report) return;
+    const earlier = this.#endsOwed(report.attempt);
     const answer = await this.#repoCall(
       "reportRun",
       (repo) =>
         // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-        repo.reportRun(report) as unknown as ReturnType<RepoDO["reportRun"]>,
+        repo.reportRun(report, { earlier }) as unknown as ReturnType<RepoDO["reportRun"]>,
     );
     // Retried: a transfer ends, and a deleted repository erases the run (`#marked`).
     if (!answer.ok) throw new Error(answer.code);
@@ -2194,8 +2209,8 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * Retires the expired run: sends its check outbox once (best effort), so
-   * a required check is not left pending; asks the repository to forget it;
+   * Retires the expired run: sends its check outbox and reports its state
+   * once (best effort), so a required check is not left pending; asks the repository to forget it;
    * then erases it. A failure is retried at the sweep's interval, the run
    * kept and answered as no run, and never ends the job: once begun, the
    * retirement holds whatever the retention becomes. Work still owed then
@@ -2213,6 +2228,13 @@ export class RunDO extends MigratingDO {
       await this.#flushChecks(job);
     } catch (error) {
       this.#log.warn("check updates of a retiring run not sent", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    try {
+      await this.#reportState();
+    } catch (error) {
+      this.#log.warn("state of a retiring run not reported", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
