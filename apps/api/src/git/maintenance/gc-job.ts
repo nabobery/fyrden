@@ -12,6 +12,7 @@ import { type GcSwapPlan, gcSwap } from "./gc-swap.js";
 import { newRunId } from "./ids.js";
 import { decodeBitSets, encodeBitSets, MarkSession, markName } from "./mark.js";
 import type { MaintenancePolicy } from "./policy.js";
+import { reflogRoots } from "./reflog-roots.js";
 import { type RewriteState, releaseOutputLease, rewriteSlice } from "./rewrite.js";
 import { GC_JOB_ID } from "./schedule.js";
 import {
@@ -199,7 +200,6 @@ class GcSlice {
   async #snapshot(): Promise<SliceResult> {
     const { git, policy } = this;
     const { storage } = git.context;
-    const now = git.context.now();
     const sources = storage.sql
       .exec<{ pack_id: string; state: string; object_count: number | null; origin: string }>(
         `SELECT pack_id, state, object_count, origin FROM packs
@@ -212,25 +212,14 @@ class GcSlice {
     const heldRoots = this.heldRoots();
     if (!sources.some((s) => s.state === "live") && heldRoots.length === 0) return { done: true };
     const state = git.refStore.state();
-    const reflog = storage.sql
-      .exec<{ old_oid: ArrayBuffer | null; new_oid: ArrayBuffer | null }>(
-        "SELECT old_oid, new_oid FROM reflog WHERE at >= ?",
-        now - policy.reflogRetentionMs,
-      )
-      .toArray();
+    const reflog = reflogRoots(git, policy.reflogRetentionMs);
     const reflogSeq =
       (storage.sql.exec<{ seq: number | null }>("SELECT max(seq) AS seq FROM reflog").one().seq as
         | number
         | null) ?? 0;
     const runId = newRunId(git);
     const roots = new Map<string, Uint8Array>();
-    for (const row of reflog) {
-      for (const value of [row.old_oid, row.new_oid]) {
-        if (!value) continue;
-        const bytes = new Uint8Array(value);
-        roots.set(Array.from(bytes).join(","), bytes);
-      }
-    }
+    for (const oid of reflog) roots.set(Array.from(oid).join(","), oid);
     // Further roots the repository keeps (pull requests' recorded bases) go with the reflog's.
     // One recorded after this read was a branch's tip when recorded: the refs this run marks
     // from, or an update after `reflogSeq` the swap's catch-up walks from, reach it. And a

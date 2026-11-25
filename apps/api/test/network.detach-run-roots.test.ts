@@ -27,7 +27,8 @@ describe("a fork's detach", () => {
   });
 
   /**
-   * A fork whose `side` branch is deleted: only a run could keep its commit.
+   * A fork whose `side` branch is deleted, its reflog entry since expired:
+   * only a run could keep its commit.
    * Not `stored`: one that never had the branch, nor its last commit's object.
    */
   async function sideless({ stored = true } = {}) {
@@ -47,9 +48,15 @@ describe("a fork's detach", () => {
     const { repo: f } = await fork(parentOwner, p, forkOwner);
     await setPolicy(f.stub);
     if (stored) await moveRef(f.stub, "refs/heads/side", fx.side, null);
+    await inRepo(f.stub, expireReflog);
     const networkId = await inRepo(f.stub, ({ git }) => git.networkId());
     return { f, networkId };
   }
+
+  /** The reflog as once every entry has expired and is pruned. */
+  const expireReflog = (repo: RepoDO) => {
+    repo.git.context.storage.sql.exec("DELETE FROM reflog").toArray();
+  };
 
   const recordRun = (repo: RepoDO, sha: string) =>
     repo.git.context.storage.sql.exec(
@@ -96,15 +103,7 @@ describe("a fork's detach", () => {
       repo.detachHooks = {
         onSlice: async (cursor) => {
           if (cursor.phase !== "prune" || answers.length > 0) return;
-          // Its commit is still reached by the side branch's reflog entry: registered.
-          answers.push(
-            await repo.registerRun({
-              runId: newUlid(),
-              sha: fx.side,
-              path: ".github/workflows/ci.yml",
-              reachableVia: fx.side,
-            }),
-          );
+          answers.push(await register(repo, fx.side));
         },
       };
     });
@@ -155,13 +154,9 @@ describe("a fork's detach", () => {
     if (!result.ok) throw new Error(`ref update failed: ${JSON.stringify(result)}`);
   };
 
+  /** As a run whose record a restore dropped registers again: whatever reaches its commit now. */
   const register = (repo: RepoDO, sha: string) =>
-    repo.registerRun({
-      runId: newUlid(),
-      sha,
-      path: ".github/workflows/ci.yml",
-      reachableVia: sha,
-    });
+    repo.registerRun({ runId: newUlid(), sha, path: ".github/workflows/ci.yml" });
 
   it("keeps the whole checkout of a run registered at its swap, its commit pushed without its tree", async () => {
     const detaching = await sideless({ stored: false });
@@ -180,6 +175,7 @@ describe("a fork's detach", () => {
         );
         moveSide(repo, null, fx.side);
         moveSide(repo, fx.side, null);
+        expireReflog(repo);
       }
       if (cursor.phase === "prune" && answers.length === 0)
         answers.push(await register(repo, fx.side));
@@ -251,6 +247,7 @@ describe("a fork's detach", () => {
       [...git.refStore.readRefsSync().refs].map(([name, oid]) => [name, oidToHex(oid)] as const),
     );
     for (const [name, oid] of refs) await moveRef(f.stub, name, oid, null);
+    await inRepo(f.stub, expireReflog);
     let recorded = false;
     await detachedWith(detaching, (repo, cursor) => {
       if (cursor.phase !== "verify" || recorded) return;
@@ -289,7 +286,7 @@ describe("a fork's detach", () => {
       if (!row?.cursor) return "none";
       const cursor = JSON.parse(new TextDecoder().decode(row.cursor)) as Record<string, unknown>;
       if (cursor.phase !== "prune") return String(cursor.phase);
-      delete cursor.heldRoots;
+      delete cursor.rootsRound;
       // Due again now, past the failed slice's retry delay.
       sql.exec(
         "UPDATE jobs SET cursor = ?, next_run_at = ? WHERE job_id = 'detach'",
@@ -312,6 +309,7 @@ describe("a fork's detach", () => {
     await setPolicy(f.stub);
     await moveRef(f.stub, "refs/heads/side", fx.side, null);
     await inRepo(f.stub, (repo: RepoDO) => {
+      expireReflog(repo);
       for (const sha of [fx.side, "e".repeat(40)])
         repo.git.context.storage.sql.exec(
           "INSERT INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)",
