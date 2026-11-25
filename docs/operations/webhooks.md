@@ -54,8 +54,10 @@ statuses and CI runs. Their fields, and GitHub's that are left out, are in
    over the raw body before it reads it.
 2. Drops a `webhook-id` it has seen: retries and redeliveries keep it.
 3. Expects any order. `position` (`epoch`, then `sequence`) orders a
-   repository's events. `completed` is final: after it, an event of the same
-   thing is late.
+   repository's events. The action `completed` is final for its run attempt
+   or job: another event of the same one is late. A `status` of `completed`
+   is not: a run held for approval shows it in its `requested`, and may go
+   on. A re-run is another `run_attempt`.
 4. Reads the rest from the API (`GET …/actions/runs/{run_id}`, its `/jobs`,
    `…/commits/{ref}/check-runs`) when it needs every state: in-between
    events may be merged, and on Workers Free a large matrix sends only some.
@@ -75,7 +77,8 @@ backup (a new `position.epoch`): what happened since the backup may be sent
 again, and a run whose record the restore removed sends nothing until its
 weekly check registers it. Take a new epoch as the sign to read the state
 again. The promise ends with a run's retention: a run whose reports failed
-all that time tries once more and is then retired.
+all that time sends what is owed once more and is then retired, counted in
+`ci.run_retired_owed` ([metrics.md](metrics.md)) if that fails too.
 
 A run's own events, the bodies shortened to what differs from other events:
 

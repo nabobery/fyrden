@@ -302,7 +302,7 @@ function planDeliveries(event: DomainEvent): readonly PlannedEffect[] {
         } satisfies PlannedCapture,
       },
     ];
-  const made = bodyOf(event) ?? {};
+  const made = dropped ? {} : (bodyOf(event) ?? {});
   const tooLarge = !dropped && journaledBytes(made) > DELIVERY_POLICY.maxBodyBytes;
   const body =
     dropped || tooLarge

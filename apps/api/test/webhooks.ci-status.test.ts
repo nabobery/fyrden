@@ -94,6 +94,22 @@ describe("the status event", () => {
     expect(await t.outbox()).toHaveLength(before);
   });
 
+  it.each([
+    ["payload_invalid", { data: { webhook: { v: 99 } } }],
+    ["payload_missing", { data: null, stored: true }],
+  ] as const)("is dropped as %s without failing its envelope", async (reason, change) => {
+    await t.createHook({ events: ["status"] });
+    await post({ state: "pending" });
+    await post({ state: "success" });
+    const [broken, whole] = await t.routed();
+    if (!broken || !whole) throw new Error("no events");
+    await t.materialize([{ ...broken, ...change }, whole]);
+    expect((await t.deliveries()).map((d) => [d.state, d.reason]).sort()).toEqual([
+      ["dropped", reason],
+      ["pending", null],
+    ]);
+  });
+
   it("is not sent for a status refused", async () => {
     await t.createHook({ events: ["status"] });
     const refused = await api("POST", `${t.path}/statuses/${"0".repeat(40)}`, t.owner.token, {

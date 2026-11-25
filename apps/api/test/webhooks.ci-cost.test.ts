@@ -36,14 +36,14 @@ const matrix = (n: number) =>
     ]),
   );
 
-type Counted = { counted: { rows: number; events: number } };
+type Counted = { counted: { rows: number; events: number }; exec: SqlStorage["exec"] };
 
 async function writes(work: () => Promise<unknown>) {
   await inRepo(t.stub(), (r: RepoDO) => {
     const { sql } = r.git.context.storage;
     const counted = { rows: 0, events: 0 };
-    (r as unknown as Counted).counted = counted;
     const exec = sql.exec.bind(sql);
+    Object.assign(r, { counted, exec: sql.exec });
     sql.exec = ((query: string, ...bindings: unknown[]) => {
       const cursor = exec(query, ...(bindings as []));
       const rows = cursor.toArray();
@@ -61,11 +61,15 @@ async function writes(work: () => Promise<unknown>) {
       };
     }) as unknown as typeof sql.exec;
   });
-  await work();
-  return inRepo(t.stub(), (r: RepoDO) => {
-    const { counted } = r as unknown as Counted;
-    return { ...counted };
-  });
+  try {
+    await work();
+  } finally {
+    await inRepo(t.stub(), (r: RepoDO) => {
+      const { sql } = r.git.context.storage;
+      sql.exec = (r as unknown as Counted).exec;
+    });
+  }
+  return inRepo(t.stub(), (r: RepoDO) => ({ ...(r as unknown as Counted).counted }));
 }
 
 const drainOutbox = () => inRepo(t.stub(), (r: RepoDO) => r.outbox.drain(t.repo.id));

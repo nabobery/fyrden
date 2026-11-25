@@ -284,6 +284,8 @@ export interface RunHooks extends DispatchHooks, LogHooks, ReservationHooks {
 /** R2 calls (a list and a delete per 1,000 chunks) one slice of an erased run's log purge makes at most. Proposed. */
 export const LOG_PURGE_CALLS = 20;
 
+const REPORTS_OWED = new Uint8Array([1]);
+
 /**
  * What the repository answers once it is deleted: a refused change, or any call at all while
  * it erases itself (a deletion is never undone, so neither answer is transient).
@@ -2051,8 +2053,7 @@ export class RunDO extends MigratingDO {
     await this.#reportState();
     const left =
       !checks.done ||
-      this.#stateOwed() !== undefined ||
-      this.jobReports().length > 0 ||
+      this.#reportOwed() ||
       this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
         .length > 0;
     return left
@@ -2066,6 +2067,10 @@ export class RunDO extends MigratingDO {
     return report && runStateSeq(report.attempt, report.phase) > this.#reported
       ? report
       : undefined;
+  }
+
+  #reportOwed(): boolean {
+    return this.#stateOwed() !== undefined || this.jobReports().length > 0;
   }
 
   #endsOwed(attempt: number): AttemptEnd[] {
@@ -2301,10 +2306,16 @@ export class RunDO extends MigratingDO {
    */
   async #retire(
     job: Job,
-  ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+  ): Promise<{ done: true } | { done: false; cursor: Uint8Array | null; runAfterMs: number }> {
     const run = this.engine.run();
     if (!run) return { done: true };
-    const retry = { done: false as const, cursor: null, runAfterMs: this.policy.sweepMs };
+    const owedBefore = (job.cursor?.length ?? 0) > 0;
+    let reportsOwed = owedBefore;
+    const retry = () => ({
+      done: false as const,
+      cursor: reportsOwed ? REPORTS_OWED : null,
+      runAfterMs: this.policy.sweepMs,
+    });
     // Answered as no run already: its live log sockets close now, not once the erasure succeeds.
     this.viewers.erased();
     try {
@@ -2315,12 +2326,16 @@ export class RunDO extends MigratingDO {
       });
     }
     try {
-      await this.#reportState();
+      while (this.#reportOwed()) await this.#reportState();
     } catch (error) {
+      reportsOwed = true;
       this.#log.warn("state of a retiring run not reported", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // Once forgotten, the repository accepts reports and tells no one: whether it took them before
+    // is kept across retries.
+    if (!this.jobs.checkpoint(job, reportsOwed ? REPORTS_OWED : new Uint8Array())) return retry();
     try {
       const answer = await this.#repoCall(
         "forgetRun",
@@ -2330,17 +2345,21 @@ export class RunDO extends MigratingDO {
       );
       if (!answer.ok && answer.code !== "repo_not_found") {
         this.#log.warn("retiring run not forgotten by its repository", { code: answer.code });
-        return retry;
+        reportsOwed = owedBefore;
+        return retry();
       }
+      if (!answer.ok) reportsOwed = false;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!repoGone(message)) {
         this.#log.warn("retiring run not forgotten by its repository", { error: message });
-        return retry;
+        return retry();
       }
+      reportsOwed = false;
     }
     try {
       const owed = this.#owedNames();
+      if (reportsOwed) owed.push("reports");
       await this.erase(run.repo_id);
       // Counted once, when the run is gone: a retry before then may still deliver the work.
       if (owed.length > 0) {
@@ -2352,7 +2371,7 @@ export class RunDO extends MigratingDO {
       this.#log.warn("retiring run not erased", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return retry;
+      return retry();
     }
     return { done: true };
   }

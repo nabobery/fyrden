@@ -378,6 +378,34 @@ describe("workflow run events", () => {
     expect((await sent()).map(([action]) => action)).toEqual(["requested", "completed"]);
   });
 
+  it("are sent of every job and attempt still owed as a run retires, however many", async () => {
+    await t.createHook({ events: ["workflow_job", "workflow_run"] });
+    const n = Array.from({ length: 150 }, (_, i) => i).join(", ");
+    const source = workflow(job("m", ["strategy:", "  matrix:", `    n: [${n}]`]));
+    const runId = await started(f, source);
+    const retention = 8 * DAY;
+    const configure = (hooks: RunDO["hooks"]) =>
+      inRun(runId, (r) => {
+        r.policy = { ...r.policy, retentionMs: retention };
+        r.hooks = hooks;
+      });
+    await configure(failing("reportRun"));
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect((await runStub(runId).cancel(t.owner.principalId, "force")).ok).toBe(true);
+      await drain(runId);
+      if (attempt < 3) expect((await runStub(runId).rerun(t.owner.principalId)).ok).toBe(true);
+      await drain(runId);
+    }
+    await advance(runId, 2_000);
+    await at(runId, T0 + retention + 3_000);
+    await configure({});
+    await inRun(runId, (r) => r.ciReconcileAt(now(runId)));
+    expect(await runStub(runId).get()).toBeUndefined();
+    const types = (await t.routed()).map((e) => e.type);
+    expect(types.filter((type) => type === "workflow_job.completed")).toHaveLength(450);
+    expect(types.filter((type) => type === "workflow_run.completed")).toHaveLength(3);
+  });
+
   it("refuse a report whose earlier attempts are not ones", async () => {
     const runId = await started(f, SOURCE);
     const report = { ...(await reportOf(runId)), attempt: 2 };
