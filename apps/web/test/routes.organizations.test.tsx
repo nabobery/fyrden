@@ -92,8 +92,8 @@ describe("the organizations page", () => {
   });
 
   it("names the organization in each link", () => {
-    const text = shown([acme]).replace(/<[^>]+>/g, "");
-    for (const page of ORG_SETTINGS) expect(text).toContain(`acme: ${page.label}`);
+    const html = shown([acme]);
+    for (const page of ORG_SETTINGS) expect(html).toContain(`acme: </span>${page.label}</a>`);
   });
 
   it("says so when there are none, and when a page is past the last", () => {

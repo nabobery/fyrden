@@ -68,7 +68,7 @@ export default function Organizations({ loaderData }: Route.ComponentProps) {
                     <span className="row">
                       {ORG_SETTINGS.filter((entry) => entry.visible(scopeOf(org))).map((entry) => (
                         <Link key={entry.key} to={entry.path(scopeOf(org))}>
-                          <span className="visually-hidden">{org.login}: </span>
+                          <span className="visually-hidden">{`${org.login}: `}</span>
                           {entry.label}
                         </Link>
                       ))}
