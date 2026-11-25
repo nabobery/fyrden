@@ -363,6 +363,26 @@ The estimate is 1.4 to 5 times what workerd retains in every shape (82 to 96 byt
 a trie node at the caps); the constants and the shapes are in `mask.ts` and
 `tools/bench/mask/src/shapes.ts`.
 
+## The runner provider contract
+
+Every runner provider passes one suite
+(`packages/runner-providers/testing/contract.ts`). Three things it asks of a
+hosted one are decisions:
+
+- **An instance id is never given to another instance**, also once the first
+  is gone. A handle is kept to tear down later, perhaps twice: if its id came
+  to name a later instance, that would remove another job's machine.
+- **While its service fails, `status`, `teardown` and `listOrphans` reject**,
+  and nothing is answered from a cache. An empty list allows another purchase;
+  a `gone`, or a teardown that is done, leaves a machine billed and forgotten
+  when it is not so.
+- **What stands behind it in its tests has pages of at most 100 instances**,
+  whatever the real service has. The suite compares a list of 120 whole, so a
+  provider that reads only the first page is found only when a page is shorter
+  than that. The suite does not check the limit itself. A page size stated by
+  each provider's test was left out: no hosted provider exists yet to use it.
+  Reconsider it with the first one, if its stand-in cannot have such pages.
+
 ## Writing git-core tests
 
 - Tests come first (see `AGENTS.md`). Parsers get a fast-check property suite
