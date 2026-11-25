@@ -43,3 +43,59 @@ them as `unreadable`. Set a new `WEBHOOKS_KEY`, then rotate each affected
 hook's secret (`POST …/hooks/{id}/secret`) and give the new secret to its
 receiver. Restoring a Durable Object backup needs the key that was current
 when the backup was taken (in `WEBHOOKS_KEYS_RETIRED`, if you kept it).
+
+## Receiving CI events
+
+`status`, `check_run`, `workflow_run` and `workflow_job` follow commit
+statuses and CI runs. Their fields, and GitHub's that are left out, are in
+[limits.md](limits.md#webhooks). A receiver:
+
+1. Verifies `webhook-signature` (Standard Webhooks, with the hook's secret)
+   over the raw body before it reads it.
+2. Drops a `webhook-id` it has seen: retries and redeliveries keep it.
+3. Expects any order. `position` (`epoch`, then `sequence`) orders a
+   repository's events. `completed` is final: after it, an event of the same
+   thing is late.
+4. Reads the rest from the API (`GET …/actions/runs/{run_id}`, its `/jobs`,
+   `…/commits/{ref}/check-runs`) when it needs every state: in-between
+   events may be merged, and on Workers Free a large matrix sends only some.
+
+What identifies one thing happening, across deliveries of it to several
+hooks:
+
+| Event | Key |
+|---|---|
+| `status` | `position.epoch`, `id` |
+| `check_run` | `head_sha`, `name`, `attempt`, `action` |
+| `workflow_run` | `id`, `run_attempt`, `action` |
+| `workflow_job` | `run_id`, `id`, `action` |
+
+Each is sent once. The exception is a repository object restored from a
+backup (a new `position.epoch`): what happened since the backup may be sent
+again, and a run whose record the restore removed sends nothing until its
+weekly check registers it. Take a new epoch as the sign to read the state
+again. The promise ends with a run's retention: a run whose reports failed
+all that time tries once more and is then retired.
+
+A run's own events, the bodies shortened to what differs from other events:
+
+```json
+{"event":"workflow_run","action":"completed",
+ "workflow_run":{"id":"01J…","run_number":4,"name":"CI","run_attempt":1,
+  "head_branch":"main","head_sha":"9f…","event":"push","status":"completed",
+  "conclusion":"failure"}}
+{"event":"workflow_job","action":"completed",
+ "workflow_job":{"id":1,"run_id":"01J…","run_attempt":1,"name":"build",
+  "job_key":"build","status":"completed","conclusion":"failure"}}
+{"event":"check_run","action":"completed",
+ "check_run":{"name":"build","head_sha":"9f…","attempt":1,
+  "status":"completed","conclusion":"failure",
+  "run":{"id":"01J…","run_attempt":1,"job_id":1}}}
+{"event":"status","id":12,"sha":"9f…","context":"ext/build","state":"failure"}
+```
+
+Names and titles in them are text that whoever wrote the workflow chose, a
+fork's pull request included: never run them, and escape them where shown.
+A receiver that posts a status on a `status` event answers itself: skip
+events whose `sender` is the receiver's own account. Nothing here starts a
+workflow on any of these events.

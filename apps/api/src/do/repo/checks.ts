@@ -37,6 +37,7 @@ import { captureCheckRun, captureStatus } from "../../webhooks/ci-captures.js";
 import { type CheckOrigin, parseCheckKey } from "../run/check-key.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
+import type { InBetweenBudget } from "./run-history.js";
 
 /*
  * Commit statuses and check summaries. A status is kept as posted; each
@@ -224,6 +225,8 @@ export class RepoChecks {
       readonly required?: (baseRef: string) => readonly RequiredStatusCheck[];
       /** Whether CI run `runId` is kept, so that a check may name it. */
       readonly runKept?: (runId: string) => boolean;
+      /** The cap on `created` events, for one call's starts. */
+      readonly createdBudget?: () => InBetweenBudget;
     },
   ) {}
 
@@ -317,7 +320,8 @@ export class RepoChecks {
       const now = this.#now();
       const named = new Map<string, { startKey: string; answer: CheckStartAnswer }>();
       let summaries: number | undefined;
-      return items.map((item): CheckStartAnswer => {
+      const budget = this.deps.createdBudget?.();
+      const answers = items.map((item): CheckStartAnswer => {
         if (!validStart(item)) return { ok: false, code: "invalid_check" };
         const key = checkNameKey(item.name);
         const earlier = named.get(key);
@@ -325,7 +329,7 @@ export class RepoChecks {
           return earlier.startKey === item.startKey
             ? earlier.answer
             : { ok: false, code: "duplicate_check" };
-        const answer = this.#start(sha, key, item, now, () => {
+        const answer = this.#start(sha, key, item, now, budget, () => {
           summaries ??=
             this.#exec<{ n: number }>(
               "checks.read",
@@ -339,6 +343,8 @@ export class RepoChecks {
         named.set(key, { startKey: item.startKey, answer });
         return answer;
       });
+      budget?.save();
+      return answers;
     });
   }
 
@@ -674,11 +680,16 @@ export class RepoChecks {
     };
   }
 
-  #tellCheck(action: "created" | "completed", row: SummaryRow): void {
+  #tellCheck(
+    action: "created" | "completed",
+    row: SummaryRow,
+    admit: () => boolean = () => true,
+  ): void {
     this.deps.events.emitToHooks(
       `check_run.${action}`,
       row.actor_id === null ? null : { principal: row.actor_id, via: "api" },
       () => captureCheckRun(this.#checkRun(row)),
+      admit,
     );
   }
 
@@ -717,6 +728,7 @@ export class RepoChecks {
     key: string,
     item: CheckStart,
     now: number,
+    budget: InBetweenBudget | undefined,
     room: () => boolean,
   ): CheckStartAnswer {
     const source = FYRDEN_CI_SOURCE;
@@ -773,7 +785,8 @@ export class RepoChecks {
       item.actor ?? null,
       now,
     );
-    this.#tellCheck("created", started as SummaryRow);
+    const run = parseCheckKey(item.startKey);
+    this.#tellCheck("created", started as SummaryRow, () => !run || !budget || budget.admit(run));
     return { ok: true, attempt, current: true };
   }
 

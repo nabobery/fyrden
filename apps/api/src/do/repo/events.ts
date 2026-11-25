@@ -802,11 +802,16 @@ export class RepoEvents {
 
   /**
    * In the caller's transaction: an event only webhooks read. With no hook
-   * taking it, nothing is written and `capture` is not called. Answers
-   * whether one took it.
+   * taking it, nothing is written and neither `admit` (whether to send it
+   * then) nor `capture` is called. Answers whether it was sent.
    */
-  emitToHooks(type: string, actor: RefActor | null, capture: CaptureBuilder): boolean {
-    if (this.#hooksFor(type, null).length === 0) return false;
+  emitToHooks(
+    type: string,
+    actor: RefActor | null,
+    capture: CaptureBuilder,
+    admit: () => boolean = () => true,
+  ): boolean {
+    if (this.#hooksFor(type, null).length === 0 || !admit()) return false;
     this.emitActivity(type, actor, {}, capture);
     return true;
   }

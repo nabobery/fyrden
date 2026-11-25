@@ -47,6 +47,7 @@ import {
   oidToHex,
   PackError,
 } from "@fyrden/git-core";
+import { ciEnv } from "../ci/budget.js";
 import {
   admissionStatements,
   discretionaryAllowance,
@@ -63,6 +64,7 @@ import {
   ChunkedUploads,
   type ChunkedView,
 } from "../git/chunked/session.js";
+import { workersPlan } from "../git/fetch/mode.js";
 import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
@@ -294,6 +296,7 @@ import {
   type SettleAnswer,
 } from "./repo/run-approvals.js";
 import {
+  IN_BETWEEN_CAP,
   type RunFilter,
   RunHistory,
   type RunNews,
@@ -752,14 +755,18 @@ export class RepoDO extends MigratingDO {
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
-    this.runs = new RunHistory(this.git, this.events, () =>
-      runRetentionMs(this.env, (m) => this.#log().warn(m)),
+    this.runs = new RunHistory(
+      this.git,
+      this.events,
+      () => runRetentionMs(this.env, (m) => this.#log().warn(m)),
+      () => (workersPlan(ciEnv(this.env)) === "paid" ? null : IN_BETWEEN_CAP),
     );
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
       required: (baseRef) => this.#authority.requiredOn(baseRef).checks.map((c) => c.check),
       runKept: (runId) => this.runs.kept(runId),
+      createdBudget: () => this.runs.createdBudget(),
     });
     this.releases = new RepoReleases({
       git: this.git,
@@ -2619,8 +2626,8 @@ export class RepoDO extends MigratingDO {
   }
 
   /**
-   * A run's state, which it reports after each change: recorded unless the
-   * repository has that state or a later one. It only updates a run the
+   * A run's state, which it reports after each change, with the jobs that
+   * moved: recorded unless the repository has that state or a later one. It only updates a run the
    * repository holds (`recorded`), so a report that lands after the run was
    * forgotten brings nothing back. Refused as `registerRun` is.
    */
@@ -2628,7 +2635,12 @@ export class RepoDO extends MigratingDO {
     report: RunReport,
     news: RunNews = {},
   ): Promise<
-    | { readonly ok: true; readonly recorded: boolean }
+    | {
+        readonly ok: true;
+        readonly recorded: boolean;
+        /** Every job id up to it is known to have ended. */
+        readonly jobsDone: number;
+      }
     | {
         readonly ok: false;
         readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
@@ -2643,7 +2655,7 @@ export class RepoDO extends MigratingDO {
         this.runs.apply(state, checked),
       );
       this.#armOutbox();
-      return { ok: true, recorded };
+      return { ok: true, recorded, jobsDone: this.runs.jobsDone(state.runId) };
     });
   }
 

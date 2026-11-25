@@ -18,7 +18,12 @@ import {
   type AttemptConclusion,
   effectiveScope,
   type InstanceConclusion,
+  type JobAction,
+  type JobsTold,
+  jobMoves,
+  jobOrder,
   jobPayload,
+  jobsDoneTo,
   type NeedResult,
   nodeOutcome,
   type RunFacts,
@@ -29,6 +34,7 @@ import {
   type SecretMaskOffer,
   type SecretReferences,
   secretReferences,
+  shown,
   type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
@@ -37,7 +43,12 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
-import type { AttemptEnd, RunReport } from "./repo/run-history.js";
+import {
+  type AttemptEnd,
+  type JobReport,
+  MAX_JOB_REPORTS,
+  type RunReport,
+} from "./repo/run-history.js";
 import { planCheckKey } from "./run/check-key.js";
 import {
   type AssignTaskAnswer,
@@ -315,6 +326,7 @@ export class RunDO extends MigratingDO {
   #facts: { readonly runId: string; readonly facts: RunFacts } | undefined;
   /** The state the repository last took (`runStateSeq`); lost with the instance, which reports again. */
   #reported = 0;
+  #jobsReported: JobsTold = { done: 0, live: {} };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -891,6 +903,47 @@ export class RunDO extends MigratingDO {
   /** Forgets which state the repository last took, as a new instance has (for tests). */
   forgetReported(): void {
     this.#reported = 0;
+    this.#jobsReported = { done: 0, live: {} };
+  }
+
+  /** The jobs to report next: those that moved since the repository took them from this instance. */
+  jobReports(): JobReport[] {
+    const rows = this.engine.rows<
+      Pick<
+        InstanceRow,
+        | "job_id"
+        | "attempt"
+        | "job_key"
+        | "name"
+        | "status"
+        | "conclusion"
+        | "started_at"
+        | "completed_at"
+      > & { triggering_actor_id: string }
+    >(
+      // Told and not ended are only the current attempt's, the last and 256 at most: what is owed
+      // is within the first 512.
+      `SELECT i.job_id, i.attempt, i.job_key, i.name, i.status, i.conclusion, i.started_at,
+         i.completed_at, a.triggering_actor_id
+       FROM run_instances i JOIN run_attempts a ON a.attempt = i.attempt
+       WHERE i.job_id > ? AND i.status <> 'blocked' ORDER BY i.job_id LIMIT ?`,
+      this.#jobsReported.done,
+      2 * MAX_JOB_REPORTS,
+    );
+    return rows
+      .map((row) => ({
+        jobId: row.job_id,
+        attempt: row.attempt,
+        triggeringActor: row.triggering_actor_id,
+        key: row.job_key,
+        name: shown(row.name) ?? row.job_key,
+        action: row.status === "cancelling" ? "in_progress" : (row.status as JobAction),
+        conclusion: row.conclusion,
+        startedAt: row.started_at,
+        completedAt: row.completed_at,
+      }))
+      .filter((job) => jobOrder(job.action) > jobOrder(this.#jobsReported.live[job.jobId]))
+      .slice(0, MAX_JOB_REPORTS);
   }
 
   /** The run as its current attempt stands; undefined when there is none (or it was erased). */
@@ -1972,6 +2025,7 @@ export class RunDO extends MigratingDO {
     const left =
       !checks.done ||
       this.#stateOwed() !== undefined ||
+      this.jobReports().length > 0 ||
       this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
         .length > 0;
     return left
@@ -2000,20 +2054,22 @@ export class RunDO extends MigratingDO {
       }));
   }
 
-  /** Reports the run's state when it moved; the repository keeps the latest of what it is told. */
   async #reportState(): Promise<void> {
-    const report = this.#stateOwed();
+    const jobs = this.jobReports();
+    const report = this.#stateOwed() ?? (jobs.length > 0 ? this.runReport() : undefined);
     if (!report) return;
     const earlier = this.#endsOwed(report.attempt);
     const answer = await this.#repoCall(
       "reportRun",
       (repo) =>
         // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-        repo.reportRun(report, { earlier }) as unknown as ReturnType<RepoDO["reportRun"]>,
+        repo.reportRun(report, { earlier, jobs }) as unknown as ReturnType<RepoDO["reportRun"]>,
     );
     // Retried: a transfer ends, and a deleted repository erases the run (`#marked`).
     if (!answer.ok) throw new Error(answer.code);
+    // By the greatest: a slice taken over may be answered after the one that took over.
     this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
+    this.#jobsReported = jobsDoneTo(jobMoves(this.#jobsReported, jobs).told, answer.jobsDone ?? 0);
   }
 
   /**

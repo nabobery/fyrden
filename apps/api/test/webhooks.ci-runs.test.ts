@@ -320,6 +320,19 @@ describe("workflow run events", () => {
     expect(await sent()).toEqual([["completed", 1, "completed", "success"]]);
   });
 
+  it("read what an earlier shape of the record kept", async () => {
+    await t.createHook({ events: ["workflow_run", "workflow_job"] });
+    const runId = await started(f, SOURCE);
+    await sql((s) =>
+      s.exec("UPDATE ci_runs SET told = ? WHERE run_id = ?", '{"stateSeq":120}', runId),
+    );
+    await advance(runId, 2_000);
+    expect((await t.routed()).map((e) => e.type)).toEqual([
+      "workflow_run.in_progress",
+      "workflow_job.queued",
+    ]);
+  });
+
   it("go to no hook that does not take them, and write no event for it", async () => {
     await t.createHook({ events: ["check_run"] });
     const runId = await started(f, SOURCE);

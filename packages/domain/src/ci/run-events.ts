@@ -30,3 +30,41 @@ export function runMoves(
   tell(report.attempt, report.phase);
   return { told: at, moves };
 }
+
+export const JOB_ACTIONS = ["queued", "in_progress", "completed"] as const;
+export type JobAction = (typeof JOB_ACTIONS)[number];
+
+export const jobOrder = (action: JobAction | undefined): number =>
+  action === undefined ? -1 : JOB_ACTIONS.indexOf(action);
+
+/**
+ * What was told of a run's jobs: every job id up to `done` was told
+ * complete, and `live` holds what was told of later ones. A run's job ids
+ * are one sequence from 1, over all its attempts.
+ */
+export interface JobsTold {
+  readonly done: number;
+  readonly live: Readonly<Record<number, JobAction>>;
+}
+
+/** What reported job states tell after `told`: each job only ever moves on, to its latest state. */
+export function jobMoves<J extends { readonly jobId: number; readonly action: JobAction }>(
+  told: JobsTold,
+  jobs: readonly J[],
+): { readonly told: JobsTold; readonly moves: readonly J[] } {
+  const live: Record<number, JobAction> = { ...told.live };
+  const moves = jobs.filter(({ jobId, action }) => {
+    if (jobId <= told.done || jobOrder(action) <= jobOrder(live[jobId])) return false;
+    live[jobId] = action;
+    return true;
+  });
+  return { told: jobsDoneTo({ done: told.done, live }, told.done), moves };
+}
+
+/** `told` with every job id up to `done` complete too. */
+export function jobsDoneTo(told: JobsTold, done: number): JobsTold {
+  let at = Math.max(told.done, done);
+  while (told.live[at + 1] === "completed") at++;
+  const live = Object.entries(told.live).filter(([jobId]) => Number(jobId) > at);
+  return { done: at, live: Object.fromEntries(live) };
+}

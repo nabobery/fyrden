@@ -36,6 +36,7 @@ export const HOOK_EVENTS = [
   "status",
   "check_run",
   "workflow_run",
+  "workflow_job",
 ] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 

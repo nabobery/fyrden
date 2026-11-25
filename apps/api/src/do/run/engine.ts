@@ -598,6 +598,7 @@ export class RunEngine {
           "UPDATE run_instances SET check_code = 'reserved_name' WHERE job_id = ?",
           row.job_id,
         );
+      this.#tellRepository();
       return;
     }
     const desired = check.status === "completed" ? (check.conclusion as string) : check.status;
@@ -612,6 +613,7 @@ export class RunEngine {
           "UPDATE run_instances SET check_code = 'duplicate_check' WHERE job_id = ?",
           row.job_id,
         );
+      this.#tellRepository();
       return;
     }
     if (existing?.desired === desired) return;

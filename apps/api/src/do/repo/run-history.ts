@@ -2,14 +2,21 @@ import { isUlid, type RepoGitStorage } from "@fyrden/adapters-cloudflare/git";
 import { isFullSha, ulid } from "@fyrden/domain";
 import {
   type AttemptConclusion,
+  INSTANCE_CONCLUSIONS,
+  type InstanceConclusion,
+  JOB_ACTIONS,
+  type JobAction,
+  type JobsTold,
+  jobMoves,
   RUN_PHASES,
   type RunFacts,
+  type RunMove,
   type RunPhase,
   runMoves,
   runStateSeq,
   type TimeRange,
 } from "@fyrden/domain/ci";
-import { captureWorkflowRun } from "../../webhooks/ci-captures.js";
+import { captureWorkflowJob, captureWorkflowRun } from "../../webhooks/ci-captures.js";
 import type { RepoEvents } from "./events.js";
 
 /*
@@ -53,13 +60,38 @@ export interface AttemptEnd {
   readonly completedAt: number;
 }
 
+/** A job instance that was queued at least once, or ended, as its run reports it. */
+export interface JobReport {
+  readonly jobId: number;
+  readonly attempt: number;
+  readonly triggeringActor: string;
+  readonly key: string;
+  readonly name: string;
+  readonly action: JobAction;
+  /** Set exactly when completed. */
+  readonly conclusion: InstanceConclusion | null;
+  readonly startedAt: number | null;
+  readonly completedAt: number | null;
+}
+
 export interface RunNews {
   /** Attempts before the reported one that ended, which may not have been reported. */
   readonly earlier?: readonly AttemptEnd[];
+  /** Jobs of any attempt that moved, by id, `MAX_JOB_REPORTS` at most. */
+  readonly jobs?: readonly JobReport[];
 }
 
-interface Told {
+export const MAX_JOB_REPORTS = 256;
+
+/** Events of a run's way to its end, which the Free plan sends a few of: `IN_BETWEEN_CAP`. */
+export type InBetween = "created" | "queued" | "in_progress";
+
+/** In-between events of each kind sent an attempt on Free. Proposed. */
+export const IN_BETWEEN_CAP = 32;
+
+interface Told extends JobsTold {
   readonly stateSeq: number;
+  readonly sent: { readonly attempt: number } & Readonly<Record<InBetween, number>>;
 }
 
 type RunRow = {
@@ -116,6 +148,12 @@ export interface RunFilter {
   readonly triggered?: TimeRange;
 }
 
+/** Admits in-between events against their attempt's cap; `save` records those admitted. */
+export interface InBetweenBudget {
+  admit(run: { readonly runId: string; readonly attempt: number }): boolean;
+  save(): void;
+}
+
 /** A page of runs, newest first; `next` the run id to continue before. */
 export interface RunPage {
   readonly runs: RunReport[];
@@ -140,6 +178,7 @@ export class RunHistory {
     private readonly events: Pick<RepoEvents, "emitToHooks">,
     /** How long a run is kept after it completed: past it, it is answered as no run. */
     private readonly retentionMs: () => number,
+    private readonly inBetweenCap: () => number | null,
   ) {}
 
   /**
@@ -150,8 +189,39 @@ export class RunHistory {
   apply(report: RunReport, news: RunNews = {}): boolean {
     const held = this.#held(report.runId);
     if (!held) return false;
-    const told = toldOf(held);
-    return this.#record(held, report, this.#tell(told, report, news.earlier ?? []));
+    return this.#record(held, report, this.#tell(toldOf(held), report, news));
+  }
+
+  /** What webhooks were told of the run's jobs: every job id up to it complete. */
+  jobsDone(runId: string): number {
+    const held = this.#held(runId);
+    return held ? toldOf(held).done : 0;
+  }
+
+  /** In the caller's transaction: the cap on checks' `created`, for checks of any runs. */
+  createdBudget(): InBetweenBudget {
+    const runs = new Map<string, { told: Told; admitted: boolean }>();
+    const cap = this.inBetweenCap();
+    return {
+      admit: ({ runId, attempt }) => {
+        if (cap === null) return true;
+        let run = runs.get(runId);
+        if (!run) {
+          const held = this.#held(runId);
+          if (!held) return true;
+          run = { told: toldOf(held), admitted: false };
+          runs.set(runId, run);
+        }
+        const sent = admitted(run.told.sent, attempt, "created", cap);
+        if (!sent) return false;
+        run.told = { ...run.told, sent };
+        run.admitted = true;
+        return true;
+      },
+      save: () => {
+        for (const [runId, { told, admitted }] of runs) if (admitted) this.#writeTold(runId, told);
+      },
+    };
   }
 
   /**
@@ -162,8 +232,12 @@ export class RunHistory {
   register(report: RunReport, inserted: boolean): void {
     const held = this.#held(report.runId);
     if (!held) return;
-    const told = inserted ? { stateSeq: runStateSeq(report.attempt, report.phase) } : toldOf(held);
-    this.#record(held, report, told);
+    const told = toldOf(held);
+    this.#record(
+      held,
+      report,
+      inserted ? { ...told, stateSeq: runStateSeq(report.attempt, report.phase) } : told,
+    );
   }
 
   #held(runId: string): Pick<RunRow, "state_seq" | "told"> | undefined {
@@ -175,29 +249,54 @@ export class RunHistory {
       .toArray()[0];
   }
 
-  #tell(told: Told, report: RunReport, earlier: readonly AttemptEnd[]): Told {
+  #tell(told: Told, report: RunReport, { earlier = [], jobs = [] }: RunNews): Told {
     const ends = new Map(earlier.map((end) => [end.attempt, end]));
-    const { told: stateSeq, moves } = runMoves(told.stateSeq, report, [...ends.keys()]);
-    for (const { attempt, action } of moves) {
-      const end = ends.get(attempt);
-      const run: RunReport = end
-        ? { ...report, ...end, phase: "completed", updatedAt: end.completedAt }
-        : report;
+    const run = runMoves(told.stateSeq, report, [...ends.keys()]);
+    const ended = run.moves.filter((m) => m.attempt === report.attempt && m.action === "completed");
+    for (const move of run.moves) if (!ended.includes(move)) this.#tellRun(move, report, ends);
+    const job = jobMoves(told, jobs);
+    let { sent } = told;
+    for (const move of job.moves) sent = this.#tellJob(move, report, sent);
+    for (const move of ended) this.#tellRun(move, report, ends);
+    return { stateSeq: run.told, ...job.told, sent };
+  }
+
+  #tellRun(
+    { attempt, action }: RunMove,
+    report: RunReport,
+    ends: ReadonlyMap<number, AttemptEnd>,
+  ): void {
+    const end = ends.get(attempt);
+    const run: RunReport = end
+      ? { ...report, ...end, phase: "completed", updatedAt: end.completedAt }
+      : report;
+    this.events.emitToHooks(
+      `workflow_run.${action}`,
+      { principal: run.triggeringActor, via: "api" },
+      () => captureWorkflowRun(run),
+    );
+  }
+
+  #tellJob(job: JobReport, report: RunReport, sent: Told["sent"]): Told["sent"] {
+    const { action } = job;
+    const cap = action === "completed" ? null : this.inBetweenCap();
+    const after =
+      action === "completed" || cap === null ? sent : admitted(sent, job.attempt, action, cap);
+    const told =
+      after !== undefined &&
       this.events.emitToHooks(
-        `workflow_run.${action}`,
-        { principal: run.triggeringActor, via: "api" },
-        () => captureWorkflowRun(run),
+        `workflow_job.${action}`,
+        { principal: job.triggeringActor, via: "api" },
+        () => captureWorkflowJob(job, report),
       );
-    }
-    return { stateSeq };
+    return told ? after : sent;
   }
 
   #record(held: Pick<RunRow, "state_seq" | "told">, report: RunReport, told: Told): boolean {
     const seq = runStateSeq(report.attempt, report.phase);
     const toldText = JSON.stringify(told);
     if (seq <= held.state_seq) {
-      if (told.stateSeq !== toldOf(held).stateSeq)
-        this.#count("UPDATE ci_runs SET told = ? WHERE run_id = ?", toldText, report.runId);
+      if (toldText !== JSON.stringify(toldOf(held))) this.#writeTold(report.runId, told);
       return false;
     }
     const summary: Summary = {
@@ -228,6 +327,10 @@ export class RunHistory {
       toldText,
     );
     return true;
+  }
+
+  #writeTold(runId: string, told: Told): void {
+    this.#count("UPDATE ci_runs SET told = ? WHERE run_id = ?", JSON.stringify(told), runId);
   }
 
   #count(query: string, ...bindings: (string | number | null)[]): void {
@@ -374,7 +477,24 @@ function matches(row: RunRow, filter: RunFilter): boolean {
 }
 
 function toldOf(row: Pick<RunRow, "state_seq" | "told">): Told {
-  return row.told === null ? { stateSeq: row.state_seq } : (JSON.parse(row.told) as Told);
+  return {
+    stateSeq: row.state_seq,
+    done: 0,
+    live: {},
+    sent: { attempt: 0, created: 0, queued: 0, in_progress: 0 },
+    ...(row.told === null ? {} : (JSON.parse(row.told) as Partial<Told>)),
+  };
+}
+
+function admitted(
+  sent: Told["sent"],
+  attempt: number,
+  kind: InBetween,
+  cap: number,
+): Told["sent"] | undefined {
+  if (attempt < sent.attempt) return undefined;
+  const now = attempt > sent.attempt ? { attempt, created: 0, queued: 0, in_progress: 0 } : sent;
+  return now[kind] < cap ? { ...now, [kind]: now[kind] + 1 } : undefined;
 }
 
 /** A report as a caller gives it, checked: one that is not one is a bug in its caller. */
@@ -423,7 +543,7 @@ export function validRunNews(news: RunNews, report: RunReport): RunNews {
   const fail = (what: string): never => {
     throw new TypeError(`invalid run report: ${what}`);
   };
-  const { earlier = [] } = news;
+  const { earlier = [], jobs = [] } = news;
   let last = 0;
   for (const end of earlier) {
     if (!Number.isSafeInteger(end.attempt) || end.attempt <= last || end.attempt >= report.attempt)
@@ -433,6 +553,18 @@ export function validRunNews(news: RunNews, report: RunReport): RunNews {
     const actor = end.triggeringActor;
     if (typeof actor !== "string" || actor === "" || actor.length > MAX_TEXT) fail("earlier actor");
     if (!Number.isFinite(end.completedAt)) fail("earlier completedAt");
+  }
+  if (jobs.length > MAX_JOB_REPORTS) fail("jobs");
+  for (const job of jobs) {
+    if (!Number.isSafeInteger(job.jobId) || job.jobId < 1) fail("job");
+    if (!Number.isSafeInteger(job.attempt) || job.attempt < 1 || job.attempt > report.attempt)
+      fail("job attempt");
+    for (const text of [job.key, job.name, job.triggeringActor])
+      if (typeof text !== "string" || text === "" || text.length > MAX_TEXT) fail("job text");
+    if (!JOB_ACTIONS.includes(job.action)) fail("job action");
+    if ((job.action === "completed") !== (job.conclusion !== null)) fail("job conclusion");
+    if (job.conclusion !== null && !INSTANCE_CONCLUSIONS.includes(job.conclusion))
+      fail("job conclusion");
   }
   return news;
 }

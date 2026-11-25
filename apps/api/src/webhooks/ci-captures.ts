@@ -1,5 +1,5 @@
 import type { CheckRunRecord, StatusRecord } from "../do/repo/checks.js";
-import type { RunReport } from "../do/repo/run-history.js";
+import type { JobReport, RunReport } from "../do/repo/run-history.js";
 import { checkRunOutput, runSummary, statusOutput } from "../repos/ci-shapes.js";
 import type { CaptureValue } from "./capture.js";
 import { capturable } from "./captures.js";
@@ -17,4 +17,21 @@ export const captureCheckRun = (check: CheckRunRecord): Captured => ({
 
 export const captureWorkflowRun = (run: RunReport): Captured => ({
   workflow_run: capturable(runSummary(run)),
+});
+
+export const captureWorkflowJob = (job: JobReport, run: RunReport): Captured => ({
+  workflow_job: capturable({
+    id: job.jobId,
+    run_id: run.runId,
+    run_attempt: job.attempt,
+    workflow_name: run.name,
+    head_branch: run.headBranch,
+    head_sha: run.sha,
+    name: job.name,
+    job_key: job.key,
+    status: job.action,
+    conclusion: job.conclusion,
+    started_at: job.startedAt,
+    completed_at: job.completedAt,
+  }),
 });

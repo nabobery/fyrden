@@ -116,8 +116,8 @@ function positive(value: unknown): number | null {
   return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
-/** A text's first line as a list shows it; undefined for nothing to show. */
-function shown(value: unknown): string | undefined {
+/** A text's first line as a list shows it (`MAX_RUN_TITLE_LENGTH`); undefined for nothing to show. */
+export function shown(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   // Cut by code units first: a commit message may be long, and a code point is at most two.
   const line = (value.trimStart().split(/[\r\n]/, 1)[0] ?? "").slice(0, 2 * MAX_RUN_TITLE_LENGTH);
