@@ -24,6 +24,8 @@ import {
   jobOrder,
   jobPayload,
   jobsDoneTo,
+  labelsFreeOfOutputs,
+  MAX_RUN_TITLE_LENGTH,
   type NeedResult,
   nodeOutcome,
   type RunFacts,
@@ -46,10 +48,12 @@ import { REPO_DELETED } from "./repo/events.js";
 import {
   type AttemptEnd,
   type JobReport,
+  MAX_JOB_LABELS,
   MAX_JOB_REPORTS,
   type RunReport,
 } from "./repo/run-history.js";
 import { planCheckKey } from "./run/check-key.js";
+import { decodeInstance } from "./run/codec.js";
 import {
   type AssignTaskAnswer,
   DISPATCH_RESYNC_MS,
@@ -915,6 +919,7 @@ export class RunDO extends MigratingDO {
         | "attempt"
         | "job_key"
         | "name"
+        | "instance"
         | "status"
         | "conclusion"
         | "started_at"
@@ -923,20 +928,22 @@ export class RunDO extends MigratingDO {
     >(
       // Told and not ended are only the current attempt's, the last and 256 at most: what is owed
       // is within the first 512.
-      `SELECT i.job_id, i.attempt, i.job_key, i.name, i.status, i.conclusion, i.started_at,
+      `SELECT i.job_id, i.attempt, i.job_key, i.name, i.instance, i.status, i.conclusion, i.started_at,
          i.completed_at, a.triggering_actor_id
        FROM run_instances i JOIN run_attempts a ON a.attempt = i.attempt
        WHERE i.job_id > ? AND i.status <> 'blocked' ORDER BY i.job_id LIMIT ?`,
       this.#jobsReported.done,
       2 * MAX_JOB_REPORTS,
     );
-    return rows
+    const owed = rows
       .map((row) => ({
         jobId: row.job_id,
         attempt: row.attempt,
         triggeringActor: row.triggering_actor_id,
-        key: row.job_key,
-        name: shown(row.name) ?? row.job_key,
+        key: row.job_key.slice(0, MAX_RUN_TITLE_LENGTH),
+        name: shown(row.name) ?? row.job_key.slice(0, MAX_RUN_TITLE_LENGTH),
+        jobKey: row.job_key,
+        instance: row.instance,
         action: row.status === "cancelling" ? "in_progress" : (row.status as JobAction),
         conclusion: row.conclusion,
         startedAt: row.started_at,
@@ -944,6 +951,26 @@ export class RunDO extends MigratingDO {
       }))
       .filter((job) => jobOrder(job.action) > jobOrder(this.#jobsReported.live[job.jobId]))
       .slice(0, MAX_JOB_REPORTS);
+    if (owed.length === 0) return [];
+    const free = this.#jobsWithFreeLabels();
+    return owed.map(({ instance, jobKey, ...job }) => ({
+      ...job,
+      labels:
+        instance !== null && free.has(jobKey)
+          ? decodeInstance(instance)
+              .runsOn.slice(0, MAX_JOB_LABELS)
+              .flatMap((label) => shown(label) ?? [])
+          : null,
+    }));
+  }
+
+  #jobsWithFreeLabels(): ReadonlySet<string> {
+    try {
+      const { jobs } = this.#loadModel().workflow;
+      return new Set(jobs.filter(labelsFreeOfOutputs).map((job) => job.id.value));
+    } catch {
+      return new Set();
+    }
   }
 
   /** The run as its current attempt stands; undefined when there is none (or it was erased). */

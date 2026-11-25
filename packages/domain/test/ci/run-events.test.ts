@@ -1,10 +1,12 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { parseWorkflow } from "../../src/ci/parse.js";
 import {
   JOB_ACTIONS,
   type JobAction,
   jobMoves,
   jobsDoneTo,
+  labelsFreeOfOutputs,
   runMoves,
 } from "../../src/ci/run-events.js";
 import { RUN_PHASES, type RunPhase, runStateSeq } from "../../src/ci/run-summary.js";
@@ -155,5 +157,32 @@ describe("what a report tells of a run's jobs", () => {
         expect(ended.has(state.done + 1)).toBe(false);
       }),
     );
+  });
+});
+
+describe("labels no job output can reach", () => {
+  const ex = (inner: string) => ["$", "{{ ", inner, " }}"].join("");
+  const free = (needs: string, runsOn: string) => {
+    const text = `on: push\njobs:\n  a:\n    runs-on: x\n    steps:\n      - run: a\n  b:\n${needs}    strategy:\n      matrix:\n        os: [x, y]\n    runs-on: ${runsOn}\n    steps:\n      - run: b\n`;
+    const parsed = parseWorkflow("w.yml", new TextEncoder().encode(text));
+    if (!parsed.ok) throw new Error(JSON.stringify(parsed.errors));
+    const job = parsed.workflow.jobs.find((j) => j.id.value === "b");
+    if (!job) throw new Error("no job");
+    return labelsFreeOfOutputs(job);
+  };
+  const needs = "    needs: a\n";
+
+  it("are those of a job without needs, whatever its expressions", () => {
+    expect(free("", "[self-hosted, linux]")).toBe(true);
+    expect(free("", ex("matrix.os"))).toBe(true);
+    expect(free("", `[self-hosted, "${ex("matrix.os")}"]`)).toBe(true);
+  });
+
+  it("are those written out in a job with needs", () => {
+    expect(free(needs, "[self-hosted, linux]")).toBe(true);
+    expect(free(needs, ex("needs.a.outputs.x"))).toBe(false);
+    expect(free(needs, ex("matrix.os"))).toBe(false);
+    expect(free(needs, `[self-hosted, "${ex("matrix.os")}"]`)).toBe(false);
+    expect(free(needs, `["pre-${ex("matrix.os")}"]`)).toBe(false);
   });
 });

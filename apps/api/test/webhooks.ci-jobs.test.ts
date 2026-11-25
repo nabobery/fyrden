@@ -10,6 +10,7 @@ import {
   advance,
   assignNamed,
   drain,
+  expr,
   type Fixture,
   finish,
   inRun,
@@ -114,6 +115,7 @@ describe("workflow job events", () => {
       head_sha: f.sha,
       name: "build",
       job_key: "build",
+      labels: ["ubuntu-latest"],
     };
     expect(queued).toEqual({
       fyrden_payload: 1,
@@ -277,6 +279,87 @@ describe("workflow job events", () => {
     await advance(runId, 2_000);
     const types = (await t.outbox()).map((e) => e.type);
     expect(types.filter((type) => type.startsWith("workflow_job."))).toEqual([]);
+  });
+
+  it("carry a job's labels, unless another job's outputs could be in them", async () => {
+    await t.createHook({ events: ["workflow_job"] });
+    const on = (text: string, runsOn: string) =>
+      text.replace("runs-on: ubuntu-latest", `runs-on: ${runsOn}`);
+    const runId = await started(
+      f,
+      workflow(
+        [
+          job("a", ["outputs:", "  os: x"]),
+          job("b", ["needs: a"]),
+          on(job("c", ["needs: a"]), expr("needs.a.outputs.os")),
+          on(
+            job("d", ["strategy:", "  matrix:", "    os: [left, right]"]),
+            `[self-hosted, "${expr("matrix.os")}"]`,
+          ),
+          job("e", ["if: false"]),
+        ].join("\n"),
+      ),
+    );
+    await finish(runId, "a", "success", { os: "s3cret-label" });
+    await advance(runId, 2_000);
+    const made = await bodies();
+    const labels = made.map((b) => {
+      const row = b.workflow_job as { name: string; labels: string[] | null };
+      return [row.name, row.labels] as const;
+    });
+    expect(Object.fromEntries(labels)).toEqual({
+      a: ["ubuntu-latest"],
+      b: ["ubuntu-latest"],
+      c: null,
+      "d (left)": ["self-hosted", "left"],
+      "d (right)": ["self-hosted", "right"],
+      e: null,
+    });
+    expect(JSON.stringify(made)).not.toContain("s3cret-label");
+  });
+
+  it("carry no labels of a workflow that no longer plans", async () => {
+    await t.createHook({ events: ["workflow_job"] });
+    const runId = await started(f, SOURCE);
+    await inRun(runId, (r) => r.engine.exec("UPDATE runs SET workflow_source = 'on: push'"));
+    await advance(runId, 2_000);
+    expect((await bodies()).map((b) => b.workflow_job)).toMatchObject([
+      { name: "build", labels: null },
+    ]);
+  });
+
+  it("are reported with the workflow read once, whether or not it plans", async () => {
+    const runId = await started(f, matrix(30));
+    const reads = (source?: string) =>
+      inRun(runId, (r) => {
+        if (source) r.engine.exec("UPDATE runs SET workflow_source = ?", source);
+        const run = r.engine.run.bind(r.engine);
+        let read = 0;
+        r.engine.run = () => {
+          read++;
+          return run();
+        };
+        const jobs = r.jobReports();
+        r.engine.run = run;
+        return { read, jobs: jobs.length };
+      });
+    expect(await reads()).toEqual({ read: 1, jobs: 30 });
+    expect(await reads("on: push")).toEqual({ read: 1, jobs: 30 });
+  });
+
+  it("are sent of a job whose id, and so its name, is longer than any text carried", async () => {
+    await t.createHook({ events: ["workflow_job"] });
+    const id = `j${"x".repeat(3_000)}`;
+    // An explicit key: YAML bounds an implicit one to 1,024 characters.
+    const source = workflow(job(id)).replace(`  ${id}:`, `  ? ${id}\n  :`);
+    const runId = await started(f, source);
+    await advance(runId, 2_000);
+    const [body] = await bodies();
+    expect(body?.workflow_job).toMatchObject({
+      name: id.slice(0, 256),
+      job_key: id.slice(0, 256),
+      status: "queued",
+    });
   });
 
   it("cannot carry a name longer or stranger than the API's", async () => {
@@ -450,6 +533,8 @@ describe("job reports", () => {
       { name: "x".repeat(3_000) },
       { key: "" },
       { triggeringActor: "" },
+      { labels: [""] },
+      { labels: Array.from({ length: 101 }, () => "x") },
     ];
     for (const change of bad)
       await expect(

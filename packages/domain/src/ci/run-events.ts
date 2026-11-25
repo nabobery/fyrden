@@ -1,4 +1,5 @@
 import { type RunPhase, runStateSeq } from "./run-summary.js";
+import type { Job } from "./workflow-schema.js";
 
 export type RunAction = "requested" | "in_progress" | "completed";
 
@@ -67,4 +68,16 @@ export function jobsDoneTo(told: JobsTold, done: number): JobsTold {
   while (told.live[at + 1] === "completed") at++;
   const live = Object.entries(told.live).filter(([jobId]) => Number(jobId) > at);
   return { done: at, live: Object.fromEntries(live) };
+}
+
+/**
+ * Whether no other job's outputs can be in the job's labels: outputs are not
+ * searched for secrets, and only a job's `needs` bring any to it, through
+ * the `needs` context or a matrix made from it.
+ */
+export function labelsFreeOfOutputs(job: Pick<Job, "needs" | "runsOn">): boolean {
+  if (job.needs.length === 0) return true;
+  return (
+    job.runsOn.kind === "literal" && job.runsOn.value.every((label) => !label.value.includes("${{"))
+  );
 }

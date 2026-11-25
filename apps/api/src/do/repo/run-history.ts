@@ -67,6 +67,8 @@ export interface JobReport {
   readonly triggeringActor: string;
   readonly key: string;
   readonly name: string;
+  /** Null when they are not to be shown (`labelsFreeOfOutputs`), or it has none. */
+  readonly labels: readonly string[] | null;
   readonly action: JobAction;
   /** Set exactly when completed. */
   readonly conclusion: InstanceConclusion | null;
@@ -82,6 +84,9 @@ export interface RunNews {
 }
 
 export const MAX_JOB_REPORTS = 256;
+
+/** Labels of a job a report carries at most. Proposed. */
+export const MAX_JOB_LABELS = 100;
 
 /** Events of a run's way to its end, which the Free plan sends a few of: `IN_BETWEEN_CAP`. */
 export type InBetween = "created" | "queued" | "in_progress";
@@ -559,7 +564,9 @@ export function validRunNews(news: RunNews, report: RunReport): RunNews {
     if (!Number.isSafeInteger(job.jobId) || job.jobId < 1) fail("job");
     if (!Number.isSafeInteger(job.attempt) || job.attempt < 1 || job.attempt > report.attempt)
       fail("job attempt");
-    for (const text of [job.key, job.name, job.triggeringActor])
+    const labels = job.labels ?? [];
+    if (labels.length > MAX_JOB_LABELS) fail("job labels");
+    for (const text of [job.key, job.name, job.triggeringActor, ...labels])
       if (typeof text !== "string" || text === "" || text.length > MAX_TEXT) fail("job text");
     if (!JOB_ACTIONS.includes(job.action)) fail("job action");
     if ((job.action === "completed") !== (job.conclusion !== null)) fail("job conclusion");

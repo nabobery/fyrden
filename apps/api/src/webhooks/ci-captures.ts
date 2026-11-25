@@ -31,6 +31,7 @@ export const captureWorkflowJob = (job: JobReport, run: RunReport): Captured => 
     job_key: job.key,
     status: job.action,
     conclusion: job.conclusion,
+    labels: job.labels,
     started_at: job.startedAt,
     completed_at: job.completedAt,
   }),
