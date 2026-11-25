@@ -273,6 +273,7 @@ describe("a record that threw without committing", () => {
     expect((await recoveryJob(p.runId))?.state).toBe("done");
 
     const task = (await fetchTask(p.runner, 0)).task;
+    expect(task).toBeDefined();
     expect(task?.id).not.toBe(p.wireId);
     const secret = source === reading;
     expect(task?.secrets.get("A")).toBe(secret ? p.value : undefined);
