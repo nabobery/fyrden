@@ -52,6 +52,12 @@ export const ORG_SETTINGS: readonly SettingsEntry<OrganizationScope>[] = [
     path: (s) => `${orgBase(s)}/variables/actions`,
     visible: () => true,
   },
+  {
+    key: "runners",
+    label: "Runners",
+    path: (s) => `${orgBase(s)}/runners`,
+    visible: () => true,
+  },
 ];
 
 function SettingsNav<S>({

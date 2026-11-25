@@ -407,6 +407,7 @@ li.reaction {
   color: var(--danger);
 }
 .secret {
+  white-space: pre-wrap;
   word-break: break-all;
 }
 /* Not `anywhere`: that also lets a table's columns shrink until its words break. */
