@@ -3,6 +3,7 @@
 
 import type { Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { CI_TODAY, servingRunners } from "../ci/budget.js";
+import { clearAccess, mayTake, serves, tookItsTask } from "./access.js";
 
 /** A runner as its credentials prove it. */
 export interface AuthenticatedRunner {
@@ -15,8 +16,8 @@ export interface AuthenticatedRunner {
   readonly ephemeral: boolean;
   /** An ephemeral runner whose task ended: it may only report on that task until its end. */
   readonly spent: boolean;
-  /** An ephemeral runner's one task was confirmed. */
-  readonly taskConfirmed: boolean;
+  /** An ephemeral runner that was assigned its one task. */
+  readonly tookTask: boolean;
 }
 
 /** A runner as the list operation shows it. */
@@ -290,8 +291,9 @@ export const SPENT_RUNNER_PAGE = 256;
 
 /**
  * Stamps up to `limit` ephemeral runners past their end at `now` revoked
- * (`spent`, at their end), oldest end first. Authentication refuses them at
- * their end already; stamped, they leave the live-runner index.
+ * (`spent`, at their end), oldest end first, and clears their access.
+ * Authentication refuses them at their end already; stamped, they leave the
+ * live-runner index.
  */
 export async function stampSpentRunners(
   db: D1Database,
@@ -300,15 +302,18 @@ export async function stampSpentRunners(
   metrics?: Metrics,
 ): Promise<number> {
   count(metrics, "runner_spent_stamp");
-  const result = await db
-    .prepare(
-      `UPDATE ci_runners SET revoked_at = expires_at, revoked_reason = 'spent'
-       WHERE id IN (SELECT id FROM ci_runners INDEXED BY ci_runners_live
-                    WHERE revoked_at IS NULL AND expires_at <= ?1 ORDER BY expires_at LIMIT ?2)`,
-    )
-    .bind(now, limit)
-    .run();
-  return result.meta.changes;
+  // Every statement reads one page: the last one's update takes its rows out of the index.
+  const page = `SELECT id FROM ci_runners INDEXED BY ci_runners_live
+    WHERE revoked_at IS NULL AND expires_at <= ?1 ORDER BY expires_at, id LIMIT ?2`;
+  const results = await db.batch([
+    ...clearAccess(db, page, [now, limit]),
+    db
+      .prepare(
+        `UPDATE ci_runners SET revoked_at = expires_at, revoked_reason = 'spent' WHERE id IN (${page})`,
+      )
+      .bind(now, limit),
+  ]);
+  return results.at(-1)?.meta.changes ?? 0;
 }
 
 /**
@@ -325,30 +330,6 @@ function liveOffer(now: string): string {
 }
 
 /**
- * Whether the job of row `x` (a pending job or a task offer, with its
- * `repo_id` and `fork`) may be given to a runner: never a fork job, and
- * only while its repository is active and not public, as this statement
- * reads it. `internal` repositories are served. No runner can opt in yet,
- * and its labels play no part: the head workflow chooses those. The claim
- * and the re-offer are the cutoff; nothing checks again before the answer,
- * so one assignment whose read passed completes, like a task already
- * running when its repository goes public.
- */
-function eligible(x: string): string {
-  return eligibleJob(`${x}.fork`, `${x}.repo_id`);
-}
-
-/**
- * `eligible`'s rule for a job of repository `repoId` with fork flag `fork`
- * (both SQL): what a run checks before it reserves a job, so it reserves
- * none that no runner may take.
- */
-export function eligibleJob(fork: string, repoId: string): string {
-  return `${fork} = 0 AND EXISTS (SELECT 1 FROM repos e WHERE e.id = ${repoId}
-    AND e.visibility <> 'public' AND e.state = 'active')`;
-}
-
-/**
  * The runner authentication read, by what the call needs: the runner alone
  * (`?1` uuid), with the task it names (`?2` task id), or FetchTask's view
  * (`?2` now, `?3` the request's version).
@@ -360,7 +341,7 @@ export function runnerAuthQuery(kind: "runner" | "task" | "fetch"): string {
        EXISTS (SELECT 1 FROM ci_pending_jobs p WHERE p.account_id = r.account_id
                AND p.claim_until IS NOT NULL AND p.claim_until < ?2) AS expired_claims,
        (SELECT count(*) FROM ci_tasks o WHERE o.runner_id = r.id AND ${liveOffer("?2")}) AS live_offers,
-       CASE WHEN t.id IS NULL THEN 0 WHEN ${eligible("t")} THEN 1 ELSE 0 END AS task_eligible`
+       CASE WHEN t.id IS NULL THEN 0 WHEN ${mayTake("r", "t.repo_id", "t.fork")} THEN 1 ELSE 0 END AS task_eligible`
       : "";
   const taskJoin =
     kind === "fetch"
@@ -372,7 +353,7 @@ export function runnerAuthQuery(kind: "runner" | "task" | "fetch"): string {
         ? "LEFT JOIN ci_tasks t ON t.id = ?2"
         : "LEFT JOIN ci_tasks t ON 0";
   return `SELECT r.id, r.uuid, r.account_id, r.token_hash, r.name, r.version, r.labels, r.ephemeral,
-              r.revoked_at, r.expires_at, r.task_confirmed_at,
+              r.revoked_at, r.expires_at, ${tookItsTask("r")} AS took_task,
               t.id AS task_id, t.run_id AS task_run_id, t.job_id AS task_job_id, t.task AS task_task,
               t.runner_id AS task_runner_id, t.offered_version AS task_offered_version,
               t.superseded_at AS task_superseded_at${dispatch}
@@ -403,7 +384,7 @@ export interface DispatchView {
   readonly liveOffers: number;
   /**
    * The runner's live offer made at the request's version, when it is not
-   * 0, and whether its job may still be given to a runner (read with it).
+   * 0, and whether its job may still be given to this runner (read with it).
    */
   readonly reoffer: (RoutedTask & { readonly eligible: boolean }) | undefined;
 }
@@ -446,7 +427,7 @@ export async function authenticateRunner(
     .bind(...binds)
     .first<
       RunnerRow & {
-        task_confirmed_at: number | null;
+        took_task: number;
         task_id: number | null;
         task_run_id: string | null;
         task_job_id: number | null;
@@ -485,7 +466,7 @@ export async function authenticateRunner(
       labels: parseLabels(row.labels),
       ephemeral: row.ephemeral === 1,
       spent: row.expires_at !== null,
-      taskConfirmed: row.task_confirmed_at !== null,
+      tookTask: row.took_task === 1,
     },
     ...(named && { task }),
     ...(fetching && {
@@ -550,8 +531,8 @@ export async function listRunners(
 
 /**
  * Revokes the account's runner `id` at `now`, as deleted (a runner revoked
- * already keeps its first time and reason). False when the account has no
- * such runner.
+ * already keeps its first time and reason), and clears its access. False
+ * when the account has no such runner.
  */
 export async function revokeRunner(
   db: D1Database,
@@ -559,21 +540,27 @@ export async function revokeRunner(
   metrics?: Metrics,
 ): Promise<boolean> {
   count(metrics, "runner_revoke");
-  const result = await db
-    .prepare(
-      `UPDATE ci_runners SET revoked_at = COALESCE(revoked_at, ?1),
-         revoked_reason = CASE WHEN revoked_at IS NULL THEN 'deleted' ELSE revoked_reason END
-       WHERE id = ?2 AND account_id = ?3`,
-    )
-    .bind(revoked.now, revoked.id, revoked.accountId)
-    .run();
-  return result.meta.changes > 0;
+  const own = "SELECT id FROM ci_runners WHERE id = ?1 AND account_id = ?2";
+  const [updated] = await db.batch([
+    db
+      .prepare(
+        `UPDATE ci_runners SET revoked_at = COALESCE(revoked_at, ?1),
+           revoked_reason = CASE WHEN revoked_at IS NULL THEN 'deleted' ELSE revoked_reason END
+         WHERE id = ?2 AND account_id = ?3`,
+      )
+      .bind(revoked.now, revoked.id, revoked.accountId),
+    ...clearAccess(db, own, [revoked.id, revoked.accountId]),
+  ]);
+  return (updated?.meta.changes ?? 0) > 0;
 }
 
 function parseLabels(json: string): string[] {
   const labels: unknown = JSON.parse(json);
   return Array.isArray(labels) ? labels.filter((l): l is string => typeof l === "string") : [];
 }
+
+/** A spent ephemeral runner may still report for this long after its task completed. Proposed. */
+export const EPHEMERAL_REPORT_MS = 10 * 60_000;
 
 /** How long a claim on a pending job holds before another poll may take the job. Proposed. */
 export const CLAIM_LEASE_MS = 30_000;
@@ -647,10 +634,10 @@ export interface Claimed {
 }
 
 /**
- * Claims the account's oldest pending job that may be given to a runner at
- * all (`eligible`, read in this statement) and whose labels are all among the
- * runner's (case-insensitive, ASCII), unclaimed or with a lapsed claim, for
- * `CLAIM_LEASE_MS`, and inserts the task row offered with `version`: one
+ * Claims the account's oldest pending job that may be given to this runner
+ * (`mayTake`, read in this statement, as is whether it still serves) and
+ * whose labels are all among the runner's (case-insensitive, ASCII),
+ * unclaimed or with a lapsed claim, for `CLAIM_LEASE_MS`, and inserts the task row offered with `version`: one
  * batch, the insert reading only the row stamped with this claim's nonce, so
  * a batch that claimed nothing inserts nothing. Undefined when no job is
  * eligible. The pending row stays until its run withdraws it.
@@ -661,7 +648,7 @@ export async function claimPending(
     accountId: string;
     runnerId: number;
     labels: readonly string[];
-    /** An ephemeral runner claims only while it holds no task and has confirmed none. */
+    /** An ephemeral runner claims only while it holds no task and was assigned none. */
     ephemeral: boolean;
     version: number;
     now: number;
@@ -678,8 +665,8 @@ export async function claimPending(
       .prepare(
         `UPDATE ci_pending_jobs SET claimed_by = ?1, claim_until = ?2, claim_nonce = ?3
          WHERE id = (
-           SELECT p.id FROM ci_pending_jobs p
-           WHERE p.account_id = ?4 AND (p.claim_until IS NULL OR p.claim_until < ?5)
+           SELECT p.id FROM ci_runners r JOIN ci_pending_jobs p ON p.account_id = ?4
+           WHERE r.id = ?1 AND ${serves("r", "?5")} AND (p.claim_until IS NULL OR p.claim_until < ?5)
              ${
                skip
                  ? `AND NOT EXISTS (SELECT 1 FROM json_each(?8) e
@@ -690,12 +677,11 @@ export async function claimPending(
              -- An ephemeral runner holds one task: decided here, so overlapping polls serialise.
              AND (?7 = 0 OR (
                NOT EXISTS (SELECT 1 FROM ci_tasks o WHERE o.runner_id = ?1 AND ${liveOffer("?5")})
-               AND NOT EXISTS (SELECT 1 FROM ci_runners r
-                               WHERE r.id = ?1 AND r.task_confirmed_at IS NOT NULL)))
-             AND ${eligible("p")}
+               AND NOT ${tookItsTask("r")}))
+             AND ${mayTake("r", "p.repo_id", "p.fork")}
              AND json_array_length(p.labels) > 0
              AND NOT EXISTS (SELECT 1 FROM json_each(p.labels) l
-                             WHERE lower(l.value) NOT IN (SELECT lower(r.value) FROM json_each(?6) r))
+                             WHERE lower(l.value) NOT IN (SELECT lower(h.value) FROM json_each(?6) h))
            ORDER BY p.id LIMIT 1)
          RETURNING id, run_id, job_id`,
       )
@@ -733,7 +719,8 @@ export async function claimPending(
 /**
  * Records that the run refused task `taskId`: ended when its task had
  * finished, superseded otherwise; for an erased run, its pending row goes too
- * (the run will never withdraw it).
+ * (the run will never withdraw it). An ephemeral runner assigned a task that
+ * is over ends here: an erased run, which also answers so, never ends it.
  */
 export async function refuseTask(
   db: D1Database,
@@ -752,6 +739,15 @@ export async function refuseTask(
       db
         .prepare("DELETE FROM ci_pending_jobs WHERE run_id = ? AND job_id = ?")
         .bind(refused.runId, refused.jobId),
+    );
+  if (refused.code === "run_not_found" || refused.code === "task_finished")
+    statements.push(
+      db
+        .prepare(
+          `UPDATE ci_runners SET expires_at = COALESCE(expires_at, ?1) WHERE ephemeral = 1
+             AND id = (SELECT runner_id FROM ci_tasks WHERE id = ?2 AND task IS NOT NULL)`,
+        )
+        .bind(refused.now + EPHEMERAL_REPORT_MS, refused.taskId),
     );
   await db.batch(statements);
 }

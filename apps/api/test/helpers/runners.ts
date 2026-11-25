@@ -127,6 +127,55 @@ export async function orgRepo(): Promise<Fixture & { org: { id: string; login: s
   return { owner, repo: repo.body, path, sha: commit.body.commit.sha, org };
 }
 
+export type OrgFixture = Fixture & { org: { id: string; login: string } };
+
+/** Another repository of the fixture's organization, with one commit on main. */
+export async function siblingRepo(f: OrgFixture): Promise<OrgFixture> {
+  const repo = await json<{ id: string; name: string }>(
+    api("POST", `/orgs/${f.org.login}/repos`, f.owner.token, { name: uniqueId("r") }),
+  );
+  expect(repo.status).toBe(201);
+  const path = `/repos/${f.org.login}/${repo.body.name}`;
+  const commit = await json<{ commit: { sha: string } }>(
+    api("POST", `${path}/file-commits`, f.owner.token, {
+      branch: "main",
+      message: "one",
+      changes: [{ path: "a.txt", content: "one\n" }],
+    }),
+  );
+  expect(commit.status).toBe(201);
+  return { ...f, repo: repo.body, path, sha: commit.body.commit.sha };
+}
+
+/** Transfers the fixture's repository to account `to`. */
+export async function transferTo(f: OrgFixture, to: string): Promise<void> {
+  const moved = await json<{ state: string }>(
+    api("POST", `/repos/${f.org.login}/${f.repo.name}/transfer`, f.owner.token, { new_owner: to }),
+  );
+  expect(moved).toMatchObject({ status: 200, body: { state: "transferred" } });
+}
+
+/** Sets a runner's public and fork access in its row. */
+export const allow = (runner: { id: number }, access: { public?: boolean; forks?: boolean }) =>
+  env.DIRECTORY.prepare("UPDATE ci_runners SET allows_public = ?, allows_forks = ? WHERE id = ?")
+    .bind(access.public ? 1 : 0, access.forks ? 1 : 0, runner.id)
+    .run();
+
+/** Limits a runner to the repositories `ids` in its rows. */
+export const selectRepos = (runner: { id: number }, ids: readonly string[]) =>
+  env.DIRECTORY.batch([
+    env.DIRECTORY.prepare("UPDATE ci_runners SET repository_access = 'selected' WHERE id = ?").bind(
+      runner.id,
+    ),
+    env.DIRECTORY.prepare("DELETE FROM ci_runner_repos WHERE runner_id = ?").bind(runner.id),
+    ...ids.map((id) =>
+      env.DIRECTORY.prepare("INSERT INTO ci_runner_repos (runner_id, repo_id) VALUES (?, ?)").bind(
+        runner.id,
+        id,
+      ),
+    ),
+  ]);
+
 /** A runner registered for `org` through a registration token its owner mints. */
 export async function registerRunner(
   org: string,
