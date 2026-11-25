@@ -916,20 +916,29 @@ describe("a run erased or retiring", () => {
 
 describe("deliveries with nothing to recover", () => {
   it.each([
-    ["that succeeds", reading()],
-    ["of a job with no secret", workflow(job("a"))],
-  ])("a delivery %s writes no row and schedules nothing", async (_, source) => {
+    // The record, its earlier tokens, where the offer stands, and the audit row of a delivery.
+    ["that succeeds", reading(), 4],
+    ["of a job with no secret", workflow(job("a")), 3],
+  ])("a delivery %s writes no row and schedules nothing", async (_, source, statements) => {
     const f = await orgRepo();
     await setSecret(f);
     const runner = await registerRunner(f.org.login, f.owner);
     const runId = await started(f, source);
     let synced = 0;
+    const queries: [string, number | undefined][] = [];
     await inRun(runId, (r) => {
       const storage = (r as unknown as { ctx: DurableObjectState }).ctx.storage;
       vi.spyOn(storage, "sync").mockImplementation(async () => void synced++);
+      vi.spyOn(r.context.metrics, "count").mockImplementation((name, dims, n) => {
+        if (name === "d1.query") queries.push([String(dims?.op), n]);
+      });
     });
     expect((await fetchTask(runner, 0)).task).toBeDefined();
     expect(synced).toBe(0);
+    expect(queries.filter(([op]) => op === "ci_task_assigned")).toEqual([
+      ["ci_task_assigned", statements],
+    ]);
+    expect(queries.filter(([op]) => /undeliverable|delivery/.test(op))).toEqual([]);
     expect(await failuresOf(runId)).toEqual([]);
     expect(await recoveryJob(runId)).toBeUndefined();
   });
@@ -939,27 +948,44 @@ describe("every failed delivery is recovered", () => {
   it.each([
     ["secrets_unmaskable", (f: OrgFixture) => setSecret(f, secretValue(40 * 1024))],
     [
+      // Past 512 KiB of value text together, so not read from the account at all.
+      "secrets_unmaskable: these secrets are more than a job is given",
+      async (f: OrgFixture) => {
+        for (let i = 0; i < 11; i++)
+          expect(
+            (await putSecret(f.owner, f.path, `S${i}`, secretValue(48 * 1024))).status,
+          ).toBeLessThan(300);
+      },
+    ],
+    [
       "owner_changed",
       (_: OrgFixture, runId: string) =>
         inRun(runId, (r) => r.engine.exec("UPDATE runs SET owner_id = 'another'")),
     ],
-  ] as const)("%s", async (code, spoil) => {
+  ] as const)("%s", async (error, spoil) => {
     const f = await orgRepo();
     await setSecret(f);
     const runner = await registerRunner(f.org.login, f.owner);
-    const runId = await started(f, reading());
+    const runId = await started(f, workflow(job("a", ["env:", `  V: ${expr("toJSON(secrets)")}`])));
     await spoil(f, runId);
+    let interrupted = 0;
     await hooked(runId, {
       afterDeliveryFailure: () => {
+        interrupted++;
         throw new Error("the run object was reset");
       },
     });
     await fetchTask(runner, 0).catch(() => undefined);
+    expect(interrupted).toBe(1);
+    expect(await jobA(runId)).toMatchObject({ status: "in_progress" });
+    expect((await failuresOf(runId)).map((r) => r.error)).toEqual([
+      expect.stringMatching(new RegExp(`^${error}`)),
+    ]);
     await reset(runId);
     await later(runId);
     const [only] = await jobsOf(runId);
     expect(only).toMatchObject({ status: "completed", conclusion: "failure" });
-    expect(only?.error).toMatch(new RegExp(`^${code}: `));
+    expect(only?.error).toMatch(new RegExp(`^${error}`));
     await nothingDelivered(f, runId);
   });
 });
