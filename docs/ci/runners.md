@@ -61,8 +61,9 @@ Change access on the runner's page, or with
 `PATCH /orgs/{org}/actions/runners/{runner_id}/access`. What it changes, and when:
 
 - **Narrowing** applies at the next claim, and whenever a job is offered to the runner again. An
-  assignment that already passed that check may still be delivered, and running jobs continue. To stop
-  one, cancel its run.
+  assignment that already passed that check may still be delivered, and running jobs continue. To end
+  one, force-cancel its run (an ordinary cancellation lets jobs with `if: always()` run), or stop the
+  machine.
 - **Widening** lets the runner take jobs already offered at once. A job that waited because no runner
   could take it is offered within five minutes.
 - **A repository transferred** to another account leaves every runner's list and every unused token's.
@@ -148,9 +149,7 @@ refused reports without stopping the job
 [v5.4.1](https://gitea.com/gitea/runner/src/tag/v5.4.1/internal/pkg/report/reporter.go)). Stop and discard
 the machine.
 
-When nothing has leaked, cancel the run and see that its job has stopped before you delete the runner: a
-deleted runner is never told of the cancellation. An ordinary cancellation lets jobs with `if: always()`
-run; force-cancel those, or stop the machine.
+When nothing has leaked, force-cancel the run and see that its job has stopped before you delete the runner: a
+deleted runner is never told of the cancellation. Or stop the machine.
 
-A registration token that was
-never used stops working an hour after it was made.
+A registration token that was never used stops working an hour after it was made.

@@ -90,15 +90,13 @@ export async function clearStaleAccess(
 
 /**
  * In a transfer's batch, under its guard `moved`: takes repository `?1` out
- * of the selections of the runners of its old owner `?4` that may serve, and
- * out of that account's registration tokens still good at `?5`, so a
+ * of every runner's selection (all its old owner's), and out of the old owner
+ * `?4`'s registration tokens still good at `?5`, so a
  * repository that comes back is selected by nobody.
  */
 export function transferAccessSql(moved: string): readonly [string, string] {
   return [
-    `DELETE FROM ci_runner_repos WHERE repo_id = ?1 AND ${moved}
-       AND runner_id IN (SELECT id FROM ci_runners INDEXED BY ci_runners_live
-         WHERE revoked_at IS NULL AND account_id = ?4)`,
+    `DELETE FROM ci_runner_repos WHERE repo_id = ?1 AND ${moved}`,
     `UPDATE ci_runner_registrations
        SET selected_repos = (SELECT json_group_array(value) FROM json_each(selected_repos)
          WHERE value <> ?1)

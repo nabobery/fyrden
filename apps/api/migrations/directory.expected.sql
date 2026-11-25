@@ -920,6 +920,9 @@ CREATE INDEX ci_pending_nonce ON ci_pending_jobs (claim_nonce) WHERE claim_nonce
 CREATE INDEX ci_runner_registrations_selected ON ci_runner_registrations (account_id, expires_at)
   WHERE consumed_at IS NULL AND repository_access = 'selected';
 
+-- index ci_runner_repos_repo
+CREATE INDEX ci_runner_repos_repo ON ci_runner_repos (repo_id);
+
 -- index ci_runners_account
 CREATE INDEX ci_runners_account ON ci_runners (account_id, id);
 

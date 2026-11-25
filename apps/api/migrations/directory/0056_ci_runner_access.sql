@@ -30,6 +30,8 @@ CREATE TABLE ci_runner_repos (
   runner_id INTEGER NOT NULL, repo_id TEXT NOT NULL,
   PRIMARY KEY (runner_id, repo_id)
 ) STRICT, WITHOUT ROWID;
+-- For a transfer, which takes its repository out of every list.
+CREATE INDEX ci_runner_repos_repo ON ci_runner_repos (repo_id);
 
 -- Runners that opted in to public or fork jobs and were assigned none yet, for a run's check
 -- before it reserves a job. It names no column a poll lease writes.

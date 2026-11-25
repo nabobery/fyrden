@@ -434,7 +434,7 @@ describe("an ephemeral runner's one task", () => {
     if (!(await fetchTask(runner, version)).task) throw new Error("no task");
     await runStub(runId).erase(f.repo.id);
     expect((await fetchTask(runner, version)).task).toBeUndefined();
-    expect((await rowOf(runner))?.expires_at).not.toBeNull();
+    expect(await rowOf(runner)).toMatchObject({ expires_at: expect.any(Number) });
   });
 
   it("of a run erased while its assignment was recorded ends the runner too", async () => {
@@ -450,9 +450,10 @@ describe("an ephemeral runner's one task", () => {
     await runStub(runId).erase(f.repo.id);
     record.release();
     expect((await fetching).task).toBeUndefined();
-    const row = await rowOf(runner);
-    expect(row?.task_assigned_at).not.toBeNull();
-    expect(row?.expires_at).not.toBeNull();
+    expect(await rowOf(runner)).toMatchObject({
+      task_assigned_at: expect.any(Number),
+      expires_at: expect.any(Number),
+    });
   });
 
   it.each(["the stalled offer", "the later offer"])(
@@ -524,7 +525,7 @@ describe("an ephemeral runner's one task", () => {
     await env.DIRECTORY.prepare("UPDATE ci_tasks SET superseded_at = 5 WHERE id = ?")
       .bind(offer?.id)
       .run();
-    expect((await rowOf(runner))?.task_assigned_at).not.toBeNull();
+    expect(await rowOf(runner)).toMatchObject({ task_assigned_at: expect.any(Number) });
     const waiting = await started(f, one);
     expect((await fetchTask(runner, 0)).task).toBeUndefined();
     expect(await tasksOfRun(waiting)).toEqual([]);
@@ -759,7 +760,7 @@ describe("what access costs", () => {
     expect(await lease(await opener(f))).toBe(plain);
   });
 
-  it("a transfer reads no expired token and no runner that stopped serving", async () => {
+  it("a transfer reads no expired token, and no runner that does not list its repository", async () => {
     const account = uniqueId("acct");
     const repo = uniqueId("repo");
     const cost = () =>
@@ -777,6 +778,14 @@ describe("what access costs", () => {
          INSERT INTO ci_runners (uuid, account_id, token_hash, name, ephemeral, created_at, revoked_at)
          SELECT ?1 || i, ?1, 'h', 'r', 1, 1, 2 FROM n`,
       ).bind(account),
+      // Serving ones, of another account and of this one.
+      ...[uniqueId("acct"), account].map((owner) =>
+        env.DIRECTORY.prepare(
+          `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+           INSERT INTO ci_runners (uuid, account_id, token_hash, name, ephemeral, created_at)
+           SELECT ?1 || '-' || i, ?1, 'h', 'r', 1, 1 FROM n`,
+        ).bind(owner),
+      ),
       env.DIRECTORY.prepare(
         `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
          INSERT INTO ci_runner_registrations (token_hash, account_id, created_by, created_at,
