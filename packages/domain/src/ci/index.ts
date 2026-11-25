@@ -18,6 +18,7 @@ export * from "./matrix.js";
 export * from "./parse.js";
 export * from "./payload.js";
 export * from "./run-state.js";
+export * from "./run-summary.js";
 export * from "./runner.js";
 export * from "./secret-references.js";
 export * from "./support-matrix.js";

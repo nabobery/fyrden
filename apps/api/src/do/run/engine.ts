@@ -369,9 +369,38 @@ export class RunEngine {
       now,
       attempt.attempt,
     );
-    this.#touch();
+    this.stateMoved();
     if (status === "completed") this.#onAttemptCompleted(attempt.attempt);
     return true;
+  }
+
+  /** The run's phase changed, now: the repository is told with its checks, in the same slice. */
+  stateMoved(): void {
+    this.#touch();
+    this.#tellRepository();
+  }
+
+  /** Queues the slice that sends the repository the run's checks and state. */
+  #tellRepository(): void {
+    this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
+  }
+
+  /** The workflow's `run-name`, evaluated; undefined without one, or when it fails to evaluate. */
+  runName(): string | undefined {
+    const model = this.host.model();
+    const field = model.fields.get("run-name");
+    if (!field) return model.workflow.runName?.value;
+    const contexts = this.#contexts();
+    const value = evaluateField(
+      field,
+      {
+        github: exprFromJson(contexts.github),
+        inputs: exprFromJson(contexts.inputs),
+        vars: exprFromJson(contexts.vars),
+      },
+      newWorkBudget(),
+    );
+    return value.ok ? toExprString(value.value) : undefined;
   }
 
   /** New attempt rows: its nodes from the plan, its instance budget at the plan's static count. */
@@ -385,6 +414,7 @@ export class RunEngine {
       model?.plan.staticInstances ?? 0,
       now,
     );
+    this.#tellRepository();
     if (!model) return;
     model.plan.graph.order.forEach(({ id: jobKey }, ord) => {
       const reserved = model.plan.jobs.get(jobKey)?.instances ?? 1;
@@ -603,7 +633,7 @@ export class RunEngine {
         row.job_id,
         desired,
       );
-    this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
+    this.#tellRepository();
   }
 
   /**
@@ -645,7 +675,7 @@ export class RunEngine {
       );
       added = true;
     }
-    if (added) this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
+    if (added) this.#tellRepository();
   }
 
   // ---------------------------------------------------------------- scheduling
@@ -976,7 +1006,7 @@ export class RunEngine {
     ))
       this.endScope(row.owner_key);
     this.#settleObsoleteChecks(n);
-    this.#ensure("run_checks", RUN_JOB.checks, this.host.policy.checkFlushMs);
+    this.#tellRepository();
     this.#ensure("run_sweep", RUN_JOB.sweep, this.host.policy.sweepMs);
     // The run's weekly check retires it at its expiry, not up to a week later.
     this.#ensure("run_reconcile", RUN_JOB.reconcile, this.host.policy.retentionMs);

@@ -15,6 +15,10 @@ CREATE INDEX ci_approvals_waiting
         ON ci_approvals (pull_number, trigger_kind, workflow_path, event_id) WHERE state = 'waiting';
 CREATE INDEX ci_events_done ON ci_events (done_at) WHERE state = 'done';
 CREATE INDEX ci_events_pending ON ci_events (id) WHERE state = 'pending';
+CREATE INDEX ci_runs_active ON ci_runs (run_id)
+        WHERE status IN ('waiting', 'queued', 'pending', 'in_progress');
+CREATE INDEX ci_runs_sha ON ci_runs (sha, run_id);
+CREATE INDEX ci_runs_workflow ON ci_runs (workflow_path, run_id);
 CREATE INDEX ci_schedules_due ON ci_schedules (next_at) WHERE disabled IS NULL;
 CREATE INDEX ci_trigger_cache_used ON ci_trigger_cache (used_at);
 CREATE UNIQUE INDEX code_owner_evaluations_key
@@ -309,7 +313,9 @@ CREATE TABLE ci_runs (
         sha TEXT NOT NULL,
         workflow_path TEXT NOT NULL,
         created_at INTEGER NOT NULL
-      ) STRICT, WITHOUT ROWID;
+      , state_seq INTEGER NOT NULL DEFAULT 0 CHECK (state_seq >= 0), status TEXT
+        CHECK (status IN ('waiting', 'queued', 'pending', 'in_progress', 'completed')), conclusion TEXT
+        CHECK (conclusion IN ('success', 'failure', 'cancelled')), event TEXT, actor_id TEXT, head_branch TEXT, completed_at INTEGER, summary TEXT CHECK (summary IS NULL OR json_valid(summary))) STRICT, WITHOUT ROWID;
 CREATE TABLE ci_schedule_fires (
         workflow_path TEXT PRIMARY KEY,
         last_fired_at INTEGER NOT NULL

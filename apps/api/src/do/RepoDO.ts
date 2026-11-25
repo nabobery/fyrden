@@ -293,6 +293,7 @@ import {
   CiApprovals,
   type SettleAnswer,
 } from "./repo/run-approvals.js";
+import { RunHistory, type RunReport, validRunReport } from "./repo/run-history.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -513,6 +514,8 @@ export class RepoDO extends MigratingDO {
   readonly ciTriggers: CiTriggers;
   /** Approvals of held fork runs. */
   readonly ciApprovals: CiApprovals;
+  /** The states of this repository's CI runs, as they report them. */
+  readonly runs: RunHistory;
   /** Scheduled workflows on this object's alarm. */
   readonly ciSchedules: CiSchedules;
   /** Whether a due schedule tick fires (a seam for a later budget). */
@@ -741,6 +744,7 @@ export class RepoDO extends MigratingDO {
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
+    this.runs = new RunHistory(this.git);
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
@@ -2526,6 +2530,9 @@ export class RepoDO extends MigratingDO {
    * those (a ref moved after its snapshot is walked by its catch-up), so a
    * run recorded during a collection never names a commit the collection
    * may leave as garbage.
+   * A run registering itself gives its `state` too, recorded unless the
+   * repository has that state or a later one: so a repository restored, or
+   * holding a run from before runs reported their states, catches up.
    */
   registerRun(input: {
     readonly runId: string;
@@ -2533,6 +2540,7 @@ export class RepoDO extends MigratingDO {
     readonly path: string;
     readonly builtUnder?: { readonly owner: string; readonly ownerGen?: number };
     readonly reachableVia?: string;
+    readonly state?: RunReport;
   }): Promise<
     | { readonly ok: true }
     | {
@@ -2554,6 +2562,8 @@ export class RepoDO extends MigratingDO {
         (input.reachableVia !== undefined && !isFullSha(input.reachableVia))
       )
         throw new TypeError("invalid run registration");
+      const state = input.state && validRunReport(input.state);
+      if (state && state.runId !== input.runId) throw new TypeError("invalid run registration");
       const refused = this.#runRecordRefusal();
       if (refused) return refused;
       const recorded =
@@ -2570,14 +2580,42 @@ export class RepoDO extends MigratingDO {
       }
       if (!recorded && input.reachableVia !== undefined && !this.#rooted(input.reachableVia))
         return { ok: false, code: "commit_unreachable" };
-      this.git.context.storage.sql.exec(
-        `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
-        input.runId,
-        input.sha,
-        input.path,
-        this.git.context.now(),
-      );
+      const { storage } = this.git.context;
+      storage.transactionSync(() => {
+        storage.sql.exec(
+          `INSERT OR IGNORE INTO ci_runs (run_id, sha, workflow_path, created_at) VALUES (?, ?, ?, ?)`,
+          input.runId,
+          input.sha,
+          input.path,
+          this.git.context.now(),
+        );
+        if (state) this.runs.apply(state);
+      });
       return { ok: true };
+    });
+  }
+
+  /**
+   * A run's state, which it reports after each change: recorded unless the
+   * repository has that state or a later one. It only updates a run the
+   * repository holds (`recorded`), so a report that lands after the run was
+   * forgotten brings nothing back. Refused as `registerRun` is.
+   */
+  reportRun(report: RunReport): Promise<
+    | { readonly ok: true; readonly recorded: boolean }
+    | {
+        readonly ok: false;
+        readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
+      }
+  > {
+    return this.#measured("reportRun", async () => {
+      const state = validRunReport(report);
+      const refused = this.#runRecordRefusal();
+      if (refused) return refused;
+      return {
+        ok: true,
+        recorded: this.git.context.storage.transactionSync(() => this.runs.apply(state)),
+      };
     });
   }
 
