@@ -30,6 +30,7 @@ describe("D1 directory schema", () => {
       "ci_job_tokens",
       "ci_pending_jobs",
       "ci_runner_registrations",
+      "ci_runner_repos",
       "ci_runners",
       "ci_tasks",
       "deployment_settings",

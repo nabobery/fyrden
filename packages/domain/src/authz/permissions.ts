@@ -212,19 +212,20 @@ export const PERMISSIONS = {
   // admin access to the organization to list runners as well as to add and
   // remove them (https://docs.github.com/en/rest/actions/self-hosted-runners,
   // not rechecked here). A runner runs the account's jobs, so both are an
-  // owner's.
+  // owner's; an agent may read them for one, and changing them stays with people.
   "self_hosted_runners:read": {
     resource: "account",
     minAccountRole: "owner",
     summary: "See an account's self-hosted runners.",
-    principals: ["user"],
+    principals: ["user", "agent"],
     implies: [],
     writes: false,
   },
   "self_hosted_runners:write": {
     resource: "account",
     minAccountRole: "owner",
-    summary: "Register self-hosted runners for an account (registration tokens), and remove them.",
+    summary:
+      "Register self-hosted runners for an account (registration tokens), choose which jobs they may be given, and remove them.",
     principals: ["user"],
     implies: ["self_hosted_runners:read"],
     writes: true,

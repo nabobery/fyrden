@@ -6,6 +6,7 @@ import { accountLimits } from "../accounts/quotas.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
 import { READ_MODEL_LONE_WRITE, withReadModel } from "../read-model/executor.js";
+import { transferAccessSql } from "../runner/access.js";
 import { spentStatement } from "../search/admission.js";
 import { REQUEST_ROWS, repairStatement, searchIndexing } from "../search/repairs.js";
 import { clock, newId } from "../services.js";
@@ -465,8 +466,9 @@ async function moveInDirectory(
   ] as const;
   // Later in the batch: this transfer moved it (the job still at this step).
   const moved = `EXISTS (SELECT 1 FROM repos WHERE id = ?1 AND owner_id = ?2) AND ${holds}`;
-  metrics?.count("d1.query", { db: "directory", op: "transfer_move" }, 6);
-  const [seen, , , , , saved] = await db.batch([
+  const [selections, tokens] = transferAccessSql(moved);
+  metrics?.count("d1.query", { db: "directory", op: "transfer_move" }, 8);
+  const [seen, , , , , , , saved] = await db.batch([
     db
       .prepare(
         `SELECT
@@ -504,6 +506,8 @@ async function moveInDirectory(
          AND ${moved}`,
       )
       .bind(...args),
+    db.prepare(selections).bind(...args),
+    db.prepare(tokens).bind(...args),
     db
       .prepare(
         `UPDATE repo_transfers SET step = 'grants', last_error = NULL, updated_at = ?5,

@@ -179,45 +179,52 @@ describe("issues in the web UI", () => {
   });
 
   /**
-   * Holds this page's next form post to `at` until the returned `release` is
-   * called (then unroutes); `release.arrived` settles once that post is held.
+   * Sends a form post to `at` (what `send` does, once) and returns once the
+   * browser is holding it; the function returned lets it go to the server.
+   *
+   * Its route stays on the page, passing everything else on. Taking off a
+   * page's last route turns the browser's interception off, and Chromium 153
+   * (Playwright 1.63.0's) drops a request it has intercepted but not reported
+   * yet when that happens: never sent, answered or failed (measured; `Detach`
+   * and `CompleteNotifyingClient` in its devtools_url_loader_interceptor.cc).
+   * That could be the post or, once it is let go, the page's reload after it.
    */
-  async function holdNextPost(
+  async function holdPost(
+    send: () => Promise<void>,
     at = "issues/1",
     on: Page = page,
-  ): Promise<(() => Promise<void>) & { arrived: Promise<void> }> {
-    const pattern = `**/${handle}/${name}/${at}*`;
-    let release = () => {};
-    const held = new Promise<void>((done) => {
-      release = done;
-    });
-    let arrive = () => {};
-    const arrived = new Promise<void>((done) => {
+  ): Promise<() => Promise<void>> {
+    const target = `/${handle}/${name}/${at}`;
+    let arrive = (_: Route) => {};
+    const arrived = new Promise<Route>((done) => {
       arrive = done;
     });
     let taken = false;
-    const handler = async (route: Route) => {
+    await on.route(`**${target}*`, (route) => {
       if (taken || route.request().method() !== "POST") return route.fallback();
       taken = true;
-      arrive();
-      await held;
-      // Left while it was held, the browser may have given up on it.
-      return route.continue().catch(() => undefined);
-    };
-    await on.route(pattern, handler);
-    const done = async () => {
-      release();
-      await on.unroute(pattern, handler);
-    };
-    return Object.assign(done, { arrived });
+      arrive(route);
+    });
+    try {
+      // The browser's report of it: its timeout fails a post that is never sent.
+      const sent = on.waitForRequest((r) => r.method() === "POST" && r.url().includes(target));
+      await Promise.all([sent, send()]);
+    } catch (error) {
+      // A later test's post is not this one's to hold.
+      taken = true;
+      throw error;
+    }
+    const route = await arrived;
+    return () => route.continue();
   }
 
   it("keeps what is written while a save or a comment is answered", async () => {
     await visit(page, `${stack.origin}/${handle}/${name}/issues/1`);
     await page.getByText("Edit title and description").click();
     await page.getByLabel("Description (Markdown)").fill("sent text");
-    let release = await holdNextPost();
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    let release = await holdPost(() =>
+      page.getByRole("button", { name: "Save", exact: true }).click(),
+    );
     await page.getByLabel("Description (Markdown)").fill("sent text, and more written meanwhile");
     await release();
     await see(page.getByRole("status")).toHaveText("Saved.");
@@ -225,8 +232,9 @@ describe("issues in the web UI", () => {
       "sent text, and more written meanwhile",
     );
     await page.locator("#comment-body").fill("a comment");
-    release = await holdNextPost();
-    await page.getByRole("button", { name: "Comment", exact: true }).click();
+    release = await holdPost(() =>
+      page.getByRole("button", { name: "Comment", exact: true }).click(),
+    );
     await page.locator("#comment-body").fill("the next comment, unsent");
     await release();
     await see(page.getByRole("status")).toHaveText("Comment added.");
@@ -336,8 +344,10 @@ describe("issues in the web UI", () => {
     const editor = item.getByLabel("Comment (Markdown)");
     await item.getByText("Edit or delete").click();
     await editor.fill("saved");
-    const release = await holdNextPost(`issues/${number}`);
-    await item.getByRole("button", { name: "Save comment" }).click();
+    const release = await holdPost(
+      () => item.getByRole("button", { name: "Save comment" }).click(),
+      `issues/${number}`,
+    );
     await editor.fill("saved, and more written meanwhile");
     await release();
     await see(page.getByRole("status")).toHaveText("Comment saved.");
@@ -378,8 +388,10 @@ describe("issues in the web UI", () => {
     const item = page.locator(`#comment-${mine.id}`);
     await item.getByText("Edit or delete").click();
     await item.getByLabel("Comment (Markdown)").fill("sent, then left");
-    const release = await holdNextPost(`issues/${number}`);
-    await item.getByRole("button", { name: "Save comment" }).click();
+    const release = await holdPost(
+      () => item.getByRole("button", { name: "Save comment" }).click(),
+      `issues/${number}`,
+    );
     // The next page, before the answer: the edit's answer is never taken.
     await page.getByRole("link", { name: "Next page" }).click();
     await see(page).toHaveURL(/after=/);
@@ -419,11 +431,13 @@ describe("issues in the web UI", () => {
       await theirs.locator("#comment-body").fill("bo's reply, unsent");
       await mine.getByText("Edit or delete").click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit");
-      let release = await holdNextPost("issues/1", theirs);
-      await mine.getByRole("button", { name: "Save comment" }).click();
-      await mine.getByLabel("Comment (Markdown)").fill("bo's edit, and more written meanwhile");
       // Sent and held before the lock: it reaches the API locked.
-      await release.arrived;
+      let release = await holdPost(
+        () => mine.getByRole("button", { name: "Save comment" }).click(),
+        "issues/1",
+        theirs,
+      );
+      await mine.getByLabel("Comment (Markdown)").fill("bo's edit, and more written meanwhile");
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
       await see(theirs.getByRole("alert")).toBeVisible();
@@ -439,9 +453,11 @@ describe("issues in the web UI", () => {
       await mine.getByText("Edit or delete").click();
       await mine.getByLabel("Comment (Markdown)").fill("bo's edit, unsent");
       await theirs.locator("#comment-body").fill("bo's reply, refused");
-      release = await holdNextPost("issues/1", theirs);
-      await theirs.getByRole("button", { name: "Comment", exact: true }).click();
-      await release.arrived;
+      release = await holdPost(
+        () => theirs.getByRole("button", { name: "Comment", exact: true }).click(),
+        "issues/1",
+        theirs,
+      );
       await rest("PUT", `/repos/${handle}/${name}/issues/1/lock`, {});
       await release();
       await see(theirs.getByRole("alert")).toBeVisible();
@@ -747,8 +763,10 @@ describe("issues in the web UI", () => {
     await see(create.getByLabel("Name")).toHaveValue("");
     await see(create.getByLabel("Description (optional)")).toHaveValue("");
     await create.getByLabel("Name").fill("second");
-    const release = await holdNextPost("labels");
-    await page.getByRole("button", { name: "Create label" }).click();
+    const release = await holdPost(
+      () => page.getByRole("button", { name: "Create label" }).click(),
+      "labels",
+    );
     await create.getByLabel("Name").fill("third, written meanwhile");
     await release();
     await see(page.locator(".label-chip", { hasText: /^second$/ })).toBeVisible();

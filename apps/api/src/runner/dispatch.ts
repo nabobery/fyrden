@@ -89,8 +89,9 @@ export async function dispatchTask(
   // ephemeral runner that already holds a task is offered only that task again, never another.
   let liveOffers = view.liveOffers;
   if (view.reoffer && !view.reoffer.eligible) {
-    // Its job may no longer be given to any runner (its repository was made public, or it was
-    // written before eligibility was recorded), as the authentication read saw it.
+    // Its job may no longer be given to this runner (its access was narrowed, its repository was
+    // made public, or it was written before eligibility was recorded), as the authentication read
+    // saw it.
     const { id, runId, assigned } = view.reoffer;
     if (!assigned) {
       // Never assigned: superseded, so the job stays queued in its run and its pending row,
@@ -101,7 +102,7 @@ export async function dispatchTask(
     // Assigned (its answer was lost): not delivered, and kept as a live offer, so an ephemeral
     // runner takes no other job. Nobody runs the task, so run state's heartbeat deadline ends
     // it, and its end revokes the token and settles the runner as for any vanished runner.
-    call.log.info("task withheld: its job may not be given to a runner", {
+    call.log.info("task withheld: its job may not be given to this runner", {
       taskId: id,
       runId,
       assigned,
@@ -109,7 +110,7 @@ export async function dispatchTask(
   }
   const reoffer =
     view.reoffer?.eligible &&
-    !(runner.ephemeral && !view.reoffer.assigned && (runner.taskConfirmed || liveOffers > 1))
+    !(runner.ephemeral && !view.reoffer.assigned && (runner.tookTask || liveOffers > 1))
       ? view.reoffer
       : undefined;
   // Without a CI master key no task's masks can be sealed, so no task is handed out: nothing is
@@ -117,7 +118,7 @@ export async function dispatchTask(
   // caller's own version keeps it searching once there is a key. The run checks again before it
   // assigns, for a key that goes after this check.
   const searches =
-    !(runner.ephemeral && (runner.taskConfirmed || liveOffers > 0)) &&
+    !(runner.ephemeral && (runner.tookTask || liveOffers > 0)) &&
     view.tasksVersion !== requestVersion;
   if ((reoffer || searches || view.expiredClaims) && !(await ciSecretKeys(call.env)).current) {
     call.log.warn("no task searched for: there is no CI master key", {
@@ -178,7 +179,7 @@ export async function dispatchTask(
   // Lapsed claims go first, so a claim of a Worker that died never holds a job, whoever polls.
   if (view.expiredClaims) await clearLapsedClaims(db, runner.accountId, clock(), call.metrics);
   // An ephemeral runner gets one task (the claim enforces it too, for polls that overlap).
-  if (runner.ephemeral && (runner.taskConfirmed || liveOffers > 0))
+  if (runner.ephemeral && (runner.tookTask || liveOffers > 0))
     return answer(undefined, requestVersion);
   if (exhausted.length === 0 && !view.expiredClaims && view.tasksVersion === requestVersion)
     return answer(undefined, view.tasksVersion);

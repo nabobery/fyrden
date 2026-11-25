@@ -1394,7 +1394,8 @@ describe("a failed delivery and a late record of the same offer", () => {
         r.hooks = {};
       });
     }
-    expect(changes).toBe(1);
+    // The offer, and the ephemeral runner's stamp its trigger writes.
+    expect(changes).toBe(2);
     expect(await jobA(runId)).toMatchObject({ status: "in_progress" });
     expect(await taskRow(offerId)).toMatchObject({ ended_at: null, superseded_at: null });
     expect((await taskRow(offerId))?.task).not.toBeNull();

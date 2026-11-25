@@ -20,6 +20,7 @@ import {
 import { newRunId } from "../git/maintenance/ids.js";
 import { decodeBitSets, encodeBitSets, MarkSession, markName } from "../git/maintenance/mark.js";
 import type { MaintenancePolicy } from "../git/maintenance/policy.js";
+import { reflogRoots } from "../git/maintenance/reflog-roots.js";
 import { type RewriteState, rewriteSlice } from "../git/maintenance/rewrite.js";
 import {
   type CallCounter,
@@ -38,15 +39,16 @@ import {
  * network, never by copying shared packs (a shared pack holds other
  * members' objects, private ones included). As one resumable job:
  *
- * 1. Mark, from the refs, every object reachable through the current view,
- *    one bit set per pack.
+ * 1. Mark, from the refs and the reflog entries within the retention (which
+ *    garbage collection and run registration rely on), every object
+ *    reachable through the current view, one bit set per pack.
  * 2. Write the marked objects that only packs of the old network hold into
  *    a new pack under the new network (an object some pack of the new
  *    network already holds, written by a push since the detach began or by
  *    an earlier round, is not copied again).
  * 3. Verify, slice by slice within the slice budget, that the new
  *    network's packs hold the whole closure (a mark through them alone),
- *    noting which CI runs' commits it covered;
+ *    noting which CI runs' commits and reflog ids it covered;
  *    then list, again slice by slice, the commit-graph rows of commits they
  *    do not hold (they leave with the old network) into scratch objects.
  * 4. Swap, under the commit lock (a write freeze: pushes wait, then are
@@ -106,11 +108,12 @@ export interface DetachCursor {
   readonly after?: string | undefined;
   readonly drops?: number | undefined;
   /**
-   * The round's mark read the CI runs' commits as roots. Absent from a round
-   * an earlier version began, which is started again before its swap.
+   * The last round whose mark read the CI runs' commits and the reflog's
+   * entries as roots. Another than `round` (a round another version began,
+   * copying this cursor or not) is started again before its swap.
    */
-  readonly heldRoots?: true | undefined;
-  /** Verify: how many CI runs' commits it covers, listed in a scratch object (none: not written). */
+  readonly rootsRound?: number | undefined;
+  /** Verify: how many held roots it covers, listed in a scratch object (none: not written). */
   readonly held?: number | undefined;
 }
 
@@ -126,7 +129,7 @@ export interface DetachWiring {
   readonly log: Logger;
   readonly blocks?: () => BlockCache;
   readonly hooks?: () => DetachHooks;
-  /** What the fork keeps besides what its refs reach (published releases' tags and commits). */
+  /** What the fork keeps besides what its refs and reflog reach (published releases' tags and commits). */
   readonly roots: () => readonly Oid[];
   /**
    * Further roots kept only if a pack it reads holds them (its CI runs'
@@ -213,8 +216,8 @@ class DetachSlice {
   }
 
   async run(job: Job, cursor: DetachCursor): Promise<SliceResult> {
-    // A round begun without the runs' commits as roots could drop one: begun again.
-    if (cursor.phase !== "notify" && cursor.version >= 0 && !cursor.heldRoots)
+    // A round begun without the runs' commits or the reflog as roots could drop one: begun again.
+    if (cursor.phase !== "notify" && cursor.version >= 0 && cursor.rootsRound !== cursor.round)
       return this.#restartRound(cursor);
     switch (cursor.phase) {
       case "mark":
@@ -242,7 +245,11 @@ class DetachSlice {
     }
   }
 
-  /** A round's snapshot: the refs' version and every live pack, then the mark from the refs. */
+  /**
+   * A round's snapshot: the refs' version and every live pack, then the mark
+   * from the refs and the reflog, read with them. A later reflog entry comes
+   * with a newer version of the refs, so the swap starts another round.
+   */
   #newRound(cursor: DetachCursor): Promise<SliceResult> {
     const { git } = this;
     const sources = git.context.storage.sql
@@ -268,18 +275,22 @@ class DetachSlice {
       after: undefined,
       drops: undefined,
       held: undefined,
-      heldRoots: true,
+      rootsRound: cursor.round + 1,
     };
-    return this.#mark(
-      next,
-      [...refs.refs.values(), ...this.wiring.roots()],
-      this.wiring.heldRoots?.() ?? [],
-    );
+    return this.#mark(next, [...refs.refs.values(), ...this.wiring.roots()], this.#heldRoots());
   }
 
-  /** The runs' commits a pack of the round's sources holds. */
+  /** Roots kept only if a source holds them: the runs' commits and the reflog's ids. */
+  #heldRoots(): Oid[] {
+    return [
+      ...(this.wiring.heldRoots?.() ?? []),
+      ...reflogRoots(this.git, this.policy.reflogRetentionMs),
+    ];
+  }
+
+  /** The held roots a pack of the round's sources holds. */
   async #heldInSources(cursor: DetachCursor): Promise<Oid[]> {
-    const held = this.wiring.heldRoots?.() ?? [];
+    const held = this.#heldRoots();
     if (held.length === 0) return [];
     const loaded = await LoadedPacks.load(
       this.git,
@@ -404,21 +415,22 @@ class DetachSlice {
 
   /**
    * One slice of the check that the new network's packs alone hold
-   * everything the refs reach (a mark through them that finds nothing
-   * missing), saved to scratch when the slice's budget runs out.
+   * everything the refs, the reflog and the runs reach (a mark through them
+   * that finds nothing missing), saved to scratch when the slice's budget
+   * runs out.
    */
   async #verify(cursor: DetachCursor): Promise<SliceResult> {
     const { git } = this;
     if (this.#moved(cursor)) return this.#next({ ...cursor, phase: "swap" });
     const check = cursor.check ?? 0;
     let held = cursor.held ?? 0;
-    const roots: Oid[] = [];
+    let roots: Oid[] = [];
     if (check === 0) {
-      roots.push(...git.refStore.readRefsSync().refs.values(), ...this.wiring.roots());
-      // The runs' commits the round's sources hold, as read now: one recorded after the round's
-      // mark and not copied is missing here, and the round is done again.
+      const own = [...git.refStore.readRefsSync().refs.values(), ...this.wiring.roots()];
+      // The runs' commits and the reflog's ids the round's sources hold, as read now: a run's
+      // recorded after the round's mark and not copied is missing here, and the round is done again.
       const inSources = await this.#heldInSources(cursor);
-      roots.push(...inSources);
+      roots = [...own, ...inSources];
       held = inSources.length;
       if (held > 0) await putScratch(git, cursor.runId, HELD, concatOids(inSources), this.counter);
     }
@@ -641,7 +653,7 @@ class DetachSlice {
   }
 
   /**
-   * The round's packs' indexes and the runs' commits its verify covered,
+   * The round's packs' indexes and the held roots its verify covered,
    * loaded before the swap, and the check the swap transaction makes with
    * them: whether a CI run recorded then names a commit those packs hold
    * that the verify did not cover. A commit a pack of the new network holds

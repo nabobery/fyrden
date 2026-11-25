@@ -89,7 +89,7 @@ describe("authorization matrix", () => {
     }
   });
 
-  it("leaves self-hosted runners to an account's owners, users only", () => {
+  it("leaves self-hosted runners to an account's owners: agents acting for one read them, people change them", () => {
     const allow = (actorType: string, holder: string, permission: string) =>
       matrix.find(
         (c) => c.actorType === actorType && c.holder === holder && c.permission === permission,
@@ -99,9 +99,11 @@ describe("authorization matrix", () => {
       expect(allow("user", "account-member", permission), permission).toBe(false);
       expect(allow("user", "admin", permission), permission).toBe(false);
       expect(allow("user", "instance-admin", permission), permission).toBe(false);
-      expect(allow("agent", "account-owner", permission), permission).toBe(false);
+      expect(allow("agent", "account-member", permission), permission).toBe(false);
       expect(allow("installation", "account-owner", permission), permission).toBe(false);
     }
+    expect(allow("agent", "account-owner", "self_hosted_runners:read")).toBe(true);
+    expect(allow("agent", "account-owner", "self_hosted_runners:write")).toBe(false);
   });
 
   it("covers every repository role", () => {

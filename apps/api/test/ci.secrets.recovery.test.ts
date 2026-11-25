@@ -13,20 +13,26 @@ import type { OrgDO } from "../src/do/OrgDO.js";
 import type { RunDO } from "../src/do/RunDO.js";
 import {
   DELIVERY_RECOVERY_MS,
+  DISPATCH_RESYNC_MS,
   GIVE_UP_OFFERS_SQL,
   OFFERS_SQL,
   RECORD_TASK_SQL,
+  SUPERSEDE_SECOND_TASK_SQL,
 } from "../src/do/run/dispatch.js";
 import { RUN_JOB } from "../src/do/run/engine.js";
+import { CI_RESERVATION_START_MS } from "../src/do/run/reservations.js";
 import { putSecret, secretValue } from "./helpers/ci-secrets.js";
 import {
+  allow,
   fetchTask,
   gate,
   jobTokensOf,
+  type OrgFixture,
   orgRepo,
   pendingOf,
   type RegisteredRunner,
   registerRunner,
+  selectRepos,
   taskRow,
   tasksOfRun,
   tasksVersionOf,
@@ -37,19 +43,18 @@ import {
   checksOf,
   drain,
   expr,
-  type Fixture,
   inRun,
   job,
   jobNamed,
   jobsOf,
   now,
   runStub,
+  specFor,
   started,
   workflow,
 } from "./helpers/runs.js";
 import { logs } from "./setup/log-capture.js";
 
-type OrgFixture = Fixture & { org: { id: string; login: string } };
 type Hooks = RunDO["hooks"];
 
 const S = 1_000;
@@ -126,9 +131,17 @@ const minutesOf = (f: OrgFixture, runId: string) =>
   );
 
 const credentialOf = (runner: RegisteredRunner) =>
-  env.DIRECTORY.prepare("SELECT expires_at, task_confirmed_at FROM ci_runners WHERE id = ?")
+  env.DIRECTORY.prepare(
+    "SELECT expires_at, task_assigned_at, task_confirmed_at FROM ci_runners WHERE id = ?",
+  )
     .bind(runner.id)
-    .first<{ expires_at: number | null; task_confirmed_at: number | null }>();
+    .first<{
+      expires_at: number | null;
+      task_assigned_at: number | null;
+      task_confirmed_at: number | null;
+    }>();
+/** Of an ephemeral runner given nothing: neither stamped nor ended. */
+const UNSPENT = { expires_at: null, task_assigned_at: null, task_confirmed_at: null };
 
 /** The outcomes logged for failed deliveries of `wireId`, in order. */
 const outcomesOf = (wireId: number) =>
@@ -170,7 +183,13 @@ async function failing(
   source?: string,
   ephemeral?: boolean,
 ): Promise<Failed> {
-  const made = await undeliverable(source, ephemeral);
+  return failingIn(await undeliverable(source, ephemeral), hooks);
+}
+
+async function failingIn(
+  made: Pick<Failed, "f" | "runner" | "runId">,
+  hooks: Hooks | ((runId: string) => Hooks),
+): Promise<Failed> {
   const injected = typeof hooks === "function" ? hooks(made.runId) : hooks;
   await hooked(made.runId, injected);
   const poll = fetchTask(made.runner, 0);
@@ -287,7 +306,7 @@ describe("an offer whose end the directory did not write", () => {
   it("leaves an ephemeral runner's credential unspent", async () => {
     const p = await notEnded(reading(), true);
     await later(p.runId);
-    expect(await credentialOf(p.runner)).toEqual({ expires_at: null, task_confirmed_at: null });
+    expect(await credentialOf(p.runner)).toEqual(UNSPENT);
   });
 
   it("waits out the claim of a pending row another poll renewed", async () => {
@@ -356,7 +375,7 @@ describe("an offer the directory ended", () => {
       status: "completed",
       conclusion: "failure",
     });
-    expect(await credentialOf(p.runner)).toEqual({ expires_at: null, task_confirmed_at: null });
+    expect(await credentialOf(p.runner)).toEqual(UNSPENT);
     expect(await reservationOf(p.runId)).toMatchObject({ state: "settled", started_at: null });
     expect(await minutesOf(p.f, p.runId)).toEqual([{ used: 0, state: "released" }]);
     expect(await pendingOf(p.runId)).toEqual([]);
@@ -626,6 +645,233 @@ describe("a call of an offer given up by the recovery", () => {
     expect(await assignAgain(p)).toEqual({ refused: "task_finished" });
     await drain(p.runId);
     await expectFailed(p);
+  });
+});
+
+describe("an ephemeral runner's offer whose delivery failed", () => {
+  /** The runner takes another job, past its offer's lease: that one is its one task. */
+  async function takesAnother(f: OrgFixture, runId: string, runner: RegisteredRunner) {
+    // Its pending row is withdrawn, so no lapsed claim supersedes the offer.
+    await drain(runId);
+    expect(await pendingOf(runId)).toEqual([]);
+    vi.setSystemTime(Date.now() + 31 * S);
+    await started(f, workflow(job("other")));
+    expect((await fetchTask(runner, 0)).task).toBeDefined();
+    expect((await credentialOf(runner))?.task_assigned_at).not.toBeNull();
+  }
+
+  it.each(["stored", "none"])(
+    "refused as its second task (failure: %s) is queued again",
+    async (failure) => {
+      const stored = failure === "stored";
+      const failed = stored ? await notEnded(reading(), true) : undefined;
+      const made = failed ?? (await undeliverable(reading(), true));
+      const { f, runner, runId } = made;
+      await setSecret(f);
+      const held = gate();
+      await hooked(runId, { beforeTaskRecord: () => held.hold() });
+      const slow: Promise<unknown> = failed ? assignAgain(failed) : fetchTask(runner, 0);
+      try {
+        await reached(held, slow);
+        const [offer] = await tasksOfRun(runId);
+        if (!offer) throw new Error("no offer");
+        await takesAnother(f, runId, runner);
+        const before = await credentialOf(runner);
+        held.release();
+        const answer = await slow;
+        if (stored) expect(answer).toEqual({ refused: "released" });
+        else expect(answer).not.toHaveProperty("task");
+        expect(await jobA(runId)).toMatchObject({ status: "queued" });
+        expect(await taskRow(offer.id)).toMatchObject({
+          task: null,
+          ended_at: null,
+          superseded_at: expect.any(Number),
+        });
+        expect(await reservationOf(runId)).toEqual({ state: "reserved", started_at: null });
+        expect(await failuresOf(runId)).toHaveLength(stored ? 1 : 0);
+        await hooked(runId, {});
+        await later(runId);
+        expect(await jobA(runId)).toMatchObject({ status: "queued" });
+        expect(await failuresOf(runId)).toEqual([]);
+        expect(outcomesOf(offer.id)).toEqual(stored ? ["scheduled", "discarded_not_live"] : []);
+        expect(await credentialOf(runner)).toEqual(before);
+        expect(await jobTokensOf(offer.id)).toEqual([]);
+        expect(await deliveries(f)).toEqual([]);
+      } finally {
+        held.release();
+        await Promise.allSettled([slow]);
+      }
+    },
+  );
+
+  it.each(["the second record", "the recovery"])(
+    "given up by %s first and by the other after: one end, its job queued again once",
+    async (first) => {
+      const p = await notEnded(reading(), true);
+      await takesAnother(p.f, p.runId, p.runner);
+      const before = await credentialOf(p.runner);
+      let changes: (number | undefined)[] = [];
+      const second = async () => {
+        const results = await env.DIRECTORY.batch([
+          env.DIRECTORY.prepare(RECORD_TASK_SQL).bind(p.task, p.wireId),
+          env.DIRECTORY.prepare(SUPERSEDE_SECOND_TASK_SQL).bind(p.wireId, 5),
+        ]);
+        changes = results.map((r) => r.meta.changes);
+      };
+      const recoveryFirst = first === "the recovery";
+      await hooked(
+        p.runId,
+        recoveryFirst ? { afterDeliveryRecovery: second } : { beforeDeliveryRecovery: second },
+      );
+      await later(p.runId);
+      expect(changes).toEqual([0, recoveryFirst ? 0 : 1]);
+      const at = (await taskRow(p.wireId))?.superseded_at;
+      if (recoveryFirst) expect(at).not.toBe(5);
+      else expect(at).toBe(5);
+      await expectQueued(p);
+      expect(outcomesOf(p.wireId)).toEqual(["scheduled", "requeued"]);
+      expect(await credentialOf(p.runner)).toEqual(before);
+    },
+  );
+
+  it("is not recorded as its second task by an attempt that outlives the recovery", async () => {
+    const p = await notEnded(reading(), true);
+    await setSecret(p.f);
+    const held = gate();
+    await hooked(p.runId, { beforeTaskRecord: () => held.hold() });
+    const slow = assignAgain(p);
+    try {
+      await reached(held, slow);
+      await takesAnother(p.f, p.runId, p.runner);
+      const before = await credentialOf(p.runner);
+      await later(p.runId);
+      await expectQueued(p);
+      const rev = await inRun(p.runId, (r) => r.engine.run()?.queue_rev);
+      const row = await taskRow(p.wireId);
+      held.release();
+      expect(await slow).toEqual({ refused: "released" });
+      await expectQueued(p);
+      expect(await taskRow(p.wireId)).toEqual(row);
+      expect(await inRun(p.runId, (r) => r.engine.run()?.queue_rev)).toBe(rev);
+      expect(await credentialOf(p.runner)).toEqual(before);
+    } finally {
+      held.release();
+      await Promise.allSettled([slow]);
+    }
+  });
+
+  it.each(["given up", "ended"])(
+    "%s by its recovery while an attempt is about to record it: the runner takes another job",
+    async (how) => {
+      const p = await notEnded(reading(), true);
+      await setSecret(p.f);
+      const held = gate();
+      await hooked(p.runId, { beforeTaskRecord: () => held.hold() });
+      const slow = assignAgain(p);
+      try {
+        await reached(held, slow);
+        if (how === "ended") await end(p.wireId);
+        await later(p.runId);
+        await drain(p.runId);
+        held.release();
+        expect(await slow).toEqual({ refused: how === "ended" ? "task_finished" : "released" });
+        await hooked(p.runId, {});
+        await drain(p.runId);
+        if (how === "ended") await expectFailed(p);
+        else await expectQueued(p);
+        expect(await credentialOf(p.runner)).toEqual(UNSPENT);
+        vi.setSystemTime(Date.now() + 31 * S);
+        await started(p.f, workflow(job("other")));
+        expect((await fetchTask(p.runner, 0)).task).toBeDefined();
+        expect((await credentialOf(p.runner))?.task_assigned_at).not.toBeNull();
+      } finally {
+        held.release();
+        await Promise.allSettled([slow]);
+      }
+    },
+  );
+});
+
+describe("a job only some runners may take, whose delivery failed", () => {
+  type Kind = "public" | "fork" | "selected";
+  const KINDS: Kind[] = ["public", "fork", "selected"];
+
+  /** Gives the runner the access a job of `kind` needs. */
+  const open = (kind: Kind, f: OrgFixture, runner: RegisteredRunner) =>
+    kind === "selected"
+      ? selectRepos(runner, [f.repo.id])
+      : allow(runner, { public: kind === "public", forks: kind === "fork" });
+  const shut = (kind: Kind, runner: RegisteredRunner) =>
+    kind === "selected" ? selectRepos(runner, []) : allow(runner, {});
+
+  /** Its end in the directory did not commit; its ephemeral runner may take it. */
+  async function restricted(kind: Kind) {
+    const f = await orgRepo();
+    await setSecret(f);
+    if (kind === "public")
+      await env.DIRECTORY.prepare("UPDATE repos SET visibility = 'public' WHERE id = ?")
+        .bind(f.repo.id)
+        .run();
+    const runner = await registerRunner(f.org.login, f.owner, { ephemeral: true });
+    await open(kind, f, runner);
+    const event = "pull_request_target";
+    const yaml = kind === "fork" ? reading().replace("on: push", `on: ${event}`) : reading();
+    const spec = specFor(f, yaml, {
+      event,
+      ref: "refs/heads/main",
+      github: { event_name: event, workflow: "ci" },
+      trust: "trusted",
+      fork: true,
+    });
+    const runId = await (kind === "fork" ? started(f, yaml, spec) : started(f, yaml));
+    await breakSecret(f);
+    return failingIn({ f, runner, runId }, { beforeDeliveryFailure: down });
+  }
+
+  it.each(KINDS)("%s: queued again, is offered only to a runner that may take it", async (kind) => {
+    const p = await restricted(kind);
+    await later(p.runId);
+    await expectQueued(p);
+    const value = await setSecret(p.f);
+    const other = await registerRunner(p.f.org.login, p.f.owner, { ephemeral: true });
+    await shut(kind, other);
+    vi.setSystemTime(Date.now() + 31 * S);
+    expect((await fetchTask(other, 0)).task).toBeUndefined();
+    expect(await tasksOfRun(p.runId)).toHaveLength(1);
+    // The runner whose offer was given up is not spent, so it may take the job.
+    expect((await fetchTask(p.runner, 0)).task?.secrets.get("A")).toBe(value);
+  });
+
+  it.each(["public", "fork"] as const)(
+    "%s: queued again and no runner left, its reservation is given back until one takes it",
+    async (kind) => {
+      const p = await restricted(kind);
+      await later(p.runId);
+      await expectQueued(p);
+      await shut(kind, p.runner);
+      await advance(p.runId, CI_RESERVATION_START_MS);
+      expect(await jobA(p.runId)).toMatchObject({ status: "queued" });
+      expect(await reservationOf(p.runId)).toEqual({ state: "wanted", started_at: null });
+      expect(await pendingOf(p.runId)).toEqual([]);
+      expect(await minutesOf(p.f, p.runId)).toEqual([{ used: 0, state: "released" }]);
+      const value = await setSecret(p.f);
+      await open(kind, p.f, p.runner);
+      await advance(p.runId, DISPATCH_RESYNC_MS);
+      vi.setSystemTime(Date.now() + 31 * S);
+      expect((await fetchTask(p.runner, 0)).task?.secrets.get("A")).toBe(value);
+    },
+  );
+
+  it("fork: failed once no runner may take it, uses no minutes and spends no runner", async () => {
+    const p = await restricted("fork");
+    await end(p.wireId);
+    await shut("fork", p.runner);
+    await later(p.runId);
+    await drain(p.runId);
+    await expectFailed(p);
+    expect(await reservationOf(p.runId)).toEqual({ state: "settled", started_at: null });
+    expect(await minutesOf(p.f, p.runId)).toEqual([{ used: 0, state: "released" }]);
+    expect(await credentialOf(p.runner)).toEqual(UNSPENT);
   });
 });
 
@@ -927,9 +1173,10 @@ describe("a run erased or retiring", () => {
 
 describe("deliveries with nothing to recover", () => {
   it.each([
-    // The record, its earlier tokens, where the offer stands, and the audit row of a delivery.
-    ["that succeeds", reading(), 4],
-    ["of a job with no secret", workflow(job("a")), 3],
+    // The record, its earlier tokens, where the offer stands, the end of an ephemeral runner's
+    // second offer, and the audit row of a delivery.
+    ["that succeeds", reading(), 5],
+    ["of a job with no secret", workflow(job("a")), 4],
   ])("a delivery %s writes no row and schedules nothing", async (_, source, statements) => {
     const f = await orgRepo();
     await setSecret(f);

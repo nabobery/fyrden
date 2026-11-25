@@ -8,6 +8,7 @@ import type {
 } from "@fyrden/domain/ci";
 import { SHOWN_HANDLE } from "../../accounts/handles.js";
 import { ciSecretKeys } from "../../ci/envelope.js";
+import { tookItsTask } from "../../runner/access.js";
 import type { ConnectCode } from "../../runner/connect.js";
 import {
   INVALID_MESSAGE,
@@ -24,6 +25,7 @@ import {
   type TaskNeed,
 } from "../../runner/proto/messages.js";
 import { ProtoError } from "../../runner/proto/wire.js";
+import { EPHEMERAL_REPORT_MS } from "../../runner/registry.js";
 import { tokenStore } from "../../services.js";
 import type { AssignAnswer, TaskAnswer, TaskRef } from "../RunDO.js";
 import type { InstanceRow, RunEngine, RunRow } from "./engine.js";
@@ -215,10 +217,23 @@ type MemoryReservation = NonNullable<ReturnType<DoMemoryBudget["tryReserve"]>>;
  * Records an offer's task in the directory (?1 the task, ?2 the offer): only on an offer still
  * standing. One given up (superseded: its poll's deadline, a release, a lapsed claim) or ended
  * unrecorded (its secrets could not be delivered, `#deliveryFailed`) is never recorded: those
- * writes and this one exclude each other through `task`.
+ * writes and this one exclude each other through `task`. An ephemeral runner's second offer is not
+ * recorded either: the directory stamps the runner with the first one recorded (the
+ * `ci_tasks_recorded` trigger), so whichever comes first is its one task.
  */
 export const RECORD_TASK_SQL = `UPDATE ci_tasks SET task = ?1
-  WHERE id = ?2 AND superseded_at IS NULL AND confirmed_at IS NULL AND ended_at IS NULL`;
+  WHERE id = ?2 AND superseded_at IS NULL AND confirmed_at IS NULL AND ended_at IS NULL
+    AND (task IS NOT NULL OR NOT EXISTS (SELECT 1 FROM ci_runners r
+      WHERE r.id = ci_tasks.runner_id AND ${tookItsTask("r")}))`;
+
+/**
+ * After `RECORD_TASK_SQL` in its batch: gives up the offer (?1, at ?2) when
+ * its ephemeral runner was assigned another, so no answer of it ever leaves.
+ */
+export const SUPERSEDE_SECOND_TASK_SQL = `UPDATE ci_tasks SET superseded_at = ?2
+  WHERE id = ?1 AND task IS NULL AND superseded_at IS NULL AND ended_at IS NULL
+    AND EXISTS (SELECT 1 FROM ci_runners r
+      WHERE r.id = ci_tasks.runner_id AND ${tookItsTask("r")})`;
 
 /**
  * The audit row of an assignment that delivers secrets (?1 the offer, ?2 the task, ?3 when, ?4
@@ -257,8 +272,6 @@ const RECOVERY_PAGE = 100;
 const JOB_TOKEN_GRACE_MS = 10 * 60_000;
 /** And never lives longer than this (GitHub's ceiling for a self-hosted job's token). */
 const JOB_TOKEN_MAX_MS = 24 * 60 * 60_000;
-/** A spent ephemeral runner may still report for this long after its task completed. Proposed. */
-const EPHEMERAL_REPORT_MS = 10 * 60_000;
 /**
  * While the run has jobs in the dispatch index, it checks them again this
  * often, so a change nothing tells it of (its repository moving to another
@@ -499,7 +512,8 @@ export class RunDispatch {
         .prepare("SELECT confirmed_at, task, ended_at, superseded_at FROM ci_tasks WHERE id = ?")
         .bind(wireId),
     ];
-    // Last, so the results above keep their places; it still runs after the record.
+    // After them, so the results above keep their places; all still run after the record.
+    record.push(db.prepare(SUPERSEDE_SECOND_TASK_SQL).bind(wireId, host.now()));
     if (secrets.length > 0)
       record.push(
         db.prepare(DELIVERY_AUDIT_SQL).bind(
@@ -536,9 +550,10 @@ export class RunDispatch {
         // Ended unrecorded: the failing attempt that ended it, or its recovery, ends the instance.
         if (row.ended_at !== null && row.superseded_at === null)
           return { refused: "task_finished" };
-        // Given up unrecorded (superseded): no answer of this offer ever left, and none can, so
-        // the instance assigned for it waits in the queue again for another offer. Ended too, by
-        // an attempt whose task was queued again before, it is not the task that attempt fails.
+        // Given up unrecorded (superseded; or the second offer of an ephemeral runner, superseded
+        // after this read): no answer of this offer ever left, and none can, so the instance
+        // assigned for it waits in the queue again for another offer. Ended too, by an attempt
+        // whose task was queued again before, it is not the task that attempt fails.
         if (host.requeueTask(ref))
           host.log.info("task never recorded: its job is queued again", {
             taskId: wireId,
@@ -1146,8 +1161,8 @@ export class RunDispatch {
         writes.push(
           raw
             .prepare(
-              // The repository and fork flag decide which runner may claim it (none, for a fork job
-              // or a public repository's: the claim reads both).
+              // The repository and fork flag decide which runners may claim it (the claim reads
+              // both, with the runner's access).
               `INSERT OR IGNORE INTO ci_pending_jobs
                  (account_id, run_id, job_id, attempt, labels, queued_at, repo_id, fork)
                SELECT ?, ?, json_extract(value, '$.jobId'), json_extract(value, '$.attempt'),
