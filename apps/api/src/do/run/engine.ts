@@ -59,6 +59,7 @@ export const RUN_JOB = {
   sweep: "sweep",
   dispatch: "dispatch",
   taskEnd: "task-end",
+  delivery: "delivery",
   reserve: "reserve",
   logClose: "log-close",
   logViewers: "log-viewers",

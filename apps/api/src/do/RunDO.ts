@@ -379,6 +379,8 @@ export class RunDO extends MigratingDO {
       jobTokenMasksOpen: (task) => host.#logs.jobTokensOpen(task),
       secretsRequest: (jobId) => host.secretsRequest(jobId),
       addSecretMasks: (task, secrets) => host.#logs.addSecretMasks(task, secrets),
+      ensureRecovery: (runAt) => host.jobs.ensure("ci_delivery", RUN_JOB.delivery, { runAt }),
+      durable: () => ctx.storage.sync(),
       failTask: (ref, error) => host.failTask(ref, error),
       requeueTask: (ref) => host.requeueTask(ref),
       get memory() {
@@ -1639,6 +1641,7 @@ export class RunDO extends MigratingDO {
         "ci_log_tickets",
         "run_approval",
         "ci_reservations",
+        "ci_delivery_failures",
         "jobs",
       ])
         this.engine.exec(`DELETE FROM ${table}`);
@@ -1839,6 +1842,7 @@ export class RunDO extends MigratingDO {
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
       ci_task_end: { runSlice: (job) => this.#dispatch.taskEndSlice(job) },
+      ci_delivery: { runSlice: (job) => this.#dispatch.recoverySlice(job) },
       ci_reserve: { runSlice: (job) => this.#reservations.slice(job) },
       ci_log_close: { runSlice: async () => this.#logs.closeSlice() },
       ci_log_viewers: { runSlice: () => this.viewers.slice() },
@@ -2135,6 +2139,10 @@ export class RunDO extends MigratingDO {
     }
     if (run.task_end_acked < run.task_end_seq) {
       this.jobs.ensure("ci_task_end", RUN_JOB.taskEnd);
+      return true;
+    }
+    if (this.engine.rows("SELECT 1 FROM ci_delivery_failures LIMIT 1").length > 0) {
+      this.jobs.ensure("ci_delivery", RUN_JOB.delivery);
       return true;
     }
     return this.#reservations.owed();

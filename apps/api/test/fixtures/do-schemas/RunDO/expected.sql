@@ -3,6 +3,13 @@ CREATE INDEX ci_tasks_task ON ci_tasks (task);
 CREATE INDEX jobs_due ON jobs (state, next_run_at);
 CREATE INDEX run_checks_dirty ON run_checks (attempt) WHERE parked IS NULL AND sent_rev < rev;
 CREATE INDEX run_instances_live ON run_instances (attempt, status);
+CREATE TABLE ci_delivery_failures (
+        wire_id INTEGER PRIMARY KEY,
+        job_id INTEGER NOT NULL,
+        task INTEGER NOT NULL,
+        error TEXT NOT NULL,
+        recorded_at INTEGER NOT NULL
+      ) STRICT;
 CREATE TABLE ci_log_chunks (
         task INTEGER NOT NULL,
         start_index INTEGER NOT NULL,

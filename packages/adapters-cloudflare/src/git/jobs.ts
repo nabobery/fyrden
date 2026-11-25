@@ -47,6 +47,7 @@ export const JOB_KINDS = [
   "run_sweep",
   "ci_dispatch",
   "ci_task_end",
+  "ci_delivery",
   "ci_reserve",
   "ci_log_close",
   "ci_log_viewers",

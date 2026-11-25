@@ -339,6 +339,7 @@ describe("a job queued before its run reserved", () => {
     // deployment's upgrade migrates it, now on Free.
     await inRun(runId, (r) => {
       expect(r.engine.instance(jobId)?.timeout_ms).toBe(360 * MIN);
+      r.engine.exec("DROP TABLE ci_delivery_failures");
       r.engine.exec("DROP TABLE ci_reservations");
       r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_checks");
       r.engine.exec("ALTER TABLE ci_log_tickets DROP COLUMN read_gets");
