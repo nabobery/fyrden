@@ -196,20 +196,20 @@ function respond(c: AppContext, op: OperationDef, result: OpResult): Response | 
 
 /**
  * The `Link` header of a successful answer of an operation paged by `page`
- * and `total_count`, from the page and page size the operation read (a
+ * that counts its items, from the page and page size the operation read (a
  * `per_page` past a list's most is read as the most).
  */
 function linkOf(
   c: AppContext,
   op: OperationDef,
   input: unknown,
-  output: unknown,
+  result: Extract<OpResult, { ok: true }>,
 ): string | undefined {
   if (!pagedByTotal(op)) return undefined;
   const read = op.input.safeParse(input);
   if (!read.success) return undefined;
   const { page, per_page: perPage } = read.data as { page: number; per_page: number };
-  const { total_count: total } = output as { total_count: number };
+  const total = result.total ?? (result.output as { total_count: number }).total_count;
   return pageLinks(new URL(c.req.url), page, perPage, total);
 }
 
@@ -280,7 +280,7 @@ export function mountOperation(
         ...(key !== undefined && { idempotencyKey: key }),
       });
       const res = await respond(c, op, result);
-      const link = result.ok ? linkOf(c, op, read.input, result.output) : undefined;
+      const link = result.ok ? linkOf(c, op, read.input, result) : undefined;
       if (link !== undefined) res.headers.set("Link", link);
       return res;
     },

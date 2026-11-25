@@ -27,7 +27,8 @@ const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 
 /** GitHub's membership role names: an `admin` is an owner. */
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
-const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
+export const toApiRole = (role: OrgRole): "admin" | "member" =>
+  role === "owner" ? "admin" : "member";
 
 export const orgHooks: { beforePublish?: () => Promise<void> } = {};
 

@@ -9421,6 +9421,29 @@ export type AdminOrgsOwnersAddInput = {
 /** Output of `admin.orgs.owners.add`. */
 export type AdminOrgsOwnersAddOutput = null;
 
+/** Input of `users.orgs.list`: List your organizations. */
+export type UsersOrgsListInput = {
+  /** Page size, at most 100; a larger one is read as 100. */
+  per_page?: number;
+  /** The page, from 1. */
+  page?: number;
+};
+
+/** Output of `users.orgs.list`. */
+export type UsersOrgsListOutput = ({
+  login: string;
+  /** Organization id (org_ prefix). */
+  id: string;
+  /** Its repositories (`GET /orgs/{org}/repos`). */
+  repos_url: string;
+  /** Its members (`GET /orgs/{org}/members`). */
+  members_url: string;
+  /** Always null: an organization has none. */
+  description: null;
+  /** Fyrden: the caller's role there (`admin`: an owner), no more than its agents' owners have. */
+  role: "admin" | "member";
+})[];
+
 /** Input of `orgs.members.list`: List an organization's members. */
 export type OrgsMembersListInput = {
   /** The organization's handle. */
@@ -10402,6 +10425,7 @@ export const OPERATIONS = {
   "orgs.memberships.set": { method: "PUT", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
   "orgs.memberships.remove": { method: "DELETE", path: "/orgs/{org}/memberships/{username}", pathParams: ["org","username"], idempotent: true },
   "admin.orgs.owners.add": { method: "PUT", path: "/admin/organizations/{org}/owners/{username}", pathParams: ["org","username"], idempotent: true, noContent: [204] },
+  "users.orgs.list": { method: "GET", path: "/user/orgs", pathParams: [], idempotent: false },
   "orgs.members.list": { method: "GET", path: "/orgs/{org}/members", pathParams: ["org"], idempotent: false, items: "members" },
   "orgs.repos.create": { method: "POST", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: true },
   "orgs.repos.list": { method: "GET", path: "/orgs/{org}/repos", pathParams: ["org"], idempotent: false, items: "repos" },
@@ -10954,6 +10978,8 @@ export interface Operations {
   "orgs.memberships.remove": { input: OrgsMembershipsRemoveInput; output: OrgsMembershipsRemoveOutput };
   /** Make a user an organization's owner. Makes a user an owner of an organization, a member or not, as GitHub Enterprise's `ghe-org-admin-promote` does: for an organization whose owners can no longer act (one being deleted: the deletion waits for another owner, and goes on as soon as one is made, or within the hour). Making an owner an owner changes nothing. Instance administrators only; the user must not be suspended or being deleted. */
   "admin.orgs.owners.add": { input: AdminOrgsOwnersAddInput; output: AdminOrgsOwnersAddOutput };
+  /** List your organizations. Lists the organizations the authenticated user belongs to, oldest first. A token limited to repositories, and an agent's own token, list none. A delegated token lists its user's with the user's own agent, and with an organization's agent only that organization; with another user's agent it is refused (403 `delegated_listing`). The oldest 200 are listed. */
+  "users.orgs.list": { input: UsersOrgsListInput; output: UsersOrgsListOutput };
   /** List an organization's members. Lists an organization's members by handle, ignoring case. Members only. */
   "orgs.members.list": { input: OrgsMembersListInput; output: OrgsMembersListOutput };
   /** Create an organization repository. Creates an empty private repository owned by an organization. Members may create them; owners administer every repository of the organization, and members can read them. */

@@ -65,6 +65,7 @@ import {
   mintAs,
   revokeUserTokenOperation,
 } from "../accounts/tokens.js";
+import { listUserOrgsOperation } from "../accounts/user-orgs.js";
 import {
   addOrgSecretRepoOperation,
   addOrgVariableRepoOperation,
@@ -394,6 +395,7 @@ export const handlers: Handlers = {
     },
   }),
 
+  "users.orgs.list": listUserOrgsOperation,
   "users.tokens.list": listUserTokensOperation,
   "users.tokens.create": createUserTokenOperation,
   "users.git_tokens.create": createGitTokenOperation,

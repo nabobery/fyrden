@@ -65,6 +65,13 @@ export interface OperationDef<
    * `statusResult(status, null)`; it declares no `successStatus`.
    */
   successStatuses?: readonly NoContentStatus[];
+  /**
+   * A GET whose output is GitHub's bare array, paged by `page` and
+   * `per_page`: its handler answers `listResult(items, total)`, the items of
+   * the page and how many there are in all, which only the REST answer's
+   * `Link` carries.
+   */
+  countedList?: true;
   /** The response carries a secret, so idempotent replays omit it. */
   secretResponse?: boolean;
   /**
@@ -120,12 +127,16 @@ export const takesPageNumbers = (def: Pick<OperationDef, "input">): boolean =>
   "page" in def.input.shape && "per_page" in def.input.shape;
 
 /**
- * Whether an operation takes page numbers and counts its items in
- * `total_count`: its REST answer links the other pages (`Link`, as GitHub's),
- * which clients such as `gh` follow.
+ * Whether an operation takes page numbers and counts its items, in
+ * `total_count` or beside its array (`countedList`): its REST answer links
+ * the other pages (`Link`, as GitHub's), which clients such as `gh` follow.
  */
-export const pagedByTotal = (def: Pick<OperationDef, "input" | "output">): boolean =>
-  takesPageNumbers(def) && def.output instanceof z.ZodObject && "total_count" in def.output.shape;
+export const pagedByTotal = (
+  def: Pick<OperationDef, "input" | "output" | "countedList">,
+): boolean =>
+  takesPageNumbers(def) &&
+  (def.countedList === true ||
+    (def.output instanceof z.ZodObject && "total_count" in def.output.shape));
 
 /** Every status an operation answers on success. */
 export const successStatusesOf = (
@@ -191,6 +202,11 @@ function validate(def: OperationDef): void {
       fail("an operation whose output is NoContent answers 201, 204 or 205");
   } else if (def.successStatus === 204 || def.successStatus === 205)
     fail("an operation answers 204 or 205 only when its output is NoContent");
+  if (
+    def.countedList &&
+    (def.method !== "GET" || !(def.output instanceof z.ZodArray) || !takesPageNumbers(def))
+  )
+    fail("a countedList operation is a GET of an array, paged by page and per_page");
   if (def.etag && answersNothing(def)) fail("an operation answering nothing has no ETag");
   if (def.secretResponse && answersNothing(def))
     fail("an operation answering nothing has no secret response");
@@ -205,8 +221,8 @@ function validate(def: OperationDef): void {
 
 /**
  * Validates and freezes one operation definition. An operation declaring
- * `successStatuses` keeps their literal types, so its handler is typed to
- * answer one of them.
+ * `successStatuses` or `countedList` keeps their literal types, so its
+ * handler is typed to answer them.
  */
 export function defineOperation<
   const Id extends string,
@@ -222,7 +238,16 @@ export function defineOperation<
   const Id extends string,
   I extends z.ZodObject,
   O extends z.ZodType,
->(def: OperationDef<I, O, Id> & { successStatuses?: undefined }): OperationDef<I, O, Id>;
+>(
+  def: OperationDef<I, O, Id> & { successStatuses?: undefined; countedList: true },
+): OperationDef<I, O, Id> & { countedList: true };
+export function defineOperation<
+  const Id extends string,
+  I extends z.ZodObject,
+  O extends z.ZodType,
+>(
+  def: OperationDef<I, O, Id> & { successStatuses?: undefined; countedList?: undefined },
+): OperationDef<I, O, Id>;
 export function defineOperation(def: OperationDef): OperationDef;
 export function defineOperation(def: OperationDef): OperationDef {
   validate(def);

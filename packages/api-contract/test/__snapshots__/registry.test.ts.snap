@@ -50475,6 +50475,120 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/user/orgs": {
+      "get": {
+        "description": "Lists the organizations the authenticated user belongs to, oldest first. A token limited to repositories, and an agent's own token, list none. A delegated token lists its user's with the user's own agent, and with an organization's agent only that organization; with another user's agent it is refused (403 \`delegated_listing\`). The oldest 200 are listed.",
+        "operationId": "users.orgs.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, at most 100; a larger one is read as 100.",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "The page, from 1.",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "description": "Always null: an organization has none.",
+                        "type": "null",
+                      },
+                      "id": {
+                        "description": "Organization id (org_ prefix).",
+                        "type": "string",
+                      },
+                      "login": {
+                        "type": "string",
+                      },
+                      "members_url": {
+                        "description": "Its members (\`GET /orgs/{org}/members\`).",
+                        "type": "string",
+                      },
+                      "repos_url": {
+                        "description": "Its repositories (\`GET /orgs/{org}/repos\`).",
+                        "type": "string",
+                      },
+                      "role": {
+                        "description": "Fyrden: the caller's role there (\`admin\`: an owner), no more than its agents' owners have.",
+                        "enum": [
+                          "admin",
+                          "member",
+                        ],
+                        "type": "string",
+                      },
+                    },
+                    "required": [
+                      "login",
+                      "id",
+                      "repos_url",
+                      "members_url",
+                      "description",
+                      "role",
+                    ],
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+              },
+            },
+            "description": "OK",
+            "headers": {
+              "Link": {
+                "description": "The other pages, as GitHub's: \`<url>; rel="prev"\`, \`rel="next"\`, \`rel="last"\` and \`rel="first"\`, each this request's URL with only \`page\` changed; absent when everything fits one page.",
+                "schema": {
+                  "type": "string",
+                },
+              },
+            },
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List your organizations",
+        "x-fyrden-permission": "members:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/user/quota": {
       "get": {
         "description": "The authenticated user's quota: how many repositories it may have and how many bytes their pushes may store, and how much of each is used. A deleted repository's bytes are free again once its deletion finishes.",
