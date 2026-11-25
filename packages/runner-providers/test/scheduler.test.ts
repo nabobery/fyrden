@@ -53,6 +53,8 @@ describe("what a candidate is dropped for", () => {
     ["networking", job({ jobNetwork: true }), { containerNetworking: "unknown" }],
     ["lifetime", job({ timeoutMs: HOUR + 1 }), { maxLifetimeMs: HOUR }],
     ["lifetime", job(), { maxLifetimeMs: Number.NaN }],
+    ["lifetime", job(), { maxLifetimeMs: Number.POSITIVE_INFINITY }],
+    ["lifetime", job(), { maxLifetimeMs: 9 * HOUR + 0.5 }],
   ] as const)("%s", (why, req, capabilities) => {
     expect(reason(req, willing("p", capabilities))).toEqual([{ providerId: "p", reason: why }]);
   });

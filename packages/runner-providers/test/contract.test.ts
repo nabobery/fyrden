@@ -308,7 +308,8 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
       return {
         status: async (handle) => (hidden.has(handle.instanceId) ? "gone" : real.status(handle)),
         teardown: async (handle) => {
-          await real.status(handle);
+          // Only where no other rule counts the instances left.
+          if (handle.intent !== "down-1") return real.teardown(handle);
           hidden.add(handle.instanceId);
         },
         listOrphans: async (tag) =>
@@ -321,7 +322,9 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
     "fails to tear down what is gone",
     wrong((real) => ({
       teardown: async (handle) => {
-        if ((await real.status(handle)) === "gone") throw new Error("not found");
+        // Only where no other rule tears down twice.
+        if (handle.intent === "down-1" && (await real.status(handle)) === "gone")
+          throw new Error("not found");
         return real.teardown(handle);
       },
     })),
@@ -337,6 +340,57 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
   ],
   [RULE.others, "gives an instance's id to a later one", reusesIds(false)],
   [RULE.others, "gives an instance's id to a later one of its intent", reusesIds(true)],
+  [
+    RULE.others,
+    "fails to tear down what is gone once another has its intent",
+    wrong((real) => ({
+      teardown: async (handle) => {
+        const others = await real.listOrphans(handle.intent);
+        if (others.some(({ instanceId }) => instanceId !== handle.instanceId))
+          if ((await real.status(handle)) === "gone") throw new Error("not found");
+        return real.teardown(handle);
+      },
+    })),
+  ],
+  [
+    RULE.others,
+    "has no status for an instance made after one was torn down",
+    wrong((real) => {
+      let torn = false;
+      return {
+        teardown: async (handle) => {
+          await real.teardown(handle);
+          torn = true;
+        },
+        status: async (handle) => {
+          const status = await real.status(handle);
+          return torn && status !== "gone" ? { unsupported: "status" } : status;
+        },
+      };
+    }),
+  ],
+  [
+    RULE.lost,
+    "has no status for an instance whose answer was lost",
+    wrong((real) => ({
+      status: async (handle) =>
+        handle.intent === "lost-1" ? { unsupported: "status" } : real.status(handle),
+    })),
+  ],
+  [
+    RULE.lost,
+    "hides an instance whose answer was lost for a teardown",
+    wrong((real) => {
+      let hidden = false;
+      return {
+        teardown: async (handle) => {
+          if (handle.intent !== "lost-1") return real.teardown(handle);
+          hidden = true;
+        },
+        listOrphans: async (tag) => (hidden && tag === "lost-1" ? [] : real.listOrphans(tag)),
+      };
+    }),
+  ],
   [
     RULE.lists,
     "lists one page",
@@ -388,6 +442,23 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
     RULE.outage,
     "lists nothing when it cannot list",
     wrong((real) => ({ listOrphans: (tag) => real.listOrphans(tag).catch(() => []) })),
+  ],
+  [
+    RULE.outage,
+    "lists the pages it got when one fails",
+    wrong((real) => ({
+      listOrphans: async (tag) => {
+        const listed = await real.listOrphans(tag);
+        const pages = listed.slice(0, 50);
+        for (let n = 50; n < listed.length; n += 50)
+          try {
+            pages.push(...(await real.listOrphans(tag)).slice(n, n + 50));
+          } catch {
+            return pages;
+          }
+        return pages;
+      },
+    })),
   ],
   [
     RULE.outage,
@@ -529,6 +600,24 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
   ],
   [
     RULE.token,
+    "puts the token in its list of what was lost",
+    wrong((real) => {
+      let lost: object | null = null;
+      return {
+        provision: (req, registration, intent) =>
+          real.provision(req, registration, intent).catch((why: Error) => {
+            if (why.message.includes("lost")) lost = { intent, registration };
+            throw why;
+          }),
+        listOrphans: async (tag) =>
+          (await real.listOrphans(tag)).map((handle) =>
+            lost && handle.intent === "token-3" ? { ...handle, lost } : handle,
+          ),
+      };
+    }),
+  ],
+  [
+    RULE.token,
     "puts the token in its list",
     wrong((real) => {
       let registration = {};
@@ -619,9 +708,58 @@ describe("the contract", () => {
         return real.provision(req, registration, intent);
       },
     }));
-    await expect(ruleViolations(overwrites)).rejects.toThrow(/read only/);
+    const thrown = await ruleViolations(overwrites);
+    expect(thrown.map((b) => b.rule)).toContain(RULE.token);
+    expect(thrown.flatMap((b) => b.violations).join()).toMatch(/read only/);
     const broken = await ruleViolations(lostWith((token) => new Error(token)));
     expect(broken.map((b) => b.rule)).toEqual([RULE.token]);
+  });
+
+  it("reports a rule that a provider throws out of", async () => {
+    const throws = wrong(() => ({
+      listOrphans: () => {
+        throw new Error("thrown, not rejected");
+      },
+    }));
+    const broken = await ruleViolations(throws);
+    expect(broken.map((b) => b.rule)).toContain(RULE.outage);
+    expect(broken.flatMap((b) => b.violations).join()).toContain("thrown, not rejected");
+  });
+
+  it("reports a provider that cannot describe itself", async () => {
+    const broken = await ruleViolations(
+      wrong(() => ({
+        describe: () => {
+          throw new Error("cannot describe");
+        },
+      })),
+    );
+    expect(broken.map((b) => b.rule)).toContain(RULE.quiet);
+    expect(broken[0]?.violations.join()).toContain("cannot describe");
+  });
+
+  it("reports a rule that throws what cannot be read", async () => {
+    const error = new Error("no");
+    Object.defineProperty(error, "name", {
+      get: () => {
+        throw new Error("unreadable");
+      },
+    });
+    const broken = await ruleViolations(wrong(() => ({ status: () => Promise.reject(error) })));
+    expect(broken.map((b) => b.rule)).toContain(RULE.one);
+  });
+
+  it("takes one that lists in pages, and fails when one fails", async () => {
+    const paged = wrong((real) => ({
+      listOrphans: async (tag) => {
+        const listed = await real.listOrphans(tag);
+        const pages = listed.slice(0, 50);
+        for (let n = 50; n < listed.length; n += 50)
+          pages.push(...(await real.listOrphans(tag)).slice(n, n + 50));
+        return pages;
+      },
+    }));
+    expect(await ruleViolations(paged)).toEqual([]);
   });
 
   it("takes an error that cannot be read whole, or is deep", async () => {

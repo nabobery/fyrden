@@ -25,8 +25,8 @@ export interface FakeProvider {
   made(): number;
   /** Instances there are now. */
   live(): number;
-  /** While on, every call to its service fails. */
-  outage(on: boolean): void;
+  /** While on, every call to its service fails, after the first few if told so. */
+  outage(on: boolean, after?: number): void;
   /** The next `provision` makes its instance, and its answer is lost. */
   loseNextResponse(): void;
   /** The instance's next state: booting, ready, running. */
@@ -59,10 +59,12 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
   const instances = new Map<string, { intent: string; at: number }>();
   let made = 0;
   let lose = false;
-  let down = false;
+  let callsLeft: number | null = null;
   const call = (name: keyof typeof calls) => {
     calls[name]++;
-    if (down) throw new Error("the service is down");
+    if (callsLeft === null) return;
+    if (callsLeft === 0) throw new Error("the service is down");
+    callsLeft--;
   };
 
   const handleOf = (instanceId: string, intent: string): InstanceHandle => ({
@@ -88,8 +90,8 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
     calls,
     made: () => made,
     live: () => instances.size,
-    outage: (on) => {
-      down = on;
+    outage: (on, after = 0) => {
+      callsLeft = on ? after : null;
     },
     loseNextResponse: () => {
       lose = true;

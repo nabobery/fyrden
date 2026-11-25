@@ -82,7 +82,7 @@ export function schedule(req: JobRequirements, candidates: readonly RunnerProvid
       continue;
     }
     const needsMs = estimate.expectedBootMs + req.timeoutMs;
-    if (has.maxLifetimeMs !== null && !(needsMs <= has.maxLifetimeMs)) {
+    if (has.maxLifetimeMs !== null && !(whole(has.maxLifetimeMs) && needsMs <= has.maxLifetimeMs)) {
       dropped.push({ providerId, reason: "lifetime" });
       continue;
     }

@@ -24,8 +24,11 @@ export interface ProviderUnderTest {
   made(): number;
   /** Instances behind it now, as what stands behind it counts them. */
   live(): number;
-  /** While on, every call to what stands behind it fails. A provider that provisions has it. */
-  outage?(on: boolean): void;
+  /**
+   * While on, every call to what stands behind it fails, after the first few if told so. A provider
+   * that provisions has it.
+   */
+  outage?(on: boolean, after?: number): void;
   /** The next `provision` makes its instance and its answer is lost. A provider that provisions has it. */
   loseNextResponse?(): void;
 }
@@ -89,6 +92,21 @@ function checks() {
 async function made(subject: ProviderUnderTest, intent: string): Promise<InstanceHandle | null> {
   const answer = await subject.provider.provision(subject.supported, REGISTRATION, intent);
   return isUnsupported(answer) ? null : answer;
+}
+
+async function makeMany(subject: ProviderUnderTest): Promise<InstanceHandle[]> {
+  const handles: InstanceHandle[] = [];
+  for (let n = 0; n < MANY; n++) {
+    const intent = `many-${n}`;
+    const handle = await made(subject, intent);
+    if (handle) handles.push({ ...handle, intent });
+  }
+  return handles;
+}
+
+async function isLive(subject: ProviderUnderTest, handle: InstanceHandle): Promise<boolean> {
+  const status = await subject.provider.status(handle);
+  return status !== "gone" && !isUnsupported(status);
 }
 
 /** Whether two lists hold the same handles, whole, in any order. */
@@ -184,8 +202,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       that(handle.instanceId !== "", "the handle has no instance id");
       const listed = await provider.listOrphans("one-1");
       that(listed.length === 1, `${listed.length} instances have its intent`);
-      const status = await provider.status(handle);
-      that(status !== "gone" && !isUnsupported(status), `its status is ${JSON.stringify(status)}`);
+      that(await isLive(subject, handle), "its status is not a live one");
       return broken;
     },
   },
@@ -208,9 +225,10 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       const handle = found[0];
       if (!handle) return broken;
       that(handle.intent === "lost-1", "the instance found has another intent");
-      that((await provider.status(handle)) !== "gone", "the instance found is gone");
+      that(await isLive(subject, handle), "the instance found is not live");
       await provider.teardown(handle);
-      that((await provider.listOrphans("lost-1")).length === 0, "it is still there");
+      that(subject.live() === 0, "it is there still");
+      that((await provider.listOrphans("lost-1")).length === 0, "it is still listed");
       return broken;
     },
   },
@@ -243,13 +261,15 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       if (!gone || !kept) return ["it refused a job it runs"];
       that(gone.instanceId !== kept.instanceId, "two instances share an id");
       await provider.teardown(gone);
-      that((await provider.status(kept)) !== "gone", "another instance went with it");
+      that(await isLive(subject, kept), "another instance went with it");
       // Nor one made since: a handle is never another instance's.
       const later = await made(subject, "pair-1");
       if (!later) return ["it refused a job it runs"];
       that(later.instanceId !== gone.instanceId, "a later instance has its id");
-      await provider.teardown(gone).catch(() => null);
-      that((await provider.status(later)) !== "gone", "a later instance went with it");
+      await provider.teardown(gone).catch(() => {
+        broken.push("tearing down an instance that is gone failed");
+      });
+      that(await isLive(subject, later), "a later instance went with it");
       return broken;
     },
   },
@@ -283,11 +303,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       await lists("cased", []);
       // Not a match anywhere in an intent.
       await lists("extra", []);
-      const many: InstanceHandle[] = [];
-      for (let n = 0; n < MANY; n++) {
-        const handle = await make(`many-${n}`);
-        if (handle) many.push(handle);
-      }
+      const many = await makeMany(subject);
       that(many.length === MANY, `it made ${many.length} of ${MANY}`);
       that(same(await provider.listOrphans("many-"), many), `it lists not all ${MANY} it made`);
       return broken;
@@ -312,6 +328,13 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
         that(await fails(provider.listOrphans("out-1")), "it listed instances");
         that(await fails(provider.teardown(handle)), "its teardown was done");
         that(await fails(provider.status(handle)), "it had a status");
+        subject.outage(false);
+        await makeMany(subject);
+        const all = await provider.listOrphans("many-");
+        // The same list, when one call gets it: not the pages it got.
+        subject.outage(true, 1);
+        const listed = await provider.listOrphans("many-").catch(() => null);
+        that(listed === null || same(listed, all), "it listed part of its instances");
       } finally {
         subject.outage(false);
       }
@@ -337,6 +360,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       if (subject.loseNextResponse) {
         subject.loseNextResponse();
         await clean("a lost answer's error", provision(supported, "token-3"));
+        await clean("a list of what was lost", provider.listOrphans("token-3"));
       }
       if (subject.outage) {
         const handle = await answer.catch(() => null);
@@ -375,15 +399,30 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
   },
 ];
 
+function thrown(error: unknown): string {
+  try {
+    return `it threw ${error}`;
+  } catch {
+    return "it threw what cannot be read";
+  }
+}
+
+async function violationsOf(rule: ProviderRule, subject: ProviderUnderTest): Promise<string[]> {
+  try {
+    if (!rule.appliesTo(subject.provider.describe())) return [];
+    return await rule.violations(subject);
+  } catch (error) {
+    return [thrown(error)];
+  }
+}
+
 /** The rules `create`'s providers break, with how; a fresh provider for each rule. */
 export async function ruleViolations(
   create: () => ProviderUnderTest,
 ): Promise<{ readonly rule: string; readonly violations: readonly string[] }[]> {
   const found = [];
   for (const rule of PROVIDER_RULES) {
-    const subject = create();
-    if (!rule.appliesTo(subject.provider.describe())) continue;
-    const violations = await rule.violations(subject);
+    const violations = await violationsOf(rule, create());
     if (violations.length > 0) found.push({ rule: rule.name, violations });
   }
   return found;
