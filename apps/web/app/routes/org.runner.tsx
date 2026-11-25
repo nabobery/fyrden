@@ -191,7 +191,7 @@ export default function RunnerPage({ loaderData }: Route.ComponentProps) {
             />
             <p className="muted">
               Choosing all repositories clears the list of selected ones. A job the runner already
-              has runs on; delete the runner to stop it.
+              has runs on; cancel its run to stop it.
             </p>
             <p>
               <button className="primary" type="submit" name="intent" value="access">
@@ -214,7 +214,8 @@ export default function RunnerPage({ loaderData }: Route.ComponentProps) {
         <section className="panel" aria-labelledby="delete-runner">
           <h2 id="delete-runner">Delete this runner</h2>
           <p className="muted">
-            Its credential stops working at once, and a job it is running is cut off.
+            Its credential stops working at once, but a job it is running goes on on its machine. To
+            end it, cancel its run and see that it has stopped first, or stop the machine.
           </p>
           <Form method="post">
             <label htmlFor="confirm">Type {runner.name} to confirm</label>

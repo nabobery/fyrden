@@ -198,7 +198,7 @@ export const updateRunnerAccess = defineOperation({
   method: "PATCH",
   path: "/orgs/{org}/actions/runners/{runner_id}/access",
   summary: "Change which jobs a self-hosted runner may be given",
-  description: `Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next job is decided by the new access; a job the runner already has runs on (delete the runner to stop it). After a widening, a job that waited because no runner could take it may take up to five minutes to be offered. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change.${CHANGE_NOTE}`,
+  description: `Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (cancel its run to stop it). After a widening, a job that waited because no runner could take it may take up to five minutes to be offered. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change.${CHANGE_NOTE}`,
   input: z.object({
     org: Org,
     runner_id: RunnerId,
@@ -278,7 +278,7 @@ export const deleteRunner = defineOperation({
   path: "/orgs/{org}/actions/runners/{runner_id}",
   summary: "Delete a self-hosted runner",
   description:
-    "Revokes a runner's credential at once: its next call is refused and the runner stops. It stays listed, with `revoked_at`, its access cleared. Deleting it again changes nothing. Audited. Owners only.",
+    "Revokes a runner's credential at once: its next call is refused, and an idle runner stops. A job it is running goes on on its machine: to end it, cancel its run and see that it has stopped before deleting the runner, or stop the machine. It stays listed, with `revoked_at`, its access cleared. Deleting it again changes nothing. Audited. Owners only.",
   input: z.object({ org: Org, runner_id: RunnerId }),
   output: NoContent,
   permission: "self_hosted_runners:write",
@@ -289,7 +289,8 @@ export const deleteRunner = defineOperation({
   mcp: {
     tool: "delete_org_runner",
     title: "Delete a self-hosted runner",
-    description: "Revoke an organization's self-hosted runner; it stops at its next call.",
+    description:
+      "Revoke an organization's self-hosted runner: its next call is refused. A job it is running goes on: cancel its run and see that it stopped first, or stop the machine.",
     readOnly: false,
   },
 });

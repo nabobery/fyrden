@@ -6601,7 +6601,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/orgs/{org}/actions/runners/{runner_id}": {
       "delete": {
-        "description": "Revokes a runner's credential at once: its next call is refused and the runner stops. It stays listed, with \`revoked_at\`, its access cleared. Deleting it again changes nothing. Audited. Owners only.",
+        "description": "Revokes a runner's credential at once: its next call is refused, and an idle runner stops. A job it is running goes on on its machine: to end it, cancel its run and see that it has stopped before deleting the runner, or stop the machine. It stays listed, with \`revoked_at\`, its access cleared. Deleting it again changes nothing. Audited. Owners only.",
         "operationId": "orgs.runners.delete",
         "parameters": [
           {
@@ -6879,7 +6879,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/orgs/{org}/actions/runners/{runner_id}/access": {
       "patch": {
-        "description": "Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next job is decided by the new access; a job the runner already has runs on (delete the runner to stop it). After a widening, a job that waited because no runner could take it may take up to five minutes to be offered. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change. 404 \`runner_not_found\`; 409 \`runner_revoked\` for a runner that no longer serves; 422 \`unknown_repository\` for an id that is not an active repository of the organization. Audited. Owners only.",
+        "description": "Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (cancel its run to stop it). After a widening, a job that waited because no runner could take it may take up to five minutes to be offered. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change. 404 \`runner_not_found\`; 409 \`runner_revoked\` for a runner that no longer serves; 422 \`unknown_repository\` for an id that is not an active repository of the organization. Audited. Owners only.",
         "operationId": "orgs.runners.access.update",
         "parameters": [
           {
