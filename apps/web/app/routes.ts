@@ -7,6 +7,7 @@ export default [
   route("appearance", "routes/appearance.ts"),
   route("settings/tokens", "routes/settings.tokens.tsx"),
   route("settings/agents", "routes/settings.agents.tsx"),
+  route("settings/organizations", "routes/settings.organizations.tsx"),
   route("settings/emails/confirm", "routes/settings.emails.confirm.tsx"),
   route("settings/notifications", "routes/settings.notifications.tsx"),
   route("notifications", "routes/notifications.tsx"),
