@@ -8058,6 +8058,53 @@ export type StatusesCombinedOutput = {
   next_cursor: string | null;
 };
 
+/** Input of `checks.runs.list`: List check runs for a reference. */
+export type ChecksRunsListInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** A full commit SHA, a branch, a tag or a full ref name. One path segment: percent-encode a slash (`feature%2Fx`). */
+  ref: string;
+  /** Only the check of this name, ignoring case. */
+  check_name?: string;
+  /** Only checks of this status. */
+  status?: "queued" | "in_progress" | "completed";
+  /** `latest` only: earlier attempts of a name are not listed. */
+  filter?: "latest" | "all";
+  /** Not supported (422 `unsupported_parameter`): checks come from Fyrden's CI alone. */
+  app_id?: unknown;
+  /** Page size, 1-100. */
+  per_page?: number;
+  /** From a previous page's `next_cursor`, with the same filters. */
+  cursor?: string;
+};
+
+/** Output of `checks.runs.list`. */
+export type ChecksRunsListOutput = {
+  total_count: number;
+  check_runs: ({
+    name: string;
+    head_sha: string;
+    status: "queued" | "in_progress" | "completed";
+    conclusion: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" | "error" | null;
+    /** Fyrden: 1, then one more each time a run starts a check of this name on the commit. */
+    attempt: number;
+    /** Fyrden: the CI run it came from; null once that run is no longer kept. */
+    run: {
+      id: string;
+      run_attempt: number;
+      /** The job within the run; null for a workflow file that could not run, and for a name a re-run settled without a job of that name. */
+      job_id: number | null;
+    } | null;
+    details_url: string | null;
+    /** Unix time in milliseconds. */
+    updated_at: number;
+  })[];
+  /** Pass as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
+};
+
 /** Input of `repos.commits.get`: Get a commit. */
 export type ReposCommitsGetInput = {
   /** The owner's handle. */
@@ -10325,6 +10372,7 @@ export const OPERATIONS = {
   "repos.commits.list": { method: "GET", path: "/repos/{owner}/{repo}/commits", pathParams: ["owner","repo"], idempotent: false, items: "commits" },
   "statuses.list": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref}/statuses", pathParams: ["owner","repo","ref"], idempotent: false, items: "statuses" },
   "statuses.combined": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref}/status", pathParams: ["owner","repo","ref"], idempotent: false, items: "statuses" },
+  "checks.runs.list": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref}/check-runs", pathParams: ["owner","repo","ref"], idempotent: false, items: "check_runs" },
   "repos.commits.get": { method: "GET", path: "/repos/{owner}/{repo}/commits/{ref+}", pathParams: ["owner","repo","ref"], idempotent: false },
   "repos.compare": { method: "GET", path: "/repos/{owner}/{repo}/compare/{basehead+}", pathParams: ["owner","repo","basehead"], idempotent: false },
   "statuses.create": { method: "POST", path: "/repos/{owner}/{repo}/statuses/{sha}", pathParams: ["owner","repo","sha"], idempotent: true },
@@ -10846,7 +10894,9 @@ export interface Operations {
   "statuses.list": { input: StatusesListInput; output: StatusesListOutput };
   /** Get the combined status for a reference. The latest status of each context on the commit `ref` names, whoever posted it, in context order, and their roll-up: `failure` if any is `failure` or `error`, else `pending` if there are none or any is `pending`, else `success`. `state` and `total_count` cover every context, whatever the page. GitHub's shape, with Fyrden's cursor paging in place of `page`, times in milliseconds, and the creator as an id. Takes the `statuses:read` permission. */
   "statuses.combined": { input: StatusesCombinedInput; output: StatusesCombinedOutput };
-  /** Get a commit. One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (`feature%2Fstatus`): raw, a name ending in `/status` or `/statuses` reads that commit's commit statuses instead. */
+  /** List check runs for a reference. The checks Fyrden's CI published on the commit `ref` names, in name order: the latest of each name, so of two runs whose jobs share a name on one commit, the later start. Commit statuses, which others post, are `statuses.combined`'s; what a pull request's base branch requires of both is `pulls.required_checks.get`'s. GitHub's shape in part: Fyrden's run and job ids in place of check run, suite and app ids, times in milliseconds and cursor paging; `total_count` counts every match, whatever the page. `filter=all` and `app_id` are refused (422 `unsupported_parameter`). Takes the `statuses:read` permission. */
+  "checks.runs.list": { input: ChecksRunsListInput; output: ChecksRunsListOutput };
+  /** Get a commit. One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (`feature%2Fstatus`): raw, a name ending in `/status` or `/statuses` reads that commit's commit statuses instead, and one ending in `/check-runs` its check runs. */
   "repos.commits.get": { input: ReposCommitsGetInput; output: ReposCommitsGetOutput };
   /** Compare two commits. Compares `base...head` (branches, tags or SHAs): how far head is ahead of and behind base, their merge base, and the commits in head and not in base, oldest first (the newest 100). File differences are not included. */
   "repos.compare": { input: ReposCompareInput; output: ReposCompareOutput };

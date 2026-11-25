@@ -37,6 +37,7 @@ import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
 import type { RunReport } from "./repo/run-history.js";
+import { planCheckKey } from "./run/check-key.js";
 import {
   type AssignTaskAnswer,
   DISPATCH_RESYNC_MS,
@@ -649,7 +650,7 @@ export class RunDO extends MigratingDO {
        VALUES (1, ?, ?, ?, 0, 'failure', 1)`,
       checkNameKey(name),
       name,
-      `${runId}/a1/plan`,
+      planCheckKey(runId),
     );
     this.jobs.ensure("run_checks", RUN_JOB.checks, {
       runAt: this.context.now() + this.policy.checkFlushMs,

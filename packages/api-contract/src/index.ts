@@ -4,6 +4,7 @@ export * from "../ops/admin.js";
 export * from "../ops/agents.js";
 export * from "../ops/archives.js";
 export * from "../ops/browse.js";
+export * from "../ops/checks.js";
 export * from "../ops/ci-secrets.js";
 export * from "../ops/comments.js";
 export * from "../ops/contents.js";

@@ -16544,7 +16544,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/commits/{ref}": {
       "get": {
-        "description": "One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (\`feature%2Fstatus\`): raw, a name ending in \`/status\` or \`/statuses\` reads that commit's commit statuses instead.",
+        "description": "One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (\`feature%2Fstatus\`): raw, a name ending in \`/status\` or \`/statuses\` reads that commit's commit statuses instead, and one ending in \`/check-runs\` its check runs.",
         "operationId": "repos.commits.get",
         "parameters": [
           {
@@ -16749,6 +16749,280 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
         "summary": "Get a commit",
         "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/commits/{ref}/check-runs": {
+      "get": {
+        "description": "The checks Fyrden's CI published on the commit \`ref\` names, in name order: the latest of each name, so of two runs whose jobs share a name on one commit, the later start. Commit statuses, which others post, are \`statuses.combined\`'s; what a pull request's base branch requires of both is \`pulls.required_checks.get\`'s. GitHub's shape in part: Fyrden's run and job ids in place of check run, suite and app ids, times in milliseconds and cursor paging; \`total_count\` counts every match, whatever the page. \`filter=all\` and \`app_id\` are refused (422 \`unsupported_parameter\`). Takes the \`statuses:read\` permission.",
+        "operationId": "checks.runs.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "A full commit SHA, a branch, a tag or a full ref name. One path segment: percent-encode a slash (\`feature%2Fx\`).",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "check_name",
+            "required": false,
+            "schema": {
+              "description": "Only the check of this name, ignoring case.",
+              "maxLength": 510,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "description": "Only checks of this status.",
+              "enum": [
+                "queued",
+                "in_progress",
+                "completed",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "default": "latest",
+              "description": "\`latest\` only: earlier attempts of a name are not listed.",
+              "enum": [
+                "latest",
+                "all",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "app_id",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): checks come from Fyrden's CI alone.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check_runs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "description": "Fyrden: 1, then one more each time a run starts a check of this name on the commit.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "neutral",
+                                  "cancelled",
+                                  "skipped",
+                                  "timed_out",
+                                  "action_required",
+                                  "error",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "details_url": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "head_sha": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "run": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                  "job_id": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                    "description": "The job within the run; null for a workflow file that could not run, and for a name a re-run settled without a job of that name.",
+                                  },
+                                  "run_attempt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "id",
+                                  "run_attempt",
+                                  "job_id",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: the CI run it came from; null once that run is no longer kept.",
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "head_sha",
+                          "status",
+                          "conclusion",
+                          "attempt",
+                          "run",
+                          "details_url",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "check_runs",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List check runs for a reference",
+        "x-fyrden-permission": "statuses:read",
         "x-fyrden-principals": [
           "user",
           "agent",

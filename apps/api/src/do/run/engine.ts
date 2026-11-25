@@ -39,6 +39,7 @@ import {
   unreadyNodeStatus,
   type WorkBudget,
 } from "@fyrden/domain/ci";
+import { jobCheckKey, settledCheckKey } from "./check-key.js";
 import { decodeInstance, encodeInstance, exprFromJson, outputsExpr } from "./codec.js";
 import { nodeName, type RunModel } from "./model.js";
 import { isReservedCheckName, WORKFLOW_FILE_PREFIX } from "./plan-check.js";
@@ -629,7 +630,7 @@ export class RunEngine {
         row.attempt,
         row.name_key,
         row.name,
-        `${run.run_id}/a${row.attempt}/j${row.job_id}`,
+        jobCheckKey(run.run_id, row.attempt, row.job_id),
         row.job_id,
         desired,
       );
@@ -669,7 +670,7 @@ export class RunEngine {
         n,
         row.name_key,
         row.name,
-        `${run.run_id}/a${n}/x${row.job_id}`,
+        settledCheckKey(run.run_id, n, row.job_id),
         row.job_id,
         row.start_key,
       );

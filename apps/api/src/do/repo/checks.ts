@@ -33,6 +33,7 @@ import {
   targetUrl,
 } from "@fyrden/domain";
 import { type Oid, oidFromHex } from "@fyrden/git-core";
+import { type CheckOrigin, parseCheckKey } from "../run/check-key.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
 
@@ -76,6 +77,25 @@ export interface CombinedStatus {
   readonly totalCount: number;
   readonly statuses: StatusRecord[];
   /** The context key to continue after. */
+  readonly next: string | null;
+}
+
+/** A check of Fyrden's runs, and the run it came from while that is kept. */
+export interface CheckRunRecord {
+  readonly name: string;
+  readonly sha: string;
+  readonly status: CheckStatus;
+  readonly conclusion: CheckConclusion | null;
+  readonly attempt: number;
+  readonly detailsUrl: string | null;
+  readonly updatedAt: number;
+  readonly origin: CheckOrigin | null;
+}
+
+/** A page of a commit's checks in the order of their folded names; `next` the name to continue after. */
+export interface CheckRunPage {
+  readonly totalCount: number;
+  readonly checks: CheckRunRecord[];
   readonly next: string | null;
 }
 
@@ -201,6 +221,8 @@ export class RepoChecks {
       readonly events: Pick<RepoEvents, "emitActivity">;
       /** The checks the active rulesets on a base branch require (none when no rule names any). */
       readonly required?: (baseRef: string) => readonly RequiredStatusCheck[];
+      /** Whether CI run `runId` is kept, so that a check may name it. */
+      readonly runKept?: (runId: string) => boolean;
     },
   ) {}
 
@@ -599,6 +621,62 @@ export class RepoChecks {
       statuses: shown.map(statusRecord),
       next: rest.length > limit ? (shown.at(-1)?.context_key ?? null) : null,
     };
+  }
+
+  /**
+   * The checks of Fyrden's runs on `sha`, by folded name, after the check
+   * named `after`: reads the commit's summaries (at most 1,000 checks and
+   * 1,000 statuses), and two rows more for each check shown (its attempt's
+   * key, and the run the key names).
+   */
+  checkRunsOn(
+    sha: string,
+    filter: { readonly name?: string; readonly status?: CheckStatus },
+    after: string | null,
+    limit: number,
+  ): CheckRunPage {
+    const key = filter.name === undefined ? undefined : checkNameKey(filter.name);
+    const matching = this.#exec<SummaryRow>(
+      "checks.read",
+      "SELECT * FROM check_summaries WHERE sha = ? AND kind = 'check'",
+      sha,
+    )
+      .filter((row) => key === undefined || row.name_key === key)
+      .filter((row) => filter.status === undefined || row.status === filter.status)
+      // As the combined status orders its contexts: one comparison for the order and the cursor.
+      .sort((a, b) => (a.name_key < b.name_key ? -1 : a.name_key > b.name_key ? 1 : 0));
+    const from = after === null ? null : checkNameKey(after);
+    const rest = from === null ? matching : matching.filter((row) => row.name_key > from);
+    const shown = rest.slice(0, limit);
+    return {
+      totalCount: matching.length,
+      checks: shown.map((row) => ({
+        name: row.name,
+        sha: row.sha,
+        status: row.status,
+        conclusion: row.conclusion,
+        attempt: row.attempt as number,
+        detailsUrl: row.details_url,
+        updatedAt: row.updated_at,
+        origin: this.#originOf(row),
+      })),
+      // The name, whose length is bounded, not its key, which can be several times as long.
+      next: rest.length > limit ? (shown.at(-1)?.name ?? null) : null,
+    };
+  }
+
+  #originOf(row: SummaryRow): CheckOrigin | null {
+    const [attempt] = this.#exec<{ start_key: string }>(
+      "checks.read",
+      `SELECT start_key FROM check_attempts
+       WHERE sha = ? AND name_key = ? AND source = ? AND attempt = ?`,
+      row.sha,
+      row.name_key,
+      row.source,
+      row.attempt,
+    );
+    const origin = attempt && parseCheckKey(attempt.start_key);
+    return origin && this.deps.runKept?.(origin.runId) ? origin : null;
   }
 
   /** Every publisher's summary of every check on `sha`. */

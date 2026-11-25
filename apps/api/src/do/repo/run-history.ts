@@ -169,6 +169,14 @@ export class RunHistory {
     return row && reportOf(row);
   }
 
+  /** Whether the repository holds the run and its retention has not ended: an operation answers it. */
+  kept(runId: string): boolean {
+    const [row] = this.git.context.storage.sql
+      .exec<RunRow>("SELECT * FROM ci_runs WHERE run_id = ?", runId)
+      .toArray();
+    return row !== undefined && !this.#expiry()(row);
+  }
+
   /**
    * Reported runs matching `filter`, before run id `before`, newest first.
    * Reads one range of one index, `RUN_PAGE_SCAN` rows of it at most: a

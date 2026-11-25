@@ -3,6 +3,7 @@
 // plays the runner through the run object's calls; everything else goes
 // through the public operations (REST through the SDK). A run's jobs queue
 // as their needs end, a re-run is a new attempt, a cancel ends the run,
+// runs and workflows are listed, and a commit's checks name their run;
 // another repository's run is missing and the actions permission is needed.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -177,6 +178,53 @@ describe("a CI run through the public operations", () => {
         owner.api.call("actions.runs.cancel", { owner: owner.handle, repo: REPO, run_id: runId }),
       ),
     ).toMatchObject({ status: 409, code: "run_not_cancellable" });
+  });
+
+  it("lists runs and workflows as runs report them, with a run's graph and its commit's checks", async () => {
+    const where = { owner: owner.handle, repo: REPO };
+    // Jobs no other run here has: of two runs' checks of one name, the later start's is shown.
+    const runId = await startRun(
+      WORKFLOW.replace("  a:", "  lint:")
+        .replace("  b:", "  report:")
+        .replace("needs: a", "needs: lint"),
+    );
+    const listed = (status: "in_progress" | "failure") =>
+      eventually(`run listed as ${status}`, async () =>
+        (await owner.api.call("actions.runs.list", { ...where, status })).workflow_runs.find(
+          (r) => r.id === runId,
+        ),
+      );
+    expect(await listed("in_progress")).toMatchObject({
+      name: ".github/workflows/ci.yml",
+      head_branch: "main",
+      head_sha: sha,
+      event: "push",
+      conclusion: null,
+    });
+    await runJob(runId, "lint", "failure");
+    const run = await listed("failure");
+    const got = await owner.api.call("actions.runs.get", { ...where, run_id: runId });
+    expect(got).toMatchObject({ id: run.id, status: run.status, conclusion: run.conclusion });
+    const graph = await owner.api.call("actions.runs.graph.get", { ...where, run_id: runId });
+    expect(graph.jobs.map((j) => [j.key, j.needs, j.conclusion])).toEqual([
+      ["lint", [], "failure"],
+      ["report", ["lint"], "skipped"],
+    ]);
+    const ofWorkflow = await owner.api.call("actions.workflows.runs.list", {
+      ...where,
+      workflow_id: "ci.yml",
+      head_sha: sha,
+      per_page: 1,
+    });
+    expect(ofWorkflow.workflow_runs.map((r) => r.id)).toEqual([runId]);
+    const workflows = await owner.api.call("actions.workflows.list", where);
+    expect(workflows.workflows).toMatchObject([{ id: "ci.yml", latest_run: { id: runId } }]);
+    const checks = await owner.api.call("checks.runs.list", { ...where, ref: "main" });
+    expect(checks.check_runs.find((c) => c.name === "lint")).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+      run: { id: runId, run_attempt: 1 },
+    });
   });
 
   it("answers another repository's run as missing, and needs the actions permission", async () => {

@@ -752,6 +752,7 @@ export class RepoDO extends MigratingDO {
       git: this.git,
       events: this.events,
       required: (baseRef) => this.#authority.requiredOn(baseRef).checks.map((c) => c.check),
+      runKept: (runId) => this.runs.kept(runId),
     });
     this.releases = new RepoReleases({
       git: this.git,
@@ -2502,6 +2503,18 @@ export class RepoDO extends MigratingDO {
       sha,
       ...this.checks.combinedStatus(sha, after, limit),
     }));
+  }
+
+  /** The checks of CI runs on the commit `ref` names that match `filter`, after the check named `after`. */
+  checkRuns(
+    ref: string,
+    filter: Parameters<RepoChecks["checkRunsOn"]>[1],
+    after: string | null,
+    limit: number,
+  ) {
+    return this.#statusesAt("checkRuns", ref, (sha) =>
+      this.checks.checkRunsOn(sha, filter, after, limit),
+    );
   }
 
   /** Reads `read` at the commit `ref` names (a SHA it has, a branch, a tag, a full ref name). */

@@ -319,6 +319,7 @@ import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "..
 import {
   createStatusOperation,
   getCombinedStatusOperation,
+  listCheckRunsOperation,
   listStatusesOperation,
 } from "../repos/statuses.js";
 import {
@@ -796,6 +797,7 @@ export const handlers: Handlers = {
   "statuses.create": createStatusOperation,
   "statuses.list": listStatusesOperation,
   "statuses.combined": getCombinedStatusOperation,
+  "checks.runs.list": listCheckRunsOperation,
   "actions.runs.list": listWorkflowRunsOperation,
   "actions.runs.get": getWorkflowRunOperation,
   "actions.runs.graph.get": getWorkflowRunGraphOperation,
