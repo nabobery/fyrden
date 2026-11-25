@@ -198,7 +198,7 @@ export const updateRunnerAccess = defineOperation({
   method: "PATCH",
   path: "/orgs/{org}/actions/runners/{runner_id}/access",
   summary: "Change which jobs a self-hosted runner may be given",
-  description: `Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (to end it, force-cancel its run and see that it stopped, or stop the machine). After a widening, a job that waited because no runner could take it may take up to five minutes to be offered. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change.${CHANGE_NOTE}`,
+  description: `Changes the fields given and keeps the rest. \`selected_repository_ids\` replaces the list of a runner that is, or becomes, \`selected\` (409 \`access_not_selected\` otherwise); \`all\` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (to end it, force-cancel its run and see that it stopped, or stop the machine). After a widening, a job that waited because no runner could take it is checked again within five minutes, and offered once it can be reserved. 422 \`forks_need_ephemeral\` for \`allows_forks\` on a runner that is not ephemeral; 422 \`invalid_input\` with nothing to change.${CHANGE_NOTE}`,
   input: z.object({
     org: Org,
     runner_id: RunnerId,

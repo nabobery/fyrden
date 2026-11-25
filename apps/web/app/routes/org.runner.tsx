@@ -101,7 +101,7 @@ function ChangedNotice() {
     <p role="status">
       Access changed.{" "}
       {changed === "wider"
-        ? "A job that was waiting because no runner could take it is offered within five minutes."
+        ? "A job that was waiting because no runner could take it is checked again within five minutes, and offered once CI minutes and capacity allow it."
         : "It counts from the next job; a job already running goes on."}
     </p>
   );

@@ -61,13 +61,14 @@ Change access on the runner's page, or with
 `PATCH /orgs/{org}/actions/runners/{runner_id}/access`. What it changes, and when:
 
 - **Narrowing** applies at the next claim, and whenever a job is offered to the runner again. An
-  assignment that already passed that check may still be delivered. If it was recorded
-  but the runner never received it, the job is not given to another runner: unless another timeout or a
-  cancellation ends it first, it fails at its heartbeat deadline, normally about ten minutes after the
-  assignment. Running jobs continue: to end one, force-cancel its run (an ordinary cancellation lets jobs with `if: always()`
-  run), or stop the machine.
+  assignment that already passed that check may still be delivered. If it was recorded but the runner
+  never received it, the job is not given to another runner: unless access is widened again and the
+  runner asks for it, or another timeout or a cancellation ends it first, it fails at its heartbeat
+  deadline, normally about ten minutes after the assignment. Running jobs continue: to end one,
+  force-cancel its run (an ordinary cancellation lets jobs with `if: always()` run), or stop the machine.
 - **Widening** lets the runner take jobs already offered at once. A job that waited because no runner
-  could take it is offered within five minutes.
+  could take it is checked again within five minutes, and offered once its account's CI minutes and, on
+  Free, the daily allowance let it be reserved.
 - **A repository transferred** to another account leaves every runner's list and every unused token's.
   Moved back, it is not listed again.
 - **A repository made public:** later claims and re-offers of its jobs need `allows_public`.
