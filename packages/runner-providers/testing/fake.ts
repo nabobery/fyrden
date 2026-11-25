@@ -23,6 +23,10 @@ export interface FakeProvider {
   readonly calls: Readonly<Record<"provision" | "status" | "teardown" | "listOrphans", number>>;
   /** Instances made so far, those gone again too. */
   made(): number;
+  /** Instances there are now. */
+  live(): number;
+  /** While on, every call to its service fails. */
+  outage(on: boolean): void;
   /** The next `provision` makes its instance, and its answer is lost. */
   loseNextResponse(): void;
   /** The instance's next state: booting, ready, running. */
@@ -55,6 +59,11 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
   const instances = new Map<string, { intent: string; at: number }>();
   let made = 0;
   let lose = false;
+  let down = false;
+  const call = (name: keyof typeof calls) => {
+    calls[name]++;
+    if (down) throw new Error("the service is down");
+  };
 
   const handleOf = (instanceId: string, intent: string): InstanceHandle => ({
     providerId: id,
@@ -78,6 +87,10 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
   return {
     calls,
     made: () => made,
+    live: () => instances.size,
+    outage: (on) => {
+      down = on;
+    },
     loseNextResponse: () => {
       lose = true;
     },
@@ -96,7 +109,7 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
       provision: async (req, _registration, intent) => {
         const refused = refusal(req);
         if (refused) return refused;
-        calls.provision++;
+        call("provision");
         const instanceId = `${id}-${++made}`;
         instances.set(instanceId, { intent, at: 0 });
         if (lose) {
@@ -106,16 +119,16 @@ export function createFakeProvider(options: FakeProviderOptions = {}): FakeProvi
         return handleOf(instanceId, intent);
       },
       status: async (handle) => {
-        calls.status++;
+        call("status");
         const instance = ownLive(handle);
         return instance ? (LIVE[instance.at] as InstanceStatus) : "gone";
       },
       teardown: async (handle) => {
-        calls.teardown++;
+        call("teardown");
         if (handle.providerId === id) instances.delete(handle.instanceId);
       },
       listOrphans: async (tag) => {
-        calls.listOrphans++;
+        call("listOrphans");
         return [...instances]
           .filter(([, instance]) => instance.intent.startsWith(tag))
           .map(([instanceId, instance]) => handleOf(instanceId, instance.intent));

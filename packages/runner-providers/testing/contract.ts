@@ -7,7 +7,11 @@ import {
   type RunnerProvider,
 } from "../src/provider.js";
 
-/** A fresh provider, and how a test drives what stands behind it. */
+/**
+ * A fresh provider, and how a test drives what stands behind it: something
+ * whose lists, if they have pages, have at most 100 instances on each, so that
+ * the suite reaches a second one.
+ */
 export interface ProviderUnderTest {
   readonly provider: RunnerProvider;
   /** A job it runs (any job, for one that provisions nothing). */
@@ -18,6 +22,10 @@ export interface ProviderUnderTest {
   calls(): number;
   /** Instances made behind it so far, those gone again too, as what stands behind it counts them. */
   made(): number;
+  /** Instances behind it now, as what stands behind it counts them. */
+  live(): number;
+  /** While on, every call to what stands behind it fails. A provider that provisions has it. */
+  outage?(on: boolean): void;
   /** The next `provision` makes its instance and its answer is lost. A provider that provisions has it. */
   loseNextResponse?(): void;
 }
@@ -36,8 +44,36 @@ const always = () => true;
 const hosted = (c: ProviderCapabilities) => c.provisions;
 const unprovisioned = (c: ProviderCapabilities) => !c.provisions;
 const whole = (n: number) => Number.isSafeInteger(n) && n >= 0;
-const text = (value: unknown) =>
-  value instanceof Error ? `${value.name} ${value.message} ${value.stack}` : JSON.stringify(value);
+/** More instances than a page of a list may hold here. */
+const MANY = 120;
+
+/** What a value holds: its own properties, enumerable or not, its name, and a collection's entries. */
+function held(value: object): unknown[] {
+  const own = [...Reflect.ownKeys(value), "name"].flatMap((key) => {
+    try {
+      return [String(key), Reflect.get(value, key)];
+    } catch {
+      return [String(key)];
+    }
+  });
+  const collection = value instanceof Map || value instanceof Set || value instanceof Headers;
+  return collection ? [...own, ...value] : own;
+}
+
+/** Whether the token is in a value, however deep: in an error's cause, say. */
+function hasToken(value: unknown): boolean {
+  const seen = new Set<unknown>();
+  const left = [value];
+  while (left.length > 0) {
+    const next = left.pop();
+    if (seen.has(next)) continue;
+    seen.add(next);
+    if (typeof next === "object" && next !== null) {
+      for (const part of held(next)) left.push(part);
+    } else if (String(next).includes(TOKEN)) return true;
+  }
+  return false;
+}
 
 /** Collects what is false, so a rule reads as what must hold. */
 function checks() {
@@ -149,7 +185,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       const listed = await provider.listOrphans("one-1");
       that(listed.length === 1, `${listed.length} instances have its intent`);
       const status = await provider.status(handle);
-      that(status !== "gone" && !isUnsupported(status), `its status is ${text(status)}`);
+      that(status !== "gone" && !isUnsupported(status), `its status is ${JSON.stringify(status)}`);
       return broken;
     },
   },
@@ -168,6 +204,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       that(lost, "the lost answer was an answer");
       const found = await provider.listOrphans("lost-1");
       that(found.length === 1, `${found.length} instances have the lost intent`);
+      that(subject.made() === 1, `it made ${subject.made()} instances`);
       const handle = found[0];
       if (!handle) return broken;
       that(handle.intent === "lost-1", "the instance found has another intent");
@@ -186,6 +223,7 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       const handle = await made(subject, "down-1");
       if (!handle) return ["it refused a job it runs"];
       await provider.teardown(handle);
+      that(subject.live() === 0, "it is there still");
       that((await provider.status(handle)) === "gone", "its status is not gone");
       that((await provider.listOrphans("down-1")).length === 0, "it is still listed");
       await provider.teardown(handle).catch(() => {
@@ -206,6 +244,12 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
       that(gone.instanceId !== kept.instanceId, "two instances share an id");
       await provider.teardown(gone);
       that((await provider.status(kept)) !== "gone", "another instance went with it");
+      // Nor one made since: a handle is never another instance's.
+      const later = await made(subject, "pair-1");
+      if (!later) return ["it refused a job it runs"];
+      that(later.instanceId !== gone.instanceId, "a later instance has its id");
+      await provider.teardown(gone).catch(() => null);
+      that((await provider.status(later)) !== "gone", "a later instance went with it");
       return broken;
     },
   },
@@ -215,22 +259,62 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
     violations: async (subject) => {
       const { provider } = subject;
       const { broken, that } = checks();
-      const task = await made(subject, "task");
-      const extra = await made(subject, "task-extra");
-      const other = await made(subject, "other-task");
-      if (!task || !extra || !other) return ["it refused a job it runs"];
+      // With the intent each was given, whatever its handle says.
+      const make = async (intent: string) => {
+        const handle = await made(subject, intent);
+        return handle && { ...handle, intent };
+      };
+      const task = await make("task");
+      const extra = await make("task-extra");
+      const other = await make("other-task");
+      const cased = await make("Cased");
+      if (!task || !extra || !other || !cased) return ["it refused a job it runs"];
       const lists = async (tag: string, expected: readonly InstanceHandle[]) => {
         const listed = await provider.listOrphans(tag);
         that(
           same(listed, expected),
-          `${JSON.stringify(tag)} lists ${text(listed)}, not ${text(expected)}`,
+          `${JSON.stringify(tag)} lists ${JSON.stringify(listed)}, not ${JSON.stringify(expected)}`,
         );
       };
       // Each as it was made: its own intent, not the one asked for.
       await lists("task", [task, extra]);
       await lists("task-", [extra]);
+      await lists("Cased", [cased]);
+      await lists("cased", []);
       // Not a match anywhere in an intent.
       await lists("extra", []);
+      const many: InstanceHandle[] = [];
+      for (let n = 0; n < MANY; n++) {
+        const handle = await make(`many-${n}`);
+        if (handle) many.push(handle);
+      }
+      that(many.length === MANY, `it made ${many.length} of ${MANY}`);
+      that(same(await provider.listOrphans("many-"), many), `it lists not all ${MANY} it made`);
+      return broken;
+    },
+  },
+  {
+    name: "a service that fails is an error, never a list, a status or a teardown that is done",
+    appliesTo: hosted,
+    violations: async (subject) => {
+      const { provider } = subject;
+      const { broken, that } = checks();
+      if (!subject.outage) return ["no way to make its service fail was given"];
+      const handle = await made(subject, "out-1");
+      if (!handle) return ["it refused a job it runs"];
+      const fails = (call: Promise<unknown>) =>
+        call.then(
+          () => false,
+          () => true,
+        );
+      subject.outage(true);
+      try {
+        that(await fails(provider.listOrphans("out-1")), "it listed instances");
+        that(await fails(provider.teardown(handle)), "its teardown was done");
+        that(await fails(provider.status(handle)), "it had a status");
+      } finally {
+        subject.outage(false);
+      }
       return broken;
     },
   },
@@ -240,20 +324,33 @@ export const PROVIDER_RULES: readonly ProviderRule[] = [
     violations: async (subject) => {
       const { provider, supported, unsupported } = subject;
       const { broken, that } = checks();
-      const clean = (what: string, value: unknown) =>
-        that(!text(value).includes(TOKEN), `${what} carries the token`);
-      const answer = await provider
-        .provision(supported, REGISTRATION, "token-1")
-        .catch((error: unknown) => error);
-      clean("a provision's answer", answer);
-      clean("a list", await provider.listOrphans("token-"));
-      for (const req of unsupported)
-        clean("a refusal", await provider.provision(req, REGISTRATION, "token-2"));
+      const clean = async (what: string, call: Promise<unknown>) => {
+        const answer = await call.catch((error: unknown) => error);
+        that(!hasToken(answer), `${what} carries the token`);
+      };
+      const provision = (req: JobRequirements, intent: string) =>
+        provider.provision(req, REGISTRATION, intent);
+      const answer = provision(supported, "token-1");
+      await clean("a provision's answer", answer);
+      await clean("a list", provider.listOrphans("token-"));
+      for (const req of unsupported) await clean("a refusal", provision(req, "token-2"));
       if (subject.loseNextResponse) {
         subject.loseNextResponse();
-        await provider
-          .provision(supported, REGISTRATION, "token-3")
-          .catch((error: unknown) => clean("an error", error));
+        await clean("a lost answer's error", provision(supported, "token-3"));
+      }
+      if (subject.outage) {
+        const handle = await answer.catch(() => null);
+        subject.outage(true);
+        try {
+          await clean("a failed provision", provision(supported, "token-4"));
+          await clean("a failed list", provider.listOrphans("token-"));
+          if (handle && !isUnsupported(handle)) {
+            await clean("a failed status", provider.status(handle));
+            await clean("a failed teardown", provider.teardown(handle));
+          }
+        } finally {
+          subject.outage(false);
+        }
       }
       return broken;
     },

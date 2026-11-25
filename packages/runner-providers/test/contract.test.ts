@@ -1,7 +1,13 @@
 // Every provider passes one suite, and each of its rules rejects a provider
 // that is wrong in that way alone.
 import { describe, expect, it } from "vitest";
-import { byoProvider, type ProviderCapabilities, type RunnerProvider } from "../src/index.js";
+import {
+  byoProvider,
+  type InstanceHandle,
+  isUnsupported,
+  type ProviderCapabilities,
+  type RunnerProvider,
+} from "../src/index.js";
 import {
   createFakeProvider,
   describeProviderContract,
@@ -17,6 +23,7 @@ const byoUnderTest = (): ProviderUnderTest => ({
   unsupported: [job({ labels: ["anything"] })],
   calls: () => 0,
   made: () => 0,
+  live: () => 0,
 });
 
 describeProviderContract("fake", () => fakeUnderTest());
@@ -49,6 +56,7 @@ const RULE = {
   others: "teardown leaves every other instance",
   lists: "listOrphans lists the instances whose intent begins with the tag, and no other",
   token: "the registration token is in no handle, list, refusal or error",
+  outage: "a service that fails is an error, never a list, a status or a teardown that is done",
   none: "one that provisions nothing costs nothing, refuses to, and has no instances",
 };
 
@@ -59,6 +67,65 @@ const estimated = (more: object) =>
       return "unsupported" in answer ? answer : { ...answer, ...more };
     },
   }));
+
+/** Fails with the last token it was given somewhere in its error. */
+const failing = (name: "status" | "teardown" | "listOrphans", error: (token: string) => unknown) =>
+  wrong((real) => {
+    let token = "";
+    const fail = () => {
+      throw error(token);
+    };
+    return {
+      provision: (req, registration, intent) => {
+        token = registration.token;
+        return real.provision(req, registration, intent);
+      },
+      ...{
+        status: { status: (handle: InstanceHandle) => real.status(handle).catch(fail) },
+        teardown: { teardown: (handle: InstanceHandle) => real.teardown(handle).catch(fail) },
+        listOrphans: { listOrphans: (tag: string) => real.listOrphans(tag).catch(fail) },
+      }[name],
+    };
+  });
+
+const lostWith = (error: (token: string) => unknown) =>
+  wrong((real) => ({
+    provision: (req, registration, intent) =>
+      real.provision(req, registration, intent).catch((why: Error) => {
+        throw why.message.includes("lost") ? error(registration.token) : why;
+      }),
+  }));
+
+/** Numbers its instances by the lowest number free; its handles are told apart by intent, or not. */
+const reusesIds = (byIntent: boolean) =>
+  wrong((real) => {
+    const slots = new Map<string, InstanceHandle>();
+    const outer = (handle: InstanceHandle) => {
+      const known = [...slots].find(([, inner]) => inner.instanceId === handle.instanceId);
+      let n = 1;
+      while (slots.has(`${n}`)) n++;
+      const instanceId = known?.[0] ?? `${n}`;
+      slots.set(instanceId, handle);
+      return { ...handle, instanceId };
+    };
+    const inner = (handle: InstanceHandle) => {
+      const found = slots.get(handle.instanceId);
+      return found && (!byIntent || found.intent === handle.intent) ? found : handle;
+    };
+    return {
+      provision: async (...args) => {
+        const answer = await real.provision(...args);
+        return isUnsupported(answer) ? answer : outer(answer);
+      },
+      status: (handle) => real.status(inner(handle)),
+      teardown: async (handle) => {
+        const found = inner(handle);
+        await real.teardown(found);
+        if (found !== handle) slots.delete(handle.instanceId);
+      },
+      listOrphans: async (tag) => (await real.listOrphans(tag)).map(outer),
+    };
+  });
 
 /** Wrong providers, by the only rule each breaks. */
 const WRONG: readonly (readonly [rule: string, how: string, create: () => ProviderUnderTest])[] = [
@@ -205,6 +272,8 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
       return {
         ...subject,
         made: fake.made,
+        live: fake.live,
+        outage: fake.outage,
         provider: {
           ...fake.provider,
           provision: async (req, registration, intent) => {
@@ -219,6 +288,33 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
         },
       };
     },
+  ],
+  [
+    RULE.lost,
+    "buys a second instance when an answer is lost",
+    wrong((real) => ({
+      provision: (req, registration, intent) =>
+        real.provision(req, registration, intent).catch(async (error) => {
+          await real.provision(req, registration, "elsewhere");
+          throw error;
+        }),
+    })),
+  ],
+  [
+    RULE.twice,
+    "hides an instance for a teardown",
+    wrong((real) => {
+      const hidden = new Set<string>();
+      return {
+        status: async (handle) => (hidden.has(handle.instanceId) ? "gone" : real.status(handle)),
+        teardown: async (handle) => {
+          await real.status(handle);
+          hidden.add(handle.instanceId);
+        },
+        listOrphans: async (tag) =>
+          (await real.listOrphans(tag)).filter((handle) => !hidden.has(handle.instanceId)),
+      };
+    }),
   ],
   [
     RULE.twice,
@@ -238,6 +334,70 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
         for (const handle of await real.listOrphans("")) await real.teardown(handle);
       },
     })),
+  ],
+  [RULE.others, "gives an instance's id to a later one", reusesIds(false)],
+  [RULE.others, "gives an instance's id to a later one of its intent", reusesIds(true)],
+  [
+    RULE.lists,
+    "lists one page",
+    wrong((real) => ({
+      listOrphans: async (tag) => (await real.listOrphans(tag)).slice(0, 100),
+    })),
+  ],
+  [
+    RULE.lists,
+    "lists its first page for every page",
+    wrong((real) => ({
+      listOrphans: async (tag) => {
+        const all = await real.listOrphans(tag);
+        return all.map((handle, n) => all[n % 50] ?? handle);
+      },
+    })),
+  ],
+  [
+    RULE.lists,
+    "matches a tag in any case",
+    wrong((real) => ({
+      listOrphans: async (tag) =>
+        (await real.listOrphans("")).filter(({ intent }) =>
+          intent.toLowerCase().startsWith(tag.toLowerCase()),
+        ),
+    })),
+  ],
+  [
+    RULE.lists,
+    "keeps an intent in lower case",
+    wrong((real) => ({
+      provision: async (req, registration, intent) => {
+        const answer = await real.provision(req, registration, intent.toLowerCase());
+        return isUnsupported(answer) ? answer : { ...answer, intent };
+      },
+      listOrphans: (tag) => real.listOrphans(tag.toLowerCase()),
+    })),
+  ],
+  [
+    RULE.lists,
+    "gives back an intent in lower case",
+    wrong((real) => ({
+      provision: (req, registration, intent) =>
+        real.provision(req, registration, intent.toLowerCase()),
+      listOrphans: (tag) => real.listOrphans(tag.toLowerCase()),
+    })),
+  ],
+  [
+    RULE.outage,
+    "lists nothing when it cannot list",
+    wrong((real) => ({ listOrphans: (tag) => real.listOrphans(tag).catch(() => []) })),
+  ],
+  [
+    RULE.outage,
+    "is done tearing down what it could not",
+    wrong((real) => ({ teardown: (handle) => real.teardown(handle).catch(() => {}) })),
+  ],
+  [
+    RULE.outage,
+    "takes an instance it cannot ask about as gone",
+    wrong((real) => ({ status: (handle) => real.status(handle).catch(() => "gone" as const) })),
   ],
   [
     RULE.lists,
@@ -293,6 +453,94 @@ const WRONG: readonly (readonly [rule: string, how: string, create: () => Provid
           throw new Error(`no answer for ${registration.token}`);
         }),
     })),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's cause",
+    lostWith((token) => new Error("no answer", { cause: new Error(token) })),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's request",
+    lostWith((token) => Object.assign(new Error("no answer"), { request: { body: { token } } })),
+  ],
+  [
+    RULE.token,
+    "puts the token in one of its errors",
+    lostWith((token) => new AggregateError([new Error("no"), new Error(token)], "no answer")),
+  ],
+  [
+    RULE.token,
+    "puts the token in an error that holds itself",
+    lostWith((token) => {
+      const error = Object.assign(new Error("no answer"), { token, self: {} });
+      error.self = error;
+      return error;
+    }),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's name",
+    lostWith((token) => Object.assign(new Error("no answer"), { name: token })),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's map",
+    lostWith((token) =>
+      Object.assign(new Error("no answer"), { request: new Map([["authorization", token]]) }),
+    ),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's set",
+    lostWith((token) => Object.assign(new Error("no answer"), { tried: new Set([token]) })),
+  ],
+  [
+    RULE.token,
+    "puts the token in its error's headers",
+    lostWith((token) =>
+      Object.assign(new Error("no answer"), { headers: new Headers({ authorization: token }) }),
+    ),
+  ],
+  [
+    RULE.token,
+    "puts the token in a status it cannot get",
+    failing("status", (token) => new Error(token)),
+  ],
+  [
+    RULE.token,
+    "puts the token in a teardown that fails",
+    failing("teardown", (token) => new Error(token)),
+  ],
+  [
+    RULE.token,
+    "puts the token in a list it cannot get",
+    failing("listOrphans", (token) => new Error(token)),
+  ],
+  [
+    RULE.token,
+    "puts the token in a provision that fails",
+    wrong((real) => ({
+      provision: (req, registration, intent) =>
+        real.provision(req, registration, intent).catch((why: Error) => {
+          throw why.message.includes("down") ? new Error(registration.token) : why;
+        }),
+    })),
+  ],
+  [
+    RULE.token,
+    "puts the token in its list",
+    wrong((real) => {
+      let registration = {};
+      return {
+        provision: (req, given, intent) => {
+          registration = given;
+          return real.provision(req, given, intent);
+        },
+        listOrphans: async (tag) =>
+          (await real.listOrphans(tag)).map((handle) => ({ ...handle, registration })),
+      };
+    }),
   ],
   [
     RULE.token,
@@ -364,9 +612,24 @@ describe("the contract", () => {
     expect(await ruleViolations(strict)).toEqual([]);
   });
 
+  it("takes an error that cannot be read whole, or is deep", async () => {
+    let deep: object = {};
+    for (let n = 0; n < 100_000; n++) deep = { deep };
+    const error = Object.assign(new Error("no answer"), { deep });
+    for (const property of ["closed", "name"])
+      Object.defineProperty(error, property, {
+        get: () => {
+          throw new Error(property);
+        },
+      });
+    expect(await ruleViolations(lostWith(() => error))).toEqual([]);
+  });
+
   it("rejects a hosted provider it was given no way to test", async () => {
-    const { loseNextResponse: _, ...subject } = fakeUnderTest();
-    const broken = await ruleViolations(() => ({ ...subject, unsupported: [] }));
-    expect(broken.map((b) => b.rule).sort()).toEqual([RULE.refuses, RULE.lost].sort());
+    const broken = await ruleViolations(() => {
+      const { loseNextResponse: _, outage: __, ...subject } = fakeUnderTest();
+      return { ...subject, unsupported: [] };
+    });
+    expect(broken.map((b) => b.rule).sort()).toEqual([RULE.refuses, RULE.lost, RULE.outage].sort());
   });
 });

@@ -33,6 +33,8 @@ export function fakeUnderTest(options: FakeProviderOptions = {}): ProviderUnderT
     ],
     calls: () => Object.values(fake.calls).reduce((a, b) => a + b, 0),
     made: fake.made,
+    live: fake.live,
+    outage: fake.outage,
     loseNextResponse: fake.loseNextResponse,
   };
 }

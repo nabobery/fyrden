@@ -62,6 +62,7 @@ export interface EphemeralRegistration {
 /** An instance a provider made. It never carries the registration token. */
 export interface InstanceHandle {
   readonly providerId: string;
+  /** Never given to another instance, also once this one is gone. */
   readonly instanceId: string;
   /** What it was made for, as `provision` was given it: the instance's tag. */
   readonly intent: string;
@@ -83,6 +84,7 @@ export interface RunnerProvider {
     registration: EphemeralRegistration,
     intent: string,
   ): Promise<InstanceHandle | Unsupported>;
+  /** `gone` only when it is: one it cannot ask about is a rejection. */
   status(handle: InstanceHandle): Promise<InstanceStatus | Unsupported>;
   /** Done when the instance is gone, also when it was gone already. */
   teardown(handle: InstanceHandle): Promise<void>;
