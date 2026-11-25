@@ -2,20 +2,25 @@
   "name": "@fyrden/runner-providers",
   "version": "0.0.0",
   "private": true,
-  "description": "CI runner provider plugins (BYO, Hetzner, Cloudflare Containers).",
+  "description": "CI runner providers: the interface, the cheapest-eligible scheduler and bring-your-own runners. No Cloudflare imports.",
   "license": "Apache-2.0",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./testing/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p .",
+    "typecheck": "tsc -p . && tsc -p tsconfig.test.json",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage --passWithNoTests"
   },
+  "dependencies": {
+    "@fyrden/domain": "workspace:*"
+  },
   "devDependencies": {
+    "@vitest/coverage-istanbul": "catalog:",
+    "fast-check": "catalog:",
     "typescript": "catalog:",
-    "vitest": "catalog:",
-    "@vitest/coverage-istanbul": "catalog:"
+    "vitest": "catalog:"
   }
 }

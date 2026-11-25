@@ -4,7 +4,7 @@
 
 | Tier | Where | Runs in | Command |
 |---|---|---|---|
-| Unit | `packages/{git-core,domain,api-contract,cli,testing}`, `tools/ci` | Node (plain Vitest) | `pnpm turbo run test` |
+| Unit | `packages/{git-core,domain,runner-providers,api-contract,cli,testing}`, `tools/ci` | Node (plain Vitest) | `pnpm turbo run test` |
 | Workerd integration | `apps/api`, `packages/adapters-cloudflare` | workerd via `@cloudflare/vitest-plugin`, with local D1, R2, KV, Queues and Durable Objects | `pnpm turbo run test` |
 | Shuffle guard | workerd suites | the same, in random file and test order with several seeds | `pnpm turbo run test:shuffle` |
 | Dry-run deploy | both Workers | wrangler bundling | `pnpm turbo run deploy:dry-run` |

@@ -4,5 +4,5 @@
     "lib": ["es2024", "webworker"],
     "types": []
   },
-  "include": ["src", "test"]
+  "include": ["src"]
 }
