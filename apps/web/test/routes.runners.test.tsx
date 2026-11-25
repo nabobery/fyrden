@@ -15,7 +15,10 @@ import NewRunner, {
   action as newAction,
   loader as newLoader,
 } from "../app/routes/org.runner-new.js";
-import Runners, { loader as runnersLoader } from "../app/routes/org.runners.js";
+import Runners, {
+  action as runnersAction,
+  loader as runnersLoader,
+} from "../app/routes/org.runners.js";
 import routes from "../app/routes.js";
 import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
 import { ACTIVE_TAG, escaped, HOSTILE, renderPage } from "./helpers/render.js";
@@ -162,6 +165,54 @@ describe("making a registration token", () => {
     request.headers.set("Origin", "https://evil.test");
     await expect(
       newAction({ request, context, params: { org: "acme" } } as never),
+    ).rejects.toBeDefined();
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("cancelling unused tokens", () => {
+  const path = `DELETE ${API}/registration-token`;
+  const cancel = (context: unknown, fields: Record<string, string>) =>
+    run(runnersAction, context, PAGE, fields);
+
+  it("asks the API once, and says how many", async () => {
+    const { context, calls } = api({ [path]: json({ cancelled: 2 }) });
+    const done = await cancel(context, { intent: "cancel-tokens" });
+    expect(calls).toHaveLength(1);
+    expect(done.headers.get("Location")).toBe(`${PAGE}?cancelled=2`);
+    const list = (query: string) =>
+      renderPage(Runners, `${PAGE}${query}`, {
+        org: "acme",
+        revoked: false,
+        runners: [],
+        pages: { next: null, first: null },
+      });
+    expect(list("?cancelled=2")).toContain("Cancelled 2 unused tokens.");
+    expect(list("?cancelled=1")).toContain("Cancelled 1 unused token.");
+    expect(list("?cancelled=0")).toContain("There was no unused token.");
+    expect(list("?cancelled=%3Cb%3E")).not.toContain('role="status"');
+  });
+
+  it("does nothing for another intent, and shows a refusal", async () => {
+    const none = api({ [path]: json({ cancelled: 2 }) });
+    expect(await cancel(none.context, { intent: "other" })).toHaveProperty("errors");
+    expect(none.calls).toHaveLength(0);
+    const refused = api({ [path]: problem(403, "forbidden") });
+    expect(await cancel(refused.context, { intent: "cancel-tokens" })).toMatchObject({
+      errors: { form: expect.any(String) },
+    });
+    const out = api({ [path]: problem(401, "unauthorized") });
+    await expect(cancel(out.context, { intent: "cancel-tokens" })).rejects.toMatchObject({
+      status: 302,
+    });
+  });
+
+  it("a post from another site is refused", async () => {
+    const { context, calls } = api({ [path]: json({ cancelled: 1 }) });
+    const request = formPost(PAGE, { intent: "cancel-tokens" });
+    request.headers.set("Origin", "https://evil.test");
+    await expect(
+      runnersAction({ request, context, params: { org: "acme" } } as never),
     ).rejects.toBeDefined();
     expect(calls).toHaveLength(0);
   });

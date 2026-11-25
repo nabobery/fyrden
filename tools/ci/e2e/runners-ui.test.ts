@@ -226,6 +226,22 @@ describe("runner settings", () => {
     }
   });
 
+  it("cancel unused tokens, which then register nothing", async () => {
+    const { token } = await ok<{ token: string }>(
+      "POST",
+      `/orgs/${org}/actions/runners/registration-token`,
+      {},
+    );
+    tokens.push(token);
+    const back = page.url();
+    await visit(page, base());
+    await page.getByRole("button", { name: "Cancel unused tokens" }).click();
+    await says(page, "Cancelled 1 unused token.");
+    await accessible("runners, tokens cancelled");
+    await expect(register(token, "never", false)).rejects.toThrow();
+    await visit(page, back);
+  });
+
   it("delete a runner once its name is typed, and keep it among past ones", async () => {
     await page.getByLabel("Type long-runner to confirm").fill("long");
     await page.getByRole("button", { name: "Delete runner" }).click();

@@ -332,6 +332,7 @@ import {
 } from "../repos/watching.js";
 import {
   addRunnerRepoOperation,
+  cancelRunnerRegistrationTokensOperation,
   createRunnerRegistrationTokenOperation,
   deleteRunnerOperation,
   getRunnerOperation,
@@ -563,6 +564,7 @@ export const handlers: Handlers = {
 
   // Self-hosted runners (runner/operations).
   "orgs.runners.registration_tokens.create": createRunnerRegistrationTokenOperation,
+  "orgs.runners.registration_tokens.cancel": cancelRunnerRegistrationTokensOperation,
   "orgs.runners.list": listRunnersOperation,
   "orgs.runners.get": getRunnerOperation,
   "orgs.runners.access.update": updateRunnerAccessOperation,

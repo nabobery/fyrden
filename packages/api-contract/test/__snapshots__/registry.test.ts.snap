@@ -6256,7 +6256,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/orgs/{org}/actions/runners": {
       "get": {
-        "description": "Lists the organization's self-hosted runners, oldest first, deleted ones too unless \`status\` says otherwise; never their credentials. Owners only.",
+        "description": "Lists the organization's self-hosted runners, oldest first, deleted ones too unless \`status\` says otherwise; never their credentials. Owners, and an agent acting for one that granted it \`self_hosted_runners:read\`.",
         "operationId": "orgs.runners.list",
         "parameters": [
           {
@@ -6486,10 +6486,74 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "self_hosted_runners:read",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
       },
     },
     "/orgs/{org}/actions/runners/registration-token": {
+      "delete": {
+        "description": "Cancels every registration token of the organization that has registered no runner and has not expired: for one that may have leaked, or was made by someone who left. Each is refused from then on. Runners already registered stay (delete those). Audited when there was any. Owners only. GitHub has no such endpoint.",
+        "operationId": "orgs.runners.registration_tokens.cancel",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org",
+            "required": true,
+            "schema": {
+              "description": "The organization's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cancelled": {
+                      "description": "How many tokens were cancelled.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "cancelled",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Cancel unused runner registration tokens",
+        "x-fyrden-permission": "self_hosted_runners:write",
+        "x-fyrden-principals": [
+          "user",
+        ],
+        "x-idempotency": "Idempotency-Key header",
+      },
       "post": {
         "description": "Mints a token that registers one self-hosted runner for the organization (\`gitea/runner register --token\`), within the hour. The runner starts with the access given here: by default every private and internal repository of the organization, no public one and no fork job; its labels only narrow that. A token with \`allows_forks\` registers only an ephemeral runner (\`--ephemeral\`); any other Register is refused and does not spend it. 422 \`unknown_repository\` for an id that is not an active repository of the organization, 422 \`invalid_input\` for \`selected_repository_ids\` without \`repository_access\` \`selected\`. A repository that left the organization before Register is dropped. Owners only. While the deployment has not turned self-hosted runners on (\`FYRDEN_CI_RUNNERS\`), a registration token is refused with 409 \`runners_off\`. On Free, a registration token is refused with 409 \`runner_fleet_full\` while the deployment's runner fleet is full (\`FYRDEN_CI_FLEET\`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused.",
         "operationId": "orgs.runners.registration_tokens.create",
@@ -6656,7 +6720,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
       "get": {
-        "description": "One runner of the organization, with the repositories it lists; never its credential. 404 \`runner_not_found\`. Owners only.",
+        "description": "One runner of the organization, with the repositories it lists; never its credential. 404 \`runner_not_found\`. Owners, and an agent acting for one that granted it \`self_hosted_runners:read\`.",
         "operationId": "orgs.runners.get",
         "parameters": [
           {
@@ -6874,6 +6938,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-fyrden-permission": "self_hosted_runners:read",
         "x-fyrden-principals": [
           "user",
+          "agent",
         ],
       },
     },

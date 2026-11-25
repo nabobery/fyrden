@@ -3,6 +3,7 @@
 
 import type {
   addRunnerRepo,
+  cancelRunnerRegistrationTokens,
   createRunnerRegistrationToken,
   deleteRunner,
   getRunner,
@@ -20,6 +21,7 @@ import { clock } from "../services.js";
 import { type AccessRefusal, accessJson, changeAccess, changeListed } from "./access.js";
 import { runnerAdmissionFor } from "./admission.js";
 import {
+  cancelRegistrations,
   createRegistration,
   fleetRoom,
   type ListedRunner,
@@ -88,6 +90,25 @@ export async function createRunnerRegistrationTokenOperation(
   );
   if (!made) throw refusal("unknown_repository", org);
   return { token, expires_at: expiresAt };
+}
+
+/** The `orgs.runners.registration_tokens.cancel` operation. */
+export async function cancelRunnerRegistrationTokensOperation(
+  ctx: OpContext,
+  input: Input<typeof cancelRunnerRegistrationTokens>,
+): Promise<Output<typeof cancelRunnerRegistrationTokens>> {
+  const org = await orgFor(ctx, input.org, "self_hosted_runners:write");
+  const cancelled = await cancelRegistrations(
+    ctx.env.DIRECTORY,
+    {
+      accountId: org.id,
+      now: clock(),
+      actor: { principalId: ctx.auth.principalId, requestId: ctx.requestId },
+    },
+    ctx.metrics,
+  );
+  ctx.log.info("runner registration tokens cancelled", { accountId: org.id, cancelled });
+  return { cancelled };
 }
 
 const RUNNER_ID = /^[1-9][0-9]{0,15}$/;

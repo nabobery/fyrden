@@ -277,6 +277,7 @@ import {
 } from "../ops/rulesets.js";
 import {
   addRunnerRepo,
+  cancelRunnerRegistrationTokens,
   createRunnerRegistrationToken,
   deleteRunner,
   getRunner,
@@ -588,6 +589,7 @@ export const registry = defineRegistry([
   setTeamRepo,
   removeTeamRepo,
   createRunnerRegistrationToken,
+  cancelRunnerRegistrationTokens,
   listRunners,
   getRunner,
   updateRunnerAccess,

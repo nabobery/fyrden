@@ -149,6 +149,34 @@ export async function createRegistration(
 }
 
 /**
+ * Cancels the account's unused registration tokens still good at `now`, and
+ * audits how many (none: no row). Consumed with no nonce, a token registers
+ * nothing, whatever another isolate's clock says, and nothing gives it back.
+ */
+export async function cancelRegistrations(
+  db: D1Database,
+  cancel: { accountId: string; now: number; actor: RunnerActor },
+  metrics?: Metrics,
+): Promise<number> {
+  count(metrics, "runner_registration_cancel");
+  const unused = "account_id = ?1 AND consumed_at IS NULL AND expires_at > ?2";
+  const [, cancelled] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO audit_log (at, actor_id, act_chain, action, target_id, details, request_id)
+         SELECT ?2, ?3, NULL, 'ci.runner.registration.cancel', ?1,
+           json_object('cancelled', count(*)), ?4
+         FROM ci_runner_registrations WHERE ${unused} HAVING count(*) > 0`,
+      )
+      .bind(cancel.accountId, cancel.now, cancel.actor.principalId, cancel.actor.requestId),
+    db
+      .prepare(`UPDATE ci_runner_registrations SET consumed_at = ?2 WHERE ${unused}`)
+      .bind(cancel.accountId, cancel.now),
+  ]);
+  return cancelled?.meta.changes ?? 0;
+}
+
+/**
  * SQL summing today's polls (D1's day) of runners that no longer serve:
  * revoked ones, through their poll-day index, and ephemeral ones past
  * their end at `now` that the cron has not stamped yet, a range of the

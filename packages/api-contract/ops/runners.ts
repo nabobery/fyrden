@@ -73,6 +73,30 @@ export const createRunnerRegistrationToken = defineOperation({
   mcp: false,
 });
 
+export const cancelRunnerRegistrationTokens = defineOperation({
+  id: "orgs.runners.registration_tokens.cancel",
+  method: "DELETE",
+  path: "/orgs/{org}/actions/runners/registration-token",
+  summary: "Cancel unused runner registration tokens",
+  description:
+    "Cancels every registration token of the organization that has registered no runner and has not expired: for one that may have leaked, or was made by someone who left. Each is refused from then on. Runners already registered stay (delete those). Audited when there was any. Owners only. GitHub has no such endpoint.",
+  input: z.object({ org: Org }),
+  output: z.object({
+    cancelled: z.number().int().describe("How many tokens were cancelled."),
+  }),
+  permission: "self_hosted_runners:write",
+  principals: ["user"],
+  rateLimit: "write",
+  idempotency: "key",
+  mcp: {
+    tool: "cancel_org_runner_registration_tokens",
+    title: "Cancel unused runner registration tokens",
+    description:
+      "Cancel every unused self-hosted runner registration token of an organization. Runners already registered stay.",
+    readOnly: false,
+  },
+});
+
 export const SelfHostedRunner = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -122,7 +146,7 @@ export const listRunners = defineOperation({
   path: "/orgs/{org}/actions/runners",
   summary: "List an organization's self-hosted runners",
   description:
-    "Lists the organization's self-hosted runners, oldest first, deleted ones too unless `status` says otherwise; never their credentials. Owners only.",
+    "Lists the organization's self-hosted runners, oldest first, deleted ones too unless `status` says otherwise; never their credentials. Owners, and an agent acting for one that granted it `self_hosted_runners:read`.",
   input: z.object({
     org: Org,
     status: z
@@ -142,7 +166,7 @@ export const listRunners = defineOperation({
       .describe("Pass as `cursor` for the next page; null on the last page."),
   }),
   permission: "self_hosted_runners:read",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
   mcp: {
@@ -174,11 +198,11 @@ export const getRunner = defineOperation({
   path: "/orgs/{org}/actions/runners/{runner_id}",
   summary: "Get a self-hosted runner",
   description:
-    "One runner of the organization, with the repositories it lists; never its credential. 404 `runner_not_found`. Owners only.",
+    "One runner of the organization, with the repositories it lists; never its credential. 404 `runner_not_found`. Owners, and an agent acting for one that granted it `self_hosted_runners:read`.",
   input: z.object({ org: Org, runner_id: RunnerId }),
   output: SelfHostedRunnerDetail,
   permission: "self_hosted_runners:read",
-  principals: ["user"],
+  principals: ["user", "agent"],
   rateLimit: "read",
   idempotency: "none",
   mcp: {

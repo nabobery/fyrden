@@ -6,7 +6,7 @@ import { env } from "cloudflare:workers";
 import { hashToken } from "@fyrden/domain";
 import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
-import { listRunners } from "../src/runner/registry.js";
+import { cancelRegistrations, listRunners } from "../src/runner/registry.js";
 import { agentFor } from "./helpers/agents.js";
 import { api, user, type Who } from "./helpers/api.js";
 import { countingD1, rowCountingD1 } from "./helpers/d1.js";
@@ -260,6 +260,129 @@ describe("a registration token's access", () => {
       .all<{ id: number }>();
     expect(results).toHaveLength(1);
     expect(await auditOf(results[0]?.id ?? 0, "ci.runner.register")).toHaveLength(1);
+  });
+});
+
+describe("cancelling registration tokens", () => {
+  const cancel = (f: OrgFixture, token = f.owner.token) =>
+    api("DELETE", `${base(f)}/registration-token`, token);
+  const minted = async (f: OrgFixture, access: unknown = {}) =>
+    (await body<{ token: string }>(mint(f, access), 201)).token;
+
+  it("ends every unused token of the organization, whatever its access, and no other's", async () => {
+    const f = await orgRepo();
+    const other = await orgRepo();
+    const unused = [
+      await minted(f),
+      await minted(f, { allows_forks: true, allows_public: true }),
+      await minted(f, { repository_access: "selected", selected_repository_ids: [f.repo.id] }),
+    ];
+    const used = await minted(f);
+    const runner = await registered(used, false);
+    const theirs = await minted(other);
+    expect(await body(cancel(f))).toEqual({ cancelled: 3 });
+    for (const token of [...unused, used])
+      for (const ephemeral of [false, true])
+        await connectError(await register(token, ephemeral), "permission_denied", 403);
+    // What registered before stays, as does another organization's token; a new one registers.
+    expect(await body(get(f, runner))).toMatchObject({ revoked_at: null });
+    await registered(theirs, false);
+    await registered(await minted(f), false);
+  });
+
+  it("is audited with how many, and audits nothing when there is none", async () => {
+    const f = await orgRepo();
+    expect(await body(cancel(f))).toEqual({ cancelled: 0 });
+    expect(await auditOf(f.org.id, "ci.runner.registration.cancel")).toEqual([]);
+    const token = await minted(f);
+    const expired = await minted(f);
+    await env.DIRECTORY.prepare(
+      "UPDATE ci_runner_registrations SET expires_at = 1 WHERE token_hash = ?",
+    )
+      .bind(await hashToken(expired))
+      .run();
+    expect(await body(cancel(f))).toEqual({ cancelled: 1 });
+    const rows = await auditOf(f.org.id, "ci.runner.registration.cancel");
+    expect(rows).toMatchObject([
+      {
+        actor_id: f.owner.principalId,
+        request_id: expect.any(String),
+        details: { cancelled: 1 },
+      },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain(await hashToken(token));
+    expect(await body(cancel(f))).toEqual({ cancelled: 0 });
+    expect(await auditOf(f.org.id, "ci.runner.registration.cancel")).toHaveLength(1);
+  });
+
+  it("ends a token given back for want of room", async () => {
+    const f = await orgRepo();
+    const token = await minted(f);
+    const full = { ...ON, FYRDEN_CI_FLEET: "0" } as Partial<Env>;
+    await connectError(await register(token, false, full), "resource_exhausted", 429);
+    expect(await body(cancel(f))).toEqual({ cancelled: 1 });
+    await connectError(await register(token, false), "permission_denied", 403);
+  });
+
+  it("repeated with its idempotency key, ends no token made since and audits nothing more", async () => {
+    const f = await orgRepo();
+    await minted(f);
+    const key = crypto.randomUUID();
+    const keyed = () =>
+      call(`/api${base(f)}/registration-token`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${f.owner.token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+      });
+    expect(await body(keyed())).toEqual({ cancelled: 1 });
+    const later = await minted(f);
+    expect(await body(keyed())).toEqual({ cancelled: 1 });
+    expect(await auditOf(f.org.id, "ci.runner.registration.cancel")).toHaveLength(1);
+    await registered(later, false);
+  });
+
+  it("is an owner's: a member, an agent and an outsider change nothing", async () => {
+    const f = await orgRepo();
+    const token = await minted(f);
+    const member = await user();
+    await api("PUT", `/orgs/${f.org.login}/memberships/${member.handle}`, f.owner.token, {
+      role: "member",
+    });
+    const agent = await agentFor(f.owner, ["self_hosted_runners:read"]);
+    for (const [who, status] of [
+      [member.token, 403],
+      [(await user()).token, 404],
+      [agent.own, 403],
+      [agent.delegated, 403],
+    ] as const)
+      expect((await cancel(f, who)).status).toBe(status);
+    await registered(token, false);
+  });
+
+  it("reads no used or expired token", async () => {
+    const f = await orgRepo();
+    const rows = { read: 0, written: 0 };
+    const counted = rowCountingD1(env.DIRECTORY, rows);
+    const run = () =>
+      cancelRegistrations(counted, {
+        accountId: f.org.id,
+        now: 1_000,
+        actor: { principalId: "usr_test", requestId: "req_test" },
+      });
+    await run();
+    const before = rows.read;
+    await env.DIRECTORY.prepare(
+      `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300)
+       INSERT INTO ci_runner_registrations (token_hash, account_id, created_by, created_at, expires_at, consumed_at)
+       SELECT ?1 || i, ?1, 'u', 1, CASE i % 2 WHEN 0 THEN 999 ELSE 5000 END, CASE i % 2 WHEN 0 THEN NULL ELSE 2 END FROM n`,
+    )
+      .bind(f.org.id)
+      .run();
+    await run();
+    expect(rows.read - before).toBeLessThanOrEqual(before + 2);
   });
 });
 
@@ -638,6 +761,7 @@ describe("who may", () => {
       ["GET", base(f)],
       ["GET", `${base(f)}/${runner.id}`],
       ["POST", `${base(f)}/registration-token`, { allows_public: true }],
+      ["DELETE", `${base(f)}/registration-token`],
       ["PATCH", `${base(f)}/${runner.id}/access`, { allows_public: true }],
       ["PUT", repoPath(f, runner, f.repo.id)],
       ["DELETE", repoPath(f, runner, f.repo.id)],
@@ -647,7 +771,8 @@ describe("who may", () => {
       ["member and repository admin", member.token, [403]],
       ["outsider", outsider.token, [404]],
       ["instance admin", instanceAdmin.token, [404]],
-      ["agent", agent.own, [403]],
+      // Its own token acts for nobody: no runner operation but a read is an agent's at all.
+      ["agent", agent.own, [403, 404]],
       ["delegated token", agent.delegated, [403]],
       ["under-scoped token", unscoped, [403]],
     ] as const)
@@ -671,6 +796,7 @@ describe("who may", () => {
         ["add_org_runner_repo", { runner_id: runner.id, repository_id: f.repo.id }],
         ["remove_org_runner_repo", { runner_id: runner.id, repository_id: f.repo.id }],
         ["delete_org_runner", { runner_id: runner.id }],
+        ["cancel_org_runner_registration_tokens", {}],
       ] as const)
         expect([
           tool,
@@ -678,6 +804,57 @@ describe("who may", () => {
         ]).toEqual([tool, true]);
     expect(await body(get(f, runner))).toMatchObject({ ...DEFAULT, revoked_at: null });
     expect(await auditOf(runner.id, "ci.runner.access")).toEqual([]);
+  });
+
+  it("an agent acting for an owner who granted it may read runners, and change nothing", async () => {
+    const f = await orgRepo();
+    const runner = await registerRunner(f.org.login, f.owner);
+    const scopes = ["self_hosted_runners:read"];
+    const agent = await agentFor(f.owner, scopes);
+    const overMcp = (await agentFor(f.owner, scopes, undefined, `${ORIGIN}/mcp`)).delegated;
+    const list = await body<{ runners: Runner[] }>(api("GET", base(f), agent.delegated));
+    expect(list.runners.map((r) => r.id)).toEqual([runner.id]);
+    expect(await body(api("GET", `${base(f)}/${runner.id}`, agent.delegated))).toMatchObject(
+      DEFAULT,
+    );
+    for (const [tool, input] of [
+      ["list_org_runners", {}],
+      ["get_org_runner", { runner_id: runner.id }],
+    ] as const) {
+      const answer = await callTool(overMcp, tool, { org: f.org.login, ...input });
+      expect([tool, answer.isError]).toEqual([tool, false]);
+      expect(answer.text).not.toContain(runner.token);
+    }
+    for (const [method, path, input] of [
+      ["POST", `${base(f)}/registration-token`, {}],
+      ["DELETE", `${base(f)}/registration-token`],
+      ["PATCH", `${base(f)}/${runner.id}/access`, { allows_public: true }],
+      ["PUT", repoPath(f, runner, f.repo.id)],
+      ["DELETE", repoPath(f, runner, f.repo.id)],
+      ["DELETE", `${base(f)}/${runner.id}`],
+    ] as const)
+      expect((await api(method, path, agent.delegated, input)).status, `${method} ${path}`).toBe(
+        403,
+      );
+    expect(await body(get(f, runner))).toMatchObject({ ...DEFAULT, revoked_at: null });
+  });
+
+  it("an agent reads no more than the person it acts for", async () => {
+    const f = await orgRepo();
+    await registerRunner(f.org.login, f.owner);
+    const member = await user();
+    await api("PUT", `/orgs/${f.org.login}/memberships/${member.handle}`, f.owner.token, {
+      role: "member",
+    });
+    const scopes = ["self_hosted_runners:read"];
+    expect((await api("GET", base(f), (await agentFor(member, scopes)).delegated)).status).toBe(
+      403,
+    );
+    expect(
+      (await api("GET", base(f), (await agentFor(await user(), scopes)).delegated)).status,
+    ).toBe(404);
+    // Its own token acts for nobody, so it belongs to no organization.
+    expect((await api("GET", base(f), (await agentFor(f.owner, scopes)).own)).status).not.toBe(200);
   });
 
   it("an owner over MCP reads and changes access, and no tool makes a registration token", async () => {

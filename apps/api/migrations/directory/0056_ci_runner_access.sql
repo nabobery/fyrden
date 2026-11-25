@@ -51,7 +51,7 @@ ALTER TABLE ci_runner_registrations ADD COLUMN allows_public INTEGER NOT NULL DE
   CHECK (allows_public IN (0, 1));
 ALTER TABLE ci_runner_registrations ADD COLUMN allows_forks INTEGER NOT NULL DEFAULT 0
   CHECK (allows_forks IN (0, 1));
--- Unused tokens limited to selected repositories, by expiry, for a transfer to take its repository
--- out of those still good.
-CREATE INDEX ci_runner_registrations_selected ON ci_runner_registrations (account_id, expires_at)
-  WHERE consumed_at IS NULL AND repository_access = 'selected';
+-- Unused tokens by expiry: for an owner to cancel those still good, and for a transfer to take its
+-- repository out of those limited to selected ones.
+CREATE INDEX ci_runner_registrations_unused ON ci_runner_registrations (account_id, expires_at)
+  WHERE consumed_at IS NULL;

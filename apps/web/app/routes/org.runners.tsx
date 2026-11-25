@@ -1,11 +1,20 @@
-import { Link } from "react-router";
-import { SavedNotice } from "../components/ci-settings-ui.js";
+import { Form, Link, redirect, useActionData, useSearchParams } from "react-router";
+import { ErrorSummary, SavedNotice } from "../components/ci-settings-ui.js";
 import { Pager } from "../components/pager.js";
 import { At } from "../components/runner-ui.js";
 import { SettingsShell } from "../components/settings-shell.js";
-import { apiGet } from "../lib/api.server.js";
+import { apiCall, apiGet, assertSameOrigin, type Problem, readForm } from "../lib/api.server.js";
+import { problemOf } from "../lib/ci-settings.server.js";
 import { pageLinks, pageQuery } from "../lib/pages.js";
-import { accessText, type Runner, runnerState, runnersApi, runnersPath } from "../lib/runners.js";
+import {
+  accessText,
+  type Runner,
+  type RunnerErrors,
+  runnerErrors,
+  runnerState,
+  runnersApi,
+  runnersPath,
+} from "../lib/runners.js";
 import type { Route } from "./+types/org.runners";
 
 export function meta({ params }: Route.MetaArgs): Route.MetaDescriptors {
@@ -28,7 +37,45 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
+export async function action({
+  request,
+  context,
+  params,
+}: Route.ActionArgs): Promise<Response | { errors: RunnerErrors }> {
+  assertSameOrigin(request);
+  const form = await readForm(request);
+  if (form.get("intent") !== "cancel-tokens") return { errors: { form: "Nothing was changed." } };
+  const result = await apiCall<{ cancelled: number } & Problem>(
+    context,
+    request,
+    "DELETE",
+    `${runnersApi(params.org)}/registration-token`,
+  );
+  const problem = problemOf(
+    { status: result.status, problem: result.status === 200 ? null : result.body },
+    request,
+  );
+  if (result.status !== 200) return { errors: runnerErrors(problem ?? { status: result.status }) };
+  return redirect(`${runnersPath(params.org)}?cancelled=${result.body.cancelled}`);
+}
+
+function CancelledNotice() {
+  const [search] = useSearchParams();
+  const cancelled = search.get("cancelled");
+  if (cancelled === null || !/^[0-9]{1,9}$/.test(cancelled)) return null;
+  return (
+    <p role="status">
+      {cancelled === "0"
+        ? "There was no unused token."
+        : cancelled === "1"
+          ? "Cancelled 1 unused token."
+          : `Cancelled ${cancelled} unused tokens.`}
+    </p>
+  );
+}
+
 export default function Runners({ loaderData }: Route.ComponentProps) {
+  const result = useActionData<typeof action>();
   const { org, revoked, runners, pages } = loaderData;
   const base = runnersPath(org);
   return (
@@ -40,6 +87,8 @@ export default function Runners({ loaderData }: Route.ComponentProps) {
           is not shown: the server does not record it.
         </p>
         <SavedNotice noun="runner" />
+        <CancelledNotice />
+        <ErrorSummary errors={{ ...result?.errors }} />
         <p>
           <Link className="button" to={`${base}/new`}>
             New runner
@@ -86,6 +135,20 @@ export default function Runners({ loaderData }: Route.ComponentProps) {
         )}
         <Pager links={pages} label="Runners" />
       </section>
+      {!revoked && (
+        <section className="panel" aria-labelledby="tokens">
+          <h2 id="tokens">Unused registration tokens</h2>
+          <p className="muted">
+            A token works for an hour, once. If one may have leaked, cancel every token that has
+            registered no runner yet. Runners already registered stay.
+          </p>
+          <Form method="post">
+            <button className="danger" type="submit" name="intent" value="cancel-tokens">
+              Cancel unused tokens
+            </button>
+          </Form>
+        </section>
+      )}
     </SettingsShell>
   );
 }

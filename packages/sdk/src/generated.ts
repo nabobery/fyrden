@@ -9430,6 +9430,18 @@ export type OrgsRunnersRegistrationTokensCreateOutput = {
   expires_at: number;
 };
 
+/** Input of `orgs.runners.registration_tokens.cancel`: Cancel unused runner registration tokens. */
+export type OrgsRunnersRegistrationTokensCancelInput = {
+  /** The organization's handle. */
+  org: string;
+};
+
+/** Output of `orgs.runners.registration_tokens.cancel`. */
+export type OrgsRunnersRegistrationTokensCancelOutput = {
+  /** How many tokens were cancelled. */
+  cancelled: number;
+};
+
 /** Input of `orgs.runners.list`: List an organization's self-hosted runners. */
 export type OrgsRunnersListInput = {
   /** The organization's handle. */
@@ -10092,6 +10104,7 @@ export const OPERATIONS = {
   "orgs.teams.repos.set": { method: "PUT", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.teams.repos.remove": { method: "DELETE", path: "/orgs/{org}/teams/{team_slug}/repos/{owner}/{repo}", pathParams: ["org","team_slug","owner","repo"], idempotent: true },
   "orgs.runners.registration_tokens.create": { method: "POST", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
+  "orgs.runners.registration_tokens.cancel": { method: "DELETE", path: "/orgs/{org}/actions/runners/registration-token", pathParams: ["org"], idempotent: true },
   "orgs.runners.list": { method: "GET", path: "/orgs/{org}/actions/runners", pathParams: ["org"], idempotent: false, items: "runners" },
   "orgs.runners.get": { method: "GET", path: "/orgs/{org}/actions/runners/{runner_id}", pathParams: ["org","runner_id"], idempotent: false },
   "orgs.runners.access.update": { method: "PATCH", path: "/orgs/{org}/actions/runners/{runner_id}/access", pathParams: ["org","runner_id"], idempotent: true },
@@ -10646,9 +10659,11 @@ export interface Operations {
   "orgs.teams.repos.remove": { input: OrgsTeamsReposRemoveInput; output: OrgsTeamsReposRemoveOutput };
   /** Create a runner registration token. Mints a token that registers one self-hosted runner for the organization (`gitea/runner register --token`), within the hour. The runner starts with the access given here: by default every private and internal repository of the organization, no public one and no fork job; its labels only narrow that. A token with `allows_forks` registers only an ephemeral runner (`--ephemeral`); any other Register is refused and does not spend it. 422 `unknown_repository` for an id that is not an active repository of the organization, 422 `invalid_input` for `selected_repository_ids` without `repository_access` `selected`. A repository that left the organization before Register is dropped. Owners only. While the deployment has not turned self-hosted runners on (`FYRDEN_CI_RUNNERS`), a registration token is refused with 409 `runners_off`. On Free, a registration token is refused with 409 `runner_fleet_full` while the deployment's runner fleet is full (`FYRDEN_CI_FLEET`, 2 unless set), or while today's polls (UTC) of runners it no longer has leave no slot; registration decides, so a token minted earlier may still be refused. */
   "orgs.runners.registration_tokens.create": { input: OrgsRunnersRegistrationTokensCreateInput; output: OrgsRunnersRegistrationTokensCreateOutput };
-  /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too unless `status` says otherwise; never their credentials. Owners only. */
+  /** Cancel unused runner registration tokens. Cancels every registration token of the organization that has registered no runner and has not expired: for one that may have leaked, or was made by someone who left. Each is refused from then on. Runners already registered stay (delete those). Audited when there was any. Owners only. GitHub has no such endpoint. */
+  "orgs.runners.registration_tokens.cancel": { input: OrgsRunnersRegistrationTokensCancelInput; output: OrgsRunnersRegistrationTokensCancelOutput };
+  /** List an organization's self-hosted runners. Lists the organization's self-hosted runners, oldest first, deleted ones too unless `status` says otherwise; never their credentials. Owners, and an agent acting for one that granted it `self_hosted_runners:read`. */
   "orgs.runners.list": { input: OrgsRunnersListInput; output: OrgsRunnersListOutput };
-  /** Get a self-hosted runner. One runner of the organization, with the repositories it lists; never its credential. 404 `runner_not_found`. Owners only. */
+  /** Get a self-hosted runner. One runner of the organization, with the repositories it lists; never its credential. 404 `runner_not_found`. Owners, and an agent acting for one that granted it `self_hosted_runners:read`. */
   "orgs.runners.get": { input: OrgsRunnersGetInput; output: OrgsRunnersGetOutput };
   /** Change which jobs a self-hosted runner may be given. Changes the fields given and keeps the rest. `selected_repository_ids` replaces the list of a runner that is, or becomes, `selected` (409 `access_not_selected` otherwise); `all` empties it. The next claim, or offer of a job again, is decided by the new access; an assignment that already passed that check, or a job the runner has, goes on (to end it, force-cancel its run and see that it stopped, or stop the machine). After a widening, a job that waited because no runner could take it is checked again within five minutes, and offered once it can be reserved. 422 `forks_need_ephemeral` for `allows_forks` on a runner that is not ephemeral; 422 `invalid_input` with nothing to change. 404 `runner_not_found`; 409 `runner_revoked` for a runner that no longer serves; 422 `unknown_repository` for an id that is not an active repository of the organization. Audited. Owners only. */
   "orgs.runners.access.update": { input: OrgsRunnersAccessUpdateInput; output: OrgsRunnersAccessUpdateOutput };

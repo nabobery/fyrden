@@ -11,7 +11,8 @@ linked where it is said; none of those statements was checked by running it unle
 ## Register a runner
 
 Only an organization's owners register runners, choose what they run and delete them. A repository's
-administrators cannot, and a user account has no runners.
+administrators cannot, and a user account has no runners. An agent acting for an owner that granted it
+`self_hosted_runners:read` may list and read them, and change nothing.
 
 1. Open the organization's settings, then Runners, then New runner. Choose which jobs the runner takes
    (below) and create the token. It registers one runner, within the hour.
@@ -155,4 +156,6 @@ the machine.
 When nothing has leaked, force-cancel the run and see that its job has stopped before you delete the runner: a
 deleted runner is never told of the cancellation. Or stop the machine.
 
-A registration token that was never used stops working an hour after it was made.
+A registration token that was never used stops working an hour after it was made. To end it sooner, use
+Cancel unused tokens on the runners page, or `DELETE /orgs/{org}/actions/runners/registration-token`: it
+cancels every unused token of the organization. A runner registered with one stays until you delete it.
