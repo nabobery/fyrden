@@ -67,7 +67,9 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * v9 (failed deliveries):
  * - `ci_delivery_failures`: a failed delivery of a job's secrets not settled
  *   yet: the directory's offer, the task it names, and the error its job gets
- *   if the offer ended. Only the failure of that task is ever acted on.
+ *   if the offer ended. Only the failure of that task is ever acted on. An
+ *   empty error is an assignment that could not be recorded, not a failed
+ *   delivery: its job never gets an error.
  */
 export const runSchema: readonly DoMigration[] = [
   {

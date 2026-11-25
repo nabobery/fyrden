@@ -1,16 +1,5 @@
-// A delivery of a job's secrets that failed at assignment, and was not settled
-// by its own attempt: its end in the directory did not commit, its answer was
-// lost, or the run's object was reset before the job was failed. The run
-// settles it 30 seconds later by what the directory then says of the offer,
-// hands nothing out, records nothing and audits nothing. Failures are injected
-// through hooks and the run's clock is the test's; a reset is an eviction.
-// Every secret value made here is registered with the log capture, so a log
-// line holding one fails its test.
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OrgDO } from "../src/do/OrgDO.js";
-import type { RunDO } from "../src/do/RunDO.js";
 import {
   DELIVERY_RECOVERY_MS,
   DISPATCH_RESYNC_MS,
@@ -21,6 +10,28 @@ import {
 } from "../src/do/run/dispatch.js";
 import { RUN_JOB } from "../src/do/run/engine.js";
 import { CI_RESERVATION_START_MS } from "../src/do/run/reservations.js";
+import {
+  breakSecret,
+  credentialOf,
+  deliveries,
+  down,
+  type Failure,
+  failuresOf,
+  type Hooks,
+  hooked,
+  jobA,
+  later,
+  minutesOf,
+  nothingDelivered,
+  outcomesOf,
+  reached,
+  reading,
+  recoveryJob,
+  reservationOf,
+  reset,
+  setSecret,
+  UNSPENT,
+} from "./helpers/ci-recovery.js";
 import { putSecret, secretValue } from "./helpers/ci-secrets.js";
 import {
   allow,
@@ -45,7 +56,6 @@ import {
   expr,
   inRun,
   job,
-  jobNamed,
   jobsOf,
   now,
   runStub,
@@ -53,108 +63,9 @@ import {
   started,
   workflow,
 } from "./helpers/runs.js";
-import { logs } from "./setup/log-capture.js";
-
-type Hooks = RunDO["hooks"];
 
 const S = 1_000;
 const MIN = 60 * S;
-
-const reading = (...more: string[]) =>
-  workflow(job("a", ["env:", `  V: ${expr("secrets.A")}`, ...more]));
-
-const account = (f: OrgFixture) => env.ORG.getByName(f.org.id);
-const jobA = (runId: string) => jobNamed(runId, "a");
-
-async function setSecret(f: OrgFixture, value = secretValue()) {
-  expect((await putSecret(f.owner, f.path, "A", value)).status).toBeLessThan(300);
-  return value;
-}
-
-/** Makes the stored secret fail to open, as a ciphertext that does not authenticate. */
-async function breakSecret(f: OrgFixture) {
-  const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(12))));
-  await runInDurableObject(account(f), (_: OrgDO, state) => {
-    state.storage.sql.exec("UPDATE ci_secrets SET nonce = ? WHERE name = 'A'", nonce);
-  });
-}
-
-const hooked = (runId: string, hooks: Hooks) =>
-  inRun(runId, (r) => {
-    r.hooks = hooks;
-  });
-
-/** A reset: the next request finds a new instance, with nothing in memory. */
-async function reset(runId: string) {
-  await evictDurableObject(runStub(runId));
-  await at(runId, now(runId));
-}
-
-type Failure = { wire_id: number; job_id: number; task: number; error: string };
-const failuresOf = (runId: string) =>
-  inRun(runId, (r) =>
-    r.engine.rows<Failure>(
-      "SELECT wire_id, job_id, task, error FROM ci_delivery_failures ORDER BY wire_id",
-    ),
-  );
-const recoveryJob = (runId: string) => inRun(runId, (r) => r.jobs.get(RUN_JOB.delivery));
-
-const deliveries = async (f: OrgFixture) =>
-  (
-    await env.DIRECTORY.prepare(
-      "SELECT details FROM audit_log WHERE target_id = ? AND action = 'ci.secrets.deliver'",
-    )
-      .bind(f.org.id)
-      .all<{ details: string }>()
-  ).results.map((r) => JSON.parse(r.details) as { task_id: number });
-
-const reservationOf = async (runId: string) => {
-  const { jobId } = await jobA(runId);
-  return inRun(
-    runId,
-    (r) =>
-      r.engine.rows<{ state: string; started_at: number | null }>(
-        "SELECT state, started_at FROM ci_reservations WHERE job_id = ?",
-        jobId,
-      )[0],
-  );
-};
-
-const minutesOf = (f: OrgFixture, runId: string) =>
-  runInDurableObject(account(f), (_: OrgDO, state) =>
-    state.storage.sql
-      .exec<{ used: number; state: string }>(
-        "SELECT used, state FROM ci_minutes WHERE key LIKE ?",
-        `${runId}/%`,
-      )
-      .toArray(),
-  );
-
-const credentialOf = (runner: RegisteredRunner) =>
-  env.DIRECTORY.prepare(
-    "SELECT expires_at, task_assigned_at, task_confirmed_at FROM ci_runners WHERE id = ?",
-  )
-    .bind(runner.id)
-    .first<{
-      expires_at: number | null;
-      task_assigned_at: number | null;
-      task_confirmed_at: number | null;
-    }>();
-/** Of an ephemeral runner given nothing: neither stamped nor ended. */
-const UNSPENT = { expires_at: null, task_assigned_at: null, task_confirmed_at: null };
-
-/** The outcomes logged for failed deliveries of `wireId`, in order. */
-const outcomesOf = (wireId: number) =>
-  logs
-    .entries()
-    .filter((e) => e.msg === "failed delivery" && e.taskId === wireId)
-    .map((e) => e.outcome);
-
-/** Nothing of the run's secrets left: no token was minted and no delivery audited. */
-async function nothingDelivered(f: OrgFixture, runId: string) {
-  for (const t of await tasksOfRun(runId)) expect(await jobTokensOf(t.id)).toEqual([]);
-  expect(await deliveries(f)).toEqual([]);
-}
 
 const ERROR = "secrets_unavailable: these secrets do not open: set them again (A)";
 
@@ -206,9 +117,6 @@ async function failingIn(
   return { ...made, wireId: offer.id, jobId, task: row.task };
 }
 
-const down = () => {
-  throw new Error("the directory write failed");
-};
 /** The end in the directory did not commit. */
 const notEnded = (source?: string, ephemeral?: boolean) =>
   failing({ beforeDeliveryFailure: down }, source, ephemeral);
@@ -222,18 +130,6 @@ const end = (wireId: number) =>
 /** Another call of the same offer, as a delayed or repeated one. */
 const assignAgain = (p: Failed) =>
   runStub(p.runId).assignTask(p.wireId, p.jobId, p.runner.id, p.f.org.id);
-
-/** Waits for `held` to be reached, failing at once when `request` settles first. */
-async function reached(held: ReturnType<typeof gate>, request: Promise<unknown>) {
-  await Promise.race([
-    held.started,
-    request.then(() => {
-      throw new Error("the request settled before its gate");
-    }),
-  ]);
-}
-
-const later = (runId: string) => advance(runId, DELIVERY_RECOVERY_MS);
 
 async function expectFailed(p: Failed) {
   const [only] = await jobsOf(p.runId);
