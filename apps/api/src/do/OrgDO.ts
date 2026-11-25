@@ -1088,6 +1088,7 @@ export class OrgDO extends MigratingDO {
   }
 
   async #forgetBeforeRemoval(actor: ChangeActor, memberId: string): Promise<boolean> {
+    await this.#checkEpoch();
     if (this.#refuse(actor)) return false;
     const current = this.accountRole(memberId);
     if (current === null || (current === "owner" && this.#owners() === 1)) return false;

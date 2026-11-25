@@ -1,4 +1,4 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ beforeAll(async () => {
 afterEach(() => {
   delete accountHooks.beforeDelivery;
   delete accountHooks.beforeRemoval;
+  delete accountHooks.beforeEpochRead;
 });
 
 async function newOrg(owner: Who) {
@@ -220,6 +221,22 @@ describe("the directory's record of an organization's members", () => {
       [bob.principalId]: "member",
       [carol.principalId]: "owner",
     });
+  });
+
+  it("is left as it is by a removal that cannot read the organization's restore generation", async () => {
+    const owner = await user();
+    const bob = await user();
+    const org = await newOrg(owner);
+    await set(org, owner, bob, "member");
+    await evictDurableObject(org.stub);
+    accountHooks.beforeEpochRead = () => Promise.reject(new Error("the directory is away"));
+    await runInDurableObject(org.stub, async (account: OrgDO) => {
+      await expect(account.removeMember(actorOf(owner), bob.principalId, [])).rejects.toThrow(
+        "the directory is away",
+      );
+    });
+    await evictDurableObject(org.stub);
+    expect((await mirrored(org.id))[bob.principalId]).toBe("member");
   });
 
   it("is left as it is by a removal that will be refused", async () => {
