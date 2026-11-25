@@ -171,8 +171,11 @@ async function failing(
   ephemeral?: boolean,
 ): Promise<Failed> {
   const made = await undeliverable(source, ephemeral);
-  await hooked(made.runId, typeof hooks === "function" ? hooks(made.runId) : hooks);
-  const polled = await fetchTask(made.runner, 0).catch(() => undefined);
+  const injected = typeof hooks === "function" ? hooks(made.runId) : hooks;
+  await hooked(made.runId, injected);
+  const poll = fetchTask(made.runner, 0);
+  // Only a reset after the directory answered interrupts the poll: any other failure is told as no task.
+  const polled = injected.afterDeliveryFailure ? await poll.catch(() => undefined) : await poll;
   expect(polled?.task).toBeUndefined();
   await hooked(made.runId, {});
   const [offer] = await tasksOfRun(made.runId);
@@ -289,7 +292,7 @@ describe("an offer whose end the directory did not write", () => {
 
   it("waits out the claim of a pending row another poll renewed", async () => {
     const p = await notEnded();
-    // The pass that withdraws the row has not run, and the claim on it stands.
+    // The pass that withdraws the row has not run, so a poll after the claim lapsed takes it again.
     await inRun(p.runId, (r) =>
       r.engine.exec(
         "UPDATE jobs SET next_run_at = next_run_at + ? WHERE job_id = ?",
@@ -297,17 +300,20 @@ describe("an offer whose end the directory did not write", () => {
         RUN_JOB.dispatch,
       ),
     );
-    const [held] = await pendingOf(p.runId);
-    expect(held?.claimed_by).toBe(p.runner.id);
+    const [first] = await pendingOf(p.runId);
+    vi.setSystemTime(Date.now() + 31 * S);
+    expect((await fetchTask(p.runner, 0)).task).toBeUndefined();
+    const [renewed] = await pendingOf(p.runId);
+    expect(renewed).toMatchObject({ id: first?.id, claimed_by: p.runner.id });
+    expect(renewed?.claim_until).toBeGreaterThan(Date.now());
+    expect(renewed?.claim_until).toBeGreaterThan(first?.claim_until ?? Number.POSITIVE_INFINITY);
     await later(p.runId);
     await expectQueued(p);
-    expect((await pendingOf(p.runId)).map((r) => [r.id, r.claimed_by])).toEqual([
-      [held?.id, p.runner.id],
-    ]);
     const value = await setSecret(p.f);
     const other = await registerRunner(p.f.org.login, p.f.owner);
+    vi.setSystemTime((renewed?.claim_until ?? 0) - 1);
     expect((await fetchTask(other, 0)).task).toBeUndefined();
-    vi.setSystemTime(Date.now() + 31 * S);
+    vi.setSystemTime((renewed?.claim_until ?? 0) + 1);
     expect((await fetchTask(other, 0)).task?.secrets.get("A")).toBe(value);
   });
 });
@@ -746,8 +752,13 @@ describe("a directory that does not answer a recovery", () => {
       },
     });
     await later(p.runId);
-    for (const wait of [1, 2, 4]) await advance(p.runId, wait * S);
-    expect(calls).toBe(4);
+    expect(calls).toBe(1);
+    for (const [k, wait] of [1, 2, 4].entries()) {
+      await advance(p.runId, wait * S - 1);
+      expect(calls).toBe(k + 1);
+      await advance(p.runId, 1);
+      expect(calls).toBe(k + 2);
+    }
     await expectQueued(p);
     expect((await runStub(p.runId).get())?.faults).toEqual([]);
   });
@@ -1040,6 +1051,7 @@ describe("the work of a recovery", () => {
     const ended = offers[0] as { id: number; job_id: number };
     await end(ended.id);
     const pages: number[] = [];
+    const asked: [number, number][] = [];
     await inRun(runId, (r) => {
       offers.forEach((offer) => {
         const assigned = r.assign(offer.job_id, `t${offer.id}`);
@@ -1054,10 +1066,26 @@ describe("the work of a recovery", () => {
       });
       r.jobs.ensure("ci_delivery", RUN_JOB.delivery, { runAt: now(runId) + DELIVERY_RECOVERY_MS });
       const waiting = () => r.engine.rows("SELECT 1 FROM ci_delivery_failures").length;
-      r.hooks = { beforeDeliveryRecovery: () => void pages.push(waiting()) };
+      const directory = (r as unknown as { env: Env }).env.DIRECTORY;
+      const batch = vi.spyOn(directory, "batch");
+      const prepare = vi.spyOn(directory, "prepare");
+      r.hooks = {
+        beforeDeliveryRecovery: () => {
+          pages.push(waiting());
+          batch.mockClear();
+          prepare.mockClear();
+        },
+        afterDeliveryRecovery: () =>
+          void asked.push([batch.mock.calls.length, prepare.mock.calls.length]),
+      };
     });
     await later(runId);
     expect(pages).toEqual([101, 1]);
+    // One batch of two statements each.
+    expect(asked).toEqual([
+      [1, 2],
+      [1, 2],
+    ]);
     expect(await failuresOf(runId)).toEqual([]);
     const after = await instances();
     expect(after.filter((j) => j.status === "completed").map((j) => [j.job_id, j.error])).toEqual([
