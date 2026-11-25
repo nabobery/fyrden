@@ -6,6 +6,7 @@ export default defineConfig({
       provider: "istanbul",
       include: ["src/**"],
       reporter: ["text-summary", "json", "lcov"],
+      thresholds: { lines: 80 },
     },
   },
 });

@@ -41,7 +41,7 @@
   },
   "overrides": [
     {
-      "includes": ["packages/git-core/**", "packages/domain/**"],
+      "includes": ["packages/git-core/**", "packages/domain/**", "packages/runner-providers/**"],
       "linter": {
         "rules": {
           "style": {
@@ -49,8 +49,8 @@
               "level": "error",
               "options": {
                 "paths": {
-                  "wrangler": "git-core and domain must not depend on Cloudflare.",
-                  "miniflare": "git-core and domain must not depend on Cloudflare."
+                  "wrangler": "git-core, domain and runner-providers must not depend on Cloudflare.",
+                  "miniflare": "git-core, domain and runner-providers must not depend on Cloudflare."
                 },
                 "patterns": [
                   {
@@ -60,11 +60,11 @@
                       "@fyrden/adapters-cloudflare",
                       "@fyrden/adapters-cloudflare/*"
                     ],
-                    "message": "git-core and domain must not depend on Cloudflare."
+                    "message": "git-core, domain and runner-providers must not depend on Cloudflare."
                   },
                   {
                     "group": ["**/adapters-cloudflare/**", "**/apps/**"],
-                    "message": "git-core and domain must not reach into adapters or apps by relative path."
+                    "message": "git-core, domain and runner-providers must not reach into adapters or apps by relative path."
                   }
                 ]
               }

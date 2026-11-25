@@ -5,8 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
-// Proves the Biome boundary rule in biome.json: git-core and domain must not
-// import Cloudflare modules. Each case copies the real biome.json
+// Proves the Biome boundary rule in biome.json: git-core, domain and
+// runner-providers must not import Cloudflare modules. Each case copies the real biome.json
 // into a temporary tree with the same package layout and lints a probe file
 // there, so the rule's path overrides apply and the repo is never touched.
 
@@ -85,7 +85,7 @@ async function workspacePackages(): Promise<Map<string, Record<string, string>>>
 }
 
 describe("core dependency graph", () => {
-  it.each(["@fyrden/git-core", "@fyrden/domain"])(
+  it.each(["@fyrden/git-core", "@fyrden/domain", "@fyrden/runner-providers"])(
     "%s depends on nothing Cloudflare-specific, directly or through workspace packages",
     async (start) => {
       const packages = await workspacePackages();
@@ -107,7 +107,7 @@ describe("core dependency graph", () => {
 });
 
 describe("core import boundary", () => {
-  for (const pkg of ["domain", "git-core"]) {
+  for (const pkg of ["domain", "git-core", "runner-providers"]) {
     it.each(forbidden)(`rejects a Cloudflare import in ${pkg}: %j`, async (source) => {
       const result = await lintProbe(pkg, source);
       expect(result.processed).toBe(1);

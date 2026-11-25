@@ -12,13 +12,14 @@ this file before changing code. `CONTRIBUTING.md` covers the human process;
 | `apps/web` | `fyrden-web` Worker (React Router SSR) | Talks to the API only through the `API` service binding and `ApiRpcContract` |
 | `packages/git-core` | Pure TypeScript git engine | **No Cloudflare imports.** Storage only through ports |
 | `packages/domain` | Principals, repos, PRs, issues, events | **No Cloudflare imports** |
+| `packages/runner-providers` | CI runner providers: the interface, the scheduler, bring-your-own runners (the contract suite and fake are in `@fyrden/runner-providers/testing`) | **No Cloudflare imports** |
 | `packages/adapters-cloudflare` | R2, D1, Durable Object SQLite, KV, Queues implementations; logging, redaction, SSRF guard | The only package that implements ports with Cloudflare APIs |
 | `packages/api-contract` | Zod operation registry → REST routes, OpenAPI, MCP tools | Every API capability is one operation here |
 | `packages/cli` | `fyrden deploy`, `fyrden doctor` and `fyrden destroy` | Wraps the pinned wrangler |
 | `packages/testing` | Test helpers: unique ids, log capture, SSRF cases (the git CLI sandbox and port fakes live in `@fyrden/git-core/testing`) | Test code only |
 | `tools/ci` | DCO check and smoke tests run by CI | |
 
-The import boundary for `git-core` and `domain` is enforced by Biome
+The import boundary for those three is enforced by Biome
 (`biome.json`) and proven by `packages/testing/test/import-boundary.test.ts`.
 
 ## Commands
