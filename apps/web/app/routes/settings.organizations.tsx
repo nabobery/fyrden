@@ -61,7 +61,9 @@ export default function Organizations({ loaderData }: Route.ComponentProps) {
           <tbody>
             {orgs.map((org) => (
               <tr key={org.id}>
-                <th scope="row">{org.login}</th>
+                <th scope="row" className="org-name">
+                  {org.login}
+                </th>
                 <td>{org.role === "admin" ? "Owner" : "Member"}</td>
                 <td>
                   {org.role === "admin" ? (

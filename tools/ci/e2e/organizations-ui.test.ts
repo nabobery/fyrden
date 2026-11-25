@@ -98,6 +98,21 @@ describe("the viewer's organizations", () => {
     await accessibleInEveryTheme(page, "organizations, an owner's");
   });
 
+  it("fit a phone's width, however long a name is", async () => {
+    const longest = "w".repeat(39);
+    await ok("POST", "/admin/organizations", { login: longest, admin: "ada" });
+    const before = page.viewportSize();
+    await page.setViewportSize({ width: 375, height: 800 });
+    try {
+      await visit(page, `${stack.origin}/settings/organizations`);
+      await see(row(page, longest)).toBeVisible();
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth)).toBe(375);
+      await accessibleInEveryTheme(page, "organizations, a phone's");
+    } finally {
+      if (before) await page.setViewportSize(before);
+    }
+  });
+
   it("lead there without JavaScript", async () => {
     const context = await page
       .context()

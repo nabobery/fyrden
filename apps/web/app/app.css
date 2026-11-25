@@ -425,6 +425,9 @@ li.reaction {
 .markdown table {
   width: auto;
 }
+.org-name {
+  overflow-wrap: anywhere;
+}
 .visually-hidden {
   position: absolute;
   width: 1px;

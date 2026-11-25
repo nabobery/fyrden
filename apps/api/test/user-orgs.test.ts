@@ -537,7 +537,7 @@ describe("a token that may not see every organization", () => {
     }
   });
 
-  it("is refused where it is git's, or a CI job's", async () => {
+  it("is refused with git's scopes, or where it is a CI job's", async () => {
     const owner = await user();
     await newOrg(owner);
     const git = await json<{ token: string }>(api("POST", "/user/git-tokens", owner.token, {}));
