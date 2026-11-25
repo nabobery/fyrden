@@ -20,7 +20,11 @@ import {
   jobPayload,
   type NeedResult,
   nodeOutcome,
+  type RunFacts,
   type RunnerResult,
+  runFacts,
+  runPhase,
+  runStateSeq,
   type SecretMaskOffer,
   type SecretReferences,
   secretReferences,
@@ -32,6 +36,8 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
+import type { RunReport } from "./repo/run-history.js";
+import { planCheckKey } from "./run/check-key.js";
 import {
   type AssignTaskAnswer,
   DISPATCH_RESYNC_MS,
@@ -70,7 +76,7 @@ import {
   runCiPolicy,
   type WaitingFor,
 } from "./run/reservations.js";
-import { runRetentionDays } from "./run/retention.js";
+import { runRetentionMs } from "./run/retention.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -113,7 +119,7 @@ export interface TaskRef {
   readonly task: number;
 }
 
-export interface RunView {
+export interface RunView extends RunFacts {
   readonly runId: string;
   readonly repoId: string;
   readonly sha: string;
@@ -194,6 +200,16 @@ export interface JobView {
   readonly error: string | null;
   /** Why a queued job is not offered to runners yet: its CI minutes or the day's capacity; null otherwise. */
   readonly waitingFor: WaitingFor | null;
+}
+
+/** A job of the workflow in an attempt's graph. */
+export interface GraphJob {
+  readonly key: string;
+  readonly name: string;
+  readonly needs: readonly string[];
+  readonly status: NodeRow["status"];
+  /** As its dependents see it; null until it is terminal. */
+  readonly outcome: NeedResult | null;
 }
 
 export type CreateAnswer =
@@ -294,6 +310,10 @@ export class RunDO extends MigratingDO {
   readonly memory = createDoMemoryBudget(17 * 1024 * 1024);
   readonly #log = createLogger({ do: "RunDO" });
   #model: { source: string; model: RunModel } | undefined;
+  /** The run's facts, read from its contexts once a wake-up. */
+  #facts: { readonly runId: string; readonly facts: RunFacts } | undefined;
+  /** The state the repository last took (`runStateSeq`); lost with the instance, which reports again. */
+  #reported = 0;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -312,8 +332,7 @@ export class RunDO extends MigratingDO {
     );
     this.policy = {
       ...RUN_DEFAULTS,
-      retentionMs:
-        runRetentionDays(env, (message) => this.#log.warn(message)) * 24 * 60 * 60 * 1000,
+      retentionMs: runRetentionMs(env, (message) => this.#log.warn(message)),
     };
     const host = this;
     this.engine = new RunEngine({
@@ -631,7 +650,7 @@ export class RunDO extends MigratingDO {
        VALUES (1, ?, ?, ?, 0, 'failure', 1)`,
       checkNameKey(name),
       name,
-      `${runId}/a1/plan`,
+      planCheckKey(runId),
     );
     this.jobs.ensure("run_checks", RUN_JOB.checks, {
       runAt: this.context.now() + this.policy.checkFlushMs,
@@ -678,6 +697,7 @@ export class RunDO extends MigratingDO {
         approver,
         this.context.now(),
       );
+      this.engine.stateMoved();
       const current = this.engine.current();
       if (current && current.attempt.status === "queued") this.#admit(current.attempt);
       return { ok: true };
@@ -789,6 +809,7 @@ export class RunDO extends MigratingDO {
       "SELECT kind, error, first_at, count FROM run_faults WHERE resolved_at IS NULL ORDER BY first_at",
     );
     return {
+      ...this.#runFacts(run),
       runId: run.run_id,
       repoId: run.repo_id,
       sha: run.sha,
@@ -819,6 +840,56 @@ export class RunDO extends MigratingDO {
         count: f.count,
       })),
     };
+  }
+
+  #runFacts(run: RunRow): RunFacts {
+    if (this.#facts?.runId !== run.run_id) {
+      let runName: string | undefined;
+      try {
+        runName = this.engine.runName();
+      } catch {
+        // The workflow does not plan, so the run has no name of its own.
+      }
+      this.#facts = {
+        runId: run.run_id,
+        facts: runFacts((JSON.parse(run.contexts) as { github?: unknown }).github, {
+          event: run.event,
+          ref: run.ref,
+          workflowPath: run.workflow_path,
+          runName,
+        }),
+      };
+    }
+    return this.#facts.facts;
+  }
+
+  /** The run as it is reported to its repository; undefined when there is none. */
+  runReport(): RunReport | undefined {
+    const current = this.engine.current();
+    if (!current) return undefined;
+    const { run, attempt } = current;
+    return {
+      ...this.#runFacts(run),
+      runId: run.run_id,
+      sha: run.sha,
+      path: run.workflow_path,
+      event: run.event,
+      actor: run.actor_id,
+      fork: run.fork !== 0,
+      createdAt: run.created_at,
+      attempt: attempt.attempt,
+      phase: runPhase(attempt.status, this.#approvalRow()?.state === "waiting"),
+      conclusion: attempt.conclusion,
+      triggeringActor: attempt.triggering_actor_id,
+      updatedAt: run.updated_at,
+      startedAt: attempt.started_at,
+      completedAt: attempt.completed_at,
+    };
+  }
+
+  /** Forgets which state the repository last took, as a new instance has (for tests). */
+  forgetReported(): void {
+    this.#reported = 0;
   }
 
   /** The run as its current attempt stands; undefined when there is none (or it was erased). */
@@ -869,6 +940,36 @@ export class RunDO extends MigratingDO {
         waitingFor: row.status === "queued" ? row.waiting_for : null,
       })),
       next: rows.length > limit ? (page.at(-1) as InstanceRow).job_id : null,
+    };
+  }
+
+  /**
+   * The jobs of an attempt of repository `repoId`'s run (the current attempt
+   * by default) as its workflow writes them, each after the jobs it needs.
+   */
+  graph(
+    repoId: string,
+    attempt?: number,
+  ):
+    | { readonly ok: true; readonly attempt: number; readonly jobs: readonly GraphJob[] }
+    | { readonly ok: false; readonly code: "run_not_found" | "attempt_not_found" } {
+    const run = this.engine.run();
+    if (this.#hidden() || run?.repo_id !== repoId) return { ok: false, code: "run_not_found" };
+    const n = attempt ?? run.attempt;
+    if (!this.engine.attempt(n)) return { ok: false, code: "attempt_not_found" };
+    const nodes = this.engine.nodes(n);
+    // A workflow that could not run has no jobs, and does not plan.
+    const graph = nodes.length > 0 ? this.#loadModel().plan.graph : undefined;
+    return {
+      ok: true,
+      attempt: n,
+      jobs: nodes.map((node) => ({
+        key: node.job_key,
+        name: node.name,
+        needs: graph?.job(node.job_key)?.needs ?? [],
+        status: node.status,
+        outcome: nodeOutcome(node) ?? null,
+      })),
     };
   }
 
@@ -1837,7 +1938,7 @@ export class RunDO extends MigratingDO {
             : { done: false, cursor: null, runAfterMs: Math.max(0, next - this.context.now()) };
         },
       },
-      run_checks: { runSlice: (job) => this.#flushChecks(job) },
+      run_checks: { runSlice: (job) => this.#tellRepository(job) },
       run_sweep: { runSlice: async () => this.#sweep() },
       run_concurrency: { runSlice: (job) => this.#concurrencySlice(job) },
       ci_dispatch: { runSlice: (job) => this.#dispatch.dispatchSlice(job) },
@@ -1854,6 +1955,50 @@ export class RunDO extends MigratingDO {
     handlers.run_retire = { runSlice: (job) => this.#retire(job) };
     handlers.run_approval = { runSlice: () => this.#notifyApproval() };
     return handlers;
+  }
+
+  /**
+   * Sends the repository the run's checks, then its state when that moved
+   * since it was last sent. Done once neither has anything left: what moves
+   * during a call here is sent by the next slice, as a running job is not
+   * queued again.
+   */
+  async #tellRepository(
+    job: Job,
+  ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+    const checks = await this.#flushChecks(job);
+    await this.#reportState();
+    const left =
+      !checks.done ||
+      this.#stateOwed() !== undefined ||
+      this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
+        .length > 0;
+    return left
+      ? { done: false, cursor: null, runAfterMs: this.policy.checkFlushMs }
+      : { done: true };
+  }
+
+  /** The run's report, when the repository has not taken its state from this instance. */
+  #stateOwed(): RunReport | undefined {
+    const report = this.runReport();
+    return report && runStateSeq(report.attempt, report.phase) > this.#reported
+      ? report
+      : undefined;
+  }
+
+  /** Reports the run's state when it moved; the repository keeps the latest of what it is told. */
+  async #reportState(): Promise<void> {
+    const report = this.#stateOwed();
+    if (!report) return;
+    const answer = await this.#repoCall(
+      "reportRun",
+      (repo) =>
+        // The RPC stub's type of a union answer is not assignable to the union; it is the union.
+        repo.reportRun(report) as unknown as ReturnType<RepoDO["reportRun"]>,
+    );
+    // Retried: a transfer ends, and a deleted repository erases the run (`#marked`).
+    if (!answer.ok) throw new Error(answer.code);
+    this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
   }
 
   /**
@@ -2017,14 +2162,16 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * Writes the run's record into its repository, which also answers whether the repository is
-   * deleted: `gone` only then. Other calls refuse a repository still being generated from its
-   * template as not found too, so a run asks here before erasing itself over such a refusal.
+   * Writes the run's record and state into its repository, which also answers whether the
+   * repository is deleted: `gone` only then. Other calls refuse a repository still being generated
+   * from its template as not found too, so a run asks here before erasing itself over such a
+   * refusal.
    */
   async #register(): Promise<"ok" | "gone" | "retry"> {
     const run = this.engine.run();
     if (!run) return "gone";
     try {
+      const state = this.runReport();
       const answer = await this.#repoCall(
         "registerRun",
         (repo) =>
@@ -2033,6 +2180,7 @@ export class RunDO extends MigratingDO {
             runId: run.run_id,
             sha: run.sha,
             path: run.workflow_path,
+            ...(state && { state }),
           }) as unknown as ReturnType<RepoDO["registerRun"]>,
       );
       if (answer.ok) return "ok";

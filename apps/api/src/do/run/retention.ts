@@ -9,6 +9,13 @@ export const MIN_RETENTION_DAYS = 7;
 /** The longest retention: GitHub's maximum for private repositories. */
 export const MAX_RETENTION_DAYS = 400;
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/** The deployment's run retention in milliseconds. */
+export function runRetentionMs(env: object, warn: (message: string) => void): number {
+  return runRetentionDays(env, warn) * DAY;
+}
+
 /**
  * The deployment's run retention in days: the Worker variable
  * `FYRDEN_CI_RUN_RETENTION_DAYS`, a whole number from 7 to 400. Anything

@@ -25,13 +25,50 @@ const RunConclusion = z
   .nullable()
   .describe("`action_required`: the run waits for a maintainer's approval.");
 
-export const WorkflowRun = z.object({
+const PerPage = z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100.");
+const Cursor = z
+  .string()
+  .max(2_000)
+  .optional()
+  .describe("From a previous page's `next_cursor`, with the same filters.");
+const NextCursor = z
+  .string()
+  .nullable()
+  .describe("Pass as `cursor` for the next page; null on the last page.");
+
+/** A run as a list shows it. */
+export const WorkflowRunSummary = z.object({
   id: z.string(),
+  run_number: z
+    .number()
+    .int()
+    .nullable()
+    .describe("The workflow's count of its runs, kept by re-runs; null for a run without one."),
+  name: z.string().describe("The workflow's name, or its file's path."),
+  display_title: z
+    .string()
+    .describe(
+      "The workflow's `run-name`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters.",
+    ),
   run_attempt: z.number().int().describe("The current attempt: 1, then one more per re-run."),
   head_sha: z.string(),
-  head_branch: z.string().nullable().describe("The branch the run is for, if its ref is one."),
+  head_branch: z
+    .string()
+    .nullable()
+    .describe(
+      "The branch the run is for: a pull request's head branch (in `fork`'s case a branch of another repository), else its ref's; null for a tag.",
+    ),
   event: z.string(),
   path: z.string().describe("The workflow file."),
+  pull_request: z
+    .object({ number: z.number().int() })
+    .nullable()
+    .describe("Fyrden: the pull request whose event triggered the run."),
+  fork: z
+    .boolean()
+    .describe(
+      "Fyrden: whether the run is a fork's: its pull request's head is in another repository.",
+    ),
   status: RunStatus,
   conclusion: RunConclusion,
   actor: z
@@ -42,6 +79,9 @@ export const WorkflowRun = z.object({
   updated_at: z.number().int(),
   run_started_at: z.number().int().nullable(),
   completed_at: z.number().int().nullable(),
+});
+
+export const WorkflowRun = WorkflowRunSummary.extend({
   approval: z
     .object({
       state: z.enum(["waiting", "approved", "cancelled", "superseded", "expired"]),
@@ -83,6 +123,9 @@ export const WorkflowJob = z.object({
   run_id: z.string(),
   run_attempt: z.number().int(),
   name: z.string(),
+  job_key: z
+    .string()
+    .describe("Fyrden: the job's id in the workflow file; a matrix's combinations share one."),
   status: z.enum(["pending", "queued", "in_progress", "completed"]),
   conclusion: z.enum(["success", "failure", "cancelled", "skipped", "timed_out"]).nullable(),
   started_at: z.number().int().nullable(),
@@ -149,16 +192,10 @@ export const listWorkflowRunJobs = defineOperation({
       .max(51)
       .optional()
       .describe("An attempt; the current by default."),
-    per_page: z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100."),
+    per_page: PerPage,
     cursor: z.string().max(2_000).optional().describe("From a previous page's `next_cursor`."),
   }),
-  output: z.object({
-    jobs: z.array(WorkflowJob),
-    next_cursor: z
-      .string()
-      .nullable()
-      .describe("Pass as `cursor` for the next page; null on the last page."),
-  }),
+  output: z.object({ jobs: z.array(WorkflowJob), next_cursor: NextCursor }),
   permission: "actions:read",
   principals: ["user", "agent"],
   rateLimit: "read",
@@ -167,6 +204,224 @@ export const listWorkflowRunJobs = defineOperation({
     tool: "list_workflow_run_jobs",
     title: "List a workflow run's jobs",
     description: "List the jobs of a CI run's attempt with their status, conclusion and check.",
+    readOnly: true,
+  },
+});
+
+/** GitHub's `status` filter: a status, or a conclusion. */
+export const RUN_STATUS_FILTERS = [
+  "completed",
+  "action_required",
+  "cancelled",
+  "failure",
+  "neutral",
+  "skipped",
+  "stale",
+  "success",
+  "timed_out",
+  "in_progress",
+  "queued",
+  "requested",
+  "waiting",
+  "pending",
+] as const;
+
+const RunFilters = {
+  branch: z
+    .string()
+    .min(1)
+    .max(1024)
+    .optional()
+    .describe("Only runs of this branch (`head_branch`), forks' included."),
+  event: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe("Only runs this event triggered, such as `push` or `pull_request`."),
+  status: z
+    .enum(RUN_STATUS_FILTERS)
+    .optional()
+    .describe(
+      "Only runs of this status or conclusion. `completed` includes a run waiting for approval; `action_required`: only those. GitHub's other values are taken and match nothing: no run here has them.",
+    ),
+  actor: z
+    .string()
+    .min(1)
+    .max(MAX_HANDLE_LENGTH)
+    .regex(HANDLE_SHAPE)
+    .optional()
+    .describe("A handle: only runs this user or agent triggered (`actor`, kept by re-runs)."),
+  head_sha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/, "a full commit SHA, lowercase")
+    .optional()
+    .describe("Only runs of this commit."),
+  created: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(
+      "Only runs triggered at these times, in GitHub's syntax: `2026-11-20` (that UTC day), `>=2026-11-20`, `<2026-11-20T10:00:00Z`, `2026-11-18..2026-11-20`, `2026-11-18..*`.",
+    ),
+  check_suite_id: z
+    .unknown()
+    .optional()
+    .describe("Not supported (422 `unsupported_parameter`): Fyrden has no check suites."),
+  exclude_pull_requests: z
+    .unknown()
+    .optional()
+    .describe(
+      "Not supported (422 `unsupported_parameter`): a run carries no pull requests but the one that triggered it.",
+    ),
+  per_page: PerPage,
+  cursor: Cursor,
+};
+
+const RUN_LIST =
+  "Newest first by run id (when each was triggered). A page reads at most 500 runs, so with filters it can hold fewer than `per_page`, even none, with a `next_cursor`: follow it until it is null. A run is listed within seconds of starting and for as long as it is kept; its state is the one it last reported, seconds old at most in normal running (`actions.runs.get` is current), and `updated_at` is when that state was reached. Runs from before this deployment recorded runs' states appear within a week of its upgrade. No `total_count`.";
+
+const WorkflowId = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(/^[^/]+$/, "a file name")
+  .describe("The workflow's file name, such as `ci.yml`; Fyrden has no numeric workflow ids.");
+
+const RunPage = z.object({
+  workflow_runs: z.array(WorkflowRunSummary),
+  next_cursor: NextCursor,
+});
+
+export const listWorkflowRuns = defineOperation({
+  id: "actions.runs.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/runs",
+  summary: "List workflow runs for a repository",
+  description: `The repository's CI runs, each as its current attempt stands. ${RUN_LIST} ${COMPATIBILITY} Takes the \`actions:read\` permission.`,
+  input: z.object({ ...RepoInput, ...RunFilters }),
+  output: RunPage,
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_workflow_runs",
+    title: "List workflow runs",
+    description:
+      "List a repository's CI runs, newest first, by branch, event, status, actor, commit or time. A page can hold fewer runs than asked, even none: follow next_cursor until it is null.",
+    readOnly: true,
+  },
+});
+
+export const listRunsOfWorkflow = defineOperation({
+  id: "actions.workflows.runs.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs",
+  summary: "List workflow runs for a workflow",
+  description: `The runs of one workflow file, as \`actions.runs.list\` lists them: those of \`.github/workflows\` and of \`.fyrden/workflows\` under that name. A file with no runs kept answers none. ${RUN_LIST} ${COMPATIBILITY} Takes the \`actions:read\` permission.`,
+  input: z.object({ ...RepoInput, workflow_id: WorkflowId, ...RunFilters }),
+  output: RunPage,
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_runs_of_workflow",
+    title: "List a workflow's runs",
+    description:
+      "List the CI runs of one workflow file, newest first, with the filters of list_workflow_runs. Follow next_cursor until it is null.",
+    readOnly: true,
+  },
+});
+
+export const listWorkflows = defineOperation({
+  id: "actions.workflows.list",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/workflows",
+  summary: "List repository workflows with runs",
+  description: `The workflow files with runs kept, in path order, each with its latest run. A file that never ran, or whose runs all expired, is not listed (GitHub lists the default branch's files): read \`.github/workflows\` for those. No \`total_count\`. ${COMPATIBILITY} Takes the \`actions:read\` permission.`,
+  input: z.object({ ...RepoInput, per_page: PerPage, cursor: Cursor }),
+  output: z.object({
+    workflows: z.array(
+      z.object({
+        id: z.string().describe("The workflow's file name, as the other operations take it."),
+        path: z.string().describe("The workflow file."),
+        name: z
+          .string()
+          .nullable()
+          .describe("The workflow's name as its latest run had it; null until one is reported."),
+        latest_run: WorkflowRunSummary.nullable().describe(
+          "Fyrden: its latest run; null while that one has not been reported, or is about to expire.",
+        ),
+      }),
+    ),
+    next_cursor: NextCursor,
+  }),
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_workflows",
+    title: "List workflows with runs",
+    description:
+      "List the workflow files that have CI runs, each with its latest run; follow next_cursor until it is null. Not the files that never ran: read .github/workflows for those.",
+    readOnly: true,
+  },
+});
+
+export const getWorkflowRunGraph = defineOperation({
+  id: "actions.runs.graph.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/graph",
+  summary: "Get a workflow run's job graph",
+  description:
+    "Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission.",
+  input: z.object({
+    ...RepoInput,
+    run_id: RunId,
+    attempt: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(51)
+      .optional()
+      .describe("An attempt; the current by default."),
+  }),
+  output: z.object({
+    run_id: z.string(),
+    run_attempt: z.number().int(),
+    jobs: z
+      .array(
+        z.object({
+          key: z.string().describe("The job's id in the workflow file."),
+          name: z.string().describe("Its name, without what an expression in it would add."),
+          needs: z.array(z.string()).describe("The keys of the jobs it waits for."),
+          status: z
+            .enum(["pending", "in_progress", "completed"])
+            .describe(
+              "`pending`: the jobs it needs have not ended. `in_progress`: it has jobs, queued or running.",
+            ),
+          conclusion: z
+            .enum(["success", "failure", "cancelled", "skipped"])
+            .nullable()
+            .describe(
+              "As its dependents see it: a failure `continue-on-error` allows is a success.",
+            ),
+        }),
+      )
+      .describe("Each after the jobs it needs."),
+  }),
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_workflow_run_graph",
+    title: "Get a workflow run's job graph",
+    description:
+      "Get a CI run's jobs as its workflow writes them: what each needs, and whether it waits, runs or ended.",
     readOnly: true,
   },
 });

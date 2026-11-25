@@ -307,14 +307,19 @@ import {
   cancelWorkflowRunOperation,
   dispatchWorkflowOperation,
   forceCancelWorkflowRunOperation,
+  getWorkflowRunGraphOperation,
   getWorkflowRunOperation,
+  listRunsOfWorkflowOperation,
   listWorkflowRunJobsOperation,
+  listWorkflowRunsOperation,
+  listWorkflowsOperation,
   rerunWorkflowRunOperation,
 } from "../repos/runs.js";
 import { listStarredOperation, starRepoOperation, unstarRepoOperation } from "../repos/stars.js";
 import {
   createStatusOperation,
   getCombinedStatusOperation,
+  listCheckRunsOperation,
   listStatusesOperation,
 } from "../repos/statuses.js";
 import {
@@ -792,13 +797,18 @@ export const handlers: Handlers = {
   "statuses.create": createStatusOperation,
   "statuses.list": listStatusesOperation,
   "statuses.combined": getCombinedStatusOperation,
+  "checks.runs.list": listCheckRunsOperation,
+  "actions.runs.list": listWorkflowRunsOperation,
   "actions.runs.get": getWorkflowRunOperation,
+  "actions.runs.graph.get": getWorkflowRunGraphOperation,
   "actions.runs.jobs.list": listWorkflowRunJobsOperation,
   "actions.runs.jobs.live_ticket": issueJobLogTicketOperation,
   "actions.runs.cancel": cancelWorkflowRunOperation,
   "actions.runs.force_cancel": forceCancelWorkflowRunOperation,
   "actions.runs.rerun": rerunWorkflowRunOperation,
   "actions.runs.approve": approveWorkflowRunOperation,
+  "actions.workflows.list": listWorkflowsOperation,
+  "actions.workflows.runs.list": listRunsOfWorkflowOperation,
   "actions.workflows.dispatch": dispatchWorkflowOperation,
   "repos.compare": compareCommitsOperation,
   "repos.contents.get": getContentsOperation,

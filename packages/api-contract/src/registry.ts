@@ -15,8 +15,12 @@ import {
   dispatchWorkflow,
   forceCancelWorkflowRun,
   getWorkflowRun,
+  getWorkflowRunGraph,
   issueJobLogTicket,
+  listRunsOfWorkflow,
   listWorkflowRunJobs,
+  listWorkflowRuns,
+  listWorkflows,
   rerunWorkflowRun,
 } from "../ops/actions.js";
 import {
@@ -47,6 +51,7 @@ import {
   listCommits,
   listTags,
 } from "../ops/browse.js";
+import { listCheckRuns } from "../ops/checks.js";
 import {
   addOrgSecretRepo,
   addOrgVariableRepo,
@@ -548,19 +553,25 @@ export const registry = defineRegistry([
   getBranch,
   listTags,
   listCommits,
-  // Before `getCommit`: its greedy `{ref+}` would take `.../{ref}/statuses` and `.../{ref}/status`.
+  // Before `getCommit`: its greedy `{ref+}` would take `.../{ref}/statuses`, `.../{ref}/status`
+  // and `.../{ref}/check-runs`.
   listStatuses,
   getCombinedStatus,
+  listCheckRuns,
   getCommit,
   compareCommits,
   createStatus,
+  listWorkflowRuns,
   getWorkflowRun,
+  getWorkflowRunGraph,
   listWorkflowRunJobs,
   cancelWorkflowRun,
   forceCancelWorkflowRun,
   rerunWorkflowRun,
   issueJobLogTicket,
   approveWorkflowRun,
+  listWorkflows,
+  listRunsOfWorkflow,
   dispatchWorkflow,
   getBlame,
   getRootContents,

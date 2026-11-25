@@ -2,9 +2,11 @@ import type {
   createStatus,
   getCombinedStatus,
   Input,
+  listCheckRuns,
   listStatuses,
   Output,
 } from "@fyrden/api-contract";
+import { checkText, MAX_CHECK_NAME_LENGTH } from "@fyrden/domain";
 import type { StatusRecord } from "../do/repo/checks.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
@@ -14,8 +16,8 @@ import { actorOf, failure } from "./pulls.js";
 import { sortingFailure } from "./sorting.js";
 
 /*
- * The Worker side of the `statuses.*` operations. The repository object
- * owns statuses and the summaries they keep (`do/repo/checks.ts`).
+ * The Worker side of the `statuses.*` and `checks.*` operations. The
+ * repository object owns statuses and check summaries (`do/repo/checks.ts`).
  */
 
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
@@ -121,5 +123,49 @@ export async function getCombinedStatusOperation(
     total_count: combined.totalCount,
     statuses: combined.statuses.map(statusOutput),
     next_cursor: combined.next === null ? null : encodeCursor(combined.next),
+  };
+}
+
+/** The `checks.runs.list` operation. The cursor is the last check's name. */
+export async function listCheckRunsOperation(
+  ctx: OpContext,
+  input: Input<typeof listCheckRuns>,
+): Promise<Output<typeof listCheckRuns>> {
+  if (input.filter === "all" || input.app_id !== undefined)
+    throw new OperationError(
+      422,
+      "unsupported_parameter",
+      `${input.filter === "all" ? "filter=all" : "app_id"} is not supported.`,
+    );
+  const after = decodeCursor(input.cursor, (name) => checkText(name, MAX_CHECK_NAME_LENGTH).ok);
+  const entry = await repoFor(ctx, input.owner, input.repo, "statuses:read");
+  const result = await repo(ctx, entry, "checkRuns").checkRuns(
+    input.ref,
+    {
+      ...(input.check_name !== undefined && { name: input.check_name }),
+      ...(input.status !== undefined && { status: input.status }),
+    },
+    after === "" ? null : after,
+    input.per_page,
+  );
+  if (!result.ok) throw new OperationError(result.status, result.code, result.error);
+  const { totalCount, checks, next } = result.value;
+  return {
+    total_count: totalCount,
+    check_runs: checks.map((check) => ({
+      name: check.name,
+      head_sha: check.sha,
+      status: check.status,
+      conclusion: check.conclusion,
+      attempt: check.attempt,
+      run: check.origin && {
+        id: check.origin.runId,
+        run_attempt: check.origin.attempt,
+        job_id: check.origin.jobId,
+      },
+      details_url: check.detailsUrl,
+      updated_at: check.updatedAt,
+    })),
+    next_cursor: next === null ? null : encodeCursor(next),
   };
 }

@@ -1,5 +1,5 @@
 // A run's jobs as checks in the repository: one per instance, sent in
-// batches (a 200-instance storm costs two repository calls), a duplicate
+// batches (a 200-instance storm costs two repository calls, and one for the run), a duplicate
 // name published once, a failure allowed by continue-on-error neutral, an
 // update landing during a send sent next, a stale send never parking
 // current work, and a re-run settling the failing checks it no longer
@@ -121,7 +121,7 @@ describe("matrix jobs", () => {
 });
 
 describe("check batches", () => {
-  it("sends a 200-instance storm in one start call and one update call", async () => {
+  it("sends a 200-instance storm in one start call, one update call and one report of the run", async () => {
     const f = await repoWithCommit();
     const values = Array.from({ length: 200 }, (_, i) => i).join(", ");
     const runId = await started(
@@ -137,7 +137,7 @@ describe("check batches", () => {
       await drain(runId);
       await advance(runId, 2_000);
     });
-    expect(calls).toEqual(["startCheckAttempts", "recordCheckUpdates"]);
+    expect(calls).toEqual(["startCheckAttempts", "recordCheckUpdates", "reportRun"]);
     const checks = await checksOf(f);
     expect(checks.size).toBe(200);
     expect([...checks.values()].every((c) => c.conclusion === "success")).toBe(true);

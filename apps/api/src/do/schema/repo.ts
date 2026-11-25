@@ -1924,4 +1924,29 @@ export const repoSchema: readonly DoMigration[] = [
         WHERE state = 'merged';
     `,
   },
+  {
+    version: 55,
+    // What lists runs: each run's state as it reported it, so a list asks no run. `state_seq`
+    // orders the states (`runStateSeq`), 0 for a run not reported yet, which no list shows;
+    // `status` is the run's phase, `completed_at` its attempt's end, and `summary` what is only
+    // shown. `ci_runs_active` holds the reported runs not completed. The other two take no condition on
+    // `state_seq`: it changes with every report, which would rewrite their entries each time.
+    name: "ci_run_states",
+    sql: `
+      ALTER TABLE ci_runs ADD COLUMN state_seq INTEGER NOT NULL DEFAULT 0 CHECK (state_seq >= 0);
+      ALTER TABLE ci_runs ADD COLUMN status TEXT
+        CHECK (status IN ('waiting', 'queued', 'pending', 'in_progress', 'completed'));
+      ALTER TABLE ci_runs ADD COLUMN conclusion TEXT
+        CHECK (conclusion IN ('success', 'failure', 'cancelled'));
+      ALTER TABLE ci_runs ADD COLUMN event TEXT;
+      ALTER TABLE ci_runs ADD COLUMN actor_id TEXT;
+      ALTER TABLE ci_runs ADD COLUMN head_branch TEXT;
+      ALTER TABLE ci_runs ADD COLUMN completed_at INTEGER;
+      ALTER TABLE ci_runs ADD COLUMN summary TEXT CHECK (summary IS NULL OR json_valid(summary));
+      CREATE INDEX ci_runs_sha ON ci_runs (sha, run_id);
+      CREATE INDEX ci_runs_workflow ON ci_runs (workflow_path, run_id);
+      CREATE INDEX ci_runs_active ON ci_runs (run_id)
+        WHERE status IN ('waiting', 'queued', 'pending', 'in_progress');
+    `,
+  },
 ];

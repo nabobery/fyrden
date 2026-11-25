@@ -11536,6 +11536,390 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
       },
     },
+    "/repos/{owner}/{repo}/actions/runs": {
+      "get": {
+        "description": "The repository's CI runs, each as its current attempt stands. Newest first by run id (when each was triggered). A page reads at most 500 runs, so with filters it can hold fewer than \`per_page\`, even none, with a \`next_cursor\`: follow it until it is null. A run is listed within seconds of starting and for as long as it is kept; its state is the one it last reported, seconds old at most in normal running (\`actions.runs.get\` is current), and \`updated_at\` is when that state was reached. Runs from before this deployment recorded runs' states appear within a week of its upgrade. No \`total_count\`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
+        "operationId": "actions.runs.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this branch (\`head_branch\`), forks' included.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "event",
+            "required": false,
+            "schema": {
+              "description": "Only runs this event triggered, such as \`push\` or \`pull_request\`.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this status or conclusion. \`completed\` includes a run waiting for approval; \`action_required\`: only those. GitHub's other values are taken and match nothing: no run here has them.",
+              "enum": [
+                "completed",
+                "action_required",
+                "cancelled",
+                "failure",
+                "neutral",
+                "skipped",
+                "stale",
+                "success",
+                "timed_out",
+                "in_progress",
+                "queued",
+                "requested",
+                "waiting",
+                "pending",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "description": "A handle: only runs this user or agent triggered (\`actor\`, kept by re-runs).",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "head_sha",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this commit.",
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "created",
+            "required": false,
+            "schema": {
+              "description": "Only runs triggered at these times, in GitHub's syntax: \`2026-11-20\` (that UTC day), \`>=2026-11-20\`, \`<2026-11-20T10:00:00Z\`, \`2026-11-18..2026-11-20\`, \`2026-11-18..*\`.",
+              "maxLength": 64,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "check_suite_id",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): Fyrden has no check suites.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "exclude_pull_requests",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): a run carries no pull requests but the one that triggered it.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "workflow_runs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor": {
+                            "additionalProperties": false,
+                            "description": "Who triggered the run: its jobs act with this principal's rights on every attempt.",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                          "completed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "cancelled",
+                                  "action_required",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "\`action_required\`: the run waits for a maintainer's approval.",
+                          },
+                          "created_at": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "display_title": {
+                            "description": "The workflow's \`run-name\`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters.",
+                            "type": "string",
+                          },
+                          "event": {
+                            "type": "string",
+                          },
+                          "fork": {
+                            "description": "Fyrden: whether the run is a fork's: its pull request's head is in another repository.",
+                            "type": "boolean",
+                          },
+                          "head_branch": {
+                            "description": "The branch the run is for: a pull request's head branch (in \`fork\`'s case a branch of another repository), else its ref's; null for a tag.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "head_sha": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "description": "The workflow's name, or its file's path.",
+                            "type": "string",
+                          },
+                          "path": {
+                            "description": "The workflow file.",
+                            "type": "string",
+                          },
+                          "pull_request": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "number": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "number",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: the pull request whose event triggered the run.",
+                          },
+                          "run_attempt": {
+                            "description": "The current attempt: 1, then one more per re-run.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "run_number": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "The workflow's count of its runs, kept by re-runs; null for a run without one.",
+                          },
+                          "run_started_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "status": {
+                            "description": "\`pending\`: waiting for its concurrency group.",
+                            "enum": [
+                              "queued",
+                              "pending",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                          "triggering_actor": {
+                            "additionalProperties": false,
+                            "description": "Who started the current attempt.",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                          "updated_at": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "run_number",
+                          "name",
+                          "display_title",
+                          "run_attempt",
+                          "head_sha",
+                          "head_branch",
+                          "event",
+                          "path",
+                          "pull_request",
+                          "fork",
+                          "status",
+                          "conclusion",
+                          "actor",
+                          "triggering_actor",
+                          "created_at",
+                          "updated_at",
+                          "run_started_at",
+                          "completed_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "workflow_runs",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List workflow runs for a repository",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/actions/runs/{run_id}": {
       "get": {
         "description": "A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
@@ -11688,6 +12072,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       "minimum": -9007199254740991,
                       "type": "integer",
                     },
+                    "display_title": {
+                      "description": "The workflow's \`run-name\`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters.",
+                      "type": "string",
+                    },
                     "errors": {
                       "description": "Why the workflow could not run, when it could not.",
                       "items": {
@@ -11768,8 +12156,12 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                       },
                       "type": "array",
                     },
+                    "fork": {
+                      "description": "Fyrden: whether the run is a fork's: its pull request's head is in another repository.",
+                      "type": "boolean",
+                    },
                     "head_branch": {
-                      "description": "The branch the run is for, if its ref is one.",
+                      "description": "The branch the run is for: a pull request's head branch (in \`fork\`'s case a branch of another repository), else its ref's; null for a tag.",
                       "type": [
                         "string",
                         "null",
@@ -11781,15 +12173,54 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                     "id": {
                       "type": "string",
                     },
+                    "name": {
+                      "description": "The workflow's name, or its file's path.",
+                      "type": "string",
+                    },
                     "path": {
                       "description": "The workflow file.",
                       "type": "string",
+                    },
+                    "pull_request": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "number": {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer",
+                            },
+                          },
+                          "required": [
+                            "number",
+                          ],
+                          "type": "object",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: the pull request whose event triggered the run.",
                     },
                     "run_attempt": {
                       "description": "The current attempt: 1, then one more per re-run.",
                       "maximum": 9007199254740991,
                       "minimum": -9007199254740991,
                       "type": "integer",
+                    },
+                    "run_number": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "The workflow's count of its runs, kept by re-runs; null for a run without one.",
                     },
                     "run_started_at": {
                       "anyOf": [
@@ -11834,11 +12265,16 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                   },
                   "required": [
                     "id",
+                    "run_number",
+                    "name",
+                    "display_title",
                     "run_attempt",
                     "head_sha",
                     "head_branch",
                     "event",
                     "path",
+                    "pull_request",
+                    "fork",
                     "status",
                     "conclusion",
                     "actor",
@@ -12110,6 +12546,164 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/graph": {
+      "get": {
+        "description": "Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. \`actions.runs.jobs.list\` lists what runs: a job here has one there per matrix combination, by \`job_key\`, once its needs ended. Empty for a run whose workflow could not run (its \`errors\` say why). Takes the \`actions:read\` permission.",
+        "operationId": "actions.runs.graph.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "attempt",
+            "required": false,
+            "schema": {
+              "description": "An attempt; the current by default.",
+              "maximum": 51,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "jobs": {
+                      "description": "Each after the jobs it needs.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "cancelled",
+                                  "skipped",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "As its dependents see it: a failure \`continue-on-error\` allows is a success.",
+                          },
+                          "key": {
+                            "description": "The job's id in the workflow file.",
+                            "type": "string",
+                          },
+                          "name": {
+                            "description": "Its name, without what an expression in it would add.",
+                            "type": "string",
+                          },
+                          "needs": {
+                            "description": "The keys of the jobs it waits for.",
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "status": {
+                            "description": "\`pending\`: the jobs it needs have not ended. \`in_progress\`: it has jobs, queued or running.",
+                            "enum": [
+                              "pending",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "key",
+                          "name",
+                          "needs",
+                          "status",
+                          "conclusion",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "run_attempt": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "run_id": {
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "run_id",
+                    "run_attempt",
+                    "jobs",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a workflow run's job graph",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs": {
       "get": {
         "description": "The jobs of a run's attempt (the current one by default), by id: one per matrix combination, and one for a job that never ran (skipped or failed before it started). GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
@@ -12258,6 +12852,10 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             "minimum": -9007199254740991,
                             "type": "integer",
                           },
+                          "job_key": {
+                            "description": "Fyrden: the job's id in the workflow file; a matrix's combinations share one.",
+                            "type": "string",
+                          },
                           "log_complete": {
                             "description": "Fyrden: whether every log row reached durable storage; null while it runs.",
                             "type": [
@@ -12318,6 +12916,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "run_id",
                           "run_attempt",
                           "name",
+                          "job_key",
                           "status",
                           "conclusion",
                           "started_at",
@@ -13516,6 +14115,330 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         "x-idempotency": "Idempotency-Key header",
       },
     },
+    "/repos/{owner}/{repo}/actions/workflows": {
+      "get": {
+        "description": "The workflow files with runs kept, in path order, each with its latest run. A file that never ran, or whose runs all expired, is not listed (GitHub lists the default branch's files): read \`.github/workflows\` for those. No \`total_count\`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
+        "operationId": "actions.workflows.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "workflows": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "description": "The workflow's file name, as the other operations take it.",
+                            "type": "string",
+                          },
+                          "latest_run": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "actor": {
+                                    "additionalProperties": false,
+                                    "description": "Who triggered the run: its jobs act with this principal's rights on every attempt.",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                      },
+                                    },
+                                    "required": [
+                                      "id",
+                                    ],
+                                    "type": "object",
+                                  },
+                                  "completed_at": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                  },
+                                  "conclusion": {
+                                    "anyOf": [
+                                      {
+                                        "enum": [
+                                          "success",
+                                          "failure",
+                                          "cancelled",
+                                          "action_required",
+                                        ],
+                                        "type": "string",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                    "description": "\`action_required\`: the run waits for a maintainer's approval.",
+                                  },
+                                  "created_at": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  "display_title": {
+                                    "description": "The workflow's \`run-name\`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters.",
+                                    "type": "string",
+                                  },
+                                  "event": {
+                                    "type": "string",
+                                  },
+                                  "fork": {
+                                    "description": "Fyrden: whether the run is a fork's: its pull request's head is in another repository.",
+                                    "type": "boolean",
+                                  },
+                                  "head_branch": {
+                                    "description": "The branch the run is for: a pull request's head branch (in \`fork\`'s case a branch of another repository), else its ref's; null for a tag.",
+                                    "type": [
+                                      "string",
+                                      "null",
+                                    ],
+                                  },
+                                  "head_sha": {
+                                    "type": "string",
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                  "name": {
+                                    "description": "The workflow's name, or its file's path.",
+                                    "type": "string",
+                                  },
+                                  "path": {
+                                    "description": "The workflow file.",
+                                    "type": "string",
+                                  },
+                                  "pull_request": {
+                                    "anyOf": [
+                                      {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "number": {
+                                            "maximum": 9007199254740991,
+                                            "minimum": -9007199254740991,
+                                            "type": "integer",
+                                          },
+                                        },
+                                        "required": [
+                                          "number",
+                                        ],
+                                        "type": "object",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                    "description": "Fyrden: the pull request whose event triggered the run.",
+                                  },
+                                  "run_attempt": {
+                                    "description": "The current attempt: 1, then one more per re-run.",
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  "run_number": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                    "description": "The workflow's count of its runs, kept by re-runs; null for a run without one.",
+                                  },
+                                  "run_started_at": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                  },
+                                  "status": {
+                                    "description": "\`pending\`: waiting for its concurrency group.",
+                                    "enum": [
+                                      "queued",
+                                      "pending",
+                                      "in_progress",
+                                      "completed",
+                                    ],
+                                    "type": "string",
+                                  },
+                                  "triggering_actor": {
+                                    "additionalProperties": false,
+                                    "description": "Who started the current attempt.",
+                                    "properties": {
+                                      "id": {
+                                        "type": "string",
+                                      },
+                                    },
+                                    "required": [
+                                      "id",
+                                    ],
+                                    "type": "object",
+                                  },
+                                  "updated_at": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "id",
+                                  "run_number",
+                                  "name",
+                                  "display_title",
+                                  "run_attempt",
+                                  "head_sha",
+                                  "head_branch",
+                                  "event",
+                                  "path",
+                                  "pull_request",
+                                  "fork",
+                                  "status",
+                                  "conclusion",
+                                  "actor",
+                                  "triggering_actor",
+                                  "created_at",
+                                  "updated_at",
+                                  "run_started_at",
+                                  "completed_at",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: its latest run; null while that one has not been reported, or is about to expire.",
+                          },
+                          "name": {
+                            "description": "The workflow's name as its latest run had it; null until one is reported.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "path": {
+                            "description": "The workflow file.",
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "path",
+                          "name",
+                          "latest_run",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "workflows",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List repository workflows with runs",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
     "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches": {
       "post": {
         "description": "Runs a workflow that has a \`workflow_dispatch\` trigger, at \`ref\` (a branch or tag name, or a full ref), with \`inputs\` checked against the ones it declares (typed in the run's \`inputs\` context, strings in \`github.event.inputs\`). \`workflow_id\` is the workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids. The file must also be on the default branch (GitHub's rule); the version at \`ref\` runs. One run per request, and per \`Idempotency-Key\` (MCP: \`idempotency_key\`) within its window: the answer names the run even when its start is still being retried. 404 \`workflow_not_found\`; 422 \`ref_not_found\`, \`workflow_not_dispatchable\` (no \`workflow_dispatch\` trigger), \`invalid_inputs\` and \`invalid_workflow\` (each with \`errors\`); 409 \`repo_not_ready\`; 409 \`repo_transferring\` while a transfer moves the repository, or once it was transferred or renamed after the request was authorized (once any active transfer ends, look the repository up again and dispatch with a new \`Idempotency-Key\`: the same key answers the refusal again); 409 \`owner_changed\` when it changed owner before the run started, so the run was dropped (a run answered before that and dropped later is never created: looking it up answers 404 \`run_not_found\`); 409 \`commit_unreachable\` when no branch, tag or recent ref history named its commit any more when the run started, so the run was dropped (the same lookup answers 404); and 409 \`ci_off\` while this deployment runs no CI. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
@@ -13643,6 +14566,402 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs": {
+      "get": {
+        "description": "The runs of one workflow file, as \`actions.runs.list\` lists them: those of \`.github/workflows\` and of \`.fyrden/workflows\` under that name. A file with no runs kept answers none. Newest first by run id (when each was triggered). A page reads at most 500 runs, so with filters it can hold fewer than \`per_page\`, even none, with a \`next_cursor\`: follow it until it is null. A run is listed within seconds of starting and for as long as it is kept; its state is the one it last reported, seconds old at most in normal running (\`actions.runs.get\` is current), and \`updated_at\` is when that state was reached. Runs from before this deployment recorded runs' states appear within a week of its upgrade. No \`total_count\`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:read\` permission.",
+        "operationId": "actions.workflows.runs.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "description": "The workflow's file name, such as \`ci.yml\`; Fyrden has no numeric workflow ids.",
+              "maxLength": 255,
+              "minLength": 1,
+              "pattern": "^[^/]+$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this branch (\`head_branch\`), forks' included.",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "event",
+            "required": false,
+            "schema": {
+              "description": "Only runs this event triggered, such as \`push\` or \`pull_request\`.",
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this status or conclusion. \`completed\` includes a run waiting for approval; \`action_required\`: only those. GitHub's other values are taken and match nothing: no run here has them.",
+              "enum": [
+                "completed",
+                "action_required",
+                "cancelled",
+                "failure",
+                "neutral",
+                "skipped",
+                "stale",
+                "success",
+                "timed_out",
+                "in_progress",
+                "queued",
+                "requested",
+                "waiting",
+                "pending",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "description": "A handle: only runs this user or agent triggered (\`actor\`, kept by re-runs).",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "head_sha",
+            "required": false,
+            "schema": {
+              "description": "Only runs of this commit.",
+              "pattern": "^[0-9a-f]{40}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "created",
+            "required": false,
+            "schema": {
+              "description": "Only runs triggered at these times, in GitHub's syntax: \`2026-11-20\` (that UTC day), \`>=2026-11-20\`, \`<2026-11-20T10:00:00Z\`, \`2026-11-18..2026-11-20\`, \`2026-11-18..*\`.",
+              "maxLength": 64,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "check_suite_id",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): Fyrden has no check suites.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "exclude_pull_requests",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): a run carries no pull requests but the one that triggered it.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "workflow_runs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "actor": {
+                            "additionalProperties": false,
+                            "description": "Who triggered the run: its jobs act with this principal's rights on every attempt.",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                          "completed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "cancelled",
+                                  "action_required",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "\`action_required\`: the run waits for a maintainer's approval.",
+                          },
+                          "created_at": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "display_title": {
+                            "description": "The workflow's \`run-name\`, else the pull request's title as the run was triggered, else the commit's first line, else the workflow's name; at most 256 characters.",
+                            "type": "string",
+                          },
+                          "event": {
+                            "type": "string",
+                          },
+                          "fork": {
+                            "description": "Fyrden: whether the run is a fork's: its pull request's head is in another repository.",
+                            "type": "boolean",
+                          },
+                          "head_branch": {
+                            "description": "The branch the run is for: a pull request's head branch (in \`fork\`'s case a branch of another repository), else its ref's; null for a tag.",
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "head_sha": {
+                            "type": "string",
+                          },
+                          "id": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "description": "The workflow's name, or its file's path.",
+                            "type": "string",
+                          },
+                          "path": {
+                            "description": "The workflow file.",
+                            "type": "string",
+                          },
+                          "pull_request": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "number": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "number",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: the pull request whose event triggered the run.",
+                          },
+                          "run_attempt": {
+                            "description": "The current attempt: 1, then one more per re-run.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "run_number": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "The workflow's count of its runs, kept by re-runs; null for a run without one.",
+                          },
+                          "run_started_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "status": {
+                            "description": "\`pending\`: waiting for its concurrency group.",
+                            "enum": [
+                              "queued",
+                              "pending",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                          "triggering_actor": {
+                            "additionalProperties": false,
+                            "description": "Who started the current attempt.",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "id",
+                            ],
+                            "type": "object",
+                          },
+                          "updated_at": {
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "id",
+                          "run_number",
+                          "name",
+                          "display_title",
+                          "run_attempt",
+                          "head_sha",
+                          "head_branch",
+                          "event",
+                          "path",
+                          "pull_request",
+                          "fork",
+                          "status",
+                          "conclusion",
+                          "actor",
+                          "triggering_actor",
+                          "created_at",
+                          "updated_at",
+                          "run_started_at",
+                          "completed_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                  },
+                  "required": [
+                    "workflow_runs",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List workflow runs for a workflow",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/archives/{format}": {
@@ -15225,7 +16544,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/commits/{ref}": {
       "get": {
-        "description": "One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (\`feature%2Fstatus\`): raw, a name ending in \`/status\` or \`/statuses\` reads that commit's commit statuses instead.",
+        "description": "One commit, named by its SHA or by a branch or tag. Percent-encode a slash in a branch or tag (\`feature%2Fstatus\`): raw, a name ending in \`/status\` or \`/statuses\` reads that commit's commit statuses instead, and one ending in \`/check-runs\` its check runs.",
         "operationId": "repos.commits.get",
         "parameters": [
           {
@@ -15430,6 +16749,280 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
         ],
         "summary": "Get a commit",
         "x-fyrden-permission": "contents:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/commits/{ref}/check-runs": {
+      "get": {
+        "description": "The checks Fyrden's CI published on the commit \`ref\` names, in name order: the latest of each name, so of two runs whose jobs share a name on one commit, the later start. Commit statuses, which others post, are \`statuses.combined\`'s; what a pull request's base branch requires of both is \`pulls.required_checks.get\`'s. GitHub's shape in part: Fyrden's run and job ids in place of check run, suite and app ids, times in milliseconds and cursor paging; \`total_count\` counts every match, whatever the page. \`filter=all\` and \`app_id\` are refused (422 \`unsupported_parameter\`). Takes the \`statuses:read\` permission.",
+        "operationId": "checks.runs.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "ref",
+            "required": true,
+            "schema": {
+              "description": "A full commit SHA, a branch, a tag or a full ref name. One path segment: percent-encode a slash (\`feature%2Fx\`).",
+              "maxLength": 1024,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "check_name",
+            "required": false,
+            "schema": {
+              "description": "Only the check of this name, ignoring case.",
+              "maxLength": 510,
+              "minLength": 1,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "description": "Only checks of this status.",
+              "enum": [
+                "queued",
+                "in_progress",
+                "completed",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "default": "latest",
+              "description": "\`latest\` only: earlier attempts of a name are not listed.",
+              "enum": [
+                "latest",
+                "all",
+              ],
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "app_id",
+            "required": false,
+            "schema": {
+              "description": "Not supported (422 \`unsupported_parameter\`): checks come from Fyrden's CI alone.",
+            },
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "description": "Page size, 1-100.",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`, with the same filters.",
+              "maxLength": 2000,
+              "type": "string",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check_runs": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempt": {
+                            "description": "Fyrden: 1, then one more each time a run starts a check of this name on the commit.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "neutral",
+                                  "cancelled",
+                                  "skipped",
+                                  "timed_out",
+                                  "action_required",
+                                  "error",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "details_url": {
+                            "type": [
+                              "string",
+                              "null",
+                            ],
+                          },
+                          "head_sha": {
+                            "type": "string",
+                          },
+                          "name": {
+                            "type": "string",
+                          },
+                          "run": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                  "job_id": {
+                                    "anyOf": [
+                                      {
+                                        "maximum": 9007199254740991,
+                                        "minimum": -9007199254740991,
+                                        "type": "integer",
+                                      },
+                                      {
+                                        "type": "null",
+                                      },
+                                    ],
+                                    "description": "The job within the run; null for a workflow file that could not run, and for a name a re-run settled without a job of that name.",
+                                  },
+                                  "run_attempt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "id",
+                                  "run_attempt",
+                                  "job_id",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: the CI run it came from; null once that run is no longer kept.",
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                          "updated_at": {
+                            "description": "Unix time in milliseconds.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                        },
+                        "required": [
+                          "name",
+                          "head_sha",
+                          "status",
+                          "conclusion",
+                          "attempt",
+                          "run",
+                          "details_url",
+                          "updated_at",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` for the next page; null on the last page.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "total_count": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                  },
+                  "required": [
+                    "total_count",
+                    "check_runs",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "List check runs for a reference",
+        "x-fyrden-permission": "statuses:read",
         "x-fyrden-principals": [
           "user",
           "agent",
