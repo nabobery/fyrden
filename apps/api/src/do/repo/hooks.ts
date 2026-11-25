@@ -34,6 +34,7 @@ export const HOOK_EVENTS = [
   "milestone",
   "release",
   "status",
+  "check_run",
 ] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 

@@ -57,6 +57,7 @@ const ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   label: new Set(["created", "edited", "deleted"]),
   milestone: new Set(["created", "edited", "opened", "closed", "deleted"]),
   release: new Set(["created", "edited", "deleted", "published", "released", "prereleased"]),
+  check_run: new Set(["created", "completed"]),
 };
 
 /** GitHub's name for an entity's webhook event where it differs from the entity's. */
@@ -248,6 +249,7 @@ export function entityBody(name: WebhookEventName, event: DomainEvent): Row {
   switch (name.event) {
     case "release":
     case "status":
+    case "check_run":
       // Always captured when a hook hears it: this default's comment-shaped body would be wrong.
       throw new Error(`a ${name.event} event's body comes from its capture`);
     case "pull_request":

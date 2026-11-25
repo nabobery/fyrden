@@ -33,7 +33,7 @@ import {
   targetUrl,
 } from "@fyrden/domain";
 import { type Oid, oidFromHex } from "@fyrden/git-core";
-import { captureStatus } from "../../webhooks/ci-captures.js";
+import { captureCheckRun, captureStatus } from "../../webhooks/ci-captures.js";
 import { type CheckOrigin, parseCheckKey } from "../run/check-key.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
@@ -423,6 +423,8 @@ export class RepoChecks {
               ...where,
             );
         }
+      for (const state of states.values())
+        if (state?.settledMoved) this.#tellCheck("completed", { ...state.row, updated_at: now });
       for (const sha of settledOn) this.reconcileHeads(sha, null);
       return results;
     });
@@ -653,19 +655,31 @@ export class RepoChecks {
     const shown = rest.slice(0, limit);
     return {
       totalCount: matching.length,
-      checks: shown.map((row) => ({
-        name: row.name,
-        sha: row.sha,
-        status: row.status,
-        conclusion: row.conclusion,
-        attempt: row.attempt as number,
-        detailsUrl: row.details_url,
-        updatedAt: row.updated_at,
-        origin: this.#originOf(row),
-      })),
+      checks: shown.map((row) => this.#checkRun(row)),
       // The name, whose length is bounded, not its key, which can be several times as long.
       next: rest.length > limit ? (shown.at(-1)?.name ?? null) : null,
     };
+  }
+
+  #checkRun(row: SummaryRow): CheckRunRecord {
+    return {
+      name: row.name,
+      sha: row.sha,
+      status: row.status,
+      conclusion: row.conclusion,
+      attempt: row.attempt as number,
+      detailsUrl: row.details_url,
+      updatedAt: row.updated_at,
+      origin: this.#originOf(row),
+    };
+  }
+
+  #tellCheck(action: "created" | "completed", row: SummaryRow): void {
+    this.deps.events.emitToHooks(
+      `check_run.${action}`,
+      row.actor_id === null ? null : { principal: row.actor_id, via: "api" },
+      () => captureCheckRun(this.#checkRun(row)),
+    );
   }
 
   #originOf(row: SummaryRow): CheckOrigin | null {
@@ -742,14 +756,15 @@ export class RepoChecks {
       attempt,
       item.startKey,
     );
-    this.#exec(
+    const [started] = this.#exec<SummaryRow>(
       "checks.summary",
       `INSERT INTO check_summaries (sha, name_key, source, name, kind, attempt, status, actor_id,
          updated_at)
        VALUES (?, ?, ?, ?, 'check', ?, 'queued', ?, ?)
        ON CONFLICT (sha, name_key, source) DO UPDATE SET name = excluded.name,
          attempt = excluded.attempt, status = 'queued', conclusion = NULL,
-         actor_id = excluded.actor_id, details_url = NULL, updated_at = excluded.updated_at`,
+         actor_id = excluded.actor_id, details_url = NULL, updated_at = excluded.updated_at
+       RETURNING *`,
       sha,
       key,
       source,
@@ -758,6 +773,7 @@ export class RepoChecks {
       item.actor ?? null,
       now,
     );
+    this.#tellCheck("created", started as SummaryRow);
     return { ok: true, attempt, current: true };
   }
 

@@ -24,6 +24,7 @@ const HookEvent = z.enum([
   "milestone",
   "release",
   "status",
+  "check_run",
   "*",
 ]);
 /** A list of events names each at most once: no longer than the events there are. */
@@ -114,7 +115,7 @@ export const createHook = defineOperation({
   path: "/repos/{owner}/{repo}/hooks",
   summary: "Create a repository webhook",
   description:
-    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, `release`, `status`, or `*` (every event, those added later too). Administrators only, with `issues:read`, `pull_requests:read`, `contents:write`, `actions:read` and `statuses:read` (a webhook carries issue, pull request, draft release, CI run and status contents).",
+    "Adds a webhook (at most 20 a repository) and sends it a `ping`. Fyrden signs deliveries with Standard Webhooks (`webhook-id`, `webhook-timestamp`, `webhook-signature`), with a secret the server makes: it is in this answer only. Events: `push`, `pull_request`, `pull_request_review`, `pull_request_review_comment`, `issue_comment`, `issues`, `label`, `milestone`, `release`, `status`, `check_run`, or `*` (every event, those added later too). Administrators only, with `issues:read`, `pull_requests:read`, `contents:write`, `actions:read` and `statuses:read` (a webhook carries issue, pull request, draft release, CI run and status contents).",
   input: z.object({
     ...RepoInput,
     name: z.literal("web").optional(),
