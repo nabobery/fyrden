@@ -612,6 +612,18 @@ describe("the contract", () => {
     expect(await ruleViolations(strict)).toEqual([]);
   });
 
+  it("finds a token after a provider that overwrites the one it is given", async () => {
+    const overwrites = wrong((real) => ({
+      provision: (req, registration, intent) => {
+        Object.assign(registration, { token: "spent" });
+        return real.provision(req, registration, intent);
+      },
+    }));
+    await expect(ruleViolations(overwrites)).rejects.toThrow(/read only/);
+    const broken = await ruleViolations(lostWith((token) => new Error(token)));
+    expect(broken.map((b) => b.rule)).toEqual([RULE.token]);
+  });
+
   it("takes an error that cannot be read whole, or is deep", async () => {
     let deep: object = {};
     for (let n = 0; n < 100_000; n++) deep = { deep };

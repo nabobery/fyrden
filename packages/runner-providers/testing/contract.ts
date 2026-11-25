@@ -39,7 +39,7 @@ export interface ProviderRule {
 
 /** Stands for a registration token: found nowhere but in the call it was given to. */
 const TOKEN = "registration-token-do-not-leak";
-const REGISTRATION = { token: TOKEN };
+const REGISTRATION = Object.freeze({ token: TOKEN });
 const always = () => true;
 const hosted = (c: ProviderCapabilities) => c.provisions;
 const unprovisioned = (c: ProviderCapabilities) => !c.provisions;
