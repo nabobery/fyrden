@@ -342,6 +342,7 @@ const REVOKED_REPOS = 100;
 
 const AUDIT_BATCH = 50;
 const DELIVERY_BATCHES = 20;
+const RECORD_OWED = "memberships.record_owed";
 /** Wait before the alarm retries a delivery that failed. Proposed. */
 const AUDIT_RETRY_MS = 60_000;
 
@@ -1071,30 +1072,31 @@ export class OrgDO extends MigratingDO {
     held: readonly string[],
   ): Promise<AclChange> {
     return this.#write(async () => {
-      const recorded = await this.#forgetBeforeRemoval(actor, memberId);
+      const owedHere = await this.#forgetBeforeRemoval(actor, memberId);
       await accountHooks.beforeRemoval?.(this);
-      let removed = false;
-      try {
-        const change = await this.#removeMember(actor, memberId, held);
-        removed = change.ok;
-        return change;
-      } finally {
-        if (recorded && !removed) {
-          this.#recordAll = true;
-          this.#scheduleAudit();
-        }
-      }
+      const change = await this.#removeMember(actor, memberId, held);
+      if (owedHere && change.ok) await this.ctx.storage.delete(RECORD_OWED);
+      return change;
     });
   }
 
+  /**
+   * Takes the member's record out of the directory, if the removal would go
+   * through as things are; a whole record is owed (durably, with an alarm)
+   * until the removal does, so one refused or cut short puts it back. True
+   * when this call is the one that owes it.
+   */
   async #forgetBeforeRemoval(actor: ChangeActor, memberId: string): Promise<boolean> {
     await this.#checkEpoch();
     if (this.#refuse(actor)) return false;
     const current = this.accountRole(memberId);
     if (current === null || (current === "owner" && this.#owners() === 1)) return false;
+    const owedBefore = (await this.ctx.storage.get(RECORD_OWED)) === true;
+    if (!owedBefore) await this.ctx.storage.put(RECORD_OWED, true);
+    await this.#armBy(this.#now() + AUDIT_RETRY_MS);
     const { account_id } = this.#meta() as Meta;
     await this.env.DIRECTORY.batch(recordMembers(this.env.DIRECTORY, account_id, [memberId], []));
-    return true;
+    return !owedBefore;
   }
 
   #removeMember(actor: ChangeActor, memberId: string, held: readonly string[]): Promise<AclChange> {
@@ -2323,7 +2325,8 @@ export class OrgDO extends MigratingDO {
           AUDIT_BATCH,
         )
         .toArray();
-      const all = this.#recordAll;
+      const owed = (await this.ctx.storage.get(RECORD_OWED)) === true;
+      const all = this.#recordAll || owed;
       if (rows.length === 0 && !all) return;
       this.#recordAll = false;
       // The directory's own table, so its archiver keeps them with the other auth events.
@@ -2344,6 +2347,7 @@ export class OrgDO extends MigratingDO {
         this.#recordAll ||= all;
         throw error;
       }
+      if (owed) await this.ctx.storage.delete(RECORD_OWED);
       const last = rows.at(-1)?.seq;
       if (last !== undefined)
         this.ctx.storage.sql.exec("DELETE FROM pending_audit WHERE seq <= ?", last);

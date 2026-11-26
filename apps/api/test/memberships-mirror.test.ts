@@ -209,12 +209,65 @@ describe("the directory's record of an organization's members", () => {
       code: "forbidden",
     });
     expect(await org.stub.accountRole(bob.principalId)).toBe("member");
+    await evictDurableObject(org.stub);
     accountHooks.beforeDelivery = async () => {
       throw new Error("the directory is away");
     };
     expect(await runDurableObjectAlarm(org.stub)).toBe(true);
+    await evictDurableObject(org.stub);
     expect((await mirrored(org.id))[bob.principalId]).toBeUndefined();
     delete accountHooks.beforeDelivery;
+    expect(await runDurableObjectAlarm(org.stub)).toBe(true);
+    expect(await mirrored(org.id)).toEqual({
+      [owner.principalId]: "member",
+      [bob.principalId]: "member",
+      [carol.principalId]: "owner",
+    });
+  });
+
+  it("has a member again whose removal stopped once their record was gone", async () => {
+    const owner = await user();
+    const bob = await user();
+    const org = await newOrg(owner);
+    await set(org, owner, bob, "member");
+    accountHooks.beforeRemoval = async () => {
+      throw new Error("the instance is gone");
+    };
+    await runInDurableObject(org.stub, async (account: OrgDO, state) => {
+      await state.storage.deleteAlarm();
+      await expect(account.removeMember(actorOf(owner), bob.principalId, [])).rejects.toThrow(
+        "the instance is gone",
+      );
+    });
+    delete accountHooks.beforeRemoval;
+    await evictDurableObject(org.stub);
+    expect(await org.stub.accountRole(bob.principalId)).toBe("member");
+    expect(await runDurableObjectAlarm(org.stub)).toBe(true);
+    expect((await mirrored(org.id))[bob.principalId]).toBe("member");
+    const owed = await runInDurableObject(org.stub, (_: OrgDO, state) =>
+      state.storage.get("memberships.record_owed"),
+    );
+    expect(owed).toBeUndefined();
+  });
+
+  it("keeps a repair it owes through a later removal that goes through", async () => {
+    const owner = await user();
+    const [bob, carol, dave] = [await user(), await user(), await user()];
+    const org = await newOrg(owner);
+    for (const who of [bob, dave]) await set(org, owner, who, "member");
+    await set(org, owner, carol, "admin");
+    accountHooks.beforeRemoval = async (account: OrgDO) => {
+      await account.setMember(actorOf(carol), member(owner), "member");
+    };
+    expect(await org.stub.removeMember(actorOf(owner), bob.principalId, [])).toMatchObject({
+      ok: false,
+    });
+    delete accountHooks.beforeRemoval;
+    await evictDurableObject(org.stub);
+    expect(await org.stub.removeMember(actorOf(carol), dave.principalId, [])).toMatchObject({
+      ok: true,
+    });
+    await evictDurableObject(org.stub);
     expect(await runDurableObjectAlarm(org.stub)).toBe(true);
     expect(await mirrored(org.id)).toEqual({
       [owner.principalId]: "member",
