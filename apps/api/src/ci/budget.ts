@@ -9,9 +9,9 @@ import { workersPlan } from "../git/fetch/mode.js";
 import { LIVE_DAILY } from "../live/budget.js";
 
 /*
- * CI's ledger (migration 0055), modeled on live's. A grant asked at or
- * after its `validUntil` is expired whether or not its receipt still
- * exists, so pruning cannot turn a retry into a second charge.
+ * CI's ledger (migration 0055). A grant asked at or after its `validUntil` is
+ * expired whether or not its receipt still exists, so pruning cannot turn a
+ * retry into a second charge.
  */
 
 export const CI_RESOURCES = [...DISCRETIONARY_RESOURCES, "worker_requests", "r2_class_b"] as const;
@@ -368,7 +368,6 @@ function isVector(v: unknown): v is CiVector {
   return keys.length === R.length && R.every((r) => isCount(vector[r]));
 }
 
-/** A vector's canonical JSON (the resources in their fixed order). */
 const vectorJson = (v: CiVector) => JSON.stringify(Object.fromEntries(R.map((r) => [r, v[r]])));
 
 function requestError(req: CiGrantRequest): string | null {
@@ -415,7 +414,6 @@ export function servingRunners(now: string, limit: string, olderThan?: string): 
   return `(${count("expires_at IS NULL")} + ${count(`expires_at > ${now}`)})`;
 }
 
-/** SQL true while at most `cap` runners may serve at `now`. */
 function fleetWithin(cap: number | null, now: string): string {
   if (cap === null) return "1";
   return `(${servingRunners(now, String(cap + 1))} <= ${cap})`;

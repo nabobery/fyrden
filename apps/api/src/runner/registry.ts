@@ -919,9 +919,11 @@ export async function claimPending(
 
 /**
  * Records that the run refused task `taskId`: ended when its task had
- * finished, superseded otherwise; for an erased run, its pending row goes too
- * (the run will never withdraw it). An ephemeral runner assigned a task that
- * is over ends here: an erased run, which also answers so, never ends it.
+ * finished, unless the offer was given up unrecorded (a later call of it
+ * queues its job again, so it must not be failed), superseded otherwise; for
+ * an erased run, its pending row goes too (the run will never withdraw it).
+ * An ephemeral runner assigned a task that is over ends here: an erased run,
+ * which also answers so, never ends it.
  */
 export async function refuseTask(
   db: D1Database,
@@ -929,10 +931,15 @@ export async function refuseTask(
   metrics?: Metrics,
 ): Promise<void> {
   count(metrics, "runner_task_refused");
-  const column = refused.code === "task_finished" ? "ended_at" : "superseded_at";
+  const ends = refused.code === "task_finished";
+  const column = ends ? "ended_at" : "superseded_at";
   const statements = [
     db
-      .prepare(`UPDATE ci_tasks SET ${column} = COALESCE(${column}, ?) WHERE id = ?`)
+      .prepare(
+        `UPDATE ci_tasks SET ${column} = COALESCE(${column}, ?) WHERE id = ?${
+          ends ? " AND (superseded_at IS NULL OR task IS NOT NULL)" : ""
+        }`,
+      )
       .bind(refused.now, refused.taskId),
   ];
   if (refused.code === "run_not_found")
