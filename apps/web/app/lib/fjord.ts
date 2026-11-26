@@ -36,6 +36,8 @@ export interface Scheme {
     readonly variable: string;
     readonly tag: string;
   };
+  /** A job log's 16 terminal colours, each readable on the panel (other colours are mapped onto them). */
+  readonly ansi: readonly string[];
 }
 
 export const FJORD: { readonly light: Scheme; readonly dark: Scheme } = {
@@ -68,6 +70,24 @@ export const FJORD: { readonly light: Scheme; readonly dark: Scheme } = {
       variable: "#243338",
       tag: "#006b75",
     },
+    ansi: [
+      "#1f2a2e",
+      "#a1222b",
+      "#1d6b33",
+      "#715500",
+      "#0b4fb8",
+      "#8a2f8f",
+      "#00626b",
+      "#4b5b61",
+      "#52676f",
+      "#a3121c",
+      "#17602b",
+      "#664c00",
+      "#1a52bf",
+      "#8f2794",
+      "#005861",
+      "#36454b",
+    ],
   },
   dark: {
     page: {
@@ -98,6 +118,24 @@ export const FJORD: { readonly light: Scheme; readonly dark: Scheme } = {
       variable: "#dce6e8",
       tag: "#7bc9cf",
     },
+    ansi: [
+      "#a0b0b7",
+      "#ff8f8a",
+      "#7fd492",
+      "#e6c75a",
+      "#8cb4ff",
+      "#e59cf0",
+      "#6fd6dc",
+      "#dce6e8",
+      "#a0b0b7",
+      "#ffa5a0",
+      "#99e2a8",
+      "#f0d878",
+      "#a8c6ff",
+      "#f0b0f8",
+      "#8fe3e8",
+      "#ffffff",
+    ],
   },
 };
 

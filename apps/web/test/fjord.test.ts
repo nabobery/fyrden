@@ -95,6 +95,7 @@ describe("Fjord", () => {
       "--diff-added-word": scheme.diff.addedWord,
       "--diff-removed-word": scheme.diff.removedWord,
       "--diff-selected": scheme.diff.selected,
+      ...Object.fromEntries(scheme.ansi.map((c, k) => [`--ansi-${k}`, c])),
     });
     expect(tokensIn(css, ":root {")).toEqual(expected(FJORD.light));
     expect(tokensIn(css, ':root:not([data-theme="light"]) {')).toEqual(expected(FJORD.dark));

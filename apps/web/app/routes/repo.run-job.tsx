@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { data, Link } from "react-router";
+import { LogViewer } from "../components/log-viewer.js";
 import { RepoHeader } from "../components/repo-header.js";
 import { duration, RunState } from "../components/run-ui.js";
 import { apiGet } from "../lib/api.server.js";
@@ -85,6 +87,8 @@ export default function JobPage({ loaderData }: Route.ComponentProps) {
   const took = duration(job.started_at, job.completed_at);
   const waits = waitingWords(job.waiting_for);
   const state = `${job.status}/${job.conclusion}/${job.steps.map((s) => s.status).join()}`;
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
   const { stopped } = useRunRefresh(
     `${run.id}:${job.id}`,
     current && job.status !== "completed",
@@ -135,8 +139,15 @@ export default function JobPage({ loaderData }: Route.ComponentProps) {
         <h3 id="log-title">Log</h3>
         <p className="row">
           <Link to={jobLogPath(owner, name, run.id, job.id)}>Read the log as text</Link>
-          <a href={jobRawPath(owner, name, run.id, job.id)}>Raw text (one page)</a>
         </p>
+        {hydrated ? (
+          <LogViewer key={job.id} owner={owner} repo={name} runId={run.id} job={job} />
+        ) : (
+          <p className="muted">
+            The log viewer needs JavaScript;{" "}
+            <a href={jobRawPath(owner, name, run.id, job.id)}>raw text (one page)</a>.
+          </p>
+        )}
       </section>
     </main>
   );

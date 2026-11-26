@@ -1,7 +1,13 @@
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eventually } from "./forge.js";
-import { fetchTask, finishTask, registerRunner, sendLog } from "./runner-play.js";
+import {
+  fetchTask,
+  finishTask,
+  type PlayedRunner,
+  registerRunner,
+  sendLog,
+} from "./runner-play.js";
 import { accessible as axe, startWebStack, visit, type WebStack } from "./web-stack.js";
 
 let stack: WebStack;
@@ -62,10 +68,14 @@ async function seam<T>(path: string, body: unknown): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function startRun(path = ".github/workflows/ci.yml", source = WORKFLOW): Promise<string> {
+async function startRun(
+  path = ".github/workflows/ci.yml",
+  source = WORKFLOW,
+  at = sha,
+): Promise<string> {
   const started = await seam<{ runId: string; answer: { ok: boolean } }>("/start", {
     repoId,
-    sha,
+    sha: at,
     ref: "refs/heads/main",
     event: "push",
     actor,
@@ -149,22 +159,60 @@ const PRINT = [
   "      - run: ./print.sh",
 ].join("\n");
 
-async function runWithLog(): Promise<void> {
-  logged = await startRun(".github/workflows/print.yml", PRINT);
-  const runner = await registerRunner(stack.origin, stack.token, org);
-  const task = await fetchTask(stack.origin, runner);
+let runner: PlayedRunner | undefined;
+
+const logRows = (n: number, from = 0) => {
   const at = { seconds: Math.floor(Date.now() / 1000), nanos: 0 };
-  const rows = [
-    { time: at, content: `::add-mask::${CANARY}` },
-    ...Array.from({ length: LOG_ROWS }, (_, i) => ({
-      time: at,
-      content: i === 7 ? `token=${CANARY}` : `line ${i + 1} ${"=".repeat(50)}`,
-    })),
-  ];
-  await sendLog(stack.origin, runner, task.id, rows);
-  const step = (stage: number, logIndex: number, logLength: number) => ({
+  return Array.from({ length: n }, (_, k) => ({
+    time: at,
+    content: from + k === 7 ? `token=${CANARY}` : `line ${from + k + 1} ${"=".repeat(50)}`,
+  }));
+};
+
+const ESC = "\u001b";
+const colour = (k: number, text: string) => `${ESC}[3${k % 8}m${text}${ESC}[0m`;
+
+const denseRows = (n: number) =>
+  logRows(n).map((row, k) => {
+    if (k === 7) return { ...row, content: colour(k, row.content) };
+    const many =
+      k % 100 === 0 ? Array.from({ length: 250 }, (_, j) => colour(k + j, "#")).join("") : "";
+    return {
+      ...row,
+      content: `${ESC}[1m${colour(k, `line ${k + 1}`)} ${colour(k + 3, "=".repeat(50))}${many}`,
+    };
+  });
+
+const LONG_TASKS = `
+  if (PerformanceObserver.supportedEntryTypes.includes("longtask")) {
+    window.__fyrdenLongTasks = [];
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) window.__fyrdenLongTasks.push(entry.duration);
+    }).observe({ type: "longtask", buffered: true });
+  }
+`;
+
+async function longTasks(action: string, run: () => Promise<void>, sinceLoad = false) {
+  const taken = "window.__fyrdenLongTasks?.splice(0) ?? null";
+  if (!sinceLoad) await page.evaluate(taken);
+  await run();
+  const tasks = (await page.evaluate(taken)) as number[] | null;
+  if (process.env.FYRDEN_BENCH !== "1") return;
+  if (tasks === null) {
+    console.log(`log viewer long tasks, ${action}: not observed in this browser`);
+    return;
+  }
+  const total = tasks.reduce((a, b) => a + b, 0);
+  console.log(
+    `log viewer long tasks, ${action}: ${tasks.length}, ${Math.round(total)} ms in all, longest ${Math.round(Math.max(0, ...tasks))} ms`,
+  );
+}
+
+const step = (stage: number, result: number, logIndex: number, logLength: number) => {
+  const at = { seconds: Math.floor(Date.now() / 1000), nanos: 0 };
+  return {
     id: 0,
-    result: 1,
+    result,
     startedAt: at,
     stoppedAt: at,
     logIndex,
@@ -172,12 +220,39 @@ async function runWithLog(): Promise<void> {
     name: "",
     stage,
     number: 0,
-  });
-  await finishTask(stack.origin, runner, task.id, 1, [step(1, 0, 1), step(4, 1, LOG_ROWS)]);
-  await finished(logged);
-  loggedJob = (
-    await rest<{ jobs: Job[] }>("GET", `/repos/${org}/${name}/actions/runs/${logged}/jobs`)
+  };
+};
+
+async function takenRun(): Promise<{ runId: string; jobId: number; taskId: number }> {
+  const runId = await startRun(".github/workflows/print.yml", PRINT);
+  runner ??= await registerRunner(stack.origin, stack.token, org);
+  const task = await fetchTask(stack.origin, runner);
+  const jobId = (
+    await rest<{ jobs: Job[] }>("GET", `/repos/${org}/${name}/actions/runs/${runId}/jobs`)
   ).jobs[0]?.id as number;
+  return { runId, jobId, taskId: task.id };
+}
+
+async function runWithLog(
+  rows: number,
+  result = 1,
+  content: (n: number) => ReturnType<typeof logRows> = logRows,
+): Promise<{ runId: string; jobId: number }> {
+  const { runId, jobId, taskId } = await takenRun();
+  const played = runner as PlayedRunner;
+  await sendLog(stack.origin, played, taskId, [
+    {
+      time: { seconds: Math.floor(Date.now() / 1000), nanos: 0 },
+      content: `::add-mask::${CANARY}`,
+    },
+    ...content(rows),
+  ]);
+  await finishTask(stack.origin, played, taskId, result, [
+    step(1, 1, 0, 1),
+    step(4, result, 1, rows),
+  ]);
+  await finished(runId);
+  return { runId, jobId };
 }
 
 beforeAll(async () => {
@@ -208,7 +283,7 @@ beforeAll(async () => {
   failed = await startRun(".github/workflows/lint.yml", WORKFLOW.replace("name: ci", "name: lint"));
   await runJob(failed, "build", "failure");
   await Promise.all([finished(passed), finished(failed)]);
-  await runWithLog();
+  ({ runId: logged, jobId: loggedJob } = await runWithLog(LOG_ROWS));
 }, 300_000);
 
 afterAll(async () => {
@@ -414,6 +489,190 @@ describe("a run and its jobs", () => {
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
       await visit(page, `${runs()}/runs/${passed}`);
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
+        width,
+      );
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+});
+
+describe("the log viewer", () => {
+  const BIG = 100_000;
+  let big = { runId: "", jobId: 0 };
+  const viewer = () => page.locator(".log-viewer");
+  const drawn = async () => Number(await viewer().getAttribute("data-rows-drawn"));
+  const parsed = async () => Number(await viewer().getAttribute("data-rows-parsed"));
+  const region = () => page.getByRole("region", { name: /^Log of / });
+
+  beforeAll(async () => {
+    await page.addInitScript(LONG_TASKS);
+    big = await runWithLog(BIG, 2, denseRows);
+  }, 600_000);
+
+  it("opens a 100,000-line coloured log at its failed step, drawing only what is in view", async () => {
+    await longTasks(
+      "open",
+      async () => {
+        await visit(page, `${runs()}/runs/${big.runId}/job/${big.jobId}`);
+        await see(region()).toContainText("line 1 ===");
+      },
+      true,
+    );
+    const log = region();
+    await see(log).toContainText("token=***");
+    await see(log).not.toContainText(CANARY);
+    await see(log.locator("[class^='a-f']").first()).toBeVisible();
+    expect(await drawn()).toBeLessThanOrEqual(150);
+    expect(await parsed()).toBeLessThanOrEqual(150);
+    await accessible("log viewer");
+  });
+
+  it("goes to the end by keyboard and reads only the rows it shows", async () => {
+    await visit(page, `${runs()}/runs/${big.runId}/job/${big.jobId}`);
+    const log = region();
+    await see(log).toContainText("line 1 ===");
+    await log.focus();
+    await longTasks("end", async () => {
+      await page.keyboard.press("End");
+      await see(log).toContainText(`line ${BIG} ===`, { timeout: 30_000 });
+    });
+    expect(await drawn()).toBeLessThanOrEqual(150);
+    expect(await parsed()).toBeLessThanOrEqual(400);
+  });
+
+  it("scrolls by wheel, drawing and parsing a bounded number of rows", async () => {
+    await visit(page, `${runs()}/runs/${big.runId}/job/${big.jobId}`);
+    const log = region();
+    await see(log).toContainText("line 1 ===");
+    await log.hover();
+    const wheels = 20;
+    await longTasks("scroll", async () => {
+      for (let k = 0; k < wheels; k++) await page.mouse.wheel(0, 4_000);
+      await see(log).not.toContainText("line 1 ===", { timeout: 30_000 });
+      await see(log.locator(".log-line > .muted").filter({ hasText: /^…$/ })).toHaveCount(0, {
+        timeout: 30_000,
+      });
+    });
+    expect(await drawn()).toBeLessThanOrEqual(150);
+    expect(await parsed()).toBeLessThanOrEqual((wheels + 1) * 150);
+  });
+
+  it("opens a line from its link", async () => {
+    await visit(page, `${runs()}/runs/${big.runId}/job/${big.jobId}`);
+    await see(region()).toContainText("line 1 ===");
+    await longTasks("step jump", async () => {
+      await page.evaluate("location.hash = '#L50002'");
+      await see(page.locator("#L50002")).toBeVisible({ timeout: 30_000 });
+    });
+    await see(page.locator("#L50002")).toContainText("line 50001 ===");
+  });
+
+  it("opens a line in a folded step that succeeded, from its link at load", async () => {
+    await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}#L2000`);
+    const line = page.locator("#L2000");
+    await see(line).toBeVisible({ timeout: 30_000 });
+    await see(line).toContainText("line 1999 ===");
+  });
+
+  it("says when a line's link is past the log's end, and stays where it is", async () => {
+    await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}#L2000`);
+    await see(page.locator("#L2000")).toBeVisible({ timeout: 30_000 });
+    const before = await region().evaluate((box) => box.scrollTop);
+    await page.evaluate("location.hash = '#L99999'");
+    await see(page.getByRole("status").filter({ hasText: "Line 99999" })).toHaveText(
+      `Line 99999 is past the end of this log (${LOG_ROWS + 1} lines).`,
+    );
+    expect(await region().evaluate((box) => box.scrollTop)).toBe(before);
+    await see(page.locator("#L2000")).toBeVisible();
+  });
+
+  it("keeps a focused line while scrolling, and gives focus to its step when folded", async () => {
+    await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}`);
+    const header = page.locator(".log-step button", { hasText: "print.sh" });
+    await header.click();
+    await see(header).toHaveAttribute("aria-expanded", "true");
+    const link = page.getByRole("link", { name: "Line 5", exact: true });
+    await link.focus();
+    await region().evaluate((box) => {
+      box.scrollTop = box.scrollHeight;
+    });
+    await see(region()).toContainText(`line ${LOG_ROWS} ===`);
+    await see(link).toBeFocused();
+    await region().evaluate((box) => {
+      box.scrollTop = 0;
+    });
+    await header.dispatchEvent("click");
+    await see(header).toHaveAttribute("aria-expanded", "false");
+    await see(header).toBeFocused();
+  });
+
+  it("keeps the line at the top in place when a step above it folds", async () => {
+    await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}`);
+    const headers = page.locator(".log-step button");
+    await headers.nth(1).click();
+    await headers.nth(0).click();
+    await see(headers.nth(0)).toHaveAttribute("aria-expanded", "true");
+    await see(headers.nth(0)).toBeFocused();
+    await region().evaluate((box) => {
+      box.scrollTop = 1_000 * 20;
+    });
+    const line = page.locator("#L1005");
+    await see(line).toBeVisible();
+    const before = (await line.boundingBox())?.y;
+    await page.keyboard.press("Enter");
+    await see(page.locator(".log-step button").first()).toHaveAttribute("aria-expanded", "false");
+    await see(line).toBeVisible();
+    expect((await line.boundingBox())?.y).toBe(before);
+  });
+
+  it("follows a running job's log live, then ends with it", async () => {
+    const live = await takenRun();
+    const played = runner as PlayedRunner;
+    await sendLog(stack.origin, played, live.taskId, logRows(100), 0, false);
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((done) => {
+      release = done;
+    });
+    let held = false;
+    await page.route("**/logs/rows?*", async (route) => {
+      if (!held) {
+        held = true;
+        await released;
+      }
+      await route.continue();
+    });
+    const asked = page.waitForRequest((request) => request.url().includes("/logs/rows?"));
+    await page.goto(`${runs()}/runs/${live.runId}/job/${live.jobId}`);
+    await asked;
+    await page.evaluate("location.hash = '#L4'");
+    release();
+    const log = page.getByRole("region", { name: /^Log of / });
+    await see(log).toHaveAccessibleName(/: 100 lines$/);
+    await see(page.locator("#L4")).toBeInViewport();
+    await page.unroute("**/logs/rows?*");
+    await sendLog(stack.origin, played, live.taskId, logRows(50, 100), 100, false);
+    await see(log).toHaveAccessibleName(/: 150 lines$/, { timeout: 30_000 });
+    await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible({
+      timeout: 30_000,
+    });
+    await see(page.locator("#L4")).toBeInViewport();
+    await page.getByRole("button", { name: "Jump to latest" }).click();
+    await see(log).toContainText("line 150 ===", { timeout: 30_000 });
+    await sendLog(stack.origin, played, live.taskId, logRows(50, 150), 150);
+    await see(log).toContainText("line 200 ===", { timeout: 30_000 });
+    await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 200)]);
+    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await accessible("log viewer, live");
+  });
+
+  it("fits a phone's width", async () => {
+    for (const width of [375, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      await visit(page, `${runs()}/runs/${big.runId}/job/${big.jobId}`);
+      await see(page.getByRole("region", { name: /^Log of / })).toContainText("line 1 ===");
       expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
         width,
       );
