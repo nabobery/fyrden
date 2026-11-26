@@ -238,7 +238,14 @@ export interface GraphJob {
   readonly status: NodeRow["status"];
   /** As its dependents see it; null until it is terminal. */
   readonly outcome: NeedResult | null;
+  /** The attempt's instances of this job, by id; none until its needs end. */
+  readonly jobs: readonly GraphInstance[];
 }
+
+export type GraphInstance = Pick<
+  JobView,
+  "jobId" | "name" | "status" | "conclusion" | "startedAt" | "completedAt" | "error" | "waitingFor"
+>;
 
 export type CreateAnswer =
   | { readonly ok: true; readonly created: boolean; readonly run: RunView }
@@ -1098,10 +1105,13 @@ export class RunDO extends MigratingDO {
   /**
    * The jobs of an attempt of repository `repoId`'s run (the current attempt
    * by default) as its workflow writes them, each after the jobs it needs.
+   * Instance names and errors are read as their first `prefixes` characters
+   * (code points), which hold at least as many UTF-16 units.
    */
   graph(
     repoId: string,
-    attempt?: number,
+    attempt: number | undefined,
+    prefixes: { readonly name: number; readonly error: number },
   ):
     | { readonly ok: true; readonly attempt: number; readonly jobs: readonly GraphJob[] }
     | { readonly ok: false; readonly code: "run_not_found" | "attempt_not_found" } {
@@ -1112,6 +1122,7 @@ export class RunDO extends MigratingDO {
     const nodes = this.engine.nodes(n);
     // A workflow that could not run has no jobs, and does not plan.
     const graph = nodes.length > 0 ? this.#loadModel().plan.graph : undefined;
+    const instances = Map.groupBy(this.#graphInstances(n, prefixes), (row) => row.job_key);
     return {
       ok: true,
       attempt: n,
@@ -1121,8 +1132,43 @@ export class RunDO extends MigratingDO {
         needs: graph?.job(node.job_key)?.needs ?? [],
         status: node.status,
         outcome: nodeOutcome(node) ?? null,
+        jobs: (instances.get(node.job_key) ?? []).map((row) => ({
+          jobId: row.job_id,
+          name: codePointPrefix(row.name, prefixes.name),
+          status: row.status,
+          conclusion: row.conclusion,
+          startedAt: row.started_at,
+          completedAt: row.completed_at,
+          error: row.error === null ? null : codePointPrefix(row.error, prefixes.error),
+          waitingFor: row.status === "queued" ? row.waiting_for : null,
+        })),
       })),
     };
+  }
+
+  #graphInstances(attempt: number, prefixes: { readonly name: number; readonly error: number }) {
+    return this.engine.rows<
+      Pick<
+        JobRow,
+        | "job_id"
+        | "job_key"
+        | "status"
+        | "conclusion"
+        | "started_at"
+        | "completed_at"
+        | "waiting_for"
+      > & { readonly name: ArrayBuffer; readonly error: ArrayBuffer | null }
+    >(
+      `SELECT i.job_id, i.job_key, substr(CAST(i.name AS BLOB), 1, ?) AS name, i.status, i.conclusion,
+         i.started_at, i.completed_at, substr(CAST(i.error AS BLOB), 1, ?) AS error,
+         r.waiting_for AS waiting_for
+       FROM run_instances i
+       LEFT JOIN ci_reservations r ON r.job_id = i.job_id
+       WHERE i.attempt = ? ORDER BY i.job_id`,
+      utf8Bound(prefixes.name),
+      utf8Bound(prefixes.error),
+      attempt,
+    );
   }
 
   // ------------------------------------------------------------------ cancel and re-run
@@ -2634,4 +2680,21 @@ export class RunDO extends MigratingDO {
       alarm: await this.ctx.storage.getAlarm(),
     };
   }
+}
+
+/**
+ * Bytes of UTF-8 that hold `points` whole code points whatever they are, read
+ * as a blob: SQLite's text `substr` stops at an embedded NUL (measured in workerd).
+ */
+const utf8Bound = (points: number) => 4 * points + 3;
+
+function codePointPrefix(bytes: ArrayBuffer, points: number): string {
+  let out = "";
+  let n = 0;
+  for (const point of new TextDecoder().decode(bytes)) {
+    if (n === points) break;
+    out += point;
+    n++;
+  }
+  return out;
 }

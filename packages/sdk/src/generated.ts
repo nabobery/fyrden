@@ -8489,14 +8489,33 @@ export type ActionsRunsGraphGetOutput = {
   jobs: ({
     /** The job's id in the workflow file. */
     key: string;
-    /** Its name, without what an expression in it would add. */
+    /** Its name, without what an expression in it would add; cut to 200 UTF-16 units. */
     name: string;
+    /** Whether `name` was cut: the whole name is longer. Never cut inside a surrogate pair. */
+    name_cut: boolean;
     /** The keys of the jobs it waits for. */
     needs: string[];
     /** `pending`: the jobs it needs have not ended. `in_progress`: it has jobs, queued or running. */
     status: "pending" | "in_progress" | "completed";
     /** As its dependents see it: a failure `continue-on-error` allows is a success. */
     conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+    /** Its jobs in this attempt, one per matrix combination, by id, without steps (`actions.runs.jobs.get` has them); empty until the jobs it needs have ended. */
+    jobs: ({
+      /** The job's id within its run. */
+      id: number;
+      /** As `actions.runs.jobs.get` names it, cut to 200 UTF-16 units. */
+      name: string;
+      /** Whether `name` was cut: the whole name is longer. Never cut inside a surrogate pair. */
+      name_cut: boolean;
+      status: "pending" | "queued" | "in_progress" | "completed";
+      conclusion: "success" | "failure" | "cancelled" | "skipped" | "timed_out" | null;
+      started_at: number | null;
+      completed_at: number | null;
+      /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
+      waiting_for: "ci_minutes" | "daily_capacity" | null;
+      /** Cut to 500 UTF-16 units. */
+      error: string | null;
+    })[];
   })[];
 };
 
@@ -11059,7 +11078,7 @@ export interface Operations {
   "actions.runs.list": { input: ActionsRunsListInput; output: ActionsRunsListOutput };
   /** Get a workflow run. A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
   "actions.runs.get": { input: ActionsRunsGetInput; output: ActionsRunsGetOutput };
-  /** Get a workflow run's job graph. Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission. */
+  /** Get a workflow run's job graph. Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended, and lists them in its own `jobs`, without steps. Names here are cut to 200 UTF-16 units and errors to 500 (`name_cut` says a name was), so an answer stays small whatever the workflow names its jobs; `actions.runs.jobs.get` has a job's whole name. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission. */
   "actions.runs.graph.get": { input: ActionsRunsGraphGetInput; output: ActionsRunsGraphGetOutput };
   /** Get a job for a workflow run. One job of a run, of whichever attempt it ran in, as `actions.runs.jobs.list` lists it, steps included. 404 `job_not_found` when the run has no such job. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. GitHub's path has no run (`/actions/jobs/{job_id}`): job ids here are per run. Takes the `actions:read` permission. */
   "actions.runs.jobs.get": { input: ActionsRunsJobsGetInput; output: ActionsRunsJobsGetOutput };

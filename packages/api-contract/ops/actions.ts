@@ -124,6 +124,17 @@ export const WorkflowRun = WorkflowRunSummary.extend({
     ),
 });
 
+const JobStatus = z.enum(["pending", "queued", "in_progress", "completed"]);
+const JobConclusion = z
+  .enum(["success", "failure", "cancelled", "skipped", "timed_out"])
+  .nullable();
+const WaitingFor = z
+  .enum(["ci_minutes", "daily_capacity"])
+  .nullable()
+  .describe(
+    "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
+  );
+
 export const WorkflowJob = z.object({
   id: z.number().int().describe("The job's id within its run."),
   run_id: z.string(),
@@ -132,8 +143,8 @@ export const WorkflowJob = z.object({
   job_key: z
     .string()
     .describe("Fyrden: the job's id in the workflow file; a matrix's combinations share one."),
-  status: z.enum(["pending", "queued", "in_progress", "completed"]),
-  conclusion: z.enum(["success", "failure", "cancelled", "skipped", "timed_out"]).nullable(),
+  status: JobStatus,
+  conclusion: JobConclusion,
   started_at: z.number().int().nullable(),
   completed_at: z.number().int().nullable(),
   check: z
@@ -175,13 +186,7 @@ export const WorkflowJob = z.object({
     .describe(
       "As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
     ),
-  waiting_for: z
-    .enum(["ci_minutes", "daily_capacity"])
-    .nullable()
-    .optional()
-    .describe(
-      "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
-    ),
+  waiting_for: WaitingFor.optional(),
 });
 
 const COMPATIBILITY =
@@ -422,13 +427,19 @@ export const listWorkflows = defineOperation({
   },
 });
 
+/** The UTF-16 units of a name and of an error in `actions.runs.graph.get`'s answer. */
+export const GRAPH_NAME_UNITS = 200;
+export const GRAPH_ERROR_UNITS = 500;
+const NameCut = z
+  .boolean()
+  .describe("Whether `name` was cut: the whole name is longer. Never cut inside a surrogate pair.");
+
 export const getWorkflowRunGraph = defineOperation({
   id: "actions.runs.graph.get",
   method: "GET",
   path: "/repos/{owner}/{repo}/actions/runs/{run_id}/graph",
   summary: "Get a workflow run's job graph",
-  description:
-    "Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission.",
+  description: `Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. \`actions.runs.jobs.list\` lists what runs: a job here has one there per matrix combination, by \`job_key\`, once its needs ended, and lists them in its own \`jobs\`, without steps. Names here are cut to ${GRAPH_NAME_UNITS} UTF-16 units and errors to ${GRAPH_ERROR_UNITS} (\`name_cut\` says a name was), so an answer stays small whatever the workflow names its jobs; \`actions.runs.jobs.get\` has a job's whole name. Empty for a run whose workflow could not run (its \`errors\` say why). Takes the \`actions:read\` permission.`,
   input: z.object({
     ...RepoInput,
     run_id: RunId,
@@ -447,7 +458,12 @@ export const getWorkflowRunGraph = defineOperation({
       .array(
         z.object({
           key: z.string().describe("The job's id in the workflow file."),
-          name: z.string().describe("Its name, without what an expression in it would add."),
+          name: z
+            .string()
+            .describe(
+              `Its name, without what an expression in it would add; cut to ${GRAPH_NAME_UNITS} UTF-16 units.`,
+            ),
+          name_cut: NameCut,
           needs: z.array(z.string()).describe("The keys of the jobs it waits for."),
           status: z
             .enum(["pending", "in_progress", "completed"])
@@ -459,6 +475,27 @@ export const getWorkflowRunGraph = defineOperation({
             .nullable()
             .describe(
               "As its dependents see it: a failure `continue-on-error` allows is a success.",
+            ),
+          jobs: z
+            .array(
+              z.object({
+                id: z.number().int().describe("The job's id within its run."),
+                name: z
+                  .string()
+                  .describe(
+                    `As \`actions.runs.jobs.get\` names it, cut to ${GRAPH_NAME_UNITS} UTF-16 units.`,
+                  ),
+                name_cut: NameCut,
+                status: JobStatus,
+                conclusion: JobConclusion,
+                started_at: z.number().int().nullable(),
+                completed_at: z.number().int().nullable(),
+                waiting_for: WaitingFor,
+                error: z.string().nullable().describe(`Cut to ${GRAPH_ERROR_UNITS} UTF-16 units.`),
+              }),
+            )
+            .describe(
+              "Its jobs in this attempt, one per matrix combination, by id, without steps (`actions.runs.jobs.get` has them); empty until the jobs it needs have ended.",
             ),
         }),
       )
@@ -472,7 +509,7 @@ export const getWorkflowRunGraph = defineOperation({
     tool: "get_workflow_run_graph",
     title: "Get a workflow run's job graph",
     description:
-      "Get a CI run's jobs as its workflow writes them: what each needs, and whether it waits, runs or ended.",
+      "Get a CI run's jobs as its workflow writes them: what each needs, whether it waits, runs or ended, and its jobs (one per matrix combination) with their ids and states.",
     readOnly: true,
   },
 });

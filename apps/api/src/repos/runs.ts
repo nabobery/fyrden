@@ -1,19 +1,21 @@
 import { isUlid, newUlid } from "@fyrden/adapters-cloudflare/git";
-import type {
-  approveWorkflowRun,
-  cancelWorkflowRun,
-  dispatchWorkflow,
-  forceCancelWorkflowRun,
-  getWorkflowRun,
-  getWorkflowRunGraph,
-  getWorkflowRunJob,
-  Input,
-  listRunsOfWorkflow,
-  listWorkflowRunJobs,
-  listWorkflowRuns,
-  listWorkflows,
-  Output,
-  rerunWorkflowRun,
+import {
+  type approveWorkflowRun,
+  type cancelWorkflowRun,
+  type dispatchWorkflow,
+  type forceCancelWorkflowRun,
+  GRAPH_ERROR_UNITS,
+  GRAPH_NAME_UNITS,
+  type getWorkflowRun,
+  type getWorkflowRunGraph,
+  type getWorkflowRunJob,
+  type Input,
+  type listRunsOfWorkflow,
+  type listWorkflowRunJobs,
+  type listWorkflowRuns,
+  type listWorkflows,
+  type Output,
+  type rerunWorkflowRun,
 } from "@fyrden/api-contract";
 import { parseCreatedFilter, runPhase, WORKFLOW_DIRECTORIES } from "@fyrden/domain/ci";
 import type { RepoDO } from "../do/RepoDO.js";
@@ -303,16 +305,29 @@ function graphStatus(job: GraphJob) {
   }
 }
 
+function cutText(text: string, units: number): { text: string; cut: boolean } {
+  if (text.length <= units) return { text, cut: false };
+  const high = text.charCodeAt(units - 1);
+  const low = text.charCodeAt(units);
+  const splitsPair = high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  return { text: text.slice(0, splitsPair ? units - 1 : units), cut: true };
+}
+
+function cutName(name: string): { name: string; name_cut: boolean } {
+  const { text, cut } = cutText(name, GRAPH_NAME_UNITS);
+  return { name: text, name_cut: cut };
+}
+
 /** The `actions.runs.graph.get` operation. */
 export async function getWorkflowRunGraphOperation(
   ctx: OpContext,
   input: Input<typeof getWorkflowRunGraph>,
 ): Promise<Output<typeof getWorkflowRunGraph>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
-  const answer = (await runStub(ctx, input.run_id, "graph").graph(
-    entry.id,
-    input.attempt,
-  )) as unknown as ReturnType<RunDO["graph"]>;
+  const answer = (await runStub(ctx, input.run_id, "graph").graph(entry.id, input.attempt, {
+    name: GRAPH_NAME_UNITS + 1,
+    error: GRAPH_ERROR_UNITS + 1,
+  })) as unknown as ReturnType<RunDO["graph"]>;
   if (!answer.ok) {
     if (answer.code === "run_not_found") throw runNotFound();
     throw new OperationError(404, "attempt_not_found", "The run has no such attempt.");
@@ -322,10 +337,20 @@ export async function getWorkflowRunGraphOperation(
     run_attempt: answer.attempt,
     jobs: answer.jobs.map((job) => ({
       key: job.key,
-      name: job.name,
+      ...cutName(job.name),
       needs: [...job.needs],
       status: graphStatus(job),
       conclusion: job.outcome,
+      jobs: job.jobs.map((instance) => ({
+        id: instance.jobId,
+        ...cutName(instance.name),
+        status: jobStatus(instance.status),
+        conclusion: instance.conclusion,
+        started_at: instance.startedAt,
+        completed_at: instance.completedAt,
+        waiting_for: instance.waitingFor,
+        error: instance.error === null ? null : cutText(instance.error, GRAPH_ERROR_UNITS).text,
+      })),
     })),
   };
 }
