@@ -38,7 +38,7 @@ export function PullHeader({
   repo: string;
   pull: PullRequest;
   viewer: string | null;
-  active: "conversation" | "files" | "conflicts" | "reviewers" | "code-owners";
+  active: "conversation" | "files" | "checks" | "conflicts" | "reviewers" | "code-owners";
 }) {
   const page = pullPage(owner, repo, pull.number);
   return (
@@ -69,6 +69,9 @@ export function PullHeader({
         </Link>
         <Link to={`${page}/files`} aria-current={active === "files" ? "page" : undefined}>
           Files changed
+        </Link>
+        <Link to={`${page}/checks`} aria-current={active === "checks" ? "page" : undefined}>
+          Checks
         </Link>
         <Link to={`${page}/reviewers`} aria-current={active === "reviewers" ? "page" : undefined}>
           Reviewers

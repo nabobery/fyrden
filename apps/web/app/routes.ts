@@ -46,6 +46,7 @@ export default [
   route(":owner/:repo/pull/:number/files", "routes/repo.pull.files.tsx"),
   route(":owner/:repo/pull/:number/files/patches", "routes/repo.pull.patches.ts"),
   route(":owner/:repo/pull/:number/conflicts", "routes/repo.pull.conflicts.tsx"),
+  route(":owner/:repo/pull/:number/checks", "routes/repo.pull.checks.tsx"),
   route(":owner/:repo/pull/:number/reviewers", "routes/repo.pull.reviewers.tsx"),
   route(":owner/:repo/pull/:number/code-owners", "routes/repo.pull.code-owners.tsx"),
   route(":owner/:repo/actions", "routes/repo.actions.tsx"),

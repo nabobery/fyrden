@@ -281,6 +281,8 @@ describe("a pull request's conversation", () => {
       timeline: [],
       commentPages: { next: null, first: null },
       reviewPages: { next: null, first: null },
+      checkRuns: { state: "read", body: { total_count: 0, check_runs: [], next_cursor: null } },
+      statuses: { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
     };
     const page = (pull: Record<string, unknown>, viewer: string | null) =>
       renderPage(Pull, "/ada/demo/pull/7", { ...base, pull: pullRequest(pull), viewer });
@@ -401,6 +403,8 @@ describe("changing a pull request", () => {
           timeline: [],
           commentPages: { next: null, first: null },
           reviewPages: { next: null, first: null },
+          checkRuns: { state: "read", body: { total_count: 0, check_runs: [], next_cursor: null } },
+          statuses: { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
         },
         {
           error: "changed",
@@ -423,6 +427,8 @@ describe("reactions on a pull request", () => {
     body: "b",
     commentPages: { next: null, first: null },
     reviewPages: { next: null, first: null },
+    checkRuns: { state: "read", body: { total_count: 0, check_runs: [], next_cursor: null } },
+    statuses: { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
     rules: null,
     permissions: null,
   };
@@ -645,6 +651,8 @@ describe("a pull request page whose session could not be checked", () => {
       timeline: [],
       commentPages: { next: null, first: null },
       reviewPages: { next: null, first: null },
+      checkRuns: { state: "read", body: { total_count: 0, check_runs: [], next_cursor: null } },
+      statuses: { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
     });
     expect(html).toContain("reload the page to write here");
     expect(html).not.toContain("Edit title and description");

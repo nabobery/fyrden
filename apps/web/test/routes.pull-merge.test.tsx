@@ -150,6 +150,8 @@ describe("the conversation's merge box", () => {
       timeline: [],
       commentPages: { next: null, first: null },
       reviewPages: { next: null, first: null },
+      checkRuns: { state: "read", body: { total_count: 0, check_runs: [], next_cursor: null } },
+      statuses: { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
       rules,
     });
 
