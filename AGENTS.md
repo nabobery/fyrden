@@ -87,15 +87,24 @@ pnpm hooks                      # opt in: lint and typecheck before every push
 10. **Sign off every commit**, merges included (`git commit -s`, see `CONTRIBUTING.md`). The person
    who submits a change signs off on it and is responsible for it, whoever or
    whatever wrote it.
+11. **Comments are the exception.** Prefer precise names and types. Keep a
+   comment only for a contract that other modules' callers rely on and types
+   can't express, an external fact (with its source), a security or
+   data-integrity invariant, or a directive such as `biome-ignore` or
+   `@ts-expect-error` with its reason. Don't restate code, document private
+   helpers by default, or record design history; design rationale goes in the
+   commit message or PR description.
 
 ## Reviews
 
 Every change gets an adversarial review before merge. A review prompt names
 the task and the decisions not to relitigate, the exact diff scope, and asks
 for: correctness, edge cases (empty input, boundaries, concurrency, retries),
-performance, security, maintainability and repo conventions; completeness
-(all callers, docs, tests) and leftover cleanup; concrete attempts to break the
-change; whether the tests prove what they claim, and whether any depends on time
+performance, security, maintainability and repo conventions, listing each
+added comment that breaks rule 11 as a NIT to remove before the commit;
+completeness (all callers, docs, tests) and leftover cleanup; concrete
+attempts to break the change; whether the tests prove what they claim, and
+whether any depends on time
 (a sleep, a timed wait, an alarm or background work that may or may not have run
 yet). Findings come with severity
 (BLOCKER, SHOULD-FIX, NIT), file and line, a failure scenario and a fix, and
