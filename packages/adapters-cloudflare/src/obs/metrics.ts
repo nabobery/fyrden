@@ -9,8 +9,7 @@ import {
 /**
  * Typed product and cost counters written to Analytics Engine. Every feature
  * counts the billable operations it makes (D1, R2, Durable Object, queue), so
- * per-deployment cost can be reported. A counter is added with the first
- * feature that emits it.
+ * per-deployment cost can be reported.
  *
  * Data point layout: index = metric name; blobs = dimensions in a fixed order;
  * doubles[0] = value. The index is always the metric name, never a value from

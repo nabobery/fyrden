@@ -1,6 +1,3 @@
-// A run's order as its repository records it: every change a list shows moves
-// it forward, whatever legal sequence of events drives the run; and the facts
-// read from a run's context, whose shape nothing promises.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { type AttemptEvent, type AttemptState, advanceAttempt } from "../../src/ci/run-state.js";
@@ -12,7 +9,6 @@ import {
   runStateSeq,
 } from "../../src/ci/run-summary.js";
 
-/** U+FFFD, what a character that is not shown becomes. */
 const REPLACED = String.fromCharCode(0xfffd);
 
 describe("a run's order", () => {

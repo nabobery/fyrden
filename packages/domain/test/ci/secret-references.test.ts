@@ -1,7 +1,4 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: these tests write workflow expressions, `${{ }}` included, as plain strings
-// Which secrets a job's expressions reference: names from `secrets.NAME` and
-// `secrets['NAME']`, every secret for any other use of the context, read from
-// the workflow `env` and that job's runner-evaluated fields only.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { EXPRESSION_SITES, type SiteFeature } from "../../src/ci/expression-sites.js";
@@ -18,7 +15,6 @@ function workflowOf(text: string): Workflow {
   return parsed.workflow;
 }
 
-/** Jobs `a` and `b`, each with one step; `a` gets `aLines` (indented 4) and `aStep` (indented 8). */
 const two = (aLines = "", aStep = "", top = "", bStep = "") =>
   [
     `${top}on: push`,
@@ -176,9 +172,6 @@ describe("secretReferences", () => {
   });
 });
 
-// --- Properties ----------------------------------------------------------------------------
-
-/** How a generated expression reads a name: a reference, a dynamic read, or a decoy. */
 type Form = "dot" | "index" | "dynamic" | "vars" | "literal";
 interface Ref {
   readonly form: Form;
@@ -222,14 +215,12 @@ function expression(r: Ref): string {
   }
 }
 
-/** A text field: each reference in its own `${{ }}`, with plain text between. */
 const text = (list: readonly Ref[]) =>
   JSON.stringify(
     list.length === 0
       ? "plain"
       : list.map((r) => `secrets.${r.name} \${{ ${expression(r)} }}`).join(" "),
   );
-/** A field whose value is one expression. */
 const single = (list: readonly Ref[]) =>
   JSON.stringify(list.length === 0 ? "${{ 1 }}" : `\${{ ${list.map(expression).join(" || ")} }}`);
 

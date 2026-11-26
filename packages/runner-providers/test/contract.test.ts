@@ -29,7 +29,6 @@ const byoUnderTest = (): ProviderUnderTest => ({
 describeProviderContract("fake", () => fakeUnderTest());
 describeProviderContract("byo", byoUnderTest);
 
-/** A subject whose provider is the fake's, changed. */
 const wrong =
   (change: (real: RunnerProvider, subject: ProviderUnderTest) => Partial<RunnerProvider>) => () => {
     const subject = fakeUnderTest();
