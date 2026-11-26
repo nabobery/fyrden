@@ -3,7 +3,6 @@
  * once, and reads from it which run and job a check came from.
  */
 
-/** A check's run, attempt and job. */
 export interface CheckOrigin {
   readonly runId: string;
   readonly attempt: number;
@@ -11,7 +10,6 @@ export interface CheckOrigin {
   readonly jobId: number | null;
 }
 
-/** Job `jobId`'s check. */
 export const jobCheckKey = (runId: string, attempt: number, jobId: number): string =>
   `${runId}/a${attempt}/j${jobId}`;
 
