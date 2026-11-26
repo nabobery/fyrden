@@ -417,7 +417,6 @@ describe("FyrdenClient", () => {
       baseUrl: "https://f.test",
       fetch: fake([]).fetchFn,
     });
-    // Never run: what the compiler must refuse.
     const refused = () =>
       // @ts-expect-error `state`, `reason` and `retry_after_ms` would be lost: read them with `call`.
       client.paginate("repos.paths.list", { owner: "me", repo: "r" });

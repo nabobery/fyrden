@@ -36,7 +36,6 @@ const NextCursor = z
   .nullable()
   .describe("Pass as `cursor` for the next page; null on the last page.");
 
-/** A run as a list shows it. */
 export const WorkflowRunSummary = z.object({
   id: z.string(),
   run_number: z

@@ -67,12 +67,10 @@ const IMAGE =
 const LABEL = `ubuntu-latest:docker://${IMAGE}`;
 const seam = join(import.meta.dirname, "../e2e/fixtures/run-seam/wrangler.jsonc");
 
-/** Names this run's containers, and (in the workflow's name) the job containers the runner starts. */
 const nonce = randomBytes(4).toString("hex");
 const CONTAINER = `fyrden-runner-${nonce}`;
 const WORKFLOW_NAME = `runner-${nonce}`;
 const BURST = 120;
-/** The variables the runner sets from the run's github context, printed by the job. */
 const CONTEXT_VARS = [
   "GITHUB_EVENT_NAME",
   "GITHUB_REF",
@@ -138,7 +136,6 @@ interface Exit {
   output: string;
 }
 
-/** A command's exit and its output, both streams; `onLine` sees each line as it comes. */
 function exec(command: string, args: readonly string[], onLine?: (line: string) => void) {
   return new Promise<Exit>((done, fail) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -190,7 +187,6 @@ let forkRun = "";
 let publicRun = "";
 const completedRuns = new Set<string>();
 
-/** A workflow of one quick job, for runs no runner may take. */
 const never = (name: string, on: string) =>
   [
     `name: ${name}`,
@@ -203,7 +199,6 @@ const never = (name: string, on: string) =>
     "",
   ].join("\n");
 
-/** The run of `repo` for `event` at `sha`, once its trigger has started it. */
 async function triggered(repo: string, event: string, sha: string): Promise<StoredRun> {
   const id = (await owner.api.call("repos.get", { owner: org, repo })).id;
   const found = await eventually(`a ${event} run of ${org}/${repo} at ${sha}`, async () => {
@@ -214,7 +209,6 @@ async function triggered(repo: string, event: string, sha: string): Promise<Stor
   return found[0] as StoredRun;
 }
 
-/** The run's pending job rows in the directory, as the claim reads them. */
 async function pending(runId: string) {
   expect(runId).toMatch(/^[0-9A-Z]{26}$/);
   const { results } = await queryDirectory(
@@ -226,7 +220,6 @@ async function pending(runId: string) {
   return results;
 }
 
-/** Once the run's one job is queued, has the run reserve now (as its alarm would). */
 async function queuedUnreserved(repo: string, runId: string) {
   await eventually(`the job of ${runId} queued`, async () => {
     const { jobs } = await owner.api.call("actions.runs.jobs.list", {
@@ -245,7 +238,6 @@ async function queuedUnreserved(repo: string, runId: string) {
   return (await res.json()) as { seq: number; state: string; waitingFor: string | null }[];
 }
 
-/** Waits until run `runId` of `repo` has its one job queued and offered to the account's runners. */
 async function queued(repo: string, runId: string) {
   await eventually(`the job of ${runId} queued`, async () => {
     const { jobs } = await owner.api.call("actions.runs.jobs.list", {
@@ -261,7 +253,6 @@ async function queued(repo: string, runId: string) {
   });
 }
 
-/** Removes this run's runner containers and whatever the runner left of its job container. */
 async function cleanUp(): Promise<void> {
   for (const name of [CONTAINER, `${CONTAINER}-register`])
     await docker(["rm", "-f", name]).catch(() => undefined);
@@ -578,7 +569,6 @@ async function recordedUpdateLogs(wireId: number): Promise<RecordedUpdateLog[]> 
     .filter((call) => call.request.taskId === wireId);
 }
 
-/** The run object's SQLite database in the local persistence, found by its run id. */
 async function runDatabase(runId: string): Promise<DatabaseSync> {
   const dir = join(forge.scratch, "state", "v3", "do", "fyrden-api-RunDO");
   for (const file of (await readdir(dir)).filter((f) => f.endsWith(".sqlite"))) {
@@ -623,7 +613,6 @@ function register(): Promise<void> {
   return registration;
 }
 
-/** Pushes `source` (workflow `name`) and lets the registered runner take its one job. */
 async function runWorkflow(
   name: string,
   source: string,
@@ -686,7 +675,6 @@ async function runWorkflow(
   return { runId, run, jobs, exit, sha, pushed };
 }
 
-/** Every object under the run's prefix, and the lines of the chunks the manifest names, in its order. */
 async function storedLines(
   runId: string,
   manifest: readonly { start_index: number; end_index: number; r2_key: string }[],
@@ -707,7 +695,6 @@ async function storedLines(
   return { objects, rows };
 }
 
-/** A job's log of the app's run as the API gives it: small pages, its last rows, and text without its times. */
 async function readBack(runId: string, jobId: number) {
   const job = { owner: org, repo: "app", run_id: runId, job_id: jobId };
   const rows: { i: number; c: string | undefined }[] = [];
@@ -768,7 +755,6 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
           .filter((l) => l !== "")
           .map((l) => ({ ...(JSON.parse(l) as { i: number; c: string }), chunk })),
       );
-      // The job's own log, as stored, explains a failure.
       const stored = shown(rows.map((r) => r.c).join("\n"));
 
       expect(run.conclusion, stored).toBe("success");
@@ -777,7 +763,6 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       ]);
       expect(JSON.parse(instance.outputs ?? "null")).toEqual({ answer: "42" });
       expect(log.state).toBe("complete");
-      // What the runner sent, as the seam recorded it on the way to the API.
       const { wire_id: wireId } = db
         .prepare("SELECT wire_id FROM ci_tasks WHERE task = ?")
         .get(instance.task) as { wire_id: number };
@@ -844,13 +829,11 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       const { from, rows: count } = burst.log;
       expect(rows.slice(from, from + count).some((r) => r.c === PRINTED[0])).toBe(true);
       note(`steps: ${steps.map((s) => `${s.name} ${JSON.stringify(s.log)}`).join("; ")}`);
-      // Read back through the API, by the page and as text followed by its links.
       const back = await readBack(runId, jobs[0]?.id as number);
       expect(back.rows).toEqual(rows.map(({ i, c }) => ({ i, c })));
       expect(back.tail).toEqual(rows.slice(-3).map((r) => r.i));
       // A row may hold newlines of its own: the runner prints some such lines.
       expect(back.text).toBe(`${rows.map((r) => r.c).join("\n")}\n`);
-      // The context the push's trigger built, as the job saw it.
       const printed = Object.fromEntries(
         rows
           .map((r) => /^ctx (GITHUB_[A-Z_]+)=(.*)$/.exec(r.c))

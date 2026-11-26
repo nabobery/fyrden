@@ -87,7 +87,6 @@ export const LOG_VIEWER_POLICY = {
   rechecks: 50,
 } as const;
 
-/** Close codes. */
 export const LOG_CLOSE = {
   done: 1000,
   life: 1001,
@@ -180,7 +179,6 @@ export type LogLine = StoredLogLine;
 
 export const logLine = (i: number, t: number | null, c: string): StoredLogRow => ({ i, t, c });
 
-/** Pause and count points, for tests. */
 export interface ViewerHooks {
   /** Before each frame is checked and sent (synchronous: nothing may come between it and the send). */
   beforeSend?: (socket: string) => void;
@@ -228,7 +226,6 @@ export type StoreTicketAnswer =
   | { readonly ok: true; readonly expiresAt: number; readonly stored: null; readonly budget: null }
   | { readonly ok: false; readonly code: "run_not_found" | "job_not_found" | "too_many_tickets" };
 
-/** What the viewers need from their object. */
 export interface ViewersHost {
   readonly env: Env;
   readonly engine: RunEngine;
@@ -331,8 +328,6 @@ export class LogViewers {
   uploadWaiting(): boolean {
     return this.#waitingUploads > 0;
   }
-
-  // ------------------------------------------------------------------ tickets and admission
 
   /**
    * Stores a ticket's hash for job `jobId`, redeemable by `credentialId`
@@ -535,14 +530,10 @@ export class LogViewers {
       jobId: admission.jobId,
       socket: state.id,
     });
-    // Backfill and what follows start in the job.
     host.ensureSlice();
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  // ------------------------------------------------------------------ publishing a log request's rows
-
-  /** Whether job `jobId` has a socket open. */
   watched(jobId: number): boolean {
     return this.#open(`j${jobId}`).length > 0;
   }
@@ -594,12 +585,10 @@ export class LogViewers {
     for (const task of [...this.#caches.keys()]) this.#dropCache(task);
   }
 
-  /** Bytes the caches hold (for tests and the bound). */
   cacheBytes(): number {
     return this.#cacheBytes;
   }
 
-  /** Every open socket's state (for tests). */
   attachments(): ViewerAttachment[] {
     return this.#open()
       .map((ws) => stateOf(ws))
@@ -629,8 +618,6 @@ export class LogViewers {
     const cache = task === null ? undefined : this.#caches.get(task);
     return (i) => (cache && i >= cache.base ? cache.rows[i - cache.base] : undefined);
   }
-
-  // ------------------------------------------------------------------ client messages
 
   /**
    * A client's message. An ack moving forward within what was sent is
@@ -713,22 +700,17 @@ export class LogViewers {
     this.#unwatched(stateOf(ws)?.jobId);
   }
 
-  /** Releases the cache of job `jobId`'s task once no socket watches it. */
   #unwatched(jobId: number | undefined): void {
     if (jobId === undefined || this.watched(jobId)) return;
     const task = this.host.engine.instance(jobId)?.task;
     if (task !== null && task !== undefined) this.#dropCache(task);
   }
 
-  // ------------------------------------------------------------------ erasure
-
   /** The run was erased: every socket closes 4404, and nothing is kept. */
   erased(): void {
     for (const ws of this.#open()) this.#close(ws, "erased", "the run was erased");
     this.dropCaches();
   }
-
-  // ------------------------------------------------------------------ the job
 
   /**
    * One run of `ci_log_viewers`: closes sockets past their life or full for
@@ -798,7 +780,6 @@ export class LogViewers {
     return { done: true };
   }
 
-  /** What a socket waits for: rows it can be sent now or once checked, its end, or nothing yet. */
   #work(state: ViewerAttachment, log: JobLog): "rows" | "end" | "none" {
     if (state.sent < log.linesEnd) return "rows";
     if (this.#fromCache(log.task)(state.sent)) return "rows";
@@ -1136,8 +1117,6 @@ export class LogViewers {
     this.#close(ws, "budget", "budget spent: ask for a new ticket");
   }
 
-  // ------------------------------------------------------------------ sending
-
   /**
    * Sends `ws` frames from `get` (rows by index) from its cursor on, while
    * it is checked, alive, not blocked (an ack reopens a blocked socket) and
@@ -1256,7 +1235,6 @@ export class LogViewers {
     this.#unwatched(state?.jobId);
   }
 
-  /** Open sockets (of `tag`), those this object closed left out. */
   #open(tag?: string): WebSocket[] {
     return this.host.sockets(tag).filter((ws) => !this.#closed.has(ws) && ws.readyState === OPEN);
   }
@@ -1266,7 +1244,6 @@ export class LogViewers {
   }
 }
 
-/** Positions compared: index, then offset. */
 function compare(i: number, o: number, j: number, p: number): number {
   return i !== j ? i - j : o - p;
 }
@@ -1280,14 +1257,12 @@ function write(ws: WebSocket, state: ViewerAttachment): void {
   ws.serializeAttachment(state);
 }
 
-/** Whether frames out past an ack (`ViewerAttachment.out`) are within what a client may leave unacknowledged. */
 function drained(out: readonly number[]): boolean {
   let bytes = 0;
   for (let k = 2; k < out.length; k += 3) bytes += out[k] ?? 0;
   return out.length / 3 <= LOG_VIEWER_POLICY.ackFrames && bytes <= LOG_VIEWER_POLICY.ackBytes;
 }
 
-/** Whether a frame of `bytes` fits the window past the socket's ack. */
 function fits(state: ViewerAttachment, bytes: number): boolean {
   let out = 0;
   for (let k = 2; k < state.out.length; k += 3) out += state.out[k] ?? 0;
@@ -1297,11 +1272,6 @@ function fits(state: ViewerAttachment, bytes: number): boolean {
   );
 }
 
-/**
- * The next frame from the socket's cursor: whole rows while the frame stays
- * within `frameBytes`, or the next part of a row too long for one; null when
- * `get` has nothing at the cursor.
- */
 function nextFrame(
   state: ViewerAttachment,
   get: (i: number) => ViewerLine | undefined,
@@ -1345,7 +1315,6 @@ function nextFrame(
   return { text, bytes, sent: next, sentPart: 0 };
 }
 
-/** Whether a row goes whole in a frame of its own. */
 function rowFits(row: ViewerLine): boolean {
   if (omitted(row)) return true;
   if ("encodedBytes" in row)

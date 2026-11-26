@@ -40,7 +40,6 @@ interface Page {
 
 const row = (i: number, c: string, t: number | null = null): StoredLogLine => ({ i, t, c });
 
-/** A run of one job; with `task`, a runner holds it. */
 async function running(task = true) {
   const f = await orgRepo();
   const runId = await started(f, workflow(job("a")));
@@ -53,7 +52,6 @@ async function running(task = true) {
 }
 type Job = Awaited<ReturnType<typeof running>>;
 
-/** Stores `chunks` as the job's log, as ingestion does: objects, and the manifest that names them. */
 async function stored(
   t: Job,
   chunks: readonly (readonly StoredLogLine[])[],
@@ -94,7 +92,6 @@ async function page(t: Job, query = ""): Promise<Page> {
   return answer.body;
 }
 
-/** Every page from the first, by cursor, until a page gives none or moves no further. */
 async function pages(t: Job, query = ""): Promise<Page[]> {
   const found: Page[] = [];
   let cursor: string | null = null;
@@ -109,7 +106,6 @@ async function pages(t: Job, query = ""): Promise<Page[]> {
   return found;
 }
 
-/** Rows with pieces joined, each piece checked to start where the last ended. */
 function joined(rows: readonly Row[]): StoredLogLine[] {
   const lines: StoredLogLine[] = [];
   let open = false;
