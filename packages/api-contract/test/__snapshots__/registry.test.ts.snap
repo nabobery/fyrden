@@ -12895,6 +12895,124 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "string",
                           },
+                          "steps": {
+                            "description": "As the runner last reported them, up to 30 seconds old while the job runs; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "completed_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "conclusion": {
+                                  "anyOf": [
+                                    {
+                                      "enum": [
+                                        "success",
+                                        "failure",
+                                        "cancelled",
+                                        "skipped",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "log": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "from": {
+                                          "maximum": 9007199254740991,
+                                          "minimum": -9007199254740991,
+                                          "type": "integer",
+                                        },
+                                        "rows": {
+                                          "maximum": 9007199254740991,
+                                          "minimum": -9007199254740991,
+                                          "type": "integer",
+                                        },
+                                      },
+                                      "required": [
+                                        "from",
+                                        "rows",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                  "description": "Fyrden: its rows of the job's log (the first, and how many).",
+                                },
+                                "name": {
+                                  "description": "As the workflow writes it, expressions in it not evaluated: its \`name\`, else \`Run\` and the first line of what it runs.",
+                                  "type": "string",
+                                },
+                                "number": {
+                                  "description": "Its place among the job's steps, from 1.",
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                "stage": {
+                                  "description": "Fyrden: \`main\` for the workflow's own steps.",
+                                  "enum": [
+                                    "setup",
+                                    "containers",
+                                    "pre",
+                                    "main",
+                                    "post",
+                                    "cleanup",
+                                  ],
+                                  "type": "string",
+                                },
+                                "started_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "status": {
+                                  "enum": [
+                                    "queued",
+                                    "in_progress",
+                                    "completed",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "number",
+                                "name",
+                                "stage",
+                                "status",
+                                "conclusion",
+                                "started_at",
+                                "completed_at",
+                                "log",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
                           "waiting_for": {
                             "anyOf": [
                               {
@@ -12924,6 +13042,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "check",
                           "log_complete",
                           "error",
+                          "steps",
                         ],
                         "type": "object",
                       },

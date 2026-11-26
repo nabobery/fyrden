@@ -834,6 +834,16 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       // Every printed line once, in order; the runner's own lines (step headers, the
       // container's setup) around them.
       expect(rows.map((r) => r.c).filter((c) => /^(burst|trickle) \d+$/.test(c))).toEqual(PRINTED);
+      const { steps } = jobs[0] as (typeof jobs)[number];
+      expect(steps.length).toBeGreaterThan(0);
+      expect(steps.map((s) => [s.status, s.conclusion])).toEqual(
+        steps.map(() => ["completed", "success"]),
+      );
+      const burst = steps.find((s) => s.stage === "main" && s.log !== null);
+      if (!burst?.log) throw new Error("no step has rows of the log");
+      const { from, rows: count } = burst.log;
+      expect(rows.slice(from, from + count).some((r) => r.c === PRINTED[0])).toBe(true);
+      note(`steps: ${steps.map((s) => `${s.name} ${JSON.stringify(s.log)}`).join("; ")}`);
       // Read back through the API, by the page and as text followed by its links.
       const back = await readBack(runId, jobs[0]?.id as number);
       expect(back.rows).toEqual(rows.map(({ i, c }) => ({ i, c })));

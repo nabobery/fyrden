@@ -27,6 +27,7 @@ import {
   runStateSeq,
   type SecretMaskOffer,
   type SecretReferences,
+  type Step,
   secretReferences,
   type TokenScope,
   toPayloadInstance,
@@ -78,6 +79,7 @@ import {
   type WaitingFor,
 } from "./run/reservations.js";
 import { runRetentionMs } from "./run/retention.js";
+import { type JobStep, jobSteps } from "./run/steps.js";
 import { StoredLogs } from "./run/stored-logs.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
@@ -201,6 +203,7 @@ export interface JobView {
   readonly check: { readonly state: string | null; readonly code: string | null };
   readonly logComplete: boolean | null;
   readonly error: string | null;
+  readonly steps: readonly JobStep[];
   /** Why a queued job is not offered to runners yet: its CI minutes or the day's capacity; null otherwise. */
   readonly waitingFor: WaitingFor | null;
 }
@@ -306,6 +309,7 @@ export class RunDO extends MigratingDO {
   readonly #reservations: RunReservations;
   readonly storedLogs: StoredLogs;
   readonly #logPages: LogPages;
+  readonly #steps = new Map<number, string>();
   /** The job logs' live sockets. */
   readonly viewers: LogViewers;
   /**
@@ -351,6 +355,11 @@ export class RunDO extends MigratingDO {
       logEnded: (task, completedAt) => host.#logs.taskEnded(task, completedAt),
       logComplete: (task) => host.#logs.complete(task),
       jobEnded: (jobId) => host.viewers.jobEnded(jobId),
+      takeSteps: (task) => {
+        const steps = host.#steps.get(task);
+        host.#steps.delete(task);
+        return steps;
+      },
       maxJobMinutes: () => host.#ci().maxJobMinutes,
       reservationWanted: (jobId) => host.#reservations.want(jobId),
       reservationEnded: (jobId, at) => host.#reservations.end(jobId, at),
@@ -395,7 +404,7 @@ export class RunDO extends MigratingDO {
       reservationsWaiting: () => host.#reservations.waiting(),
       assign: (jobId, key, accountId) => host.assign(jobId, key, accountId),
       taskLive: (ref) => host.taskLive(ref),
-      updateTask: (ref) => host.updateTask(ref),
+      updateTask: (ref, steps) => host.updateTask(ref, steps),
       completeTask: (ref, report) => host.completeTask(ref, report),
       logComplete: (task) => host.#logs.complete(task),
       addJobTokenMask: (task, token) => host.#logs.addMask(task, token),
@@ -488,6 +497,10 @@ export class RunDO extends MigratingDO {
       this.#model = { source: run.workflow_source, model: loaded.model };
     }
     return this.#model.model;
+  }
+
+  #written(jobKey: string): readonly Step[] {
+    return this.#loadModel().workflow.jobs.find((j) => j.id.value === jobKey)?.steps ?? [];
   }
 
   /** The estimates of the tasks' kept log-mask matchers, in bytes (for tests). */
@@ -967,6 +980,10 @@ export class RunDO extends MigratingDO {
         check: { state: row.check_desired, code: row.parked ?? row.check_code },
         logComplete: row.log_complete === null ? null : row.log_complete === 1,
         error: row.error,
+        steps:
+          row.steps === null
+            ? []
+            : jobSteps(row.steps, this.#written(row.job_key), row.status === "completed"),
         waitingFor: row.status === "queued" ? row.waiting_for : null,
       })),
       next: rows.length > limit ? (page.at(-1) as InstanceRow).job_id : null,
@@ -1237,12 +1254,13 @@ export class RunDO extends MigratingDO {
       if (!this.engine.applyInstance(row, { kind: "unassign" })) return false;
       this.engine.exec(
         `UPDATE run_instances SET task = NULL, assign_key = NULL, started_at = NULL,
-           heartbeat_at = NULL, queued_at = ?
+           heartbeat_at = NULL, steps = NULL, queued_at = ?
          WHERE job_id = ?`,
         row.queued_at,
         row.job_id,
       );
       this.#reservations.unassigned(row.job_id);
+      this.#steps.delete(ref.task);
       this.#logs.taskEnded(ref.task, this.context.now());
       this.engine.ensureDeadlines();
       return true;
@@ -1279,18 +1297,20 @@ export class RunDO extends MigratingDO {
   }
 
   /** A heartbeat; `cancel` tells the runner to stop. */
-  updateTask(ref: TaskRef): TaskAnswer<{ cancel: boolean }> {
+  updateTask(ref: TaskRef, steps?: string | null): TaskAnswer<{ cancel: boolean }> {
     return this.#tx((): TaskAnswer<{ cancel: boolean }> => {
       const found = this.#task(ref);
       if (!("row" in found)) return { ok: false, code: found.code };
       const { row } = found;
       if (row.status === "completed") return { ok: false, code: "task_finished" };
       const now = this.context.now();
+      if (steps) this.#steps.set(ref.task, steps);
       // Heartbeats come every few seconds; writing each would cost a row each.
       if ((row.heartbeat_at ?? 0) + this.policy.heartbeatWriteMs <= now) {
         this.engine.exec(
-          "UPDATE run_instances SET heartbeat_at = ? WHERE job_id = ?",
+          "UPDATE run_instances SET heartbeat_at = ?, steps = COALESCE(?, steps) WHERE job_id = ?",
           now,
+          this.#steps.get(ref.task) ?? null,
           row.job_id,
         );
         this.engine.ensureDeadlines();
@@ -1302,7 +1322,12 @@ export class RunDO extends MigratingDO {
   /** The runner's final result. A task that is not current is refused: the fence after cancel and re-run. */
   completeTask(
     ref: TaskRef,
-    report: { result: RunnerResult; outputs?: Record<string, string>; logComplete: boolean },
+    report: {
+      result: RunnerResult;
+      outputs?: Record<string, string>;
+      logComplete: boolean;
+      steps?: string | null;
+    },
   ): TaskAnswer<{ conclusion: InstanceConclusion }> {
     return this.#tx((): TaskAnswer<{ conclusion: InstanceConclusion }> => {
       const found = this.#task(ref);
@@ -1332,6 +1357,7 @@ export class RunDO extends MigratingDO {
           outputs: accepted.ok ? accepted.text : null,
           error: accepted.ok ? null : accepted.error,
           logComplete: report.logComplete,
+          steps: report.steps ?? null,
         },
       );
       const done = this.engine.instance(row.job_id) as InstanceRow;
@@ -1786,6 +1812,7 @@ export class RunDO extends MigratingDO {
       return true;
     });
     if (!erased) return false;
+    this.#steps.clear();
     this.viewers.erased();
     this.#logs.erased();
     this.#model = undefined;

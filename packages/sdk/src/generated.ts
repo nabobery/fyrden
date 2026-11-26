@@ -8540,6 +8540,24 @@ export type ActionsRunsJobsListOutput = {
     /** Fyrden: whether every log row reached durable storage; null while it runs. */
     log_complete: boolean | null;
     error: string | null;
+    /** As the runner last reported them, up to 30 seconds old while the job runs; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them. */
+    steps: ({
+      /** Its place among the job's steps, from 1. */
+      number: number;
+      /** As the workflow writes it, expressions in it not evaluated: its `name`, else `Run` and the first line of what it runs. */
+      name: string;
+      /** Fyrden: `main` for the workflow's own steps. */
+      stage: "setup" | "containers" | "pre" | "main" | "post" | "cleanup";
+      status: "queued" | "in_progress" | "completed";
+      conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+      started_at: number | null;
+      completed_at: number | null;
+      /** Fyrden: its rows of the job's log (the first, and how many). */
+      log: {
+        from: number;
+        rows: number;
+      } | null;
+    })[];
     /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
     waiting_for?: "ci_minutes" | "daily_capacity" | null;
   })[];

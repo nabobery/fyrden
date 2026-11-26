@@ -144,6 +144,31 @@ export const WorkflowJob = z.object({
     .nullable()
     .describe("Fyrden: whether every log row reached durable storage; null while it runs."),
   error: z.string().nullable(),
+  steps: z
+    .array(
+      z.object({
+        number: z.number().int().describe("Its place among the job's steps, from 1."),
+        name: z
+          .string()
+          .describe(
+            "As the workflow writes it, expressions in it not evaluated: its `name`, else `Run` and the first line of what it runs.",
+          ),
+        stage: z
+          .enum(["setup", "containers", "pre", "main", "post", "cleanup"])
+          .describe("Fyrden: `main` for the workflow's own steps."),
+        status: z.enum(["queued", "in_progress", "completed"]),
+        conclusion: z.enum(["success", "failure", "cancelled", "skipped"]).nullable(),
+        started_at: z.number().int().nullable(),
+        completed_at: z.number().int().nullable(),
+        log: z
+          .object({ from: z.number().int(), rows: z.number().int() })
+          .nullable()
+          .describe("Fyrden: its rows of the job's log (the first, and how many)."),
+      }),
+    )
+    .describe(
+      "As the runner last reported them, up to 30 seconds old while the job runs; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
+    ),
   waiting_for: z
     .enum(["ci_minutes", "daily_capacity"])
     .nullable()
