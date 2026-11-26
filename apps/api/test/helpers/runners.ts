@@ -34,15 +34,23 @@ export const ROOMY_FLEET: Partial<Env> = { FYRDEN_CI_FLEET: "100000" } as Partia
 
 export const ON: Partial<Env> = { FYRDEN_CI_RUNNERS: "on", ...ROOMY_FLEET } as Partial<Env>;
 
-/** Runs the app against the test env with some bindings replaced. */
-export async function call(path: string, init: RequestInit, overrides: Partial<Env> = ON) {
-  const ctx = createExecutionContext();
+/**
+ * Runs the app against the test env with some bindings replaced, and waits
+ * for its background work; with `background`, that is left to the caller.
+ */
+export async function call(
+  path: string,
+  init: RequestInit,
+  overrides: Partial<Env> = ON,
+  background?: ExecutionContext,
+) {
+  const ctx = background ?? createExecutionContext();
   const res = await createApp().fetch(
     new Request(`${ORIGIN}${path}`, init),
     { ...env, ...overrides },
     ctx,
   );
-  await waitOnExecutionContext(ctx);
+  if (!background) await waitOnExecutionContext(ctx);
   return res;
 }
 
@@ -60,6 +68,7 @@ export function runnerCall(
     credentials?: Credentials;
     overrides?: Partial<Env>;
     headers?: Record<string, string>;
+    background?: ExecutionContext;
   } = {},
 ) {
   return call(
@@ -79,6 +88,7 @@ export function runnerCall(
       body,
     },
     options.overrides ?? ON,
+    options.background,
   );
 }
 
