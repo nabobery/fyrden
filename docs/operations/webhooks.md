@@ -68,7 +68,7 @@ hooks:
 | Event | Key |
 |---|---|
 | `status` | `position.epoch`, `id` |
-| `check_run` | `head_sha`, `name`, `attempt`, `action` |
+| `check_run` | `position.epoch`, `head_sha`, `name`, `attempt`, `action` (a restore takes the check record back, so an attempt number can be used again) |
 | `workflow_run` | `id`, `run_attempt`, `action` |
 | `workflow_job` | `run_id`, `id`, `action` |
 

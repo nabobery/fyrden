@@ -212,7 +212,7 @@ export class RunHistory {
         let run = runs.get(runId);
         if (!run) {
           const held = this.#held(runId);
-          if (!held) return true;
+          if (!held) return false;
           run = { told: toldOf(held), admitted: false };
           runs.set(runId, run);
         }

@@ -670,6 +670,16 @@ describe("a matrix larger than the Free plan tells job by job", () => {
     ]);
   });
 
+  it("sends no in-between event of a run the repository does not hold", async () => {
+    await t.createHook({ events: ["check_run"] });
+    const runId = await started(f, SOURCE);
+    await inRepo(t.stub(), (r: RepoDO) =>
+      r.git.context.storage.sql.exec("DELETE FROM ci_runs WHERE run_id = ?", runId),
+    );
+    await t.stub().startCheckAttempts(f.sha, [{ name: "late", startKey: `${runId}/a1/j9` }]);
+    expect(await counts("check_run")).toEqual({});
+  });
+
   it("counts afresh for a re-run", async () => {
     const runId = await started(f, matrix(33));
     await advance(runId, 2_000);
