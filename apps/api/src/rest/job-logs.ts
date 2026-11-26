@@ -25,8 +25,7 @@ const noStore: MiddlewareHandler = async (c, next) => {
  * (and under `/api/v3`): a page of a job's log as plain text, each row a
  * line after its time as GitHub writes it, with `Link: rel="next"` while
  * more is stored, so a client that follows it gets the whole log. The same
- * page, bounds and access as `actions.runs.jobs.logs.read`; outside the
- * registry because its answer is not JSON.
+ * page, bounds and access as `actions.runs.jobs.logs.read`.
  */
 export function mountJobLogs(app: Hono<{ Bindings: Env; Variables: AuthVariables }>): void {
   app.on(

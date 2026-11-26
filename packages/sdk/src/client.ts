@@ -21,7 +21,6 @@ export type ItemOf<K extends Paged> = K extends Paged
     : never
   : never;
 
-/** Every member of a union at once: what an input must hold to suit any of the operations. */
 type AllOf<U> = (U extends unknown ? (u: U) => void : never) extends (all: infer I) => void
   ? I
   : never;
@@ -147,7 +146,6 @@ export class FyrdenClient {
     refuseRedirect(response);
     const text = await response.text();
     if (!response.ok) {
-      // A problem document, or anything else (a proxy's HTML page): an error with its status.
       const problem = parseObject(text) ?? {};
       throw new FyrdenError(
         response.status,
@@ -255,7 +253,6 @@ function retryAfterOf(
   return Math.max(0, Math.ceil((at - now()) / 1000));
 }
 
-/** `text` as a JSON object, or undefined when it is not one. */
 function parseObject(text: string): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(text);

@@ -7,7 +7,6 @@ import { inRun, job, started, workflow } from "./helpers/runs.js";
 
 const CHUNKS = 400;
 
-/** A running job whose log has `CHUNKS` chunks of 3 lines, but for the one at `hole`. */
 async function chunked(hole?: number) {
   const f = await orgRepo();
   const runId = await started(f, workflow(job("a")));
@@ -31,7 +30,6 @@ async function chunked(hole?: number) {
   return runId;
 }
 
-/** What `fn` answers, and the rows of the object's tables it read. */
 function counted<T>(run: RunDO, fn: () => T) {
   const { sql } = run.context.storage;
   const exec = sql.exec.bind(sql);

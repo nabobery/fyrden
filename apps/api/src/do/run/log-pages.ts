@@ -86,7 +86,6 @@ export interface LogPagesHost {
   charge(chunks: number): Promise<LogReadCharge>;
 }
 
-/** Pause points, for tests. */
 export interface LogPageHooks {
   beforeChunkGet?: (key: string) => Promise<void> | void;
   afterChunkGet?: (key: string) => Promise<void> | void;

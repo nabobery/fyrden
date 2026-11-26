@@ -31,7 +31,6 @@ import { REGISTER_RUNNER_SQL } from "../src/runner/registry.js";
 const DAY = 86_400_000;
 const MINUTE = 60_000;
 
-/** `db` with D1's clock at `clock.now` (milliseconds) in every ledger statement. */
 function clocked(db: D1Database, clock: { now: number }): D1Database {
   const rewrite = (query: string) => query.split(CI_NOW).join(`(${clock.now})`);
   return new Proxy(db, {
