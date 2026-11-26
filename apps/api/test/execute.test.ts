@@ -10,6 +10,8 @@ import { z } from "zod";
 import {
   executeOperation,
   type Handlers,
+  type ListResult,
+  listResult,
   type OpContext,
   OperationError,
   type StatusResult,
@@ -46,6 +48,21 @@ const putOp = defineOperation({
   mcp: false,
 });
 
+const countedOp = defineOperation({
+  id: "test.counted",
+  method: "GET",
+  path: "/test/counted",
+  summary: "A counted list",
+  input: z.object({ page: z.number().default(1), per_page: z.number().default(30) }),
+  output: z.array(z.string()),
+  countedList: true,
+  permission: AUTHENTICATED,
+  principals: ["user"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: false,
+});
+
 const record = { id: "tok_1", principalType: "user", scopes: [] as string[] } as TokenRecord;
 
 function ctx(mode: "read" | "write", fresh: boolean): OpContext {
@@ -67,6 +84,40 @@ function ctx(mode: "read" | "write", fresh: boolean): OpContext {
     waitUntil: () => {},
   };
 }
+
+describe("a countedList operation", () => {
+  const run = (op: OperationDef, answer: unknown) =>
+    executeOperation(op, async () => answer as never, ctx("read", true), {});
+
+  it("answers its items, with how many there are in all beside them", async () => {
+    expect(await run(countedOp, listResult(["a"], 7))).toEqual({
+      ok: true,
+      output: ["a"],
+      total: 7,
+    });
+  });
+
+  it("is a bug without a total, as a total is anywhere else", async () => {
+    await expect(run(countedOp, ["a"])).rejects.toThrow("answered without a total");
+    await expect(run(countedOp, { items: ["a"], total: 1 })).rejects.toThrow(
+      "answered without a total",
+    );
+    for (const total of [-1, 0, 1.5, Number.NaN])
+      await expect(run(countedOp, listResult(["a"], total))).rejects.toThrow("total");
+    const { countedList: _, ...plain } = countedOp;
+    await expect(run(plain as unknown as OperationDef, listResult(["a"], 1))).rejects.toThrow(
+      "is no countedList",
+    );
+  });
+
+  it("is typed to answer a list result", () => {
+    const handler = async () => listResult(["a"], 1);
+    const typed: Promise<ListResult<string[]>> = handler();
+    // @ts-expect-error a plain array is no ListResult
+    const bare: ListResult<string[]> = ["a"];
+    expect([typed, bare]).toHaveLength(2);
+  });
+});
 
 describe("Handlers (checked by tsc)", () => {
   it("requires a handler for every registry operation, with its own types", () => {

@@ -657,6 +657,21 @@ them and their use.
 | Forks | A fork that loses the last slot to a concurrent create is deleted again |
 | An agent's repositories | Besides the account's quota, an agent acting for a user may have created at most 100 active repositories (`QUOTA_AGENT_MAX_REPOS`); past it, 403 `quota_exceeded`, held against concurrent creates |
 
+## Your organizations
+
+`GET /user/orgs` (MCP `list_orgs`; `members:read`) lists the organizations
+the authenticated user belongs to, and `/settings/organizations` shows them
+with each one's settings pages (its owners').
+
+| What | Value |
+|---|---|
+| Answer | GitHub's bare array: `login`, `id` (a string), `repos_url`, `members_url`, `description` (always null), and Fyrden's `role` (`admin` for an owner, `member`). GitHub's other URLs name nothing Fyrden has and are left out ([GitHub's shape](https://docs.github.com/en/rest/orgs/orgs#list-organizations-for-the-authenticated-user)) |
+| Order and pages | By id (oldest first), 30 a page, up to 100 (a larger `per_page` is read as 100), with GitHub's `Link` header. A membership that ends while a client pages can make it skip one organization, one that begins can repeat one. The oldest 200 are listed (Proposed) |
+| Tokens | With scopes that include neither `members:read` nor `members:write` (those of `POST /user/git-tokens`): 403. A token without scopes is not narrowed, a git token included; a CI job's is refused (401). Limited to repositories: an empty list, as GitHub answers fine-grained tokens. An agent's own token: an empty list (an agent belongs to none). Delegated: the user's list with the user's own agent; only the organization itself with an organization's agent; 403 `delegated_listing` with another user's agent |
+| Where it reads | The directory's `memberships` finds up to 500 organizations to ask (250 at a time, until 200 are confirmed), and each one's own object says whether the caller belongs and as what: one Durable Object request each. The record shows nothing by itself |
+| The record | Written as each membership change is delivered to the directory: before its request answers, or within a minute when that fails. A removal takes it out before the membership ends, so a removal fails while the directory does not answer. Until an addition is recorded the organization is missing from the list, never the other way round |
+| The daily pass | Once a day the maintenance cron makes every organization's record equal to its members, 10 organizations a run (Proposed; 2,880 a day): the first pass after an upgrade records the organizations made before. It also repairs what a restore of the directory or of an organization left wrong. An organization that fails is logged (`memberships.reconcile`) and waits for the next pass. To start a pass now, delete the `membership_reconcile` row of the directory's `deployment_settings` |
+
 ## Repository transfer
 
 `POST /repos/{owner}/{repo}/transfer` moves a repository to the caller or to
@@ -1207,7 +1222,7 @@ carry a port (`localhost:8443`), and `gh` reaches it over https only.
 |---|---|
 | Paths | Every REST operation answers under `/api/v3/` as under `/api/`, on the API's origin and the web origin alike. Downloads (raw files, archives, release assets), live updates, the runner protocol and `openapi.json` stay under `/api/` only |
 | Credentials | `Authorization: token <token>` is a bearer token by another name, everywhere a token is taken but the live updates socket (`Bearer` or the session there). A DPoP-bound token sent so is refused (it needs `DPoP` and a proof) |
-| Paging | Operations taking `page` and `per_page` that count their items in `total_count` (the CI secret and variable lists, and the searches) send GitHub's `Link` header with `prev`, `next`, `last` and `first`: this request's URL with only `page` changed, the last page worked out from `total_count` and the page size the list reads (a CI list reads a larger `per_page` as its most; a search refuses `per_page` over 100), none on the first page when everything fits on it. `gh secret list` and `gh variable list` follow `next`. Lists paged by cursor (`next_cursor`, notifications included) send no `Link` |
+| Paging | Operations taking `page` and `per_page` that count their items (in `total_count`: the CI secret and variable lists, and the searches; beside GitHub's bare array: `GET /user/orgs`) send GitHub's `Link` header with `prev`, `next`, `last` and `first`: this request's URL with only `page` changed, the last page worked out from `total_count` and the page size the list reads (a CI list reads a larger `per_page` as its most; a search refuses `per_page` over 100), none on the first page when everything fits on it. `gh secret list` and `gh variable list` follow `next`. Lists paged by cursor (`next_cursor`, notifications included) send no `Link` |
 | `gh auth login` | Not supported: it reads the scopes of the token at `/api/v3/`, then asks GraphQL for `viewer { login }`, and Fyrden has no GraphQL; it also refuses a host with a port. Use `GH_HOST` and `GH_ENTERPRISE_TOKEN` (verified: https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/auth/login/login.go) |
 | `--repos` | `gh secret set --repos` and `gh variable set --repos` look repositories up through GraphQL to send numeric ids; Fyrden's ids are strings (`rep_…`) and it has no GraphQL (verified: https://github.com/cli/cli/blob/v2.104.0/api/queries_repo.go). Set an organization secret's or variable's repositories through the REST operations, with ids |
 | An empty variable value | `gh variable set` leaves `value` out of its request when it is empty, and always tries the `POST` first, updating with `PATCH` only on its 409 (verified: https://github.com/cli/cli/blob/v2.104.0/pkg/cmd/variable/set/http.go). A `POST` without `value` is refused (422 `invalid_input`) before Fyrden looks for the variable, so both creating and updating one fail, and an existing value stays as it was |

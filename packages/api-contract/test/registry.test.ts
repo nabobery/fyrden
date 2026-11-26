@@ -57,6 +57,41 @@ describe("defineOperation", () => {
     ],
     ["an empty path", { path: "" }, /not a valid template/],
     ["path param missing from input", { path: "/repos/{owner}/{name}" }, /\{name\} missing/],
+    [
+      "a countedList that is no array",
+      {
+        countedList: true,
+        input: z.object({
+          owner: z.string(),
+          repo: z.string(),
+          page: z.number(),
+          per_page: z.number(),
+        }),
+      },
+      /countedList operation is a GET of an array/,
+    ],
+    [
+      "a countedList without page numbers",
+      { countedList: true, output: z.array(z.string()) },
+      /countedList operation is a GET of an array/,
+    ],
+    [
+      "a countedList that writes",
+      {
+        countedList: true,
+        method: "POST",
+        idempotency: "key",
+        output: z.array(z.string()),
+        input: z.object({
+          owner: z.string(),
+          repo: z.string(),
+          page: z.number(),
+          per_page: z.number(),
+        }),
+        mcp: false,
+      },
+      /countedList operation is a GET of an array/,
+    ],
     ["GET with an idempotency key", { idempotency: "key" }, /naturally idempotent/],
     [
       "POST without an idempotency key",
