@@ -144,6 +144,31 @@ export const WorkflowJob = z.object({
     .nullable()
     .describe("Fyrden: whether every log row reached durable storage; null while it runs."),
   error: z.string().nullable(),
+  steps: z
+    .array(
+      z.object({
+        number: z.number().int().describe("Its place among the job's steps, from 1."),
+        name: z
+          .string()
+          .describe(
+            "As the workflow writes it, expressions in it not evaluated: its `name`, else `Run` and the first line of what it runs.",
+          ),
+        stage: z
+          .enum(["setup", "containers", "pre", "main", "post", "cleanup"])
+          .describe("Fyrden: `main` for the workflow's own steps."),
+        status: z.enum(["queued", "in_progress", "completed"]),
+        conclusion: z.enum(["success", "failure", "cancelled", "skipped"]).nullable(),
+        started_at: z.number().int().nullable(),
+        completed_at: z.number().int().nullable(),
+        log: z
+          .object({ from: z.number().int(), rows: z.number().int() })
+          .nullable()
+          .describe("Fyrden: its rows of the job's log (the first, and how many)."),
+      }),
+    )
+    .describe(
+      "As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
+    ),
   waiting_for: z
     .enum(["ci_minutes", "daily_capacity"])
     .nullable()
@@ -519,6 +544,91 @@ export const issueJobLogTicket = defineOperation({
   idempotency: "key",
   secretResponse: true,
   mcp: false,
+});
+
+const LogRowIndex = z.number().int().describe("The row's index in the log.");
+const LogRowTime = z.number().nullable().describe("When it was printed, Unix ms; null for none.");
+
+const LogRow = z.union([
+  z
+    .object({
+      i: LogRowIndex,
+      t: LogRowTime,
+      c: z.string(),
+      o: z.number().int().describe("Where this piece starts in the row, in UTF-16 units."),
+      end: z.boolean().describe("Whether it reaches the row's end."),
+    })
+    .describe("A piece of a row too long for one page."),
+  z.object({ i: LogRowIndex, t: LogRowTime, c: z.string() }).describe("A whole row."),
+  z
+    .object({
+      i: LogRowIndex,
+      omitted: z.literal("row_too_large"),
+      bytes: z.number().int().describe("The row's declared size."),
+    })
+    .describe("A row too large to be stored."),
+]);
+
+export const readJobLog = defineOperation({
+  id: "actions.runs.jobs.logs.read",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/rows",
+  summary: "Read a job's log",
+  description:
+    "A page of a job's log rows as stored, finished or so far: masked when they were stored, oldest first. Start at a row (`from`), at the last rows (`tail`) or where a page ended (`cursor`), one of them at most; without one, at the first row. A page holds at most `max_bytes` of encoded rows and reads a bounded part of storage, so it can hold fewer. `next_cursor` is null only once the log is closed and was read to its end: while rows may still come it is always given, and reading from it again follows the log (no rows when there are none yet). A row too long for a page comes in pieces, to join by `o`; with `tail`, a last row too long comes as its end. Only stored rows are answered: the last ones a running job printed may be held back for masking. `state`: `none` before the job got a task, or when it never did; `streaming`; `complete`; `incomplete` (rows were lost or are still late). A cursor of another log, or past its end, is 422 `invalid_cursor`. A log from before server masking is 410 `log_unavailable`. 503 `log_busy` while the run stores uploads or reads other pages that need the room (a refused page is not charged), 503 `log_unreadable` when a stored part cannot be read. Where the deployment meters CI (Workers Free), pages that read storage share a daily allowance: 429 `log_reads_spent` with `retry_after` and `retry_at` naming the next 00:00 UTC, 503 `log_reads_unavailable` when it cannot be accounted for. `GET …/jobs/{job_id}/logs` answers the same as plain text, from `from`, `tail` or `cursor`, at most 512 KiB a page, with a `Link` to the next page while more is stored. Takes the `actions:read` permission. A Fyrden extension.",
+  input: z.object({
+    ...RepoInput,
+    run_id: RunId,
+    job_id: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(2 ** 31 - 1)
+      .describe("The job's id within its run."),
+    from: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(2 ** 31 - 1)
+      .optional()
+      .describe("The row to start at; past the end, the end."),
+    tail: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10_000)
+      .optional()
+      .describe("The last rows to read: fewer when they do not fit."),
+    cursor: z.string().max(200).optional().describe("From a previous page's `next_cursor`."),
+    max_bytes: z.coerce
+      .number()
+      .int()
+      .min(1024)
+      .max(512 * 1024)
+      .default(64 * 1024)
+      .describe("The encoded rows a page holds at most, in bytes."),
+  }),
+  output: z.object({
+    rows: z.array(LogRow),
+    state: z.enum(["none", "streaming", "complete", "incomplete"]),
+    end: z.number().int().describe("Rows stored when the page was read."),
+    next_cursor: z
+      .string()
+      .nullable()
+      .describe("Pass as `cursor` to read on; null once a closed log was read to its end."),
+  }),
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "expensive",
+  idempotency: "none",
+  noStore: true,
+  mcp: {
+    tool: "get_job_log",
+    title: "Read a CI job's log",
+    description:
+      "Read a page of a CI job's log, finished or still running. Use tail (such as 200) for why a job failed, from or cursor to read on; next_cursor is null once everything was read.",
+    readOnly: true,
+  },
 });
 
 export const approveWorkflowRun = defineOperation({

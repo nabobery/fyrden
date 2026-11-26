@@ -191,7 +191,7 @@ CREATE TABLE run_instances (
         outputs TEXT,
         error TEXT,
         log_complete INTEGER,
-        check_code TEXT,
+        check_code TEXT, steps TEXT,
         UNIQUE (attempt, job_key, idx),
         CHECK ((status = 'completed') = (conclusion IS NOT NULL))
       ) STRICT;

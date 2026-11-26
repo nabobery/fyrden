@@ -82,6 +82,12 @@ CREATE TABLE ci_job_tokens (
   token_id TEXT PRIMARY KEY, task_id INTEGER NOT NULL, created_at INTEGER NOT NULL
 ) STRICT;
 
+-- table ci_log_read_days
+CREATE TABLE ci_log_read_days (
+  day INTEGER PRIMARY KEY CHECK (day >= 0),
+  class_b INTEGER NOT NULL CHECK (class_b BETWEEN 0 AND 9007199254740991)
+) STRICT;
+
 -- table ci_pending_jobs
 CREATE TABLE ci_pending_jobs (
   id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, run_id TEXT NOT NULL,

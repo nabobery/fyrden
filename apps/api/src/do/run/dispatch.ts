@@ -38,6 +38,7 @@ import {
   unavailableError,
   unmaskableError,
 } from "./secrets.js";
+import { storedSteps } from "./steps.js";
 
 /*
  * The runner protocol inside a run's object: the run's queued jobs published
@@ -167,10 +168,15 @@ export interface DispatchHost {
   reservationsWaiting(): boolean;
   assign(jobId: number, assignKey: string, accountId: string): AssignAnswer;
   taskLive(ref: TaskRef): boolean;
-  updateTask(ref: TaskRef): TaskAnswer<{ cancel: boolean }>;
+  updateTask(ref: TaskRef, steps?: string | null): TaskAnswer<{ cancel: boolean }>;
   completeTask(
     ref: TaskRef,
-    report: { result: RunnerResult; outputs?: Record<string, string>; logComplete: boolean },
+    report: {
+      result: RunnerResult;
+      outputs?: Record<string, string>;
+      logComplete: boolean;
+      steps?: string | null;
+    },
   ): TaskAnswer<{ conclusion: string }>;
   /** Whether the task's stored log is complete. */
   logComplete(task: number): boolean;
@@ -1018,9 +1024,10 @@ export class RunDispatch {
         return { ok: false, code: "invalid_argument", message: INVALID_MESSAGE };
       throw error;
     }
-    if (request.state?.id !== wireId)
+    const { state } = request;
+    if (state?.id !== wireId)
       return { ok: false, code: "invalid_argument", message: TASK_ID_MISMATCH };
-    const result = request.state.result;
+    const result = state.result;
     if (result !== Result.UNSPECIFIED && RUNNER_RESULT[result] === undefined)
       return { ok: false, code: "invalid_argument", message: TASK_RESULT_UNKNOWN };
     const answer = (resultCode: number, sent: readonly string[] = []): ReportTaskAnswer => ({
@@ -1038,7 +1045,7 @@ export class RunDispatch {
     if (map.confirmed_at === null) await this.confirm(wireId, runnerId);
 
     if (result === Result.UNSPECIFIED) {
-      const beat = host.updateTask(ref);
+      const beat = host.updateTask(ref, storedSteps(state));
       if (beat.ok) return answer(beat.cancel ? Result.CANCELLED : Result.UNSPECIFIED);
       if (beat.code === "unknown_task")
         return { ok: false, code: "not_found", message: TASK_NOT_FOUND };
@@ -1052,6 +1059,7 @@ export class RunDispatch {
         result: RUNNER_RESULT[result] as RunnerResult,
         ...(request.outputs.size > 0 && { outputs }),
         logComplete: host.logComplete(ref.task),
+        steps: storedSteps(state),
       }),
     );
     if (done.ok) {
