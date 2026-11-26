@@ -6,7 +6,8 @@
 // injected through hooks, or by a trigger of the directory, and the run's clock
 // is the test's. An assignment whose run object was reset is reported by the
 // Worker that called it: a call that fails there stands in for one, with an
-// eviction where the object's memory matters. Failed deliveries are in ci.secrets.recovery.test.ts.
+// eviction where the object's memory matters. Failed deliveries are in
+// ci.secrets.recovery.test.ts.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";

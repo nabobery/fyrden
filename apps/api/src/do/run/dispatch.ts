@@ -49,9 +49,8 @@ import { storedSteps } from "./steps.js";
  * A failed delivery of a job's secrets is recorded here before the directory
  * is asked to end its offer, so that one whose end did not commit, whose
  * answer was lost, or whose object was reset before its job was failed is
- * settled later (`recoverySlice`) by what the directory then says. So is an
- * assignment that threw before it learned whether the directory recorded it,
- * and one whose caller reports that its call failed (`assignmentLost`).
+ * settled later (`recoverySlice`) by what the directory then says, as is an
+ * assignment not known to be recorded (`assignmentLost`).
  */
 
 /** The error of a job whose secrets are not delivered because its repository changed owner. */
@@ -277,7 +276,6 @@ export const OFFERS_SQL = `SELECT id, task, ended_at, superseded_at,
 export const DELIVERY_RECOVERY_MS = 30_000;
 /** The stored error of an assignment whose record failed: it has none, and fails no job with one. */
 const NOT_RECORDED = "";
-/** Failures one pass settles. Proposed. */
 const RECOVERY_PAGE = 100;
 
 /** A job token outlives its job's timeout by this. Proposed. */
@@ -314,10 +312,8 @@ interface DeliveryFailureRow {
   recorded_at: number;
 }
 
-/** What an assignment holds while it is made. */
 interface HeldAssignment {
   reservation?: MemoryReservation | undefined;
-  /** The task it assigned, until it knows the directory recorded it or put its job back. */
   unrecorded?: TaskRef | undefined;
 }
 
@@ -337,7 +333,6 @@ interface MapRow {
   confirmed_at: number | null;
 }
 
-/** The key a job is assigned under for an offer. */
 const assignKey = (wireId: number): string => `t${wireId}`;
 
 export class RunDispatch {
@@ -377,7 +372,6 @@ export class RunDispatch {
     }
   }
 
-  /** Has the job's task under the offer, if it has one, settled by the recovery. */
   assignmentLost(wireId: number, jobId: number): void {
     const row = this.host.engine.instance(jobId);
     if (row && row.task !== null && row.assign_key === assignKey(wireId))
@@ -890,11 +884,8 @@ export class RunDispatch {
   }
 
   /**
-   * Stores that the assignment of task `ref` threw before it learned whether the directory
-   * recorded it, or that its caller never had its answer, to be settled by the recovery. A failed delivery of the same task keeps its error
-   * and its time; what another task left under the same offer (its job was queued again, so it is
-   * never acted on) is replaced. A failure to store it is logged: the assignment's own error is
-   * the one thrown.
+   * A failed delivery of the same task keeps its error and time; another task's row under the
+   * offer is replaced. A failure to store is only logged, so the assignment's own error is thrown.
    */
   #notRecorded(wireId: number, ref: TaskRef): void {
     const { host } = this;

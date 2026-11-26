@@ -1406,10 +1406,8 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * The Worker's call of `assignTask` for job `jobId` as the directory's task
-   * `wireId` failed, so it may have been left assigned: this object reset
-   * before it was recorded, say. Any number of times, and for a call that
-   * succeeded or still runs: the directory decides what becomes of the job.
+   * The Worker's `assignTask` call for `wireId` failed. Safe at any time, any
+   * number of times: the directory decides what becomes of the job.
    */
   assignmentLost(wireId: number, jobId: number): void {
     this.#dispatch.assignmentLost(wireId, jobId);

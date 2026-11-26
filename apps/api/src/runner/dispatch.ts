@@ -326,19 +326,14 @@ async function assignTask(
       runId,
       error: error instanceof Error ? error.message : String(error),
     });
-    // An overloaded object is asked nothing more: the job is left to its heartbeat deadline.
+    // Never retry an overloaded object (verified: https://developers.cloudflare.com/durable-objects/best-practices/error-handling/).
     if ((error as { overloaded?: unknown } | null)?.overloaded !== true)
       call.waitUntil(assignmentLost(call, runId, taskId, jobId));
     throw new TaskUnavailable();
   }
 }
 
-/**
- * Tells the run that a call of its assignment failed, so a job it left
- * assigned (its object was reset meanwhile) is settled by what the directory
- * says of its offer. Once, as best it can: on a new stub, since one that
- * threw stays broken.
- */
+// A new stub: one that threw stays broken (verified: https://developers.cloudflare.com/durable-objects/best-practices/error-handling/).
 async function assignmentLost(
   call: FetchContext,
   runId: string,
