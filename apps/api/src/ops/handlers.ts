@@ -362,7 +362,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 
-/** The agents of an act chain, in its order, with their handles. */
 async function actChainOf(
   env: Env,
   act: readonly string[],
@@ -569,7 +568,6 @@ export const handlers: Handlers = {
   "orgs.teams.repos.set": setTeamRepoOperation,
   "orgs.teams.repos.remove": removeTeamRepoOperation,
 
-  // Self-hosted runners (runner/operations).
   "orgs.runners.registration_tokens.create": createRunnerRegistrationTokenOperation,
   "orgs.runners.registration_tokens.cancel": cancelRunnerRegistrationTokensOperation,
   "orgs.runners.list": listRunnersOperation,
@@ -579,7 +577,6 @@ export const handlers: Handlers = {
   "orgs.runners.repositories.remove": removeRunnerRepoOperation,
   "orgs.runners.delete": deleteRunnerOperation,
 
-  // Forks share the parent's packs in its fork network (network/).
   "repos.fork": forkRepoOperation,
   "repos.forks.list": listForksOperation,
   "repos.generate": generateRepoOperation,
@@ -666,8 +663,8 @@ export const handlers: Handlers = {
   "pulls.requested_reviewers.add_teams": requestTeamReviewersOperation,
   "pulls.requested_reviewers.remove": removeRequestedReviewersOperation,
   "pulls.code_owners.get": getPullCodeOwnersOperation,
-  // Issues; the listing, get, lock and comments serve pull requests too, each kind on its
-  // own permission (repos/subjects).
+  // The listing, get, lock and comments serve pull requests too, each kind on its own
+  // permission.
   "issues.list": listIssuesOperation,
   "issues.references.list": listIssueReferencesOperation,
   "reactions.issue.list": listIssueReactionsOperation,
@@ -725,7 +722,7 @@ export const handlers: Handlers = {
   "issues.comments.update": updateCommentOperation,
   "issues.comments.delete": deleteCommentOperation,
 
-  // Stars are the caller's own, of repositories it can read (repos/stars).
+  // Stars are the caller's own, of repositories it can read.
   "stars.put": starRepoOperation,
   "stars.delete": unstarRepoOperation,
   "stars.list": listStarredOperation,
@@ -760,18 +757,14 @@ export const handlers: Handlers = {
   "users.notification_settings.get": getNotificationSettingsOperation,
   "users.notification_settings.put": setNotificationSettingsOperation,
 
-  // Quotas live in each account's object (accounts/quotas).
   "quotas.user.get": getUserQuotaOperation,
   "quotas.org.get": getOrgQuotaOperation,
   "admin.quotas.set": setQuotaOperation,
 
-  // Effects that failed for good, reopened by an operator (effects/repair).
   "admin.effects.repair": repairEffectsOperation,
 
-  // Accounts' envelopes the events consumer gave up on, replayed (queues/events-replay).
   "admin.events.replay": replayFailedEventsOperation,
 
-  // The read model's maintenance: its writers paused and resumed, and its export (read-model).
   "admin.read_model.pause": pauseReadModelOperation,
   "admin.read_model.resume": resumeReadModelOperation,
   "admin.read_model.handshake": handshakeReadModelOperation,
@@ -781,7 +774,6 @@ export const handlers: Handlers = {
   "admin.read_model.export": getReadModelExportOperation,
   "admin.read_model.export_page": getReadModelExportPageOperation,
 
-  // Search's projections, populated by reconciliation (search/backfill).
   "admin.search.backfill": backfillSearchOperation,
   "admin.search.indexing": setSearchIndexingOperation,
   "admin.search.status": getSearchStatusOperation,

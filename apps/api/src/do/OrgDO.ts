@@ -358,7 +358,6 @@ export class OrgDO extends MigratingDO {
   static readonly schema = orgSchema;
 
   constructor(ctx: DurableObjectState, env: Env) {
-    // Every D1 execution counted against the invocation's tally.
     super(ctx, { ...env, DIRECTORY: countedD1(env.DIRECTORY), ORG_READ: countedD1(env.ORG_READ) });
   }
 
@@ -428,13 +427,11 @@ export class OrgDO extends MigratingDO {
     return stored?.payload ?? null;
   }
 
-  /** Arms the alarm for the outbox's next drain or prune, unless it is due sooner. */
   async #armOutbox(): Promise<void> {
     const due = this.#outbox.dueAt();
     if (due !== null) await this.#armBy(due);
   }
 
-  /** The alarm goes off by `at` at the latest (an earlier one stands). */
   async #armBy(at: number): Promise<void> {
     const current = await this.ctx.storage.getAlarm();
     if (current === null || current > at) await this.ctx.storage.setAlarm(at);
@@ -610,7 +607,6 @@ export class OrgDO extends MigratingDO {
         answer[repoId] = { held, roles: {} };
         continue;
       }
-      // The repository's team grants read once for every principal asked.
       const grants = sql
         .exec<{ team_id: string; role: RepoRole }>(
           "SELECT team_id, role FROM team_repos INDEXED BY team_repos_repo WHERE repo_id = ? LIMIT ?",
@@ -796,7 +792,6 @@ export class OrgDO extends MigratingDO {
     return { ...basis, teams, groups };
   }
 
-  /** Team `teamId`'s role on repository `repoId`, or null (no grant, or no such team). */
   #teamRoleOn(repoId: string, teamId: string): RepoRole | null {
     const row = this.ctx.storage.sql
       .exec<{ role: RepoRole }>(
@@ -808,7 +803,6 @@ export class OrgDO extends MigratingDO {
     return row?.role ?? null;
   }
 
-  /** Which of `pairs` (`membershipKey`s) are memberships now. */
   #memberships(pairs: readonly string[]): string[] {
     const sql = this.ctx.storage.sql;
     return pairs.filter((pair) => {
@@ -898,11 +892,6 @@ export class OrgDO extends MigratingDO {
     ]);
   }
 
-  /**
-   * `#roleOn` given the repository's team grants (read once, at most
-   * `LIVE_TEAM_GRANTS`), each probed for `principalId`'s membership by its
-   * key.
-   */
   #roleWithGrants(
     repoId: string,
     principalId: string,
@@ -942,7 +931,6 @@ export class OrgDO extends MigratingDO {
       meta.kind === "user"
         ? 1
         : this.ctx.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM members").one().n;
-    // Collaborators who are neither the owner nor members; one repository's by its index.
     const outside = `c.principal_id <> ?
       AND NOT EXISTS (SELECT 1 FROM members m WHERE m.principal_id = c.principal_id)`;
     const others = (
@@ -1324,7 +1312,6 @@ export class OrgDO extends MigratingDO {
     return this.#ci.secret(scope, name);
   }
 
-  /** Deletes a secret or a variable of a scope. */
   ciDelete(actor: CiActor, kind: CiKind, scope: string, name: string): CiResult<null> {
     return this.#ci.remove(actor, kind, scope, name);
   }
@@ -1432,12 +1419,10 @@ export class OrgDO extends MigratingDO {
     return new AccountQuotas(this.ctx.storage, defaultLimits(this.env), () => this.#now());
   }
 
-  /** The account's quota limits in force. */
   quotaLimits(): QuotaLimits {
     return this.#quotas().limits();
   }
 
-  /** The account's limits and storage use. */
   quotaStatus(): StorageStatus {
     return this.#quotas().status();
   }
@@ -1656,7 +1641,6 @@ export class OrgDO extends MigratingDO {
           transferId,
         )
         .toArray()[0]?.assets;
-      // The room its admission made is taken now.
       this.#endArrival(transferId, true);
       // A repository that left before may come back.
       this.ctx.storage.sql.exec("DELETE FROM forgotten_repos WHERE repo_id = ?", repoId);
@@ -1747,7 +1731,6 @@ export class OrgDO extends MigratingDO {
       if (bumped) this.#revoked(null, readers, [repoId], bumped.version);
       return { ...handedOver, acl: bumped };
     });
-    // An access.revoked it wrote goes out with the alarm.
     void this.#armOutbox();
     return released;
   }
@@ -1801,7 +1784,6 @@ export class OrgDO extends MigratingDO {
           input.transferId,
         )
         .toArray()[0];
-      // Adopted or called off already (a late runner): no room is made again.
       const adopted =
         sql
           .exec(
@@ -1888,7 +1870,6 @@ export class OrgDO extends MigratingDO {
     this.#quotas().release(transferId);
   }
 
-  /** Records transfer step `op` of `transferId`; false when it was done before. */
   #firstTime(transferId: string, op: "adopt" | "release"): boolean {
     const done = this.ctx.storage.sql.exec(
       `INSERT INTO transfer_ops (transfer_id, op, done_at) VALUES (?, ?, ?)
@@ -2408,7 +2389,6 @@ export class OrgDO extends MigratingDO {
             error: sent.error,
           });
       } else {
-        // Nothing to send: stored payloads past their retention go.
         const due = outbox.dueAt();
         if (due !== null && due <= now) outbox.prunePayloads();
       }
@@ -2424,7 +2404,6 @@ export class OrgDO extends MigratingDO {
       createLogger({ op: "org.audit", doClass: "OrgDO" }).warn("delivering audit rows failed", {
         error,
       });
-      // Tried again later, unless the outbox needs the alarm sooner.
       await this.#armBy(this.#now() + AUDIT_RETRY_MS);
     }
   }
@@ -2489,8 +2468,7 @@ export class OrgDO extends MigratingDO {
 
   /**
    * Of `ids`, those not being deleted (any lifecycle but `deleting` and
-   * `deleted`), read from the directory's primary. Runs
-   * `accountHooks.afterLifecycleRead` after.
+   * `deleted`), read from the directory's primary.
    */
   async #remaining(ids: readonly string[]): Promise<Set<string>> {
     const remaining = new Set<string>();
@@ -2511,7 +2489,6 @@ export class OrgDO extends MigratingDO {
     return remaining;
   }
 
-  /** Whether any of `ids` is being deleted: not in `remaining`, or retired here since. */
   #gone(ids: readonly string[], remaining: ReadonlySet<string>): boolean {
     return ids.some((id) => !remaining.has(id) || this.#retired.has(id));
   }
@@ -2664,7 +2641,6 @@ export class OrgDO extends MigratingDO {
     if (change.ok && change.changed) this.#scheduleAudit();
   }
 
-  /** An audit row was written: the alarm delivers it soon, an earlier alarm kept. */
   #scheduleAudit(): void {
     const at = this.#now() + AUDIT_RETRY_MS;
     void this.ctx.storage.getAlarm().then((current) => {

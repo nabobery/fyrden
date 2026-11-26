@@ -1,7 +1,6 @@
-// Workflow files: discovery, parsing, the supported subset and expressions, run
-// state, and the runner protocol's rules. A subpath of its own
-// (`@fyrden/domain/ci`) so the YAML parser stays out of everything that imports
-// the package root, the web app's client bundle included.
+// A subpath of its own (`@fyrden/domain/ci`) so the YAML parser stays out of
+// everything that imports the package root, the web app's client bundle
+// included.
 export * from "./concurrency.js";
 export * from "./cron.js";
 export * from "./discover.js";

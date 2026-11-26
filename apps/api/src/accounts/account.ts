@@ -70,7 +70,6 @@ export async function actingRoleIn(
   return role;
 }
 
-/** Whether a token may use the account permission `permission` with role `role` in the account. */
 export function canUseAccount(
   auth: Pick<TokenRecord, "principalType" | "scopes" | "repoIds">,
   role: OrgRole | null,
@@ -119,7 +118,6 @@ export async function invalidateAccountRepos(
   metrics?: Metrics,
 ): Promise<void> {
   metrics?.count("d1.query", { db: "directory", op: "acl_invalidate" });
-  // Best effort: the change stands whatever happens here.
   const listed = await env.DIRECTORY.prepare(
     "SELECT id FROM repos WHERE owner_id = ? AND state <> 'deleted' AND state = 'active' LIMIT ?",
   )

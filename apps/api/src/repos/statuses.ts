@@ -15,17 +15,11 @@ import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { sortingFailure } from "./sorting.js";
 
-/*
- * The Worker side of the `statuses.*` and `checks.*` operations. The
- * repository object owns statuses and check summaries (`do/repo/checks.ts`).
- */
-
 const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
   return ctx.env.REPO.getByName(entry.id);
 };
 
-/** The problem for a refusal of a status. */
 function statusFailure(entry: RepoEntry, code: string): OperationError {
   switch (code) {
     case "commit_not_found":
@@ -51,7 +45,6 @@ function statusFailure(entry: RepoEntry, code: string): OperationError {
   }
 }
 
-/** The `statuses.create` operation. */
 export async function createStatusOperation(
   ctx: OpContext,
   input: Input<typeof createStatus>,
@@ -71,7 +64,7 @@ export async function createStatusOperation(
   return statusOutput(result.status);
 }
 
-/** The `statuses.list` operation. The cursor is the last status's id. */
+/** The cursor is the last status's id. */
 export async function listStatusesOperation(
   ctx: OpContext,
   input: Input<typeof listStatuses>,
@@ -90,7 +83,7 @@ export async function listStatusesOperation(
   };
 }
 
-/** The `statuses.combined` operation. The cursor is the last context's folded name. */
+/** The cursor is the last context's folded name. */
 export async function getCombinedStatusOperation(
   ctx: OpContext,
   input: Input<typeof getCombinedStatus>,
@@ -113,7 +106,7 @@ export async function getCombinedStatusOperation(
   };
 }
 
-/** The `checks.runs.list` operation. The cursor is the last check's name. */
+/** The cursor is the last check's name. */
 export async function listCheckRunsOperation(
   ctx: OpContext,
   input: Input<typeof listCheckRuns>,
