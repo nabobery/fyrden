@@ -2691,7 +2691,7 @@ const utf8Bound = (points: number) => 4 * points + 3;
 function codePointPrefix(bytes: ArrayBuffer, points: number): string {
   let out = "";
   let n = 0;
-  for (const point of new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes)) {
+  for (const point of new TextDecoder("utf-8", { fatal: false, ignoreBOM: true }).decode(bytes)) {
     if (n === points) break;
     out += point;
     n++;

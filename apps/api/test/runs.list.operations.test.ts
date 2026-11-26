@@ -632,10 +632,9 @@ describe("a run's job graph", () => {
     expect(node?.name).toBe("ab\u0000cd");
     expect([node?.jobs[0]?.name, node?.jobs[0]?.name_cut]).toEqual(["ab\u0000cd", false]);
     expect(node?.jobs[0]?.error).toBe(`x\u0000${"y".repeat(498)}`);
-    const bom = (await graph(f, runId)).body.jobs.find((j: { key: string }) => j.key === "bom") as {
-      jobs: { name: string }[];
-    };
-    expect(bom.jobs[0]?.name).toBe("\uFEFFlead");
+    const nodes = (await graph(f, runId)).body.jobs as { key: string; jobs: { name: string }[] }[];
+    const bom = nodes.find((j) => j.key === "bom");
+    expect(bom?.jobs[0]?.name).toBe("\uFEFFlead");
   });
 
   it("stays under 600 KB at its maxima: 256 instances of a very long name, each with a long error", async () => {
