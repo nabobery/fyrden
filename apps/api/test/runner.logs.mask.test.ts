@@ -51,7 +51,6 @@ const one = workflow(job("a"));
 const MIN = 60_000;
 const LATE_MS = 10 * MIN;
 
-/** A run in a new organization, with a runner holding its first task. */
 async function withTask(source = one) {
   const f = await orgRepo();
   const runId = await started(f, source);
@@ -76,7 +75,6 @@ async function withTwoTasks() {
 }
 
 const row = (content: string): LogRow => ({ content });
-/** Filler rows `[from, from + n)`. */
 const filler = (from: number, n: number): LogRow[] =>
   Array.from({ length: n }, (_, k) => row(`line ${from + k}`));
 
@@ -95,7 +93,6 @@ interface Line {
   c: string;
 }
 
-/** The stored lines of every chunk the manifest names, checked contiguous and never repeated. */
 async function storedLines(runId: string, task: number): Promise<Line[]> {
   const chunks = await inRun(runId, (r) =>
     r.engine.rows<{ start_index: number; end_index: number; r2_key: string }>(
@@ -137,7 +134,6 @@ async function everyObject(runId: string, task: number): Promise<string> {
   return texts.join("\n");
 }
 
-/** No form of `value` the masker covers appears in `text`. */
 function expectNoForm(text: string, value: string) {
   for (const variant of buildVariants(value)) expect(text).not.toContain(variant.text);
 }
@@ -157,7 +153,6 @@ const logOf = (runId: string, task: number) =>
       }>("SELECT ack_index, state, mask_carry, ended_at FROM ci_logs WHERE task = ?", task)[0],
   );
 
-/** A reset: the next request finds a new instance, with nothing in memory. */
 async function reset(runId: string) {
   await evictDurableObject(runStub(runId));
   await at(runId, now(runId));
@@ -204,7 +199,6 @@ async function releaseHeld(
   }
 }
 
-/** The `ci.mask_dropped` points written while `fn` runs, as [run, task, reason, value]. */
 async function maskDropped(fn: () => Promise<void>): Promise<[string, string, string, number][]> {
   const dataset = env.METRICS as unknown as { writeDataPoint: (point: unknown) => void };
   const write = dataset.writeDataPoint;

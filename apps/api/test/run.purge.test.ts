@@ -24,7 +24,6 @@ import {
 const DAY = 24 * 60 * 60 * 1000;
 const RETENTION = 2 * DAY;
 
-/** `n` chunk objects under the run's prefix; their keys. */
 async function chunks(runId: string, n: number): Promise<void> {
   for (let i = 0; i < n; i += 100)
     await Promise.all(
@@ -54,7 +53,6 @@ const left = async (runId: string) => ({
   alarm: await runInDurableObject(runStub(runId), (_, state) => state.storage.getAlarm()),
 });
 
-/** Runs the object's alarm as at `t`. */
 const alarmAt = (
   runId: string,
   t: number,

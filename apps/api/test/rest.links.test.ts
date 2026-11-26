@@ -15,7 +15,6 @@ let owner: Who;
 let three: string;
 let many: string;
 
-/** A repository of `owner` with `count` variables, and its variables' REST path. */
 async function withVariables(count: number): Promise<string> {
   const repo = await repoOf(owner.principalId);
   const path = `/repos/${owner.handle}/${repo.name}/actions/variables`;
@@ -32,7 +31,6 @@ async function withVariables(count: number): Promise<string> {
 const get = (url: string) =>
   exports.default.fetch(url, { headers: { Authorization: `Bearer ${owner.token}` } });
 
-/** The `Link` header's URLs by relation, in the order sent. */
 function links(res: Response): [string, string][] {
   const header = res.headers.get("Link");
   if (header === null) return [];

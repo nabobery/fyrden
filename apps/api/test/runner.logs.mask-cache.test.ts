@@ -30,7 +30,6 @@ import { at, drain, inRun, job, now, runStub, started, T0, workflow } from "./he
 const MIN = 60_000;
 const LATE_MS = 10 * MIN;
 
-/** A run of `jobs` jobs in a new organization, a runner holding each job's task. */
 async function withTasks(jobs = 1) {
   const f = await orgRepo();
   const names = Array.from({ length: jobs }, (_, k) => String.fromCharCode(0x61 + k));
@@ -67,7 +66,6 @@ async function ackOf(runner: Credentials, request: LogRequest): Promise<number> 
   return decodeUpdateLogResponse(await proto(await sendLog(runner, request))).ackIndex;
 }
 
-/** Every stored line's text, in order. */
 async function contents(runId: string, task: number): Promise<string[]> {
   const keys = await inRun(runId, (r) =>
     r.engine
@@ -89,7 +87,6 @@ async function contents(runId: string, task: number): Promise<string[]> {
   return lines;
 }
 
-/** Records what each log request's masking did with the kept matchers, from now on. */
 async function outcomes(runId: string): Promise<MaskCacheOutcome[]> {
   const seen: MaskCacheOutcome[] = [];
   await inRun(runId, (r) => {
@@ -98,7 +95,6 @@ async function outcomes(runId: string): Promise<MaskCacheOutcome[]> {
   return seen;
 }
 
-/** The kept matchers' estimate and the pool's reservations, with no request in progress. */
 const held = (runId: string) =>
   inRun(runId, (r) => ({
     cache: r.maskCacheBytesHeld(),

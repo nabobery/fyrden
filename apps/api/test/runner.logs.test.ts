@@ -40,7 +40,6 @@ const two = workflow([job("a"), job("b")].join("\n"));
 const KiB = 1024;
 const MiB = 1024 * KiB;
 
-/** A run of `source` in a new organization, with a runner holding its first task. */
 async function withTask(source = one) {
   const f = await orgRepo();
   const runId = await started(f, source);
@@ -52,7 +51,6 @@ async function withTask(source = one) {
   return { f, runId, runner, task, number };
 }
 
-/** Rows at positions `[from, from + n)`, each line naming its position, printed one second apart. */
 const rowsAt = (from: number, n: number, content = (i: number) => `line ${i}`): LogRow[] =>
   Array.from({ length: n }, (_, k) => ({
     time: { seconds: 1_900_000_000 + from + k, nanos: 250_000_000 },
@@ -66,7 +64,6 @@ function sendLog(
   return runnerCall("UpdateLog", encodeUpdateLogRequest(request), { credentials: runner });
 }
 
-/** UpdateLog; the ack it answers. */
 async function ackOf(
   runner: Credentials,
   request: { taskId: number; index: number; rows?: LogRow[]; noMore?: boolean },
@@ -111,13 +108,11 @@ const chunksOf = (runId: string, task: number) =>
     ),
   );
 
-/** Every object stored under the task's log prefix. */
 async function objectsOf(runId: string, task: number): Promise<string[]> {
   const listed = await env.CI.list({ prefix: `runs/${runId}/` });
   return listed.objects.map((o) => o.key).filter((key) => key.split("/")[4] === String(task));
 }
 
-/** A stored line: a row (`t`, `c`) or an omission record (`omitted`, `bytes`). */
 interface Line {
   i: number;
   t?: number | null;
@@ -126,7 +121,6 @@ interface Line {
   bytes?: number;
 }
 
-/** The lines of every chunk the manifest names, in order, checked contiguous with no duplicates. */
 async function storedLines(runId: string, task: number): Promise<Line[]> {
   const lines: Line[] = [];
   let next = 0;
@@ -167,13 +161,11 @@ const hook = (runId: string, set: (run: RunDO) => RunDO["hooks"]) =>
     r.hooks = set(r);
   });
 
-/** A reset: the next request finds a new instance, with nothing in memory. */
 async function reset(runId: string) {
   await evictDurableObject(runStub(runId));
   await at(runId, now(runId));
 }
 
-/** A gate a hook waits on: `started` resolves when the hook is reached, `release` lets it go. */
 function gate() {
   let reached!: () => void;
   let release!: () => void;
@@ -723,7 +715,6 @@ describe("UpdateLog fencing", () => {
   });
 });
 
-/** The bytes a varint of `value` takes. */
 const varintBytes = (value: number) =>
   value < 2 ** 7 ? 1 : value < 2 ** 14 ? 2 : value < 2 ** 21 ? 3 : value < 2 ** 28 ? 4 : 5;
 
@@ -939,7 +930,6 @@ describe("a row too large for any request", () => {
     const { runId, runner, task, number } = await withTask();
     const raw = async (body: Uint8Array) =>
       ackOfRaw(await runnerCall("UpdateLog", body, { credentials: runner }));
-    /** The request from `index` of `rows`' one row, its header written `repeat` times and its length padded by `pad` bytes. */
     const framed = (index: number, rows: LogRow[], repeat: number, pad: number) => {
       const header = encodeUpdateLogRequest({ taskId: task.id, index });
       const row = encodeLogRow(rows[0] as LogRow);
