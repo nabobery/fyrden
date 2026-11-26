@@ -1,7 +1,3 @@
-// The rules a run's attempts, job nodes and instances follow: every legal
-// transition and the refusal of the rest, how instance outcomes become a
-// node's result and a check, readiness, fail-fast, max-parallel, and how an
-// attempt concludes.
 import { describe, expect, it } from "vitest";
 import {
   advanceAttempt,

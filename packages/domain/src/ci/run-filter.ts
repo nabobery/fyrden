@@ -17,7 +17,6 @@ const SECOND = 1_000;
 /** The offset farthest from UTC in use, +14:00. */
 const MAX_OFFSET_MINUTES = 14 * 60;
 
-/** What a date (a UTC day) or a time (a second) covers. */
 function instant(text: string): { readonly from: number; readonly until: number } | undefined {
   const day = utcDay(text);
   if (day !== undefined) return { from: day, until: day + DAY };

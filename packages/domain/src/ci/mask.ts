@@ -180,7 +180,6 @@ function unescapeCommand(sequence: string): string {
   return sequence === "%25" ? "%" : sequence === "%0D" ? "\r" : "\n";
 }
 
-/** The raw data of an `::add-mask::` row, as the row shows it, or null for any other row. */
 function commandData(row: string): string | null {
   if (!row.startsWith(COMMAND)) return null;
   const data = row.slice(COMMAND.length);
@@ -360,7 +359,6 @@ export interface MaskRowsResult {
   readonly dropped: readonly { readonly index: number; readonly reason: "values" | "bytes" }[];
 }
 
-/** Matchers over some of the masks not in the base, and their states in the call. */
 interface Tier {
   readonly masks: number[];
   readonly long: Matcher;
@@ -372,7 +370,6 @@ interface Tier {
 interface Entry {
   readonly variants: readonly MaskVariant[];
   readonly fromIndex: number;
-  /** Stream offset (from the first row) where matches may start; -Infinity before the rows, Infinity not yet in effect. */
   from: number;
 }
 
@@ -657,7 +654,6 @@ function isLowSurrogate(unit: number): boolean {
   return unit >= 0xdc00 && unit <= 0xdfff;
 }
 
-/** The carry if it names a crossing variant of a mask in effect before `start`, else null. */
 function resumable(
   entries: readonly Entry[],
   carry: LogMaskCarry | null,
@@ -719,28 +715,21 @@ class Ranges {
  * starts before its row.
  */
 class Matcher {
-  /** Transitions keyed `node * 0x10000 + unit`: one lookup whatever a node's fan-out. */
   readonly #edges = new Map<number, number>();
-  /** Children as a linked list, walked only while building. */
   readonly #firstChild: number[] = [-1];
   readonly #nextSibling: number[] = [-1];
   readonly #unit: number[] = [0];
   readonly #fail: number[] = [0];
   readonly #depth: number[] = [0];
-  /** Lowest `from` of the patterns ending at the node. */
   readonly #term: number[] = [Number.POSITIVE_INFINITY];
-  /** Nearest node on the failure chain with a pattern ending there, or -1. */
   readonly #dict: number[] = [-1];
-  /** Lowest `from` of the patterns continuing past the node, and the first such pattern. */
   readonly #proper: number[] = [Number.POSITIVE_INFINITY];
   readonly #properRef: number[] = [-1];
-  /** Deepest node on the failure chain (itself included) that some pattern continues past. */
   readonly #partialNode: number[] = [0];
   readonly #refs: { readonly mask: number; readonly variant: number }[] = [];
 
   readonly #crosses: boolean;
 
-  /** Counts lookups while a call scans with this matcher; unset between calls. */
   work: { lookups: number } | undefined;
 
   /** The crossing (or row-local) variants of masks `masks`, ascending positions, that are in effect. */
@@ -749,12 +738,10 @@ class Matcher {
     this.#add(entries, masks);
   }
 
-  /** Patterns inserted. */
   get patterns(): number {
     return this.#refs.length;
   }
 
-  /** Trie nodes, the root included. */
   get nodes(): number {
     return this.#unit.length;
   }
@@ -840,7 +827,6 @@ class Matcher {
     }
   }
 
-  /** The state after reading `unit`. */
   step(node: number, unit: number): number {
     let at = node;
     for (;;) {
@@ -850,14 +836,12 @@ class Matcher {
     }
   }
 
-  /** The state after reading `text` from the root. */
   run(text: string): number {
     let node = 0;
     for (let i = 0; i < text.length; i++) node = this.step(node, text.charCodeAt(i));
     return node;
   }
 
-  /** Length of the longest match ending at stream offset `end` that counts, or 0. */
   longestMatch(node: number, end: number): number {
     let at =
       (this.#term[node] as number) < Number.POSITIVE_INFINITY ? node : (this.#dict[node] as number);
@@ -869,7 +853,6 @@ class Matcher {
     return 0;
   }
 
-  /** `carry`, with the lowest `from` of the patterns continuing past it. */
   carryFrom(node: number, end: number): [LogMaskCarry, number] | null {
     let at = this.#partialNode[node] as number;
     while (at !== 0) {
@@ -884,7 +867,6 @@ class Matcher {
     return null;
   }
 
-  /** The deepest partial match in progress at stream offset `end` that would count if completed. */
   carry(node: number, end: number): LogMaskCarry | null {
     let at = this.#partialNode[node] as number;
     while (at !== 0) {
@@ -916,11 +898,8 @@ export class MaskMatcherCache {
   #inBase: number[] = [];
   #long: Matcher | undefined;
   #short: Matcher | undefined;
-  /** UTF-16 units of the kept values and variants. */
   #units = 0;
-  /** Variants kept, of every mask: those not in the base (pending, carried) included. */
   #variantCount = 0;
-  /** Patterns in the base matchers. */
   #patterns = 0;
 
   /** What the last call did with the base. */

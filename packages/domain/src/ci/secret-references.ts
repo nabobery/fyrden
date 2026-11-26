@@ -51,7 +51,6 @@ function roots(field: ExpressionField): ExprNode[] {
 
 const isSecrets = (node: ExprNode) => node.k === "context" && node.name === "secrets";
 
-/** Adds the names `node` reads; false when it reads `secrets` any other way. */
 function collect(node: ExprNode, names: Set<string>): boolean {
   switch (node.k) {
     case "context":

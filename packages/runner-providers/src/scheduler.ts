@@ -117,7 +117,6 @@ interface Priced {
 
 const whole = (n: number) => Number.isSafeInteger(n) && n >= 0;
 
-/** The price of `expectedMs` in whole billing steps; null for an estimate that is no price. */
 function expectedCost(estimate: CostEstimate, expectedMs: number): number | null {
   const { microUsdPerMinute, billingStepMs, expectedBootMs } = estimate;
   if (!whole(microUsdPerMinute) || !whole(billingStepMs) || !whole(expectedBootMs)) return null;

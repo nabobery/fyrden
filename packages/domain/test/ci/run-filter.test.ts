@@ -1,5 +1,3 @@
-// The `created` filter of a list of runs: GitHub's date syntax, each form the
-// range of times it names, and anything else refused.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { parseCreatedFilter } from "../../src/ci/run-filter.js";
