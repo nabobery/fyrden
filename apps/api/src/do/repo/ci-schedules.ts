@@ -52,10 +52,6 @@ export interface ScheduledFile {
   readonly crons: readonly string[];
 }
 
-/**
- * Whether a due tick fires. A seam for a later budget of schedule runs:
- * every tick fires today.
- */
 export interface ScheduleAdmission {
   allowTick(repoId: string, path: string): "fire" | "skip";
 }
@@ -207,7 +203,6 @@ export class CiSchedules {
     );
   }
 
-  /** Records `eventId` as the last refresh when an older refresh event is still pending. */
   #markIfOlderPending(eventId: number): void {
     const older = this.#sql()
       .exec(

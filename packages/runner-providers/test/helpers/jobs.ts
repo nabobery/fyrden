@@ -18,7 +18,6 @@ export const job = (more: Partial<JobRequirements> = {}): JobRequirements => ({
   ...more,
 });
 
-/** A fake and jobs it can and cannot run, as the contract takes them. */
 export function fakeUnderTest(options: FakeProviderOptions = {}): ProviderUnderTest {
   const fake = createFakeProvider(options);
   return {

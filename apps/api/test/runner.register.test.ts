@@ -29,7 +29,6 @@ const ORIGIN = "https://fyrden.test";
 
 type Who = { principalId: string; token: string; handle: string };
 
-/** Runs the app against the test env with some bindings replaced. */
 async function call(path: string, init: RequestInit, overrides: Partial<Env> = {}) {
   const ctx = createExecutionContext();
   const res = await createApp().fetch(
@@ -116,7 +115,6 @@ async function who(isAdmin = false): Promise<Who> {
   return { ...p, handle: p.principalId.toLowerCase().replace("_", "-") };
 }
 
-/** A new organization owned by `owner`, with `members` as members. */
 async function newOrg(owner: Who, members: Who[] = []): Promise<{ id: string; login: string }> {
   const login = uniqueId("org").slice(0, 39);
   const res = await rest(

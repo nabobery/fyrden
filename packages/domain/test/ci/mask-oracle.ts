@@ -184,7 +184,6 @@ function unescapeCommand(sequence: string): string {
   return sequence === "%25" ? "%" : sequence === "%0D" ? "\r" : "\n";
 }
 
-/** The raw data of an `::add-mask::` row, as the row shows it, or null for any other row. */
 function commandData(row: string): string | null {
   if (!row.startsWith(COMMAND)) return null;
   const data = row.slice(COMMAND.length);
@@ -365,7 +364,6 @@ export interface MaskRowsResult {
 interface Entry {
   readonly variants: readonly MaskVariant[];
   readonly fromIndex: number;
-  /** Stream offset (from the first row) where matches may start; -Infinity before the rows, Infinity not yet in effect. */
   from: number;
 }
 
@@ -582,7 +580,6 @@ function isLowSurrogate(unit: number): boolean {
   return unit >= 0xdc00 && unit <= 0xdfff;
 }
 
-/** The carry if it names a crossing variant of a mask in effect before `start`, else null. */
 function resumable(
   entries: readonly Entry[],
   carry: LogMaskCarry | null,
@@ -644,22 +641,16 @@ class Ranges {
  * starts before its row.
  */
 class Matcher {
-  /** Transitions keyed `node * 0x10000 + unit`: one lookup whatever a node's fan-out. */
   readonly #edges = new Map<number, number>();
-  /** Children as a linked list, walked only while building. */
   readonly #firstChild: number[] = [-1];
   readonly #nextSibling: number[] = [-1];
   readonly #unit: number[] = [0];
   readonly #fail: number[] = [0];
   readonly #depth: number[] = [0];
-  /** Lowest `from` of the patterns ending at the node. */
   readonly #term: number[] = [Number.POSITIVE_INFINITY];
-  /** Nearest node on the failure chain with a pattern ending there, or -1. */
   readonly #dict: number[] = [-1];
-  /** Lowest `from` of the patterns continuing past the node, and the first such pattern. */
   readonly #proper: number[] = [Number.POSITIVE_INFINITY];
   readonly #properRef: number[] = [-1];
-  /** Deepest node on the failure chain (itself included) that some pattern continues past. */
   readonly #partialNode: number[] = [0];
   readonly #refs: { mask: number; variant: number }[] = [];
 
@@ -735,7 +726,6 @@ class Matcher {
     }
   }
 
-  /** The state after reading `unit`. */
   step(node: number, unit: number): number {
     let at = node;
     for (;;) {
@@ -745,7 +735,6 @@ class Matcher {
     }
   }
 
-  /** The state for a prefix of a pattern, or the root when it is empty or unknown. */
   walk(prefix: string): number {
     let node = 0;
     for (let i = 0; i < prefix.length && (i === 0 || node !== 0); i++) {
@@ -754,7 +743,6 @@ class Matcher {
     return node;
   }
 
-  /** Length of the longest match ending at stream offset `end` that counts, or 0. */
   longestMatch(node: number, end: number): number {
     let at =
       (this.#term[node] as number) < Number.POSITIVE_INFINITY ? node : (this.#dict[node] as number);
@@ -766,7 +754,6 @@ class Matcher {
     return 0;
   }
 
-  /** The deepest partial match in progress at stream offset `end` that would count if completed. */
   carry(node: number, end: number): LogMaskCarry | null {
     let at = this.#partialNode[node] as number;
     while (at !== 0) {

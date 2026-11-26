@@ -51,7 +51,6 @@ import { ciSecretKeys } from "./envelope.js";
 
 const ORG = "org";
 
-/** An account object's answer, or the operation's error. */
 function settled<T>(result: CiResult<T>): T {
   if (!result.ok) throw new OperationError(result.status, result.code, result.error);
   return result.value;
@@ -92,11 +91,6 @@ async function repoScope(
   return { repo: entry, stub };
 }
 
-/**
- * The organization `handle`, if the caller may use `permission` there; a
- * user's namespace answers 404 `not_an_org` (it has no organization-level
- * secrets or variables).
- */
 async function orgScope(ctx: OpContext, handle: string, permission: Permission) {
   const account = await findAccount(ctx.env, handle, { metrics: ctx.metrics });
   if (account?.type === "user")
@@ -144,8 +138,6 @@ function orgEntryOut<T extends object>(
     }),
   };
 }
-
-// --- Repository secrets -------------------------------------------------------
 
 export async function getRepoSecretPublicKeyOperation(
   ctx: OpContext,
@@ -210,8 +202,6 @@ export async function listRepoOrgSecretsOperation(
   return { total_count: page.total, secrets: page.items.map(secretOut) };
 }
 
-// --- Organization secrets -----------------------------------------------------
-
 export async function getOrgSecretPublicKeyOperation(
   ctx: OpContext,
   input: Input<typeof getOrgSecretPublicKey>,
@@ -269,8 +259,6 @@ export async function deleteOrgSecretOperation(
   deliverAudit(ctx, stub);
   return null;
 }
-
-// --- An organization entry's selected repositories ----------------------------
 
 async function listSelected(
   ctx: OpContext,
@@ -381,8 +369,6 @@ export function removeOrgVariableRepoOperation(
   return changeSelected(ctx, "variable", input.org, input.name, { remove: input.repository_id });
 }
 
-// --- Repository variables -----------------------------------------------------
-
 export async function listRepoVariablesOperation(
   ctx: OpContext,
   input: Input<typeof listRepoVariables>,
@@ -455,8 +441,6 @@ export async function listRepoOrgVariablesOperation(
   return { total_count: page.total, variables: page.items.map(variableOut) };
 }
 
-// --- Organization variables -----------------------------------------------------
-
 export async function listOrgVariablesOperation(
   ctx: OpContext,
   input: Input<typeof listOrgVariables>,
@@ -526,12 +510,8 @@ export async function deleteOrgVariableOperation(
   return null;
 }
 
-// --- Keys -----------------------------------------------------------------------
-
-/** Accounts one rewrap call visits at most. */
 const REWRAP_ACCOUNTS = 25;
 
-/** The `admin.ci.secrets.rewrap` operation: every user's and organization's account object, a page at a time. */
 export async function rewrapCiSecretsOperation(
   ctx: OpContext,
   input: Input<typeof rewrapCiSecrets>,

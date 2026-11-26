@@ -267,6 +267,33 @@ describe("FyrdenClient", () => {
     ]);
   });
 
+  it.each([{ from: 5 }, { tail: 2 }])(
+    "reads a job's log from %o, then by next_cursor alone, to the end stored so far",
+    async (start) => {
+      const { sent, fetchFn } = fake([
+        { body: { rows: [{ i: 5 }], next_cursor: "c1" } },
+        { body: { rows: [{ i: 6 }], next_cursor: "c2" } },
+        { body: { rows: [], next_cursor: "c2" } },
+      ]);
+      const client = new FyrdenClient({ baseUrl: "https://f.test/api", fetch: fetchFn });
+      const rows: number[] = [];
+      for await (const row of client.paginate("actions.runs.jobs.logs.read", {
+        owner: "me",
+        repo: "r",
+        run_id: "R",
+        job_id: 1,
+        ...start,
+      }))
+        rows.push(row.i);
+      expect(rows).toEqual([5, 6]);
+      expect(sent.map((s) => new URL(s.url).search)).toEqual([
+        `?${Object.entries(start)[0]?.join("=")}`,
+        "?cursor=c1",
+        "?cursor=c2",
+      ]);
+    },
+  );
+
   it("starts a paginated stream after an id, then follows next_cursor alone", async () => {
     const { sent, fetchFn } = fake([
       { body: { comments: [{ id: 3 }], next_cursor: "c1" } },

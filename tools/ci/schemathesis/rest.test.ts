@@ -27,7 +27,6 @@ const wranglerBin = join(
   "wrangler.js",
 );
 
-/** What the run points path parameters at; set up before the run. */
 const SEED = {
   owner: "fuzz",
   repo: "seed",

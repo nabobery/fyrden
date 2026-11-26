@@ -8,7 +8,6 @@ import {
 import type { PageLinks } from "../lib/pages.js";
 import { Pager } from "./pager.js";
 
-/** Every error of a submitted form, read out when it appears. */
 export function ErrorSummary({ errors }: { errors: FormErrors }) {
   const messages = Object.values(errors).filter((m): m is string => typeof m === "string");
   if (messages.length === 0) return null;
@@ -30,7 +29,6 @@ export function FieldError({ id, message }: { id: string; message: string | unde
   ) : null;
 }
 
-/** `aria-invalid` and `aria-describedby` for a field with a hint and maybe an error. */
 export function describedBy(
   field: string,
   message: string | undefined,
@@ -107,7 +105,6 @@ export function VisibilityField({
   );
 }
 
-/** The repositories a `selected` organization entry reaches, each removable, and one to add. */
 export function RepositoryAccess({
   noun,
   repositories,

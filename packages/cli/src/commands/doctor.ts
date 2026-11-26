@@ -112,7 +112,6 @@ export async function doctor(
   )
     log(await searchSummary(runner, apiDir, directory.name, org.name));
 
-  // The keys webhook and CI secrets are kept with (deploy makes each when there is none).
   const secrets = await workerSecrets(runner, config.name).catch(() => null);
   if (secrets && !secrets.has("WEBHOOKS_KEY"))
     log("WARN WEBHOOKS_KEY is not set: webhooks cannot be created (fyrden deploy makes it)");
@@ -133,7 +132,6 @@ export async function doctor(
   return { authenticated: true, missing, schemaDrift };
 }
 
-/** What stands between a database's applied migrations and the checkout's. */
 function gapMessage(gap: MigrationGap): string {
   const parts: string[] = [];
   if (gap.pending.length > 0)
@@ -145,7 +143,6 @@ function gapMessage(gap: MigrationGap): string {
   return parts.join("; ");
 }
 
-/** How many effects are in each state, and how old the oldest of each is: a stuck backlog shows here. */
 async function effectsSummary(runner: WranglerRunner, apiDir: string, db: string): Promise<string> {
   try {
     const rows = await queryRemote<{ state: string; count: number; oldest: number }>(
@@ -163,12 +160,7 @@ async function effectsSummary(runner: WranglerRunner, apiDir: string, db: string
   }
 }
 
-/**
- * Search's state, read only: whether indexing is on and at which
- * generation, and a repository not yet known whole to search at it (one
- * row each through an index; none listed is not proof that a backfill
- * reached every repository).
- */
+/** One row each through an index; none listed is not proof that a backfill reached every repository. */
 async function searchSummary(
   runner: WranglerRunner,
   apiDir: string,
@@ -203,7 +195,6 @@ async function searchSummary(
   }
 }
 
-/** The commit the Worker's current version was deployed from (its FYRDEN_COMMIT var). */
 async function deployedCommit(runner: WranglerRunner, worker: string): Promise<string> {
   try {
     // fyrden deploy sends all traffic to one version; during a gradual

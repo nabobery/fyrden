@@ -1,12 +1,6 @@
 // Actions secrets and variables settings, in a real browser against both
-// Workers: an administrator sets, updates and deletes a repository's
-// secrets and variables, an organization's owner its own with the
-// repositories they reach, a 48 KiB value fits and one byte more does not,
-// line breaks typed in a form are stored as "\n" (with and without
-// JavaScript), worst-case variable values still list, a writer gets no
-// page and no form, and a secret's value never comes back to the browser
-// or into the Workers' logs. Every page is checked with axe for WCAG 2.x A
-// and AA. Needs `pnpm --filter @fyrden/web build` first (turbo does it).
+// Workers. Every page is checked with axe for WCAG 2.x A and AA. Needs
+// `pnpm --filter @fyrden/web build` first (turbo does it).
 import { uniqueId } from "@fyrden/testing";
 import { type APIResponse, type Browser, type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -18,7 +12,6 @@ let browser: Browser;
 const handle = "ada";
 const name = "secrets";
 const CANARY = `canary-${uniqueId()}`;
-/** What the browser received, as text: every response's status, headers and body. */
 const received: string[] = [];
 
 const accessible = (what: string) => axe(page, what);
@@ -90,7 +83,6 @@ async function close(target: Page): Promise<void> {
   await target.context().close();
 }
 
-/** A page of this session with no JavaScript. */
 async function withoutScript(): Promise<Page> {
   const context = await browser.newContext({
     javaScriptEnabled: false,
@@ -101,7 +93,6 @@ async function withoutScript(): Promise<Page> {
   return plain;
 }
 
-/** A signed-in page for the user with `token`, in its own browser context. */
 async function signedIn(token: string): Promise<Page> {
   const theirs = await (await browser.newContext()).newPage();
   await theirs.goto(`${stack.origin}/auth/sign-in?return_to=%2F`);

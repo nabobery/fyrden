@@ -12895,6 +12895,124 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "type": "string",
                           },
+                          "steps": {
+                            "description": "As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "completed_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "conclusion": {
+                                  "anyOf": [
+                                    {
+                                      "enum": [
+                                        "success",
+                                        "failure",
+                                        "cancelled",
+                                        "skipped",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "log": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "from": {
+                                          "maximum": 9007199254740991,
+                                          "minimum": -9007199254740991,
+                                          "type": "integer",
+                                        },
+                                        "rows": {
+                                          "maximum": 9007199254740991,
+                                          "minimum": -9007199254740991,
+                                          "type": "integer",
+                                        },
+                                      },
+                                      "required": [
+                                        "from",
+                                        "rows",
+                                      ],
+                                      "type": "object",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                  "description": "Fyrden: its rows of the job's log (the first, and how many).",
+                                },
+                                "name": {
+                                  "description": "As the workflow writes it, expressions in it not evaluated: its \`name\`, else \`Run\` and the first line of what it runs.",
+                                  "type": "string",
+                                },
+                                "number": {
+                                  "description": "Its place among the job's steps, from 1.",
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                "stage": {
+                                  "description": "Fyrden: \`main\` for the workflow's own steps.",
+                                  "enum": [
+                                    "setup",
+                                    "containers",
+                                    "pre",
+                                    "main",
+                                    "post",
+                                    "cleanup",
+                                  ],
+                                  "type": "string",
+                                },
+                                "started_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "status": {
+                                  "enum": [
+                                    "queued",
+                                    "in_progress",
+                                    "completed",
+                                  ],
+                                  "type": "string",
+                                },
+                              },
+                              "required": [
+                                "number",
+                                "name",
+                                "stage",
+                                "status",
+                                "conclusion",
+                                "started_at",
+                                "completed_at",
+                                "log",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
                           "waiting_for": {
                             "anyOf": [
                               {
@@ -12924,6 +13042,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                           "check",
                           "log_complete",
                           "error",
+                          "steps",
                         ],
                         "type": "object",
                       },
@@ -13075,6 +13194,268 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           "agent",
         ],
         "x-idempotency": "Idempotency-Key header",
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/rows": {
+      "get": {
+        "description": "A page of a job's log rows as stored, finished or so far: masked when they were stored, oldest first. Start at a row (\`from\`), at the last rows (\`tail\`) or where a page ended (\`cursor\`), one of them at most; without one, at the first row. A page holds at most \`max_bytes\` of encoded rows and reads a bounded part of storage, so it can hold fewer. \`next_cursor\` is null only once the log is closed and was read to its end: while rows may still come it is always given, and reading from it again follows the log (no rows when there are none yet). A row too long for a page comes in pieces, to join by \`o\`; with \`tail\`, a last row too long comes as its end. Only stored rows are answered: the last ones a running job printed may be held back for masking. \`state\`: \`none\` before the job got a task, or when it never did; \`streaming\`; \`complete\`; \`incomplete\` (rows were lost or are still late). A cursor of another log, or past its end, is 422 \`invalid_cursor\`. A log from before server masking is 410 \`log_unavailable\`. 503 \`log_busy\` while the run stores uploads or reads other pages that need the room (a refused page is not charged), 503 \`log_unreadable\` when a stored part cannot be read. Where the deployment meters CI (Workers Free), pages that read storage share a daily allowance: 429 \`log_reads_spent\` with \`retry_after\` and \`retry_at\` naming the next 00:00 UTC, 503 \`log_reads_unavailable\` when it cannot be accounted for. \`GET …/jobs/{job_id}/logs\` answers the same as plain text, from \`from\`, \`tail\` or \`cursor\`, at most 512 KiB a page, with a \`Link\` to the next page while more is stored. Takes the \`actions:read\` permission. A Fyrden extension.",
+        "operationId": "actions.runs.jobs.logs.read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "description": "The job's id within its run.",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "description": "The row to start at; past the end, the end.",
+              "maximum": 2147483647,
+              "minimum": 0,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "description": "The last rows to read: fewer when they do not fit.",
+              "maximum": 10000,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "From a previous page's \`next_cursor\`.",
+              "maxLength": 200,
+              "type": "string",
+            },
+          },
+          {
+            "in": "query",
+            "name": "max_bytes",
+            "required": false,
+            "schema": {
+              "default": 65536,
+              "description": "The encoded rows a page holds at most, in bytes.",
+              "maximum": 524288,
+              "minimum": 1024,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end": {
+                      "description": "Rows stored when the page was read.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "next_cursor": {
+                      "description": "Pass as \`cursor\` to read on; null once a closed log was read to its end.",
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "rows": {
+                      "items": {
+                        "anyOf": [
+                          {
+                            "additionalProperties": false,
+                            "description": "A piece of a row too long for one page.",
+                            "properties": {
+                              "c": {
+                                "type": "string",
+                              },
+                              "end": {
+                                "description": "Whether it reaches the row's end.",
+                                "type": "boolean",
+                              },
+                              "i": {
+                                "description": "The row's index in the log.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "o": {
+                                "description": "Where this piece starts in the row, in UTF-16 units.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "t": {
+                                "description": "When it was printed, Unix ms; null for none.",
+                                "type": [
+                                  "number",
+                                  "null",
+                                ],
+                              },
+                            },
+                            "required": [
+                              "i",
+                              "t",
+                              "c",
+                              "o",
+                              "end",
+                            ],
+                            "type": "object",
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "A whole row.",
+                            "properties": {
+                              "c": {
+                                "type": "string",
+                              },
+                              "i": {
+                                "description": "The row's index in the log.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "t": {
+                                "description": "When it was printed, Unix ms; null for none.",
+                                "type": [
+                                  "number",
+                                  "null",
+                                ],
+                              },
+                            },
+                            "required": [
+                              "i",
+                              "t",
+                              "c",
+                            ],
+                            "type": "object",
+                          },
+                          {
+                            "additionalProperties": false,
+                            "description": "A row too large to be stored.",
+                            "properties": {
+                              "bytes": {
+                                "description": "The row's declared size.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "i": {
+                                "description": "The row's index in the log.",
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              "omitted": {
+                                "const": "row_too_large",
+                                "type": "string",
+                              },
+                            },
+                            "required": [
+                              "i",
+                              "omitted",
+                              "bytes",
+                            ],
+                            "type": "object",
+                          },
+                        ],
+                      },
+                      "type": "array",
+                    },
+                    "state": {
+                      "enum": [
+                        "none",
+                        "streaming",
+                        "complete",
+                        "incomplete",
+                      ],
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "rows",
+                    "state",
+                    "end",
+                    "next_cursor",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Read a job's log",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
       },
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun": {

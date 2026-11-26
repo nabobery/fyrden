@@ -51,7 +51,6 @@ export interface RunReport extends RunFacts {
   readonly completedAt: number | null;
 }
 
-/** How an attempt before a report's own ended. */
 export interface AttemptEnd {
   readonly attempt: number;
   readonly conclusion: AttemptConclusion;

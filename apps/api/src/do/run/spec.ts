@@ -55,7 +55,6 @@ const MAX_EVENT_LENGTH = 64;
 
 const utf8 = new TextEncoder();
 
-/** The contexts as they are stored and measured. */
 const contextsJson = (github: unknown, inputs: unknown, vars: unknown) =>
   JSON.stringify({ github: github ?? null, inputs: inputs ?? null, vars: vars ?? null });
 

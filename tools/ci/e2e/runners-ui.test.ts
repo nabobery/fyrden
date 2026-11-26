@@ -1,9 +1,5 @@
 // An organization's runner settings, in a real browser against both
-// Workers: an owner makes a registration token (shown once), sees the
-// runner it registers, changes which jobs the runner takes with and
-// without JavaScript, and deletes it; a member and a repository's admin
-// get no page; and no registration token reaches the Workers' logs. Every
-// page is checked with axe for WCAG 2.x A and AA. Needs
+// Workers. Every page is checked with axe for WCAG 2.x A and AA. Needs
 // `pnpm --filter @fyrden/web build` first (turbo does it).
 import { type Page, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -20,7 +16,6 @@ const org = "acme";
 const base = () => `${stack.origin}/settings/orgs/${org}/runners`;
 const accessible = (what: string) => axe(page, what);
 const tokens: string[] = [];
-/** A status `on` reads out with `text` in it (a change to a list has two). */
 const says = (on: Page, text: string) =>
   see(on.getByRole("status").filter({ hasText: text })).toBeVisible();
 
@@ -78,7 +73,6 @@ async function register(token: string, name: string, ephemeral: boolean): Promis
   expect(declared.status).toBe(200);
 }
 
-/** The registration token the page shows. */
 async function shownToken(on: Page): Promise<string> {
   const text = (await on.locator("pre.secret").first().textContent()) ?? "";
   const token = /--token (fyrden_run_\S+)/.exec(text)?.[1];

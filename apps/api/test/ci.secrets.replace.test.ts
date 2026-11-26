@@ -115,7 +115,6 @@ afterEach(() => {
   delete accountHooks.ciRewrapCounted;
 });
 
-/** A user with a repository holding secret `name`. */
 async function userWithSecret(name = "OLD") {
   const owner = await user();
   const repo = await repoOf(owner.principalId);
@@ -373,7 +372,6 @@ describe("replacing an account's CI data key", () => {
         delete accountHooks.ciRewrapPrepared;
         await account.ciReplaceDataKey({ principalId: admin.principalId }, 1);
       };
-      // Today's count went negative here: one listed, none left, one counted as remaining.
       expect(await stub.ciRewrap()).toEqual({ rewrapped: 0, remaining: 0, unreadable: 0 });
       expect((await dataKeys(stub))[0]).toMatchObject({ generation: 1, wrapped: "", nonce: "" });
     } finally {

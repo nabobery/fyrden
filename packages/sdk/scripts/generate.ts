@@ -16,7 +16,6 @@ import { z } from "zod";
 
 type Schema = Record<string, unknown>;
 
-/** `repos.collaborators.set` → `ReposCollaboratorsSet`. */
 function typeName(id: string): string {
   return id
     .split(/[._]/)
@@ -90,11 +89,6 @@ function jsonSchema(schema: z.ZodType, io: "input" | "output"): Schema {
  */
 const NOT_ITEM_PAGED: ReadonlySet<string> = new Set(["repos.paths.list"]);
 
-/**
- * The array property a paginated output carries beside `next_cursor`, if
- * it is one: in the output itself, or in one variant of a union (a
- * directory among a path's contents).
- */
 function pageItems(op: OperationDef): string | undefined {
   if (NOT_ITEM_PAGED.has(op.id)) return undefined;
   const input = jsonSchema(op.input, "input");

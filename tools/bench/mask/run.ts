@@ -49,7 +49,6 @@ interface HeapUsage {
   backingStorageSize: number;
 }
 
-/** One connection to the workerd inspector, for `Runtime.getHeapUsage`. */
 function inspector(port: number): Promise<{ heap(): Promise<HeapUsage>; close(): void }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(`ws://127.0.0.1:${port}/main`);
@@ -57,7 +56,6 @@ function inspector(port: number): Promise<{ heap(): Promise<HeapUsage>; close():
     const waiting = new Map<number, (usage: HeapUsage) => void>();
     socket.addEventListener("message", (event) => {
       const { id, result } = JSON.parse(String(event.data)) as { id?: unknown; result?: HeapUsage };
-      // Only answers to this connection's own queries: anything else the inspector sends is ignored.
       if (typeof id !== "number" || result === undefined) return;
       const done = waiting.get(id);
       if (typeof done !== "function") return;
@@ -79,10 +77,6 @@ function inspector(port: number): Promise<{ heap(): Promise<HeapUsage>; close():
   });
 }
 
-/**
- * Trie nodes (roots included) and patterns of the masks in effect at the worker's call (row 1),
- * and UTF-16 units of every mask's value and variants.
- */
 function counts(masks: readonly { value: string; fromIndex: number }[]) {
   const prefixes = [new Set<string>(), new Set<string>()];
   let patterns = 0;

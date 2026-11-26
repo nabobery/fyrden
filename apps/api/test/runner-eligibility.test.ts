@@ -65,7 +65,6 @@ async function primed(f: OrgFixture): Promise<number> {
   return tasksVersionOf(f.org.id);
 }
 
-/** A fork pull request run of `event`, waiting for its approval. */
 function forkSpec(f: OrgFixture, event: "pull_request" | "pull_request_target"): RunSpec {
   return specFor(f, pullWorkflow(event), {
     event,
@@ -77,7 +76,6 @@ function forkSpec(f: OrgFixture, event: "pull_request" | "pull_request_target"):
   });
 }
 
-/** Runners of the organization with every label a workflow might ask for, one of them ephemeral. */
 async function everyRunner(f: OrgFixture): Promise<RegisteredRunner[]> {
   return [
     await registerRunner(f.org.login, f.owner),

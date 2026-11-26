@@ -98,7 +98,6 @@ export async function startWebStack(
     ? join(root, `apps/api/wrangler.e2e-${crypto.randomUUID()}.jsonc`)
     : apiConfig;
   let output = "";
-  // Checks, run on each piece of output, of the waitForLine calls still pending.
   const waiters = new Set<() => void>();
   const workerLines = (from = 0) =>
     output
@@ -229,7 +228,6 @@ export async function reload(page: Page): Promise<void> {
   await page.locator("html[data-hydrated]").waitFor({ state: "attached" });
 }
 
-/** What axe finds against WCAG 2.x A and AA on `page` as it stands, one line each. */
 async function violations(page: Page): Promise<string[]> {
   const result = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
@@ -299,7 +297,6 @@ async function submitPick(page: Page, pick: Pick, timeout = POST_SENT_MS) {
   return sent;
 }
 
-/** Picks `pick` (see `submitPick`) and returns once the server has kept it. */
 async function pickScheme(page: Page, pick: Pick): Promise<void> {
   const post = await submitPick(page, pick);
   // Ended, answered or not: the page posts with `redirect: "manual"`, and while any request is
@@ -314,11 +311,6 @@ async function pickScheme(page: Page, pick: Pick): Promise<void> {
   expect(cookie?.value ?? "system", `the server kept ${pick}`).toBe(pick);
 }
 
-/**
- * Waits until the page shows `pick` under an operating system in `os`: the button reads
- * pressed, the root carries the choice, the page's background is drawn in the scheme that
- * results (its stylesheet applied), and no file view is still drawing.
- */
 async function settled(page: Page, pick: Pick, os: OsScheme): Promise<void> {
   await see(pickButton(page, pick)).toHaveAttribute("aria-pressed", "true");
   const root = page.locator("html");

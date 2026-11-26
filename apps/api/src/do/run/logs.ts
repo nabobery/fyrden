@@ -114,7 +114,6 @@ export function maskAdditionalData(
   return (keyId) => `fyrden-ci-mask:v1:${runId}:${task}:${maskId}:${kind}:${keyId}`;
 }
 
-/** A `ci_log_masks` row. */
 interface MaskRow {
   kind: MaskKind;
   from_index: number;
@@ -139,7 +138,6 @@ interface SealedMaskRow {
  */
 export type AddMaskAnswer = "added" | "full" | "key_unavailable" | "masks_unreadable";
 
-/** What `addSecretMasks` answers. */
 export type SecretMasksAnswer =
   | { readonly ok: true }
   | ({ readonly ok: false; readonly code: "secrets_unmaskable" } & Omit<
@@ -211,7 +209,6 @@ export interface LogPublisher {
   dropCaches(): void;
 }
 
-/** What the log work needs from its object. */
 export interface LogsHost {
   readonly env: Env;
   readonly engine: RunEngine;
@@ -282,7 +279,6 @@ interface RunFacts {
   readonly trust: "trusted" | "untrusted";
 }
 
-/** Whether a log is sealed or past its late window. */
 function closed(log: LogRow | undefined, now: number): boolean {
   if (!log) return false;
   if (log.state === "complete" || log.finalized === 1) return true;
@@ -934,7 +930,6 @@ export class RunLogs {
     this.host.hooks.maskMatcher?.(task, kept ? (outcome ?? "uncached") : "uncached");
   }
 
-  /** Publishes final rows to the job's sockets (a test may pause first). */
   async #publish(ref: LogRef, base: number, rows: readonly LogLine[]): Promise<void> {
     const hook = viewerHooks.beforePublish;
     if (hook) await hook(ref.runId);
@@ -942,7 +937,6 @@ export class RunLogs {
     this.host.viewers.publish(ref.jobId, ref.task, base, rows);
   }
 
-  /** Reports the `::add-mask::` values of stored rows that the caps kept from being registered. */
   #dropped(wireId: number, ref: LogRef, masked: MaskRowsResult, end: number): void {
     const { runId } = ref;
     for (const { index, reason } of masked.dropped) {
@@ -1189,7 +1183,6 @@ function storedCarry(
   return { ...carry, mask: storedMasks + (carry.mask - loaded - fetched) };
 }
 
-/** A row's time in Unix milliseconds; null when the runner sent none. */
 function unixMs(time: Timestamp | undefined): number | null {
   return time ? time.seconds * 1000 + Math.floor(time.nanos / 1_000_000) : null;
 }

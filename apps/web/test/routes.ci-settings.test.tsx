@@ -1,9 +1,3 @@
-// Actions secrets and variables settings: a secret is sealed here for the
-// scope's key read on each write and never returned in plain text; a value
-// sent with CRLF line breaks is stored with "\n"; a legal 48 KiB value fits
-// the form; each problem the API answers lands on its field; the pages
-// render only what the API let the viewer read.
-
 import { matchRoutes } from "react-router";
 import { describe, expect, it } from "vitest";
 import { errorsFor } from "../app/lib/ci-settings.js";
@@ -54,7 +48,6 @@ function multipartPost(path: string, fields: Record<string, string>, extra = "")
 
 type Reply = Response | ((request: Request) => Response | Promise<Response>);
 
-/** fyrden-api faked by "METHOD /api/path" (no query); a list of replies answers in turn. */
 function api(routes: Record<string, Reply | Reply[]>) {
   const used: Record<string, number> = {};
   return fakeApi(async (request) => {
@@ -72,7 +65,6 @@ function api(routes: Record<string, Reply | Reply[]>) {
 
 const lineOf = (call: Request) => `${call.method} ${new URL(call.url).pathname}`;
 
-/** Everything a result exposes to the browser, as text. */
 async function exposed(result: unknown): Promise<string> {
   if (result instanceof Response)
     return [

@@ -1,15 +1,14 @@
 import { workersPlan } from "../git/fetch/mode.js";
 
 /*
- * Discretionary work (watched P2 entries now; digests later) is admitted
- * against a daily allowance of the deployment's resources, so it never
- * takes more than its share of an account's daily quotas, which core work
+ * Discretionary work is admitted against a daily allowance of the
+ * deployment's resources, so it never takes more than its share of an
+ * account's daily quotas, which core work
  * (P0 and P1 entries, everything else) shares and is never refused. A UTC
  * day's admissions, each priced at its whole life, stay within the
  * allowance. See docs/operations/limits.md (Discretionary work).
  */
 
-/** The resources an admission is priced in. */
 export const DISCRETIONARY_RESOURCES = [
   "do_requests",
   "do_rows_read",
@@ -50,9 +49,8 @@ const ENTRY = /^([a-z0-9_]+)=(0|[1-9][0-9]{0,14})$/;
 /**
  * A daily allowance variable (`resource=n,…`) read whole, or null when
  * unset or not readable whole (a resource not in `resources` or named
- * twice, a value not a whole number): treated as unset, as
- * `internalCallLimit` treats its variable; `fyrden deploy` refuses such a
- * value before it is set.
+ * twice, a value not a whole number): treated as unset; `fyrden deploy`
+ * refuses such a value before it is set.
  */
 export function dailyValues<R extends string>(
   raw: unknown,
@@ -200,7 +198,6 @@ export function pruneHoursStatement(db: D1Database): D1PreparedStatement {
 /** How long an isolate keeps what it read of the warning before reading it again. Proposed. */
 export const DELIVERY_STATE_TTL_MS = 60_000;
 
-/** The warning's end as last read (0: none), and when a read was last tried. */
 let known: number | undefined;
 let triedAt = Number.NEGATIVE_INFINITY;
 /** The read under way, which callers meanwhile wait on rather than start another. */

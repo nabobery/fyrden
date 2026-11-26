@@ -49,7 +49,6 @@ function Check({
   );
 }
 
-/** The fields that choose which jobs a runner takes. */
 export function AccessFields({
   access,
   errors,

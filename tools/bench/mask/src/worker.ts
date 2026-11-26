@@ -17,7 +17,6 @@ export default {
       // Own shapes only: a name such as `constructor` must not reach an inherited function.
       const shape = Object.hasOwn(SHAPES, name) ? SHAPES[name] : undefined;
       if (typeof shape !== "function") return new Response(`no shape ${name}`, { status: 404 });
-      // Copies of one task's cache, so a small one is measured above the heap's noise.
       const copies = Number(url.searchParams.get("copies") ?? "1");
       held = [];
       let masks = shape();

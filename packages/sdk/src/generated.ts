@@ -8540,6 +8540,24 @@ export type ActionsRunsJobsListOutput = {
     /** Fyrden: whether every log row reached durable storage; null while it runs. */
     log_complete: boolean | null;
     error: string | null;
+    /** As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them. */
+    steps: ({
+      /** Its place among the job's steps, from 1. */
+      number: number;
+      /** As the workflow writes it, expressions in it not evaluated: its `name`, else `Run` and the first line of what it runs. */
+      name: string;
+      /** Fyrden: `main` for the workflow's own steps. */
+      stage: "setup" | "containers" | "pre" | "main" | "post" | "cleanup";
+      status: "queued" | "in_progress" | "completed";
+      conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+      started_at: number | null;
+      completed_at: number | null;
+      /** Fyrden: its rows of the job's log (the first, and how many). */
+      log: {
+        from: number;
+        rows: number;
+      } | null;
+    })[];
     /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
     waiting_for?: "ci_minutes" | "daily_capacity" | null;
   })[];
@@ -8607,6 +8625,58 @@ export type ActionsRunsJobsLiveTicketOutput = {
   expires_in: number;
   /** Where to open the WebSocket (the ticket in its query). */
   url: string;
+};
+
+/** Input of `actions.runs.jobs.logs.read`: Read a job's log. */
+export type ActionsRunsJobsLogsReadInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+  /** The job's id within its run. */
+  job_id: number;
+  /** The row to start at; past the end, the end. */
+  from?: number;
+  /** The last rows to read: fewer when they do not fit. */
+  tail?: number;
+  /** From a previous page's `next_cursor`. */
+  cursor?: string;
+  /** The encoded rows a page holds at most, in bytes. */
+  max_bytes?: number;
+};
+
+/** Output of `actions.runs.jobs.logs.read`. */
+export type ActionsRunsJobsLogsReadOutput = {
+  rows: ({
+    /** The row's index in the log. */
+    i: number;
+    /** When it was printed, Unix ms; null for none. */
+    t: number | null;
+    c: string;
+    /** Where this piece starts in the row, in UTF-16 units. */
+    o: number;
+    /** Whether it reaches the row's end. */
+    end: boolean;
+  } | {
+    /** The row's index in the log. */
+    i: number;
+    /** When it was printed, Unix ms; null for none. */
+    t: number | null;
+    c: string;
+  } | {
+    /** The row's index in the log. */
+    i: number;
+    omitted: "row_too_large";
+    /** The row's declared size. */
+    bytes: number;
+  })[];
+  state: "none" | "streaming" | "complete" | "incomplete";
+  /** Rows stored when the page was read. */
+  end: number;
+  /** Pass as `cursor` to read on; null once a closed log was read to its end. */
+  next_cursor: string | null;
 };
 
 /** Input of `actions.runs.approve`: Approve a workflow run from a fork. */
@@ -10384,6 +10454,7 @@ export const OPERATIONS = {
   "actions.runs.force_cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.rerun": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.jobs.live_ticket": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/live", pathParams: ["owner","repo","run_id","job_id"], idempotent: true },
+  "actions.runs.jobs.logs.read": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}/logs/rows", pathParams: ["owner","repo","run_id","job_id"], idempotent: false, items: "rows" },
   "actions.runs.approve": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/approve", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.workflows.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/workflows", pathParams: ["owner","repo"], idempotent: false, items: "workflows" },
   "actions.workflows.runs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs", pathParams: ["owner","repo","workflow_id"], idempotent: false, items: "workflow_runs" },
@@ -10918,6 +10989,8 @@ export interface Operations {
   "actions.runs.rerun": { input: ActionsRunsRerunInput; output: ActionsRunsRerunOutput };
   /** Get a ticket to watch a job's log live. A single-use ticket (30 seconds) to open a WebSocket at `url` (`GET` with `Upgrade: websocket`; add `&from=<index>` to start at a row, 0 by default) that streams the job's log rows, masked as they are stored: `{"t":"rows","rows":[{"i":<index>,"t":<Unix ms or null>,"c":"<text>"}]}` in order, each position once. An oversized omitted row is a whole record in the same `rows` array: `{"i":<index>,"omitted":"row_too_large","bytes":<declared size>}`. It has no content or timestamp, is never split into parts, and keeps the log incomplete. The stream immediately after a gap is conservatively masked and can hide non-secret text. Logs created before server masking was introduced are unavailable: the socket sends no history and ends with `log: "incomplete"` and `durable: 0`. A row too long for one frame comes as `{"t":"part","i","o","c","end"}` pieces (the first with `"ts"`, the row's time) to join in order. Once a whole final upload seals the log, or ten minutes have passed since its task ended, and every stored row was sent: `{"t":"end","log":"complete"|"incomplete","durable":<n>}` (rows at or past `durable` were not stored and cannot be added after `end`; late uploads are accepted only after task completion and before final sealing or the ten-minute deadline; `"unfinished":<index>` names a row whose parts cannot be finished, to discard), then close 1000. Where the deployment meters log viewers (Workers Free), a socket reads from storage at most what reading back the log stored when its ticket was issued takes (each chunk once for every 504 KiB it holds) plus 4 MiB, in a bounded number of reads and of checks of its credential: one whose next read or check would pass that is closed 4429, after `{"t":"end","reason":"budget"}` when the window has room for it (with `"unfinished":<index>` for a row cut mid-part); ask for a new ticket and reconnect with `from` at `unfinished` when given, else at the row after the last whole row received (a row received only in part starts again). Rows sent live as they arrive are not counted. Acknowledge with `{"t":"ack","i":<next index>,"o":<UTF-16 offset in it>}` only at the position immediately after a received frame: the next row index and offset 0 after a `rows` frame, or the end position of a `part` frame (the next row and offset 0 when `end` is true). Send an acknowledgement after each 256 KiB of frames (their UTF-8) or 16 complete frames handled. Only an acknowledgement at a sent frame boundary that releases outstanding frames advances the window; other acknowledgements count against the control-message limit. At most 64 frames or 1 MiB go unacknowledged; once that is full, nothing more is sent until acknowledgements leave at most 256 KiB and 16 frames out, and a socket that takes 2 minutes to get there closes 4408. `ping` is answered `pong`. Closes: 4401 the credential no longer holds, 4429 the socket's budget is spent, 4403 access to the repository was lost (checked at least every 60 seconds while rows flow), 4404 the run was erased, 1001 after 24 hours, 1011 a stored chunk or outgoing frame could not be read or sent, 1008 any other message, or more than 20 a minute that do not acknowledge a sent frame boundary and release outstanding frames. The upgrade needs the same credential: the session's cookie from this origin, or the token in `Authorization`. The caller's own credentials only (a delegated or DPoP-bound token: 403 `delegated_listing`). At most 20 tickets a run unredeemed (429 `too_many_tickets`). Where log viewers are metered, each ticket is paid from the deployment's daily CI capacity: once viewers' share of the day is spent, 429 `log_viewers_spent` with `retry_after` and `retry_at` naming the next 00:00 UTC (finished logs included); 503 `log_viewers_unavailable` when it cannot be accounted for, while more runners serve than the deployment's fleet cap, or when watching the log costs more than viewers' daily share. A run takes 20 sockets, 5 a credential and 10 a principal. If the response is lost, retrying its `Idempotency-Key` returns `409 secret_already_disclosed`; use a new key to request another ticket. The lost ticket expires automatically. Takes the `actions:read` permission. A Fyrden extension. */
   "actions.runs.jobs.live_ticket": { input: ActionsRunsJobsLiveTicketInput; output: ActionsRunsJobsLiveTicketOutput };
+  /** Read a job's log. A page of a job's log rows as stored, finished or so far: masked when they were stored, oldest first. Start at a row (`from`), at the last rows (`tail`) or where a page ended (`cursor`), one of them at most; without one, at the first row. A page holds at most `max_bytes` of encoded rows and reads a bounded part of storage, so it can hold fewer. `next_cursor` is null only once the log is closed and was read to its end: while rows may still come it is always given, and reading from it again follows the log (no rows when there are none yet). A row too long for a page comes in pieces, to join by `o`; with `tail`, a last row too long comes as its end. Only stored rows are answered: the last ones a running job printed may be held back for masking. `state`: `none` before the job got a task, or when it never did; `streaming`; `complete`; `incomplete` (rows were lost or are still late). A cursor of another log, or past its end, is 422 `invalid_cursor`. A log from before server masking is 410 `log_unavailable`. 503 `log_busy` while the run stores uploads or reads other pages that need the room (a refused page is not charged), 503 `log_unreadable` when a stored part cannot be read. Where the deployment meters CI (Workers Free), pages that read storage share a daily allowance: 429 `log_reads_spent` with `retry_after` and `retry_at` naming the next 00:00 UTC, 503 `log_reads_unavailable` when it cannot be accounted for. `GET …/jobs/{job_id}/logs` answers the same as plain text, from `from`, `tail` or `cursor`, at most 512 KiB a page, with a `Link` to the next page while more is stored. Takes the `actions:read` permission. A Fyrden extension. */
+  "actions.runs.jobs.logs.read": { input: ActionsRunsJobsLogsReadInput; output: ActionsRunsJobsLogsReadOutput };
   /** Approve a workflow run from a fork. Lets a run from a fork's first-time contributor start: it waits (`status: completed`, `conclusion: action_required`, `approval.state: waiting`) until a user with write access approves it. Approving again answers the same; a run that is not waiting (it needed no approval, or was superseded by a newer push, cancelled or expired) is 409 `approval_not_pending`. Only users may approve. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */
   "actions.runs.approve": { input: ActionsRunsApproveInput; output: ActionsRunsApproveOutput };
   /** List repository workflows with runs. The workflow files with runs kept, in path order, each with its latest run. A file that never ran, or whose runs all expired, is not listed (GitHub lists the default branch's files): read `.github/workflows` for those. No `total_count`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */

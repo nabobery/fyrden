@@ -1,6 +1,3 @@
-// Masking of CI log rows: the variants a value covers, `::add-mask::`
-// parsing, the matcher over rows joined with no separator, the carry between
-// requests, the settled boundary and the caps.
 import { describe, expect, it } from "vitest";
 import {
   buildVariants,

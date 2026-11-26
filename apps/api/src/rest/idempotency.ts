@@ -67,7 +67,6 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-/** Claims `key` for this request, or says how to answer it instead. */
 export async function startIdempotent(
   env: Env,
   request: {
@@ -225,7 +224,6 @@ const NOT_FINAL: Readonly<Record<string, (output: unknown) => boolean>> = {
     (output as { state?: unknown }).state === "completing",
 };
 
-/** What a key keeps of a request's result. */
 export function outcomeOf(
   op: OperationDef,
   result: { ok: true; output: unknown; status?: number } | { ok: false; problem: Problem },
