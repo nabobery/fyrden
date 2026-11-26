@@ -116,6 +116,7 @@ function Filters({
   search: string;
 }) {
   const error = (field: FilterError["field"]) => errors.find((e) => e.field === field);
+  const asked = new URLSearchParams(search);
   const field = (
     name: string,
     label: string,
@@ -131,7 +132,7 @@ function Filters({
           id={`f-${name}`}
           name={name}
           className="run-filter-input"
-          defaultValue={value ?? ""}
+          defaultValue={value ?? asked.get(name) ?? ""}
           aria-invalid={problem ? true : undefined}
           aria-describedby={problem ? `f-${key}-error` : undefined}
           {...extra}

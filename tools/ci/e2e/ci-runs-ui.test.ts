@@ -77,6 +77,7 @@ async function startRun(
   path = ".github/workflows/ci.yml",
   source = WORKFLOW,
   at = sha,
+  context: Record<string, string> = {},
 ): Promise<string> {
   const started = await seam<{ runId: string; answer: { ok: boolean } }>("/start", {
     repoId,
@@ -85,7 +86,7 @@ async function startRun(
     event: "push",
     actor,
     workflow: { path, source },
-    github: { ref: "refs/heads/main", event_name: "push" },
+    github: { ref: "refs/heads/main", event_name: "push", ...context },
   });
   expect(started.answer.ok).toBe(true);
   return started.runId;
@@ -333,6 +334,9 @@ describe("the runs list", () => {
     await page.getByRole("link", { name: "Clear" }).click();
     await see(page).toHaveURL(runs());
     await see(page.getByLabel("Commit")).toHaveValue("");
+    await page.getByLabel("Commit").fill("nope");
+    await page.getByRole("button", { name: "Filter" }).click();
+    await see(page.getByLabel("Commit")).toHaveValue("nope");
   });
 
   it("names a filter it cannot send", async () => {
@@ -470,11 +474,13 @@ describe("a run and its jobs", () => {
         "on: push",
         "jobs:",
         "  a:",
-        "    needs: nope",
+        "    needs: build_and_publish_release_packages_to_registry",
         "    runs-on: ubuntu-latest",
         "    steps:",
         "      - run: echo a",
       ].join("\n"),
+      sha,
+      { workflow: name_ },
     );
     await finished(broken);
     for (const width of [375, 320]) {

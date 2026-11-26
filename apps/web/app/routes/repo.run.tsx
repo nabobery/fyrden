@@ -329,8 +329,11 @@ function Notes({ run }: { run: Run }) {
           {/* biome-ignore lint/a11y/noRedundantRoles: without markers, WebKit reads a list as a group unless told. */}
           <ul role="list">
             {run.errors.map((e) => (
-              <li key={`${e.path}\u0000${e.line}\u0000${e.column}\u0000${e.code}`}>
-                <code className="run-wrap">
+              <li
+                key={`${e.path}\u0000${e.line}\u0000${e.column}\u0000${e.code}`}
+                className="run-wrap"
+              >
+                <code>
                   {run.path}
                   {e.line > 0 && `:${e.line}${e.column > 0 ? `:${e.column}` : ""}`}
                 </code>{" "}
