@@ -72,9 +72,6 @@ afterEach(() => {
   installCounters();
 });
 
-// ------------------------------------------------------------------ counting what the object sends
-
-/** Frames each socket was sent (by socket id), messages and rechecks each run's object handled. */
 const sent = new Map<string, number>();
 const sentBytes = new Map<string, number>();
 const messages = new Map<string, number>();
@@ -97,8 +94,6 @@ function installCounters() {
 }
 installCounters();
 
-// ------------------------------------------------------------------ runs, runners and log rows
-
 interface Task {
   f: Awaited<ReturnType<typeof orgRepo>>;
   runId: string;
@@ -109,7 +104,6 @@ interface Task {
   token: string;
 }
 
-/** A run of one job in a new organization, with a runner holding its task. */
 async function withTask(source = one): Promise<Task> {
   const f = await orgRepo();
   const runId = await started(f, source);
@@ -126,7 +120,6 @@ const row = (content: string, ms?: number): LogRow =>
   ms === undefined
     ? { content }
     : { content, time: { seconds: Math.floor(ms / 1000), nanos: (ms % 1000) * 1_000_000 } };
-/** Filler rows `[from, from + n)`. */
 const filler = (from: number, n: number, ms?: number): LogRow[] =>
   Array.from({ length: n }, (_, k) => row(`line ${from + k}`, ms));
 
@@ -167,7 +160,6 @@ interface Line {
   c: string;
 }
 
-/** The stored NDJSON lines of every chunk the manifest names, contiguous from 0. */
 async function storedText(runId: string, task: number): Promise<string[]> {
   const chunks = await inRun(runId, (r) =>
     r.engine.rows<{ start_index: number; end_index: number; r2_key: string }>(
@@ -187,9 +179,6 @@ async function storedText(runId: string, task: number): Promise<string[]> {
   return lines;
 }
 
-// ------------------------------------------------------------------ tickets, upgrades and clients
-
-/** One request through the Worker. */
 async function call(request: Request): Promise<Response> {
   const ctx = createExecutionContext();
   const response = await createApp().fetch(request, env, ctx);
@@ -226,7 +215,6 @@ interface UpgradeOptions {
   headers?: Record<string, string>;
   path?: string;
   upgrade?: boolean;
-  /** Whether the object's first check of the socket runs before it is returned (default true). */
   checked?: boolean;
 }
 
@@ -261,7 +249,6 @@ type Frame =
 
 interface Client {
   ws: WebSocket;
-  /** The socket's id in the object (the first 16 hex chars of its ticket's hash). */
   id: string;
   frames: Frame[];
   texts: string[];
@@ -269,7 +256,6 @@ interface Client {
   code: number | null;
 }
 
-/** A socket that `token` opened on the job's log, its frames collected. */
 async function watch(
   t: Pick<Task, "f" | "runId" | "jobId">,
   token: string,
@@ -321,7 +307,6 @@ async function settle(c: Client): Promise<void> {
   expect(c.frames.length).toBe(sent.get(c.id) ?? 0);
 }
 
-/** The rows `c` received, parts joined, checked contiguous from `from`. */
 function receivedLines(c: Client, from = 0): StoredLogLine[] {
   const lines: StoredLogLine[] = [];
   let part: Line | null = null;
@@ -356,7 +341,6 @@ function received(c: Client, from = 0): Line[] {
 const endOf = (c: Client) =>
   c.frames.find((f) => f.t === "end") as Extract<Frame, { t: "end" }> | undefined;
 
-/** The next position `c` expects, as its ack names it. */
 function position(c: Client): { i: number; o: number } {
   let pos = { i: -1, o: 0 };
   for (const frame of c.frames) {
@@ -371,7 +355,6 @@ function position(c: Client): { i: number; o: number } {
   return pos;
 }
 
-/** The position after `c`'s first `n` frames. */
 function positionAfter(c: Client, n: number): { i: number; o: number } {
   return position({ ...c, frames: c.frames.slice(0, n) });
 }
@@ -384,7 +367,6 @@ async function say(runId: string, c: Client, message: unknown): Promise<void> {
     await runInDurableObject(runStub(runId), () => {});
 }
 
-/** Acknowledges everything `c` received. */
 async function ackAll(runId: string, c: Client): Promise<void> {
   await settle(c);
   const p = position(c);
@@ -430,13 +412,11 @@ function hold(runId: string) {
 const attachments = (runId: string): Promise<ViewerAttachment[]> =>
   inRun(runId, (r) => r.viewers.attachments());
 
-/** Runs the viewers' slice (and anything else due) until nothing is due at the run's clock. */
 const slice = (runId: string) => drain(runId);
 
 /** A reset of the object's memory (as a hibernation wake leaves it): only the settled cache is lost. */
 const forget = (runId: string) => inRun(runId, (r) => r.viewers.dropCaches());
 
-/** Expects every line `c` received to be byte-identical to the stored one. */
 async function expectStored(t: Task, c: Client, from = 0) {
   const stored = await storedText(t.runId, t.number);
   const lines = receivedLines(c, from);
@@ -563,8 +543,6 @@ describe("pre-masking log history", () => {
     expect(JSON.parse(stored[0] as string).c === "***").toBe(true);
   });
 });
-
-// ------------------------------------------------------------------ the ticket
 
 describe("the ticket operation", () => {
   it("issues a 30 s ticket to an actions:read holder, with the socket's address", async () => {
@@ -732,8 +710,6 @@ describe("the ticket operation", () => {
     ).toBe(1);
   });
 });
-
-// ------------------------------------------------------------------ the upgrade
 
 describe("the upgrade", () => {
   it("accepts an ASCII case-insensitive WebSocket upgrade", async () => {
@@ -929,8 +905,6 @@ describe("the upgrade", () => {
   });
 });
 
-// ------------------------------------------------------------------ delivery
-
 describe("delivery", () => {
   it("joins mid-job from storage while live rows land during a held read: 0..130 once each, in order", async () => {
     const t = await withTask();
@@ -1103,8 +1077,6 @@ describe("delivery", () => {
     expect(sent.get(socket.id) ?? 0).toBe(0);
   });
 });
-
-// ------------------------------------------------------------------ rechecks
 
 describe("omission records", () => {
   const oversized = () => row("x".repeat(4 * MIB));
@@ -1529,8 +1501,6 @@ describe("rechecks", () => {
     expect(sent.get(socket.id) ?? 0).toBe(0);
   });
 });
-
-// ------------------------------------------------------------------ flow control
 
 describe("flow control", () => {
   it("counts an ACK inside a whole-row frame as control without extending the slow window", async () => {
@@ -2382,8 +2352,6 @@ describe("read budgets", () => {
   });
 });
 
-// ------------------------------------------------------------------ the end
-
 describe("the end", () => {
   it("keeps a completed task's viewer open until its late final rows commit", async () => {
     const t = await withTask();
@@ -2615,8 +2583,6 @@ describe("the end", () => {
   });
 });
 
-// ------------------------------------------------------------------ client messages
-
 describe("client messages", () => {
   it("answer ping with pong without the object handling a message", async () => {
     const t = await withTask();
@@ -2649,8 +2615,6 @@ describe("client messages", () => {
     expect(await socket.closed).toEqual({ code: 1008 });
   });
 });
-
-// ------------------------------------------------------------------ the settled cache
 
 describe("the settled cache", () => {
   it("is kept only for jobs watched, within 4 MiB, and dropped past it", async () => {
@@ -2690,8 +2654,6 @@ describe("the settled cache", () => {
     expect(new TextEncoder().encode(JSON.stringify(worst)).length).toBeLessThan(16 * KIB);
   });
 });
-
-// ------------------------------------------------------------------ the cursor, whatever the interleaving
 
 describe("a socket's cursor", () => {
   it("receives each index from its start once, in order, byte-identical to storage, under any interleaving", async () => {
@@ -2826,8 +2788,6 @@ describe("a socket's cursor", () => {
     );
   });
 });
-
-// ------------------------------------------------------------------ review regressions
 
 describe("access decided fresh, not from the repository's cached snapshot", () => {
   /** Ages the repository's ACL snapshot past 60 s (a read still takes it for 5 minutes). */

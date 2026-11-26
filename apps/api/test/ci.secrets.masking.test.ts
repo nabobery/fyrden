@@ -73,8 +73,6 @@ const KIB = 1024;
 const MIB = 1024 * KIB;
 const one = workflow(job("a"));
 
-// ------------------------------------------------------------------ generated values
-
 /** A value made up to be masked, registered: no log line may hold it. */
 const fresh = (label: string): string =>
   registerSecretValue(`${label}-${crypto.randomUUID()}-${crypto.randomUUID()}`);
@@ -84,9 +82,6 @@ afterEach(() => {
   installCounters();
 });
 
-// ------------------------------------------------------------------ runs, tasks and log rows
-
-/** A run of `source` in a new organization, with a runner holding its first task. */
 async function withTask(source = one) {
   const f = await orgRepo();
   const runId = await started(f, source);
@@ -131,7 +126,6 @@ function runnerModel(t: Pick<Task, "runner" | "wire">) {
   };
 }
 
-/** The stored lines' text, from every chunk the manifest names, contiguous from 0. */
 async function stored(runId: string, task: number): Promise<string[]> {
   const chunks = await inRun(runId, (r) =>
     r.engine.rows<{ start_index: number; end_index: number; r2_key: string }>(
@@ -163,14 +157,12 @@ async function everyObject(runId: string, task: number): Promise<string> {
   return texts.join("\n");
 }
 
-/** No form of `value` the masker covers appears in `text`. */
 function expectNoForm(text: string, value: string) {
   for (const variant of buildVariants(value)) expect(text).not.toContain(variant.text);
 }
 
 const maskRowsOf = storedMasksOf;
 
-/** The task's masks as their values open under the deployment's keys, in order. */
 const opened = async (runId: string, task: number) =>
   (await openedMasksOf(runId, task)).map((m) => ({
     kind: m.kind,
@@ -196,13 +188,11 @@ const gapOf = (runId: string, task: number) =>
       )[0]?.gap_remaining,
   );
 
-/** A reset: the next request finds a new instance, with nothing in memory. */
 async function reset(runId: string) {
   await evictDurableObject(runStub(runId));
   await at(runId, now(runId));
 }
 
-/** The run object's variables, which the test may change for a while. */
 type MutableEnv = Record<string, unknown>;
 async function withVars<R>(
   runId: string,
@@ -265,8 +255,6 @@ function hold(runId: string) {
   };
 }
 
-// ------------------------------------------------------------------ a live viewer
-
 const sent = new Map<string, number>();
 function installCounters() {
   viewerHooks.afterSend = (socket) => sent.set(socket, (sent.get(socket) ?? 0) + 1);
@@ -289,7 +277,6 @@ interface Client {
 
 const waiters: (() => void)[] = [];
 
-/** A socket the run's owner opened on job `a`'s log. */
 async function watch(t: Task): Promise<Client> {
   const { jobId } = await jobNamed(t.runId, "a");
   const path = `${t.f.path}/actions/runs/${t.runId}/jobs/${jobId}/logs/live`;
@@ -339,8 +326,6 @@ async function settle(c: Client): Promise<void> {
 }
 
 const received = (c: Client) => c.frames.flatMap((f) => (f.t === "rows" ? (f.rows ?? []) : []));
-
-// ------------------------------------------------------------------ tests
 
 describe("mask rows at rest", () => {
   it("are sealed, every kind, with no value in any column, and open to what was registered", async () => {
@@ -1120,7 +1105,6 @@ describe("without a CI master key that seals", () => {
 });
 
 describe("with a current CI master key, but the task's stored masks sealed under one gone", () => {
-  /** A key that seals, other than the one the task's masks were sealed under. */
   const otherKey = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
   const rotated = () => ({
     CI_SECRETS_KEY: otherKey(),
@@ -1312,7 +1296,6 @@ describe("with a current CI master key, but the task's stored masks sealed under
 });
 
 describe("admission with mask headroom", () => {
-  /** Rows making a body of more than 4 MiB, the first printing `secret`. */
   const large = (secret: string, mib: number) => {
     const piece = "y".repeat(64 * KIB);
     const count = Math.ceil((mib * MIB) / piece.length) + 1;
@@ -1432,7 +1415,6 @@ describe("admission with mask headroom", () => {
   });
 });
 
-/** Reservations a test holds in a run object's pool, by run. */
 const held = new Map<string, { release(): void }>();
 
 const repoTokens = async (repoId: string) => (await repoTokenCounts(repoId)).minted;
@@ -1460,7 +1442,6 @@ async function lostAnswer() {
   return { f, runId, runner, lost, number, version };
 }
 
-/** The SQL the run's object runs through its engine while `fn` runs, whitespace collapsed. */
 async function recordQueries(runId: string, fn: () => Promise<unknown>): Promise<string[]> {
   const queries: string[] = [];
   await inRun(runId, (r) => {

@@ -61,7 +61,6 @@ const CI = ".github/workflows/ci.yml";
 beforeAll(() => switchCi(true));
 afterAll(() => switchCi(false));
 
-/** A workflow whose run name, job `if` and `runs-on` read variables. */
 function varsWorkflow(on: string): string {
   return [
     "name: ci",
@@ -98,7 +97,6 @@ async function setVariables(who: Who, path: string, vars: Record<string, string>
   for (const [name, value] of Object.entries(vars)) await setVariable(who, path, name, value);
 }
 
-/** The variables the run was created with. */
 const varsOf = (runId: string) =>
   inRun(
     runId,
@@ -106,7 +104,6 @@ const varsOf = (runId: string) =>
       JSON.parse((r.engine.run() as { contexts: string }).contexts).vars as Record<string, string>,
   );
 
-/** The run's `run-name`, evaluated from its stored contexts. */
 const runNameOf = (runId: string) =>
   inRun(runId, (r) => {
     const run = r.engine.run() as {
@@ -148,7 +145,6 @@ async function planOf(runId: string) {
   };
 }
 
-/** Everything a run read from its variables. */
 async function readVars(runId: string) {
   return { vars: await varsOf(runId), title: await runNameOf(runId), ...(await planOf(runId)) };
 }
@@ -166,7 +162,6 @@ async function onlyRun(f: CiRepo, kind: string): Promise<string> {
   return (runs[0] as { run_id: string }).run_id;
 }
 
-/** A repository of `owner` whose first commit holds a vars workflow for `on`, and its variables. */
 async function varsRepo(on: string, vars: Record<string, string> = PLAN_VARS) {
   const f = await ciRepo({ [CI]: varsWorkflow(on), "a.txt": "one\n" });
   await setVariables(f.owner, f.path, vars);
@@ -270,7 +265,6 @@ describe("the variables a run's plan reads", () => {
 });
 
 describe("fork pull requests", () => {
-  /** A base with a workflow on both pull request events, and a first-time contributor's fork pull request. */
   async function forkPull() {
     const base = await varsRepo("[pull_request, pull_request_target]");
     await runTriggers(base.stub);
@@ -1054,7 +1048,6 @@ describe("snapshotVariables", () => {
   const utf8 = new TextEncoder();
   const size = (github: unknown, inputs: unknown, vars: unknown) =>
     utf8.encode(JSON.stringify({ github, inputs, vars })).length;
-  /** A github context padded so the contexts with `vars` are exactly `total` bytes. */
   const padded = (vars: Record<string, string>, inputs: unknown, total: number) => {
     const base = size({ pad: "" }, inputs, vars);
     return { pad: "y".repeat(total - base) };
@@ -1123,9 +1116,6 @@ describe("a run's spec with a variables error", () => {
   });
 });
 
-// --- helpers -----------------------------------------------------------------------------
-
-/** A spec for the size checks: contexts only matter. */
 function specWith(contexts: Pick<RunSpec, "github" | "inputs" | "vars">): RunSpec {
   const f = { owner: { principalId: "usr_x" }, repo: { id: "rep_x" }, sha: "a".repeat(40) };
   return { ...specFor(f as Parameters<typeof specFor>[0], "x"), ...contexts };
@@ -1173,7 +1163,6 @@ const storedSpec = (f: CiRepo, runId: string) =>
         .toArray()[0]?.spec ?? null,
   );
 
-/** The runs the repository recorded (registered). */
 const registeredRuns = (f: CiRepo) =>
   inRepo(f.stub, (r: RepoDO) =>
     r.git.context.storage.sql
@@ -1190,11 +1179,9 @@ const withoutRecordedOwner = (f: CiRepo) =>
     );
   });
 
-/** POST …/transfer of the repository to account `login`. */
 const transferTo = (f: CiRepo, login: string) =>
   json<{ state: string }>(api("POST", `${f.path}/transfer`, f.owner.token, { new_owner: login }));
 
-/** POST …/dispatches of ci.yml on main. */
 async function dispatch(f: CiRepo, key = crypto.randomUUID()) {
   const res = await exports.default.fetch(
     `${ORIGIN}/api${f.path}/actions/workflows/ci.yml/dispatches`,

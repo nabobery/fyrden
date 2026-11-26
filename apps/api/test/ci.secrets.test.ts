@@ -26,7 +26,6 @@ beforeAll(async () => {
 
 type Listed = { total_count: number; secrets: Record<string, unknown>[] };
 
-/** A user's repository and its REST path. */
 async function userRepo(visibility: "public" | "private" = "private") {
   const owner = await user();
   const repo = await repoOf(owner.principalId, visibility);

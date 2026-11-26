@@ -49,7 +49,6 @@ afterEach(() => {
   delete transferHooks.afterGeneration;
 });
 
-/** A workflow whose job `a` reads the secrets `ORG_SECRET` and `REPO_SECRET` and the variable `ONLY_B`. */
 const reading = workflow(
   job("a", [
     "env:",
@@ -138,7 +137,6 @@ describe("a run created before its repository moved to another account", () => {
 });
 
 describe("a run bound to no owner", () => {
-  /** An organization's repository as the trigger helpers take it, with the organization's secrets. */
   async function orgCiRepo() {
     const owner = await user();
     const org = await newOrg(await user(true), owner);

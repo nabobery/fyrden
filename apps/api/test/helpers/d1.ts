@@ -1,6 +1,3 @@
-// A D1 binding that counts what it runs, for tests bounding the queries an
-// invocation makes.
-
 import { env } from "cloudflare:workers";
 
 /**

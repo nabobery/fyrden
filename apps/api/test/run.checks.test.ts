@@ -28,7 +28,6 @@ import {
 
 const MIN = 60_000;
 
-/** Counts the run's calls to the repository while `work` runs. */
 async function countRepoCalls(runId: string, work: () => Promise<unknown>) {
   const calls: string[] = [];
   await inRun(runId, (r) => {

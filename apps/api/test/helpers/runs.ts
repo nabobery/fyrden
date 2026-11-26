@@ -116,7 +116,6 @@ export async function advance(runId: string, ms: number): Promise<void> {
   await drain(runId);
 }
 
-/** Starts a run at clock `t0` and runs its first steps. */
 /** The account that owns repository `repoId` now, as the directory has it. */
 export async function ownerOf(repoId: string): Promise<string> {
   const row = await env.DIRECTORY.prepare("SELECT owner_id FROM repos WHERE id = ?")
@@ -183,7 +182,6 @@ export async function finish(
   return task;
 }
 
-/** The repository's check summaries on `sha`, by name. */
 export async function checksOf(f: Fixture) {
   const rows = await inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) =>
     r.checks.summariesOn(f.sha),
@@ -196,7 +194,6 @@ export function expr(inner: string): string {
   return ["$", "{{ ", inner, " }}"].join("");
 }
 
-/** Plain workflow YAML for a list of jobs. */
 export function workflow(jobs: string): string {
   return `name: ci\non: push\njobs:\n${jobs}`;
 }
