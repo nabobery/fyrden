@@ -2574,8 +2574,9 @@ export class RepoDO extends MigratingDO {
   }): Promise<
     | {
         readonly ok: true;
-        /** As `reportRun` answers it, to a run registering itself (`state`). */
+        /** As `reportRun` answers them, to a run registering itself (`state`). */
         readonly jobsDone?: number;
+        readonly epoch?: number;
       }
     | {
         readonly ok: false;
@@ -2625,8 +2626,13 @@ export class RepoDO extends MigratingDO {
         );
         if (state) this.runs.register(state, !recorded);
       });
-      const jobsDone = state && this.runs.jobsDone(input.runId);
-      return { ok: true, ...(jobsDone !== undefined && { jobsDone }) };
+      if (!state) return { ok: true };
+      const jobsDone = this.runs.jobsDone(input.runId);
+      return {
+        ok: true,
+        epoch: this.events.epochGen(),
+        ...(jobsDone !== undefined && { jobsDone }),
+      };
     });
   }
 
@@ -2645,6 +2651,8 @@ export class RepoDO extends MigratingDO {
         readonly recorded: boolean;
         /** Every job id up to it was told complete; absent for a run it does not hold. */
         readonly jobsDone?: number;
+        /** The repository's restore generation: a new one may have lost what it was told. */
+        readonly epoch: number;
       }
     | {
         readonly ok: false;
@@ -2661,7 +2669,12 @@ export class RepoDO extends MigratingDO {
       );
       this.#armOutbox();
       const jobsDone = this.runs.jobsDone(state.runId);
-      return { ok: true, recorded, ...(jobsDone !== undefined && { jobsDone }) };
+      return {
+        ok: true,
+        recorded,
+        epoch: this.events.epochGen(),
+        ...(jobsDone !== undefined && { jobsDone }),
+      };
     });
   }
 

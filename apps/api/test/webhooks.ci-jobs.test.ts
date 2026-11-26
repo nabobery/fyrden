@@ -350,9 +350,8 @@ describe("workflow job events", () => {
   it("are sent of a job whose id, and so its name, is longer than any text carried", async () => {
     await t.createHook({ events: ["workflow_job"] });
     const id = `j${"x".repeat(3_000)}`;
-    // An explicit key: YAML bounds an implicit one to 1,024 characters.
-    const source = workflow(job(id)).replace(`  ${id}:`, `  ? ${id}\n  :`);
-    const runId = await started(f, source);
+    const withExplicitKey = workflow(job(id)).replace(`  ${id}:`, `  ? ${id}\n  :`);
+    const runId = await started(f, withExplicitKey);
     await advance(runId, 2_000);
     const [body] = await bodies();
     expect(body?.workflow_job).toMatchObject({
@@ -511,7 +510,7 @@ describe("job reports", () => {
     expect(await t.routed()).toEqual([]);
     const state = await reportOf(runId);
     const path = ".github/workflows/ci.yml";
-    expect(await t.stub().registerRun({ runId, sha: f.sha, path, state })).toEqual({
+    expect(await t.stub().registerRun({ runId, sha: f.sha, path, state })).toMatchObject({
       ok: true,
       jobsDone: 0,
     });
@@ -540,6 +539,38 @@ describe("job reports", () => {
       .map((b) => (b.workflow_job as { name: string }).name);
     expect(ended).toEqual(["m (1)", "m (2)", "m (3)", "m (2)", "m (3)"]);
     expect(await inRun(runId, (r) => r.jobReports())).toEqual([]);
+  });
+
+  it("are sent again to a repository restored from before a job's end past one still running", async () => {
+    await t.createHook({ events: ["workflow_job"] });
+    const runId = await started(f, matrix(2));
+    await assignNamed(runId, "m (1)");
+    await advance(runId, 2_000);
+    const backup = await toldOf(runId);
+    await finish(runId, "m (2)");
+    await advance(runId, 2_000);
+    await inRepo(t.stub(), (r: RepoDO) => {
+      const { sql } = r.git.context.storage;
+      sql.exec("UPDATE ci_runs SET told = ? WHERE run_id = ?", backup, runId);
+      sql.exec("UPDATE repo_meta SET epoch_gen = epoch_gen + 1 WHERE id = 1");
+    });
+    await inRun(runId, (r) => r.ciReconcileAt(r.context.now()));
+    await advance(runId, 2_000);
+    expect((await jobNamed(runId, "m (1)")).status).toBe("in_progress");
+    await inRepo(t.stub(), (r: RepoDO) =>
+      r.git.context.storage.sql.exec("UPDATE ci_runs SET told = ? WHERE run_id = ?", backup, runId),
+    );
+    await inRun(runId, (r) => r.forgetReported());
+    await inRun(runId, (r) => r.ciReconcileAt(r.context.now()));
+    await advance(runId, 2_000);
+    const ended = (await t.routed())
+      .filter((e) => e.type === "workflow_job.completed")
+      .map((e) => {
+        const { webhook } = e.data as { webhook: { tree: { workflow_job: { name: string } } } };
+        const { tree } = webhook;
+        return `${e.id.epochGen}:${tree.workflow_job.name}`;
+      });
+    expect(ended).toEqual(["1:m (2)", "2:m (2)", "2:m (2)"]);
   });
 
   it("are refused when they are not ones", async () => {

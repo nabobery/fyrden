@@ -392,10 +392,7 @@ describe("a run's row", () => {
     const late = await inRun(runId, (r) => r.runReport());
     if (!late) throw new Error("no report");
     expect(await repoOf(f).forgetRun({ runId })).toEqual({ ok: true });
-    expect(await repoOf(f).reportRun(late)).toEqual({
-      ok: true,
-      recorded: false,
-    });
+    expect(await repoOf(f).reportRun(late)).toEqual({ ok: true, recorded: false, epoch: 1 });
     expect(
       await inRepo(
         repoOf(f),

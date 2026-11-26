@@ -279,7 +279,7 @@ describe("workflow run events", () => {
     const runId = await started(f, SOURCE);
     const state = await reportOf(runId);
     const registration = { runId, sha: f.sha, path: ".github/workflows/ci.yml", state };
-    expect(await t.stub().registerRun(registration)).toEqual({ ok: true, jobsDone: 0 });
+    expect(await t.stub().registerRun(registration)).toMatchObject({ ok: true, jobsDone: 0 });
     expect(await t.routed()).toEqual([]);
     await advance(runId, 2_000);
     expect((await sent()).map(([action]) => action)).toEqual(["requested", "in_progress"]);

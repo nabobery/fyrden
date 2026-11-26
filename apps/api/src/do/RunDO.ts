@@ -342,6 +342,7 @@ export class RunDO extends MigratingDO {
   /** The state the repository last took (`runStateSeq`); lost with the instance, which reports again. */
   #reported = 0;
   #jobsReported: JobsTold = { done: 0, live: {} };
+  #repoEpoch: number | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -953,6 +954,7 @@ export class RunDO extends MigratingDO {
   forgetReported(): void {
     this.#reported = 0;
     this.#jobsReported = { done: 0, live: {} };
+    this.#repoEpoch = undefined;
   }
 
   jobReports(): JobReport[] {
@@ -2130,9 +2132,12 @@ export class RunDO extends MigratingDO {
       : undefined;
   }
 
-  #takeJobsDone(done: number | undefined): boolean {
+  #takeJobsDone(done: number | undefined, epoch: number | undefined): boolean {
     if (done === undefined) return false;
-    const behind = done < this.#jobsReported.done;
+    const restored =
+      epoch !== undefined && this.#repoEpoch !== undefined && epoch !== this.#repoEpoch;
+    if (epoch !== undefined) this.#repoEpoch = epoch;
+    const behind = restored || done < this.#jobsReported.done;
     this.#jobsReported = behind ? { done, live: {} } : jobsDoneTo(this.#jobsReported, done);
     return behind;
   }
@@ -2170,7 +2175,7 @@ export class RunDO extends MigratingDO {
     // By the greatest: a slice taken over may be answered after the one that took over.
     this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
     this.#jobsReported = jobMoves(this.#jobsReported, jobs).told;
-    this.#takeJobsDone(answer.jobsDone);
+    this.#takeJobsDone(answer.jobsDone, answer.epoch);
   }
 
   /**
@@ -2356,7 +2361,8 @@ export class RunDO extends MigratingDO {
           }) as unknown as ReturnType<RepoDO["registerRun"]>,
       );
       if (!answer.ok) return answer.code === "repo_not_found" ? "gone" : "retry";
-      if (this.#takeJobsDone(answer.jobsDone)) this.jobs.ensure("run_checks", RUN_JOB.checks);
+      this.#takeJobsDone(answer.jobsDone, answer.epoch);
+      if (this.#reportOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
       return "ok";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
