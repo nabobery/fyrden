@@ -68,7 +68,10 @@ function Card({
   return (
     <li className="graph-card" data-card={job.key} id={cardId(job.key)}>
       <span className="graph-name">{title}</span>
-      <RunState status={job.status} conclusion={job.conclusion} />
+      <RunState
+        status={only?.status ?? job.status}
+        conclusion={only ? only.conclusion : job.conclusion}
+      />
       {job.jobs.length > 1 && <span className="muted"> {job.jobs.length} jobs</span>}
       {job.jobs.length === 0 && job.needs.length > 0 && (
         <span className="muted graph-waits">Waiting for {job.needs.join(", ")}</span>

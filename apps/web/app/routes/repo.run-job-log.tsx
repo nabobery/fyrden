@@ -95,7 +95,7 @@ export default function JobLog({ loaderData }: Route.ComponentProps) {
   return (
     <main>
       <RepoHeader repo={repo} origin={origin} active="actions" />
-      <p className="muted">
+      <p className="muted run-wrap">
         <Link to={jobPath(owner, name, runId, job.id)}>{job.name}</Link>
       </p>
       <h2>Log as text</h2>

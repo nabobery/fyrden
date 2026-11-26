@@ -74,6 +74,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return {
     repo: repoBody,
     origin: url.origin,
+    search: url.search,
     workflow,
     filters,
     cursor,
@@ -107,10 +108,12 @@ function Filters({
   filters,
   errors,
   action,
+  search,
 }: {
   filters: RunFilters;
   errors: FilterError[];
   action: string;
+  search: string;
 }) {
   const error = (field: FilterError["field"]) => errors.find((e) => e.field === field);
   const field = (
@@ -142,7 +145,7 @@ function Filters({
       action={action}
       className="run-filters"
       aria-label="Filter runs"
-      key={`${action}?${runFiltersQuery(filters)}`}
+      key={`${action}${search}`}
     >
       <div className="row">
         <div>
@@ -290,7 +293,7 @@ function Sidebar({
 }
 
 export default function Actions({ loaderData }: Route.ComponentProps) {
-  const { repo, origin, workflow, filters, cursor, listing, workflows, workflowsCursor } =
+  const { repo, origin, search, workflow, filters, cursor, listing, workflows, workflowsCursor } =
     loaderData;
   const owner = repo.owner;
   const name = repo.name;
@@ -310,13 +313,14 @@ export default function Actions({ loaderData }: Route.ComponentProps) {
           workflowsCursor={workflowsCursor}
         />
         <section aria-labelledby="runs-title">
-          <h2 id="runs-title">
+          <h2 id="runs-title" className="run-wrap">
             {workflow === null ? "Runs" : <>Runs of {shown?.name ?? <code>{workflow}</code>}</>}
           </h2>
           <Filters
             filters={filters}
             errors={listing.kind === "filter-errors" ? listing.errors : []}
             action={here}
+            search={search}
           />
           {listing.kind === "refused" && (
             <p role="alert" className="error">

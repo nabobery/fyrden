@@ -245,6 +245,16 @@ describe("the runs list", () => {
     await see(page.locator(".run-row")).toHaveCount(3);
   });
 
+  it("clears a value it refused", async () => {
+    await visit(page, runs());
+    await page.getByLabel("Commit").fill("nope");
+    await page.getByRole("button", { name: "Filter" }).click();
+    await see(page.getByRole("alert")).toContainText("A full commit SHA");
+    await page.getByRole("link", { name: "Clear" }).click();
+    await see(page).toHaveURL(runs());
+    await see(page.getByLabel("Commit")).toHaveValue("");
+  });
+
   it("names a filter it cannot send", async () => {
     await visit(page, `${runs()}?sha=nope`);
     await see(page.getByRole("alert")).toContainText("A full commit SHA");
@@ -369,6 +379,35 @@ describe("a run and its jobs", () => {
     await page.getByRole("link", { name: "View the current attempt" }).click();
     await see(page).toHaveURL(`${runs()}/runs/${failed}`);
     await see(page.getByLabel("Attempt")).toHaveValue("2");
+  });
+
+  it("wraps long unbroken names at a phone's width", async () => {
+    const name_ = "Build_and_publish_release_packages_to_registry";
+    const broken = await startRun(
+      ".github/workflows/release_and_publish_packages.yml",
+      [
+        `name: ${name_}`,
+        "on: push",
+        "jobs:",
+        "  a:",
+        "    needs: nope",
+        "    runs-on: ubuntu-latest",
+        "    steps:",
+        "      - run: echo a",
+      ].join("\n"),
+    );
+    await finished(broken);
+    for (const width of [375, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const path of [`/runs/${broken}`, "/workflows/release_and_publish_packages.yml"]) {
+        await visit(page, `${runs()}${path}`);
+        expect(
+          await page.locator("html").evaluate((html) => html.scrollWidth),
+          `${path} at ${width}px`,
+        ).toBe(width);
+      }
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
   });
 
   it("fits a phone's width", async () => {

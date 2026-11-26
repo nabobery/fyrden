@@ -89,7 +89,7 @@ function Header({ run, owner, repo }: { run: Run; owner: string; repo: string })
   const took = duration(run.run_started_at, run.completed_at);
   return (
     <header className="run-header">
-      <p className="muted">
+      <p className="muted run-wrap">
         <Link to={runsPath(owner, repo)}>Actions</Link> /{" "}
         <Link to={workflowRunsPath(owner, repo, run.path.split("/").pop() ?? run.path)}>
           {run.name}
@@ -174,7 +174,7 @@ function Notes({ run }: { run: Run }) {
           <ul role="list">
             {run.errors.map((e) => (
               <li key={`${e.path}\u0000${e.line}\u0000${e.column}\u0000${e.code}`}>
-                <code>
+                <code className="run-wrap">
                   {run.path}
                   {e.line > 0 && `:${e.line}${e.column > 0 ? `:${e.column}` : ""}`}
                 </code>{" "}

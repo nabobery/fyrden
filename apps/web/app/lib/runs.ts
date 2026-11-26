@@ -147,7 +147,7 @@ function createdOf(filters: RunFilters): string | undefined {
 
 export const RUNS_PER_PAGE = 30;
 
-/** The API's query for a page of runs with `filters`, after `cursor` (bound to those filters). */
+/** The API's query for a page of runs with `filters`, after a `cursor` read with the same filters. */
 export function runsApiQuery(filters: RunFilters, cursor: string | null): string {
   const query = new URLSearchParams({ per_page: String(RUNS_PER_PAGE) });
   if (filters.status) query.set("status", filters.status);

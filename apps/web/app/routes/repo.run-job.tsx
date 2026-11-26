@@ -94,7 +94,7 @@ export default function JobPage({ loaderData }: Route.ComponentProps) {
   return (
     <main>
       <RepoHeader repo={repo} origin={origin} active="actions" />
-      <p className="muted">
+      <p className="muted run-wrap">
         <Link to={runPath(owner, name, run.id, current ? undefined : job.run_attempt)}>
           {run.display_title}
         </Link>

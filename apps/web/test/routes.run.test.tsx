@@ -241,6 +241,22 @@ describe("drawing a run", () => {
     expect(draw({ graph: null, attempt: 1 })).toMatch(/\/jobs\?attempt=(<!-- -->)?1/);
   });
 
+  it("draws a one-job card in its job's state", () => {
+    const g = graph() as unknown as {
+      jobs: { status: string; jobs: { status: string; conclusion: string | null }[] }[];
+    };
+    const build = g.jobs[0] as {
+      status: string;
+      jobs: { status: string; conclusion: string | null }[];
+    };
+    build.status = "in_progress";
+    build.jobs = [{ ...(build.jobs[0] as object), status: "queued", conclusion: null } as never];
+    const html = draw({ graph: g });
+    const card = html.slice(html.indexOf('data-card="build"'), html.indexOf('data-card="test"'));
+    expect(card).toContain("Queued");
+    expect(card).not.toContain("In progress");
+  });
+
   it("says a past attempt is one, and the run's state is the current one's", () => {
     const html = draw({ attempt: 1 });
     expect(html).toMatch(/Attempt (<!-- -->)?1(<!-- -->)? of (<!-- -->)?2/);

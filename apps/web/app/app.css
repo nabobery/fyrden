@@ -853,3 +853,7 @@ ul.runs {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.run-wrap {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
