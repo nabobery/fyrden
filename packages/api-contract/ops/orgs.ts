@@ -160,6 +160,50 @@ export const removeMembership = defineOperation({
   },
 });
 
+const MY_ORGS =
+  "A token limited to repositories, and an agent's own token, list none. A delegated token lists its user's with the user's own agent, and with an organization's agent only that organization; with another user's agent it is refused (403 `delegated_listing`). The oldest 200 are listed.";
+
+export const UserOrg = z.object({
+  login: z.string(),
+  id: z.string().describe("Organization id (org_ prefix)."),
+  repos_url: z.string().describe("Its repositories (`GET /orgs/{org}/repos`)."),
+  members_url: z.string().describe("Its members (`GET /orgs/{org}/members`)."),
+  description: z.null().describe("Always null: an organization has none."),
+  role: MembershipRole.describe(
+    "Fyrden: the caller's role there (`admin`: an owner), no more than its agents' owners have.",
+  ),
+});
+
+export const listUserOrgs = defineOperation({
+  id: "users.orgs.list",
+  method: "GET",
+  path: "/user/orgs",
+  summary: "List your organizations",
+  description: `Lists the organizations the authenticated user belongs to, oldest first. ${MY_ORGS}`,
+  input: z.object({
+    per_page: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .default(30)
+      .transform((n) => Math.min(n, 100))
+      .describe("Page size, at most 100; a larger one is read as 100."),
+    page: z.coerce.number().int().min(1).max(1_000).default(1).describe("The page, from 1."),
+  }),
+  output: z.array(UserOrg),
+  countedList: true,
+  permission: "members:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "list_orgs",
+    title: "List your organizations",
+    description: `List the organizations you belong to, with your role in each. A page shorter than its size (at most 100) is the last. ${MY_ORGS}`,
+    readOnly: true,
+  },
+});
+
 export const listMembers = defineOperation({
   id: "orgs.members.list",
   method: "GET",

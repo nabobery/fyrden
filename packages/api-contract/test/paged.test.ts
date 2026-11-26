@@ -1,6 +1,6 @@
-// Which operations page by `page` and `per_page` and count their items in
-// `total_count`: their REST answers carry GitHub's `Link` header, which clients
-// such as `gh` follow, and the OpenAPI document says so.
+// Which operations page by `page` and `per_page` and count their items:
+// their REST answers carry GitHub's `Link` header, which clients such as `gh`
+// follow, and the OpenAPI document says so.
 import { describe, expect, it } from "vitest";
 import { pagedByTotal, takesPageNumbers } from "../src/op.js";
 import { openApiDocument } from "../src/openapi.js";
@@ -17,18 +17,19 @@ const PAGED_BY_TOTAL = [
   "orgs.actions.variables.repos.list",
   "search.issues",
   "search.repositories",
+  "users.orgs.list",
 ];
 
 /** Taking `page` (only 1) beside a cursor, with no `total_count` to make a last page of. */
 const PAGED_BY_CURSOR = ["notifications.list", "notifications.repo_list"];
 
 describe("operations paged by page number", () => {
-  it("count their items in total_count, unless they are paged by cursor", () => {
+  it("count their items, unless they are paged by cursor", () => {
     expect(registry.filter(pagedByTotal).map((op) => op.id)).toEqual(
       expect.arrayContaining(PAGED_BY_TOTAL),
     );
     expect(registry.filter(pagedByTotal)).toHaveLength(PAGED_BY_TOTAL.length);
-    // A new operation taking page numbers decides: total_count, or a place on the cursor list.
+    // A new operation taking page numbers decides: a count, or a place on the cursor list.
     expect(
       registry.filter((op) => takesPageNumbers(op) && !pagedByTotal(op)).map((op) => op.id),
     ).toEqual(PAGED_BY_CURSOR);

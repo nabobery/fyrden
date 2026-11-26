@@ -18,6 +18,7 @@ import {
   strongestRole,
 } from "@fyrden/domain";
 import type { SecretReferences } from "@fyrden/domain/ci";
+import { recordAllMembers, recordMembers } from "../accounts/memberships.js";
 import { ciEnv } from "../ci/budget.js";
 import { MigratingDO } from "./base/MigratingDO.js";
 import { Outbox } from "./base/outbox.js";
@@ -66,6 +67,10 @@ export interface ChangeActor {
 }
 
 export const accountHooks: {
+  /** After a delivery read what it writes, before its write. */
+  beforeDelivery?: (account: OrgDO) => Promise<void>;
+  /** After a removal's precheck (and the directory's record gone, if it passed), before its transaction. */
+  beforeRemoval?: (account: OrgDO) => Promise<void>;
   /** After an addition read its principals' lifecycle, before its transaction. */
   afterLifecycleRead?: (account: OrgDO) => Promise<void>;
   /** Before the object reads its restore generation from the directory. */
@@ -336,6 +341,8 @@ const LIFECYCLE_BATCH = 90;
 const REVOKED_REPOS = 100;
 
 const AUDIT_BATCH = 50;
+const DELIVERY_BATCHES = 20;
+const RECORD_OWED = "memberships.record_owed";
 /** Wait before the alarm retries a delivery that failed. Proposed. */
 const AUDIT_RETRY_MS = 60_000;
 
@@ -1055,13 +1062,44 @@ export class OrgDO extends MigratingDO {
    * removal (created, or transferred in) is not named: the member's feed
    * forgets it when next read, as it finds the member cannot read it; if
    * the member can read it again by then, its older items stay, which
-   * shows the member nothing it may not read.
+   * shows the member nothing it may not read. The directory's record of the
+   * member goes before the membership does, so a list read after it ended
+   * never asks this object.
    */
   async removeMember(
     actor: ChangeActor,
     memberId: string,
     held: readonly string[],
   ): Promise<AclChange> {
+    return this.#write(async () => {
+      const owedHere = await this.#forgetBeforeRemoval(actor, memberId);
+      await accountHooks.beforeRemoval?.(this);
+      const change = await this.#removeMember(actor, memberId, held);
+      if (owedHere && change.ok) await this.ctx.storage.delete(RECORD_OWED);
+      return change;
+    });
+  }
+
+  /**
+   * Takes the member's record out of the directory, if the removal would go
+   * through as things are; a whole record is owed (durably, with an alarm)
+   * until the removal does, so one refused or cut short puts it back. True
+   * when this call is the one that owes it.
+   */
+  async #forgetBeforeRemoval(actor: ChangeActor, memberId: string): Promise<boolean> {
+    await this.#checkEpoch();
+    if (this.#refuse(actor)) return false;
+    const current = this.accountRole(memberId);
+    if (current === null || (current === "owner" && this.#owners() === 1)) return false;
+    const owedBefore = (await this.ctx.storage.get(RECORD_OWED)) === true;
+    if (!owedBefore) await this.ctx.storage.put(RECORD_OWED, true);
+    await this.#armBy(this.#now() + AUDIT_RETRY_MS);
+    const { account_id } = this.#meta() as Meta;
+    await this.env.DIRECTORY.batch(recordMembers(this.env.DIRECTORY, account_id, [memberId], []));
+    return !owedBefore;
+  }
+
+  #removeMember(actor: ChangeActor, memberId: string, held: readonly string[]): Promise<AclChange> {
     return this.#change(actor, { owner: true }, (meta) => {
       const current = this.accountRole(memberId);
       if (current === null) return this.#unchanged(meta);
@@ -2247,11 +2285,14 @@ export class OrgDO extends MigratingDO {
   /**
    * Delivers waiting audit rows to the directory, oldest first, deleting
    * each batch once written (at least once: a batch written whose delete
-   * was lost is written again). A failure leaves them for the alarm.
-   * Concurrent callers share one delivery.
+   * was lost is written again), each batch with the directory's record of
+   * the members its rows name, as they are then. A failure leaves them for
+   * the alarm, and so does a backlog past `DELIVERY_BATCHES`. Concurrent
+   * callers share one delivery. The record is written here and by a removal
+   * alone, one at a time, so an older state never replaces a newer one.
    */
   deliverAudit(): Promise<void> {
-    this.#delivering ??= this.#deliver().finally(() => {
+    this.#delivering ??= this.#write(() => this.#deliver()).finally(() => {
       this.#delivering = undefined;
     });
     return this.#delivering;
@@ -2259,8 +2300,24 @@ export class OrgDO extends MigratingDO {
 
   #delivering: Promise<void> | undefined;
 
+  /** Makes the directory's record of an organization's members equal to them. */
+  async mirrorMembers(): Promise<void> {
+    this.#recordAll = true;
+    while (this.#recordAll) await this.deliverAudit();
+  }
+
+  #recordAll = false;
+
+  #writing: Promise<unknown> = Promise.resolve();
+
+  #write<T>(write: () => Promise<T>): Promise<T> {
+    const run = this.#writing.then(write);
+    this.#writing = run.catch(() => {});
+    return run;
+  }
+
   async #deliver(): Promise<void> {
-    for (;;) {
+    for (let batch = 0; batch < DELIVERY_BATCHES; batch++) {
       const rows = this.ctx.storage.sql
         .exec<AuditRow>(
           `SELECT seq, at, actor_id, action, target_id, details, request_id FROM pending_audit
@@ -2268,22 +2325,54 @@ export class OrgDO extends MigratingDO {
           AUDIT_BATCH,
         )
         .toArray();
-      if (rows.length === 0) return;
+      const owed = (await this.ctx.storage.get(RECORD_OWED)) === true;
+      const all = this.#recordAll || owed;
+      if (rows.length === 0 && !all) return;
+      this.#recordAll = false;
       // The directory's own table, so its archiver keeps them with the other auth events.
       const db = this.env.DIRECTORY;
-      await db.batch(
-        rows.map((row) =>
-          db
-            .prepare(
-              `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
-               VALUES (?, ?, ?, ?, ?, ?)`,
-            )
-            .bind(row.at, row.actor_id, row.action, row.target_id, row.details, row.request_id),
-        ),
+      const statements = rows.map((row) =>
+        db
+          .prepare(
+            `INSERT INTO audit_log (at, actor_id, action, target_id, details, request_id)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(row.at, row.actor_id, row.action, row.target_id, row.details, row.request_id),
       );
-      const last = rows.at(-1)?.seq as number;
-      this.ctx.storage.sql.exec("DELETE FROM pending_audit WHERE seq <= ?", last);
+      statements.push(...this.#memberRecord(all ? "all" : changedMembers(rows)));
+      try {
+        await accountHooks.beforeDelivery?.(this);
+        if (statements.length > 0) await db.batch(statements);
+      } catch (error) {
+        this.#recordAll ||= all;
+        throw error;
+      }
+      if (owed) await this.ctx.storage.delete(RECORD_OWED);
+      const last = rows.at(-1)?.seq;
+      if (last !== undefined)
+        this.ctx.storage.sql.exec("DELETE FROM pending_audit WHERE seq <= ?", last);
     }
+    await this.#armBy(this.#now());
+  }
+
+  #memberRecord(principals: "all" | readonly string[]): D1PreparedStatement[] {
+    const meta = this.#meta();
+    if (!meta || principals.length === 0) return [];
+    const columns = "SELECT principal_id AS id, role, added_at AS at FROM members";
+    const { sql } = this.ctx.storage;
+    if (principals === "all")
+      return recordAllMembers(
+        this.env.DIRECTORY,
+        meta.account_id,
+        sql.exec<MemberRecord>(columns).toArray(),
+      );
+    const members = sql
+      .exec<MemberRecord>(
+        `${columns} WHERE principal_id IN (SELECT value FROM json_each(?))`,
+        JSON.stringify(principals),
+      )
+      .toArray();
+    return recordMembers(this.env.DIRECTORY, meta.account_id, principals, members);
   }
 
   override async alarm(): Promise<void> {
@@ -2589,6 +2678,25 @@ const RANK = `CASE tr.role ${REPO_ROLES.map((r, i) => `WHEN '${r}' THEN ${i}`).j
 
 /** Thrown in a change's transaction to undo it: a snapshot would grow past its limit. */
 class TooMany extends Error {}
+
+type MemberRecord = { id: string; role: OrgRole; at: number };
+
+function changedMembers(rows: readonly AuditRow[]): string[] {
+  const changed = new Set<string>();
+  for (const row of rows) {
+    if (!MEMBERSHIP_ACTIONS.has(row.action)) continue;
+    const details = JSON.parse(row.details) as { user?: string; principals?: string[] };
+    for (const id of details.principals ?? [details.user as string]) changed.add(id);
+  }
+  return [...changed];
+}
+
+const MEMBERSHIP_ACTIONS: ReadonlySet<string> = new Set([
+  "org.member.set",
+  "org.member.remove",
+  "org.owner_handoff",
+  "principal.retire",
+]);
 
 type AuditRow = {
   seq: number;

@@ -63,6 +63,7 @@ export async function actingRoleIn(
   let role = await accountRoleOf(env, account, auth.principalId, metrics);
   for (const owner of new Set(auth.ceilingIds)) {
     if (role === null) break;
+    if (owner === auth.principalId) continue;
     const ceiling = await accountRoleOf(env, account, owner, metrics);
     role = ceiling === null ? null : role === "owner" && ceiling === "owner" ? "owner" : "member";
   }

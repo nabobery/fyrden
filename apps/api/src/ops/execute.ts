@@ -63,12 +63,34 @@ export class StatusResult<S extends number = number, O = unknown> {
 export const statusResult = <const S extends number, O>(status: S, output: O): StatusResult<S, O> =>
   new StatusResult(status, output);
 
-/** A handler's answer: the output, or for an operation with `successStatuses`, one of them with it. */
+/** What a handler returns for a `countedList` operation: a page's items, and how many there are in all. */
+export class ListResult<O = unknown> {
+  readonly #brand = true;
+
+  constructor(
+    readonly items: O,
+    readonly total: number,
+  ) {}
+
+  static is(value: unknown): value is ListResult {
+    return typeof value === "object" && value !== null && #brand in value;
+  }
+}
+
+export const listResult = <O>(items: O, total: number): ListResult<O> =>
+  new ListResult(items, total);
+
+/**
+ * A handler's answer: the output, for an operation with `successStatuses`
+ * one of them with it, for a `countedList` one its total with it.
+ */
 export type HandlerOutput<D extends OperationDef> = D extends {
   readonly successStatuses: readonly (infer S extends number)[];
 }
   ? StatusResult<S, Output<D>>
-  : Output<D>;
+  : D extends { readonly countedList: true }
+    ? ListResult<Output<D>>
+    : Output<D>;
 
 export type OpHandler<D extends OperationDef> = (
   ctx: OpContext,
@@ -79,7 +101,7 @@ export type OpHandler<D extends OperationDef> = (
 export type Handlers = { [D in FyrdenRegistry[number] as D["id"]]: OpHandler<D> };
 
 export type OpResult =
-  | { ok: true; output: unknown; replayed?: true; status?: number }
+  | { ok: true; output: unknown; replayed?: true; status?: number; total?: number }
   | { ok: false; problem: Problem; replayed?: true };
 
 /**
@@ -203,6 +225,15 @@ export async function reverified(
  * status the operation does not declare, is a server bug, never sent as-is.
  */
 function success(op: OperationDef, answer: unknown): OpResult {
+  if (op.countedList) {
+    if (!ListResult.is(answer))
+      throw new Error(`${op.id} is a countedList but answered without a total`);
+    const items = op.output.parse(answer.items) as unknown[];
+    if (!Number.isSafeInteger(answer.total) || answer.total < items.length)
+      throw new Error(`${op.id} answered a total of ${answer.total} for ${items.length} items`);
+    return { ok: true, output: items, total: answer.total };
+  }
+  if (ListResult.is(answer)) throw new Error(`${op.id} answered a total but is no countedList`);
   if (op.successStatuses === undefined) {
     if (StatusResult.is(answer))
       throw new Error(`${op.id} answered status ${answer.status} but declares no successStatuses`);

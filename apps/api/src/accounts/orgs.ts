@@ -11,6 +11,7 @@ import type {
   updateOrg,
 } from "@fyrden/api-contract";
 import { isValidHandle, type OrgRole } from "@fyrden/domain";
+import type { OrgDO } from "../do/OrgDO.js";
 import { allocateEpoch } from "../events/epochs.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
@@ -19,13 +20,15 @@ import { clock, newId } from "../services.js";
 import { applied, findAccount, invalidateChange, orgFor, userFor } from "./account.js";
 import { wakeDeletionsBlockedOn } from "./deletion-runner.js";
 import { GHOST_LOGIN, ghostsAmong, handleFree } from "./handles.js";
+import { recordMembers } from "./memberships.js";
 
 // D1 reports a unique-index violation in the error message.
 const UNIQUE_VIOLATION = /UNIQUE constraint failed/i;
 
 /** GitHub's membership role names: an `admin` is an owner. */
 const toOrgRole = (role: "admin" | "member"): OrgRole => (role === "admin" ? "owner" : "member");
-const toApiRole = (role: OrgRole): "admin" | "member" => (role === "owner" ? "admin" : "member");
+export const toApiRole = (role: OrgRole): "admin" | "member" =>
+  role === "owner" ? "admin" : "member";
 
 export const orgHooks: { beforePublish?: () => Promise<void> } = {};
 
@@ -54,7 +57,7 @@ export async function createOrgOperation(
   await orgHooks.beforePublish?.();
   const now = clock();
   const db = env.DIRECTORY;
-  metrics.count("d1.query", { db: "directory", op: "org_create" }, 3);
+  metrics.count("d1.query", { db: "directory", op: "org_create" }, 5);
   let seen: D1Result | undefined;
   let made: D1Result | undefined;
   try {
@@ -85,6 +88,8 @@ export async function createOrgOperation(
         { login: input.login, admin: admin.id },
         "principals",
       ),
+      // Nothing while the organization is not published: the record's inserts need its principal.
+      ...recordMembers(db, id, [admin.id], [{ id: admin.id, role: "owner", at: now }]),
     ]);
   } catch (error) {
     if (error instanceof Error && UNIQUE_VIOLATION.test(error.message))
@@ -122,10 +127,16 @@ export async function setMembershipOperation(
       toOrgRole(input.role),
     ),
   );
-  ctx.waitUntil(stub.deliverAudit());
+  await deliverChange(stub, metrics);
   await invalidateChange(env, org.id, change, metrics);
   if (input.role === "admin") await wakeDeletions(env, org.id, metrics);
   return { org: org.handle, user: user.handle, role: input.role, state: "active" };
+}
+
+async function deliverChange(stub: DurableObjectStub<OrgDO>, metrics: Metrics): Promise<void> {
+  metrics.count("do.request", { class: "OrgDO", method: "deliverAudit" });
+  // The object's alarm delivers what fails here.
+  await stub.deliverAudit().catch(() => {});
 }
 
 /** A user deletion waiting on the organization's last owner goes on now that it has another. */
@@ -160,7 +171,7 @@ export async function addOrgOwnerOperation(
       { id: user.id, handle: user.handle },
     ),
   );
-  ctx.waitUntil(stub.deliverAudit());
+  await deliverChange(stub, metrics);
   await invalidateChange(env, org.id, change, metrics);
   await wakeDeletions(env, org.id, metrics);
   return null;
@@ -183,7 +194,7 @@ export async function removeMembershipOperation(
   const change = applied(
     await stub.removeMember({ principalId: auth.principalId, requestId }, user.id, held),
   );
-  ctx.waitUntil(stub.deliverAudit());
+  await deliverChange(stub, metrics);
   await invalidateChange(env, org.id, change, metrics);
   return { org: org.handle, user: user.handle, state: "removed" };
 }

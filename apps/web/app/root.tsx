@@ -136,6 +136,7 @@ function SiteHeader() {
             <Link to="/notifications">Inbox</Link>
             <Link to="/settings/tokens">Tokens</Link>
             <Link to="/settings/agents">Agents</Link>
+            <Link to="/settings/organizations">Organizations</Link>
             <Link to="/settings/notifications">Notifications</Link>
           </>
         )}

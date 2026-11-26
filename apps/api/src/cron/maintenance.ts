@@ -1,5 +1,6 @@
 import { createLogger, type Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { reapEmails } from "../accounts/emails.js";
+import { reconcileMemberships } from "../accounts/memberships.js";
 import { pruneCiBudget } from "../ci/budget.js";
 import { reapOAuth } from "../oauth/reaper.js";
 import { pruneFailedEvents } from "../queues/events-dlq.js";
@@ -22,8 +23,8 @@ export const MAINTENANCE_OBJECT = "instance";
  * reaps idempotency keys, OAuth leftovers, the read model's expired writer
  * leases and failed envelopes kept their time, prunes CI's ledger, stamps
  * ephemeral runners past their end revoked (so the index of runners that
- * may serve stays small), clears the access of revoked runners, and
- * advances transfers;
+ * may serve stays small), clears the access of revoked runners, checks the
+ * record of organizations' members, and advances transfers;
  * while the read model's maintenance holds ordinary work back, not the
  * tasks that write it (deletions' cleanups, abandoned generations'
  * settling, transfers' fences, pruning failed envelopes). Each
@@ -66,6 +67,7 @@ export async function runMaintenance(env: Env, metrics: Metrics): Promise<void> 
     })(),
     stampSpentRunners(env.DIRECTORY, Date.now(), undefined, metrics),
     clearStaleAccess(env.DIRECTORY, undefined, metrics),
+    reconcileMemberships(env, { now: Date.now(), metrics }),
   ]);
   const failed = results.filter((r) => r.status === "rejected");
   for (const failure of failed)
