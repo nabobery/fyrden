@@ -2572,7 +2572,11 @@ export class RepoDO extends MigratingDO {
     readonly reachableVia?: string;
     readonly state?: RunReport;
   }): Promise<
-    | { readonly ok: true }
+    | {
+        readonly ok: true;
+        /** As `reportRun` answers it, to a run registering itself (`state`). */
+        readonly jobsDone?: number;
+      }
     | {
         readonly ok: false;
         readonly code:
@@ -2621,7 +2625,8 @@ export class RepoDO extends MigratingDO {
         );
         if (state) this.runs.register(state, !recorded);
       });
-      return { ok: true };
+      const jobsDone = state && this.runs.jobsDone(input.runId);
+      return { ok: true, ...(jobsDone !== undefined && { jobsDone }) };
     });
   }
 
@@ -2638,8 +2643,8 @@ export class RepoDO extends MigratingDO {
     | {
         readonly ok: true;
         readonly recorded: boolean;
-        /** Every job id up to it is known to have ended. */
-        readonly jobsDone: number;
+        /** Every job id up to it was told complete; absent for a run it does not hold. */
+        readonly jobsDone?: number;
       }
     | {
         readonly ok: false;
@@ -2655,7 +2660,8 @@ export class RepoDO extends MigratingDO {
         this.runs.apply(state, checked),
       );
       this.#armOutbox();
-      return { ok: true, recorded, jobsDone: this.runs.jobsDone(state.runId) };
+      const jobsDone = this.runs.jobsDone(state.runId);
+      return { ok: true, recorded, ...(jobsDone !== undefined && { jobsDone }) };
     });
   }
 

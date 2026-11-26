@@ -197,10 +197,10 @@ export class RunHistory {
     return this.#record(held, report, this.#tell(toldOf(held), report, news));
   }
 
-  /** What webhooks were told of the run's jobs: every job id up to it complete. */
-  jobsDone(runId: string): number {
+  /** Every job id up to it was told complete; undefined for a run the repository does not hold. */
+  jobsDone(runId: string): number | undefined {
     const held = this.#held(runId);
-    return held ? toldOf(held).done : 0;
+    return held && toldOf(held).done;
   }
 
   /** In the caller's transaction: the cap on checks' `created`, for checks of any runs. */

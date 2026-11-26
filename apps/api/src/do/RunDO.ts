@@ -2069,6 +2069,13 @@ export class RunDO extends MigratingDO {
       : undefined;
   }
 
+  #takeJobsDone(done: number | undefined): boolean {
+    if (done === undefined) return false;
+    const behind = done < this.#jobsReported.done;
+    this.#jobsReported = behind ? { done, live: {} } : jobsDoneTo(this.#jobsReported, done);
+    return behind;
+  }
+
   #reportOwed(): boolean {
     return this.#stateOwed() !== undefined || this.jobReports().length > 0;
   }
@@ -2101,7 +2108,8 @@ export class RunDO extends MigratingDO {
     if (!answer.ok) throw new Error(answer.code);
     // By the greatest: a slice taken over may be answered after the one that took over.
     this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
-    this.#jobsReported = jobsDoneTo(jobMoves(this.#jobsReported, jobs).told, answer.jobsDone ?? 0);
+    this.#jobsReported = jobMoves(this.#jobsReported, jobs).told;
+    this.#takeJobsDone(answer.jobsDone);
   }
 
   /**
@@ -2286,8 +2294,9 @@ export class RunDO extends MigratingDO {
             ...(state && { state }),
           }) as unknown as ReturnType<RepoDO["registerRun"]>,
       );
-      if (answer.ok) return "ok";
-      return answer.code === "repo_not_found" ? "gone" : "retry";
+      if (!answer.ok) return answer.code === "repo_not_found" ? "gone" : "retry";
+      if (this.#takeJobsDone(answer.jobsDone)) this.jobs.ensure("run_checks", RUN_JOB.checks);
+      return "ok";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (repoGone(message)) return "gone";

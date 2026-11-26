@@ -395,7 +395,6 @@ describe("a run's row", () => {
     expect(await repoOf(f).reportRun(late)).toEqual({
       ok: true,
       recorded: false,
-      jobsDone: 0,
     });
     expect(
       await inRepo(

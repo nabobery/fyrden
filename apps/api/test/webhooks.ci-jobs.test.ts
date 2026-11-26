@@ -495,7 +495,7 @@ describe("job reports", () => {
     expect(seen.size).toBe(450);
   });
 
-  it("go on past jobs a repository without the run could not be told", async () => {
+  it("go on past jobs a repository without the run could not be told, and send them once it has it", async () => {
     await t.createHook({ events: ["workflow_job"] });
     const runId = await started(f, matrix(200));
     await inRepo(t.stub(), (r: RepoDO) =>
@@ -511,9 +511,35 @@ describe("job reports", () => {
     expect(await t.routed()).toEqual([]);
     const state = await reportOf(runId);
     const path = ".github/workflows/ci.yml";
-    expect(await t.stub().registerRun({ runId, sha: f.sha, path, state })).toEqual({ ok: true });
+    expect(await t.stub().registerRun({ runId, sha: f.sha, path, state })).toEqual({
+      ok: true,
+      jobsDone: 0,
+    });
     await advance(runId, 2_000);
-    expect(await counts("workflow_job")).toEqual({ queued: 200 });
+    for (let page = 0; page < 3; page++) await advance(runId, 2_000);
+    expect(await counts("workflow_job")).toEqual({ queued: 200, completed: 600 });
+  });
+
+  it("are sent again past what a restored repository was told, by a run that knew more", async () => {
+    await t.createHook({ events: ["workflow_job"] });
+    const runId = await started(f, matrix(3));
+    await finish(runId, "m (1)");
+    await advance(runId, 2_000);
+    const backup = await toldOf(runId);
+    await finish(runId, "m (2)");
+    await finish(runId, "m (3)");
+    await advance(runId, 2_000);
+    expect((await counts("workflow_job")).completed).toBe(3);
+    await inRepo(t.stub(), (r: RepoDO) =>
+      r.git.context.storage.sql.exec("UPDATE ci_runs SET told = ? WHERE run_id = ?", backup, runId),
+    );
+    await advance(runId, 7 * 24 * 60 * 60_000);
+    await advance(runId, 2_000);
+    const ended = (await bodies())
+      .filter((b) => b.action === "completed")
+      .map((b) => (b.workflow_job as { name: string }).name);
+    expect(ended).toEqual(["m (1)", "m (2)", "m (3)", "m (2)", "m (3)"]);
+    expect(await inRun(runId, (r) => r.jobReports())).toEqual([]);
   });
 
   it("are refused when they are not ones", async () => {
