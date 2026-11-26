@@ -197,7 +197,7 @@ export default function RunPage({ loaderData }: Route.ComponentProps) {
   const shownState = `${run.status}/${run.conclusion}/${run.run_attempt}/${graph?.jobs.map((j) => `${j.status}${j.jobs.map((i) => i.status).join()}`).join() ?? ""}`;
   const { stopped } = useRunRefresh(
     `${run.id}:${attempt}`,
-    !past && run.status !== "completed",
+    !past && (run.status !== "completed" || run.approval?.state === "waiting"),
     shownState,
     loaderData,
   );

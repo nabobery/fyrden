@@ -46,6 +46,11 @@ export function useRunRefresh(
   revalidate.current = revalidator.revalidate;
   const schedule = useMemo(() => new RefreshSchedule(), []);
   const [stopped, setStopped] = useState<string | null>(null);
+  const shown = useRef(identity);
+  if (shown.current !== identity) {
+    shown.current = identity;
+    if (stopped !== null) setStopped(null);
+  }
   // biome-ignore lint/correctness/useExhaustiveDependencies: `answer` is the trigger: one look per answer.
   useEffect(() => {
     if (!active || stopped === identity) return;
