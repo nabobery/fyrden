@@ -613,9 +613,12 @@ describe("a run's job graph", () => {
     expect(one.body.name).toBe(straddling);
   });
 
-  it("keeps a name or error with a NUL in it whole up to its cut", async () => {
+  it("keeps a name or error with a NUL or a leading byte order mark whole up to its cut", async () => {
     const f = await repoWithCommit();
-    const runId = await started(f, workflow(job("nul", ['name: "ab\\0cd"'])));
+    const runId = await started(
+      f,
+      workflow([job("nul", ['name: "ab\\0cd"']), job("bom", ['name: "\\uFEFFlead"'])].join("\n")),
+    );
     await inRun(runId, (run) =>
       run.engine.exec(
         "UPDATE run_instances SET error = ? WHERE job_key = 'nul'",
@@ -629,6 +632,10 @@ describe("a run's job graph", () => {
     expect(node?.name).toBe("ab\u0000cd");
     expect([node?.jobs[0]?.name, node?.jobs[0]?.name_cut]).toEqual(["ab\u0000cd", false]);
     expect(node?.jobs[0]?.error).toBe(`x\u0000${"y".repeat(498)}`);
+    const bom = (await graph(f, runId)).body.jobs.find((j: { key: string }) => j.key === "bom") as {
+      jobs: { name: string }[];
+    };
+    expect(bom.jobs[0]?.name).toBe("\uFEFFlead");
   });
 
   it("stays under 600 KB at its maxima: 256 instances of a very long name, each with a long error", async () => {
