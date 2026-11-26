@@ -12,7 +12,6 @@ export const CI_FREE_ACCOUNT_MINUTES = 2_000;
 export const CI_FREE_AGENT_MINUTES = 500;
 /** The most minutes one reservation holds: a week. */
 export const CI_MINUTES_MAX = 10_080;
-/** Rows of months before the last one removed by one reserve. */
 const PRUNE_PAGE = 64;
 
 export interface CiMinuteLimits {

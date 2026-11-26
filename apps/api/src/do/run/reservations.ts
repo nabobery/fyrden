@@ -364,7 +364,6 @@ export class RunReservations {
     let progressed = false;
     for (const first of rows) {
       let row: ReservationRow | undefined = first;
-      // Fixing the inputs, then the first call, in one pass.
       for (let i = 0; i < 2 && row; i++) {
         const next = await this.#step(job, run, row, read);
         if (!next.stuck) progressed = true;

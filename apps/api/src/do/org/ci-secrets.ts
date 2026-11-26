@@ -143,7 +143,6 @@ export interface CiActor {
   readonly requestId?: string;
 }
 
-/** What `AccountCi` needs of its account object. */
 export interface CiHost {
   readonly storage: DurableObjectStorage;
   readonly env: Env;
@@ -283,8 +282,6 @@ export class AccountCi {
     return ciSecretKeys(this.host.env);
   }
 
-  // --- Data keys -------------------------------------------------------------
-
   #newest(): DataKeyRow | undefined {
     return this.#sql
       .exec<DataKeyRow>(
@@ -304,7 +301,6 @@ export class AccountCi {
       .toArray()[0];
   }
 
-  /** The replacement that retired `generation`, if one did. */
   #replaced(generation: number): CiDataKeyReplaced | undefined {
     const row = this.#sql
       .exec<{ replaced_by: number | null; replaced_at: number | null }>(
@@ -629,8 +625,6 @@ export class AccountCi {
     return out;
   }
 
-  // --- Secrets ---------------------------------------------------------------
-
   /**
    * Sets a secret from a value sealed for the scope's public key of
    * generation `keyId`: created (true) or updated (false).
@@ -854,7 +848,6 @@ export class AccountCi {
     });
   }
 
-  /** Deletes a secret or a variable. */
   remove(actor: CiActor, kind: CiKind, scope: string, name: string): CiResult<null> {
     const account = this.host.account();
     const stored = ciName(kind, name);
@@ -876,8 +869,6 @@ export class AccountCi {
     if (answer.ok) this.host.audited();
     return answer;
   }
-
-  // --- Variables -------------------------------------------------------------
 
   /** Creates a variable; 409 `variable_exists` when the scope has one of the name. */
   async createVariable(input: {
@@ -933,7 +924,6 @@ export class AccountCi {
     return answer;
   }
 
-  /** Changes a variable's value or visibility. */
   async updateVariable(input: {
     readonly actor: CiActor;
     readonly scope: string;
@@ -1114,8 +1104,6 @@ export class AccountCi {
     );
   }
 
-  // --- Delivery ------------------------------------------------------------
-
   /**
    * The secrets a job of repository `repoId` gets, sealed, for its run to
    * open: the first `MAX_RUN_ORG_SECRETS` organization secrets that reach the
@@ -1210,8 +1198,6 @@ export class AccountCi {
     });
     return ok({ dataKeys, entries });
   }
-
-  // --- An organization entry's selected repositories --------------------------
 
   /**
    * Every repository id an organization secret or variable of visibility
@@ -1330,8 +1316,6 @@ export class AccountCi {
     return ok(stored);
   }
 
-  // --- Repositories leaving --------------------------------------------------
-
   /**
    * In a transaction: repository `repoId` left the account (moved away or
    * deleted). Its secrets and variables go, it leaves every list, and its
@@ -1353,8 +1337,6 @@ export class AccountCi {
       repoId,
     );
   }
-
-  // --- Shared checks ---------------------------------------------------------
 
   #scopeRefusal(account: { readonly kind: "org" | "user" }, scope: string): CiFailure | undefined {
     if (scope === ORG_SCOPE) return account.kind === "org" ? undefined : NOT_AN_ORG;
@@ -1428,7 +1410,6 @@ export class AccountCi {
       .one().n;
   }
 
-  /** Why the scope takes no more entries of `kind`. */
   #full(kind: CiKind, scope: string): CiFailure | undefined {
     const t = KINDS[kind];
     const max = scope === ORG_SCOPE ? t.maxOrg : t.maxRepo;
