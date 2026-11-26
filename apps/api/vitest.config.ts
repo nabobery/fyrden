@@ -1,7 +1,6 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { configDefaults, defineConfig, type TestProjectInlineConfiguration } from "vitest/config";
 
-/** Vitest's default on CI; 2 locally; FYRDEN_TEST_WORKERS overrides both. */
 function localWorkers(): { maxWorkers?: number } {
   const workers = Number(process.env.FYRDEN_TEST_WORKERS) || (process.env.CI ? 0 : 2);
   return workers > 0 ? { maxWorkers: workers } : {};

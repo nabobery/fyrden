@@ -1,6 +1,3 @@
-// The self-hosted runner operations: registration tokens, and listing,
-// reading, changing the access of and deleting an organization's runners.
-
 import type {
   addRunnerRepo,
   cancelRunnerRegistrationTokens,
@@ -34,7 +31,6 @@ import { runnersOn } from "./service.js";
 /** How long a registration token registers a runner: GitHub's lifetime for its own. */
 const REGISTRATION_TTL_MS = 60 * 60 * 1000;
 
-/** The `orgs.runners.registration_tokens.create` operation. */
 export async function createRunnerRegistrationTokenOperation(
   ctx: OpContext,
   input: Input<typeof createRunnerRegistrationToken>,
@@ -92,7 +88,6 @@ export async function createRunnerRegistrationTokenOperation(
   return { token, expires_at: expiresAt };
 }
 
-/** The `orgs.runners.registration_tokens.cancel` operation. */
 export async function cancelRunnerRegistrationTokensOperation(
   ctx: OpContext,
   input: Input<typeof cancelRunnerRegistrationTokens>,
@@ -208,7 +203,6 @@ async function runnerDetail(ctx: OpContext, org: Account, id: number) {
   };
 }
 
-/** The `orgs.runners.get` operation. */
 export async function getRunnerOperation(
   ctx: OpContext,
   input: Input<typeof getRunner>,
@@ -217,7 +211,6 @@ export async function getRunnerOperation(
   return runnerDetail(ctx, org, input.runner_id);
 }
 
-/** The `orgs.runners.access.update` operation. */
 export async function updateRunnerAccessOperation(
   ctx: OpContext,
   input: Input<typeof updateRunnerAccess>,
@@ -260,7 +253,6 @@ async function changeRepo(
   return null;
 }
 
-/** The `orgs.runners.repositories.add` operation. */
 export function addRunnerRepoOperation(
   ctx: OpContext,
   input: Input<typeof addRunnerRepo>,
@@ -268,7 +260,6 @@ export function addRunnerRepoOperation(
   return changeRepo(ctx, input, "add");
 }
 
-/** The `orgs.runners.repositories.remove` operation. */
 export function removeRunnerRepoOperation(
   ctx: OpContext,
   input: Input<typeof removeRunnerRepo>,

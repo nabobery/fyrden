@@ -137,7 +137,6 @@ async function readFileResource(
     owner: one("owner"),
     repo: one("repo"),
     path: decodeURIComponent(one("path")),
-    // A branch, tag or commit; the default branch without one.
     ...(one("ref") && { ref: decodeURIComponent(one("ref")) }),
   });
   if (!result.ok) {
@@ -356,11 +355,9 @@ function parseJson(body: Uint8Array | ArrayBuffer | string): unknown {
 
 const SERVER_INFO = { name: "fyrden", version: API_VERSION } as const;
 
-/** A server with only what a listen request's validation reads: its capabilities. */
 const listenServer = () =>
   new McpServer(SERVER_INFO, { capabilities: { resources: { subscribe: true } } });
 
-/** A listen refusal: a JSON-RPC error, its code the HTTP status, its data the problem. */
 function listenRefusal(
   ctx: OpContext,
   id: ListenId,

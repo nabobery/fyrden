@@ -192,7 +192,6 @@ export async function listOwnedForks(
   return results.map(entryOf);
 }
 
-/** The active repositories among `ids` (of enabled owners), in one query, from the D1 primary. */
 /**
  * The repositories an account holds now, in one read: those it owns (but
  * deleted ones) and those a transfer has moved away from it in the
@@ -211,6 +210,7 @@ export async function heldRepos(env: Env, ownerId: string, metrics?: Metrics): P
   return results.map((row) => row.id);
 }
 
+/** The active repositories among `ids` (of enabled owners), in one query, from the D1 primary. */
 export async function findReposById(
   env: Env,
   ids: readonly string[],
