@@ -81,7 +81,6 @@ export async function newOrg(admin: Who, owner: Who): Promise<{ login: string; i
   return { login, id: made.body.id };
 }
 
-/** A repository of `ownerId` with `visibility`. */
 export async function repoOf(
   ownerId: string,
   visibility: "public" | "internal" | "private" = "private",
@@ -144,7 +143,6 @@ export function everyRow(stub: DurableObjectStub<OrgDO>): Promise<string> {
   });
 }
 
-/** Runs SQL in an account object. */
 export function inAccount<T>(
   stub: DurableObjectStub<OrgDO>,
   fn: (sql: SqlStorage, instance: OrgDO) => T,

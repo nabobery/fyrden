@@ -40,7 +40,6 @@ async function seal(recipientPublicKey: Uint8Array, message: Uint8Array): Promis
   return sealWith(epk, shared, recipientPublicKey, message);
 }
 
-/** A sealed box from the ephemeral public key and the shared secret it gives. */
 function sealWith(
   epk: Uint8Array,
   shared: Uint8Array,

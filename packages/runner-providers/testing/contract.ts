@@ -50,7 +50,6 @@ const whole = (n: number) => Number.isSafeInteger(n) && n >= 0;
 /** More instances than a page of a list may hold here. */
 const MANY = 120;
 
-/** What a value holds: its own properties, enumerable or not, its name, and a collection's entries. */
 function held(value: object): unknown[] {
   const own = [...Reflect.ownKeys(value), "name"].flatMap((key) => {
     try {
@@ -63,7 +62,6 @@ function held(value: object): unknown[] {
   return collection ? [...own, ...value] : own;
 }
 
-/** Whether the token is in a value, however deep: in an error's cause, say. */
 function hasToken(value: unknown): boolean {
   const seen = new Set<unknown>();
   const left = [value];
@@ -78,7 +76,6 @@ function hasToken(value: unknown): boolean {
   return false;
 }
 
-/** Collects what is false, so a rule reads as what must hold. */
 function checks() {
   const broken: string[] = [];
   return {
@@ -109,7 +106,6 @@ async function isLive(subject: ProviderUnderTest, handle: InstanceHandle): Promi
   return status !== "gone" && !isUnsupported(status);
 }
 
-/** Whether two lists hold the same handles, whole, in any order. */
 function same(a: readonly InstanceHandle[], b: readonly InstanceHandle[]): boolean {
   const lines = (handles: readonly InstanceHandle[]) =>
     handles

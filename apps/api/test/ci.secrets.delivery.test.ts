@@ -63,7 +63,6 @@ import { logs } from "./setup/log-capture.js";
 
 type OrgFixture = Fixture & { org: { id: string; login: string } };
 
-/** Calls the account objects answered for a job's secrets. */
 let secretReads = 0;
 afterEach(() => {
   secretReads = 0;
@@ -76,14 +75,11 @@ const countReads = () => {
   };
 };
 
-/** A workflow whose job `a` reads `names` as `secrets.<name>`, each into an env entry. */
 const reading = (...names: string[]) =>
   workflow(job("a", ["env:", ...names.map((n, k) => `  V${k}: ${expr(`secrets.${n}`)}`)]));
 
-/** A workflow whose job reads the whole `secrets` context. */
 const dynamic = workflow(job("a", ["env:", `  ALL: ${expr("toJSON(secrets)")}`]));
 
-/** Another repository of the fixture's organization, with one commit on main. */
 async function sibling(f: OrgFixture): Promise<OrgFixture> {
   const repo = await json<{ id: string; name: string }>(
     api("POST", `/orgs/${f.org.login}/repos`, f.owner.token, { name: uniqueId("r") }),
@@ -165,7 +161,6 @@ async function plant(
   });
 }
 
-/** Runs `source` in the fixture's repository and has a new runner fetch its task. */
 async function deliver(f: OrgFixture, source: string, extra = {}) {
   const runId = await started(f, source, extra);
   const runner = await registerRunner(f.org.login, f.owner);
@@ -179,7 +174,6 @@ async function delivered(f: OrgFixture, source: string, extra = {}) {
   return { ...got, task: got.task };
 }
 
-/** The task's secrets other than the job token entries. */
 const ownSecrets = (task: { secrets: Map<string, string> }) =>
   Object.fromEntries(
     [...task.secrets].filter(([k]) => k !== "GITHUB_TOKEN" && k !== "GITEA_TOKEN"),
@@ -203,7 +197,6 @@ async function pullRequestTask(
   return task;
 }
 
-/** A version the organization's runners were told of, with nothing pending. */
 async function primed(f: OrgFixture): Promise<number> {
   const runId = await started(f, workflow(job("a")));
   await runStub(runId).cancel(f.owner.principalId, "graceful");
@@ -228,7 +221,6 @@ async function sendLog(runner: Credentials, taskId: number, contents: string[]) 
   return decodeUpdateLogResponse(await proto(res)).ackIndex;
 }
 
-/** The stored lines' text, from every chunk the manifest names. */
 async function storedLog(runId: string, wireId: number): Promise<string[]> {
   const task = (await taskRow(wireId))?.task;
   const chunks = await inRun(runId, (r) =>
@@ -250,8 +242,6 @@ async function storedLog(runId: string, wireId: number): Promise<string[]> {
 }
 
 const jobA = (runId: string) => jobNamed(runId, "a");
-
-// ------------------------------------------------------------------ which secrets
 
 describe("which secrets a job gets", () => {
   it("a repository's secret reaches only that repository's jobs, with the run's variables", async () => {
@@ -390,8 +380,6 @@ describe("which secrets a job gets", () => {
   });
 });
 
-// ------------------------------------------------------------------ trust
-
 describe("trust", () => {
   it("an untrusted pull_request run gets only the job token and no variables, and the account is never asked", async () => {
     const f = await orgRepo();
@@ -425,8 +413,6 @@ describe("trust", () => {
     expect(secretReads).toBe(0);
   });
 });
-
-// ------------------------------------------------------------------ offers and masking
 
 describe("offers and masking", () => {
   it("a secret updated between an offer and its re-offer is delivered fresh, and both values stay masked", async () => {
@@ -470,9 +456,6 @@ describe("offers and masking", () => {
   });
 });
 
-// ------------------------------------------------------------------ the delivery audit
-
-/** The `ci.secrets.deliver` rows of account `accountId`, oldest first. */
 async function deliveries(accountId: string) {
   const { results } = await env.DIRECTORY.prepare(
     "SELECT actor_id, details FROM audit_log WHERE target_id = ? AND action = 'ci.secrets.deliver' ORDER BY seq",
@@ -568,8 +551,6 @@ describe("the delivery audit", () => {
     expect(audited.meta.changes).toBe(0);
   });
 });
-
-// ------------------------------------------------------------------ failures
 
 describe("failures fail closed", () => {
   it.each(["data key", "ciphertext"] as const)(
@@ -670,13 +651,11 @@ async function breakSecret(f: OrgFixture, name: string) {
   });
 }
 
-/** Makes the secret `name` undeliverable: past the mask budget, or not opening. */
 async function undeliverable(f: OrgFixture, name: string, how: "unmaskable" | "unopenable") {
   if (how === "unmaskable") await repoSecret(f, name, secretValue(40 * 1024));
   else await breakSecret(f, name);
 }
 
-/** Waits for `held` to be reached, failing at once when `request` settles first. */
 async function reached(held: ReturnType<typeof gate>, request: Promise<unknown>) {
   await Promise.race([
     held.started,

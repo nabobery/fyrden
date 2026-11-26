@@ -29,7 +29,6 @@ export interface MaintenanceWiring {
   readonly heldRoots?: () => readonly Oid[];
 }
 
-/** The job handlers of repack and garbage collection, for the object's alarm. */
 export function maintenanceHandlers(
   git: RepoGitStorage,
   wiring: MaintenanceWiring,

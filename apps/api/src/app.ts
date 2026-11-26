@@ -17,6 +17,7 @@ import { wellKnownRouter } from "./oauth/metadata.js";
 import { oauthRouter } from "./oauth/token.js";
 import { READ_MODEL_PROTOCOL } from "./read-model/executor.js";
 import { mountArchives } from "./rest/archive.js";
+import { mountJobLogs } from "./rest/job-logs.js";
 import { mountRest } from "./rest/mount.js";
 import { mountRaw } from "./rest/raw.js";
 import { mountReleaseAssets } from "./rest/release-assets.js";
@@ -64,6 +65,7 @@ export function createApp() {
   mountRunnerService(app);
   mountRest(app);
   mountRaw(app);
+  mountJobLogs(app);
   mountReleaseAssets(app);
   mountArchives(app);
   mountMcp(app);

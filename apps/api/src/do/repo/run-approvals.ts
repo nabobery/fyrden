@@ -246,7 +246,6 @@ export class CiApprovals {
     });
   }
 
-  /** Whether run `runId` waits for approval. */
   waitingRun(runId: string): boolean {
     return this.#row(runId)?.state === "waiting";
   }

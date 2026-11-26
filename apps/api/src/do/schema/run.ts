@@ -70,6 +70,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *   if the offer ended. Only the failure of that task is ever acted on. An
  *   empty error is an assignment that could not be recorded, not a failed
  *   delivery: its job never gets an error.
+ *
+ * v10 (steps):
+ * - `run_instances.steps`: the job's steps as its runner last reported them
+ *   (src/do/run/steps.ts); NULL before a report, and for tasks from before.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -448,5 +452,10 @@ export const runSchema: readonly DoMigration[] = [
         recorded_at INTEGER NOT NULL
       ) STRICT;
     `,
+  },
+  {
+    version: 10,
+    name: "ci_job_steps",
+    sql: "ALTER TABLE run_instances ADD COLUMN steps TEXT;",
   },
 ];

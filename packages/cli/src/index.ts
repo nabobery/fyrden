@@ -252,7 +252,6 @@ function bareAddress(text: string): boolean {
   return at > 0 && !domain.includes("@") && domain.slice(1, -1).includes(".");
 }
 
-/** `Name <address>` or a bare address. */
 function senderAddress(from: string): boolean {
   const open = from.indexOf(" <");
   if (open > 0 && from.endsWith(">"))
@@ -260,11 +259,6 @@ function senderAddress(from: string): boolean {
   return bareAddress(from);
 }
 
-/**
- * The email flags: the provider's three or none (undefined), the sending
- * switch and limits only with them; null for anything else (a provider but
- * Resend, a sending address that is not one, limits that do not fit).
- */
 function emailArgs(given: ReadonlyMap<string, string>): EmailArgs | undefined | null {
   const [provider, from, secretsFile, sending] = [
     given.get("--email"),
@@ -310,10 +304,6 @@ export interface LiveArgs {
   sockets?: number;
 }
 
-/**
- * `--live on|off` and `--live-sockets N` (1 to 100,000, with `--live on`
- * only): on (undefined when off or left out); null for anything else.
- */
 function liveArgs(given: ReadonlyMap<string, string>): LiveArgs | undefined | null {
   const [live, sockets] = [given.get("--live"), given.get("--live-sockets")];
   if (live === undefined) return sockets === undefined ? undefined : null;
@@ -333,10 +323,6 @@ export function ciSinceMs(text: string): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-/**
- * Undefined when no CI flag is given; null when one is invalid. `--ci-fleet`,
- * `--ci-daily` and `--ci-max-job-minutes` are Free only: Paid reads none of them.
- */
 function ciArgs(given: ReadonlyMap<string, string>, plan: Plan): CiSettings | undefined | null {
   const runners = given.get("--ci-runners");
   const fleet = given.get("--ci-fleet");
@@ -618,7 +604,6 @@ function webhookSecretFits(secret: string): boolean {
   return bytes.length >= 16 && bytes.toString("base64") === text;
 }
 
-/** The provider's secrets from its file. */
 async function emailSecrets(path: string): Promise<{ apiKey: string; webhookSecret?: string }> {
   let text: string;
   try {

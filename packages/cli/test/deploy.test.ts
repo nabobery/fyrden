@@ -369,7 +369,6 @@ describe("fyrden deploy", () => {
     generated = await generatedConfig();
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_PROVIDER");
     expect(generated.vars).not.toHaveProperty("FYRDEN_EMAIL_FROM");
-    // Sending, with its webhook's secret and limits of its own; each deploy says so again.
     await deploy(
       deps(fake.runner, {
         email: {
@@ -406,7 +405,6 @@ describe("fyrden deploy", () => {
     };
     const fake = fakeWrangler();
     await deploy(deps(fake.runner, { email }).d);
-    // The API first without it, then again with the web Worker's URL.
     const origins = () => fake.state.apiVersions.map((v) => v.vars.FYRDEN_PUBLIC_ORIGIN);
     expect(origins()).toEqual([undefined, "https://fyrden-web.acct.workers.dev"]);
     await deploy(deps(fake.runner, { email }).d);
@@ -1088,8 +1086,6 @@ describe("fyrden doctor", () => {
     );
     expect(lines).toContain("ok   fyrden-org schema matches apps/api/migrations/org.expected.sql");
     const executed = fake.calls.filter((c) => c.args[1] === "execute");
-    // Each database's applied migrations, then its schema; fyrden-org's effects; search's
-    // setting (off: the read model is not read for it).
     expect(executed.map((c) => c.args[2])).toEqual([
       "fyrden-directory",
       "fyrden-directory",

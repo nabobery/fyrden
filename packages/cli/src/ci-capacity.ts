@@ -1,6 +1,6 @@
 /*
  * A copy of the ceiling apps/api/src/ci/budget.ts clamps CI's Free allowance to
- * (`ciAllowance`, `fleetReservation`, `LIVE_DAILY`, `FREE_DAILY`, `FREE_SHARE`),
+ * (`ciAllowance`, `fleetReservation`, `LOG_READS`, `LIVE_DAILY`, `FREE_DAILY`, `FREE_SHARE`),
  * so `fyrden deploy` can refuse values the API would not honor. The CLI depends
  * on no workspace package; apps/api/test/ci.capacity-copy.test.ts fails when the
  * copies differ.
@@ -52,6 +52,12 @@ const LIVE_DAILY: Partial<CiDaily> = {
   queue_ops: 0,
 };
 
+const LOG_READS: Partial<CiDaily> = {
+  r2_class_b: 8_000,
+  d1_rows_read: 8_000,
+  d1_rows_written: 8_000,
+};
+
 const DISCRETIONARY_SHARE = 0.2;
 
 export const CI_FREE_FLEET = 2;
@@ -85,7 +91,7 @@ export function dailyValues(value: string | undefined): Partial<Record<string, n
   );
 }
 
-/** Negative where the fleet, live hints and discretionary work alone pass Free's limit. */
+/** Negative where the fleet, log pages, live hints and discretionary work alone pass Free's limit. */
 export function ciDailyCeiling(fleet: number, discretionary?: string): CiDaily {
   const reserved = fleetReservation(fleet);
   const set = dailyValues(discretionary);
@@ -95,7 +101,7 @@ export function ciDailyCeiling(fleet: number, discretionary?: string): CiDaily {
       const others = DISCRETIONARY.has(r)
         ? (LIVE_DAILY[r] ?? 0) + Math.min(set[r] ?? limit * DISCRETIONARY_SHARE, limit)
         : 0;
-      return [r, limit - reserved[r] - others];
+      return [r, limit - reserved[r] - (LOG_READS[r] ?? 0) - others];
     }),
   ) as CiDaily;
 }
@@ -112,7 +118,7 @@ export function ciCapacityProblems(options: {
   for (const r of CI_DAILY_RESOURCES) {
     if (ceiling[r] < 0)
       problems.push(
-        `${r}: a fleet of ${options.fleet} runners, live hints and discretionary work need ${CI_FREE_DAILY[r] - ceiling[r]}, past Free's ${CI_FREE_DAILY[r]}`,
+        `${r}: a fleet of ${options.fleet} runners, log pages, live hints and discretionary work need ${CI_FREE_DAILY[r] - ceiling[r]}, past Free's ${CI_FREE_DAILY[r]}`,
       );
     else if ((daily[r] ?? 0) > ceiling[r])
       problems.push(`${r}: --ci-daily asks ${daily[r]}, at most ${ceiling[r]} is left`);

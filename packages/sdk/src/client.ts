@@ -177,7 +177,7 @@ export class FyrdenClient {
 
   /**
    * Every item of a paginated operation, page after page (following
-   * `next_cursor`); an answer without the paged field (a path that is a
+   * `next_cursor`, to the end stored so far for one that can grow); an answer without the paged field (a path that is a
    * file, not a directory) has no items.
    */
   async *paginate<K extends Paged>(
@@ -189,16 +189,19 @@ export class FyrdenClient {
     if (field === undefined) throw new TypeError(`${id} has no items to page: use call`);
     let cursor: string | null | undefined;
     do {
-      // Once a page answered, its cursor carries on from where `after` (a start given by id)
-      // began: the two are never sent together.
-      const { after: _after, ...rest } = input as Record<string, unknown>;
+      // Once a page answered, its cursor carries on from where the start given (`after` an id,
+      // `from` a row or the `tail`) began: the two are never sent together.
+      const { after: _after, from: _from, tail: _tail, ...rest } = input as Record<string, unknown>;
       const page = (await this.call(
         id,
         (cursor ? { ...rest, cursor } : input) as InputOf<K>,
         options,
       )) as Record<string, unknown>;
       for (const item of (page[field] as ItemOf<K>[] | undefined) ?? []) yield item;
-      cursor = page.next_cursor as string | null | undefined;
+      const next = page.next_cursor as string | null | undefined;
+      // A page that moved no further has reached the end there is so far (a running job's log).
+      if (next === cursor) return;
+      cursor = next;
     } while (cursor);
   }
 }

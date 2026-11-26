@@ -22,6 +22,7 @@ import runV6 from "./fixtures/do-schemas/RunDO/v6.sql?raw";
 import runV7 from "./fixtures/do-schemas/RunDO/v7.sql?raw";
 import runV8 from "./fixtures/do-schemas/RunDO/v8.sql?raw";
 import runV9 from "./fixtures/do-schemas/RunDO/v9.sql?raw";
+import runV10 from "./fixtures/do-schemas/RunDO/v10.sql?raw";
 
 const versions: Record<number, string> = {
   0: runV0,
@@ -34,6 +35,7 @@ const versions: Record<number, string> = {
   7: runV7,
   8: runV8,
   9: runV9,
+  10: runV10,
 };
 
 describe("RunDO schema", () => {
@@ -303,7 +305,9 @@ describe("RunDO schema", () => {
         },
       ]);
       expect(result.tasks).toEqual(result.before.tasks);
-      expect(result.instances).toEqual(result.before.instances);
+      expect(result.instances).toEqual(
+        result.before.instances.map((row) => ({ ...row, steps: null })),
+      );
       expect(result.chunks).toEqual(result.before.chunks);
       expect(result.masks).toEqual([]);
       expect(result.fresh).toEqual({ state: "streaming", finalized: 0, unmasked: 0 });

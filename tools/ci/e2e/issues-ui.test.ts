@@ -1,10 +1,7 @@
 // Issues in a real browser (Chromium through Playwright) against both
-// Workers under one wrangler dev: a person opens an issue with a hostile
-// title and body (inert), comments, edits the description, filters the
-// list, closes it as not planned and reopens it; an edit made from a page
-// someone else changed since is refused with the text kept. Every page it
-// visits is checked with axe for WCAG 2.x A and AA. Needs `pnpm --filter
-// @fyrden/web build` first (turbo does it).
+// Workers under one wrangler dev. Every page it visits is checked with axe
+// for WCAG 2.x A and AA. Needs `pnpm --filter @fyrden/web build` first
+// (turbo does it).
 import { type Page, type Route, expect as see } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { accessible as axe, reload, startWebStack, visit, type WebStack } from "./web-stack.js";

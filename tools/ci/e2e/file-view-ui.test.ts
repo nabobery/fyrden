@@ -1,7 +1,4 @@
-// The file page in a real browser against both Workers, with and without JavaScript: numbered
-// lines that agree with the renderer's rows, line links, go to line, a file paged in blocks,
-// the fall back to plain text, Fjord's colours and a scheme change in place; and the REST
-// API under /api/v3 through the web origin, as stock `gh` calls it. Needs
+// The file page in a real browser against both Workers, with and without JavaScript. Needs
 // `pnpm --filter @fyrden/web build` first (turbo does it).
 
 import { type Browser, type Locator, type Page, type Route, expect as see } from "@playwright/test";
@@ -63,7 +60,6 @@ async function put(path: string, bytes: string | Buffer): Promise<void> {
   expect(res.status, `${path}: ${await res.clone().text()}`).toBeLessThan(300);
 }
 
-/** Runs `use` on a page of this session with no JavaScript. */
 async function withoutScript<T>(use: (plain: Page) => Promise<T>): Promise<T> {
   const context = await browser.newContext({
     javaScriptEnabled: false,
@@ -360,7 +356,6 @@ describe("line links", () => {
   });
 });
 
-/** Scrolls the page by script, as a person would, and returns where it came to rest. */
 const scrollAwayTo = (y: number) =>
   page.evaluate((top) => {
     const view = globalThis as unknown as {

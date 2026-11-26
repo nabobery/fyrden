@@ -348,7 +348,6 @@ export const orgSchema: readonly DoMigration[] = [
   },
   {
     version: 12,
-    // CI minutes by reservation key (src/do/org/ci-minutes.ts).
     name: "ci_minutes",
     sql: `
       CREATE TABLE ci_minutes (

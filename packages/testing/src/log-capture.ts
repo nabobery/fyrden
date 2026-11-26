@@ -13,7 +13,6 @@ export interface CapturedLogs {
   entries(): Record<string, unknown>[];
 }
 
-/** Values no log line may contain, registered by the tests that made them up. */
 const secretValues = new Set<string>();
 
 /**
@@ -25,7 +24,6 @@ export function registerSecretValue(value: string): string {
   return value;
 }
 
-/** The string fields of a parsed JSON value, at any depth. */
 function stringsOf(value: unknown, out: string[]): string[] {
   if (typeof value === "string") out.push(value);
   else if (value !== null && typeof value === "object")
