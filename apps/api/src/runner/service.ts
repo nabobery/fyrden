@@ -367,6 +367,7 @@ async function fetchTask(call: CallContext): Promise<Response> {
         log: call.log,
         now: call.now,
         timeoutHeader: call.c.req.header("connect-timeout-ms"),
+        waitUntil: (work) => call.c.executionCtx.waitUntil(work),
       },
       runner,
       dispatch,

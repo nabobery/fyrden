@@ -49,7 +49,8 @@ import { storedSteps } from "./steps.js";
  * A failed delivery of a job's secrets is recorded here before the directory
  * is asked to end its offer, so that one whose end did not commit, whose
  * answer was lost, or whose object was reset before its job was failed is
- * settled later (`recoverySlice`) by what the directory then says.
+ * settled later (`recoverySlice`) by what the directory then says, as is an
+ * assignment not known to be recorded (`assignmentLost`).
  */
 
 /** The error of a job whose secrets are not delivered because its repository changed owner. */
@@ -63,8 +64,8 @@ export type AssignTaskAnswer =
       /**
        * `wrong_account`: the runner's account no longer owns the run's repository (it moved);
        * `repo_transferring`: the repository is being transferred; `released`: the offer was
-       * given up (by its poll, or by the recovery of its failed delivery) before the assignment
-       * could be recorded; `confirmed`: a report
+       * given up (by its poll, or by the recovery of an earlier attempt that failed) before the
+       * assignment could be recorded; `confirmed`: a report
        * made the stale offer no longer replayable. `tokens_exhausted`: the offer cannot be
        * repeated, but its last token and an in-flight answer remain valid.
        * `ci_key_unavailable`: no CI master key seals the task's masks. Refused before anything
@@ -119,13 +120,15 @@ export interface DispatchHooks {
   afterTaskEndCommit?: () => Promise<void> | void;
   /** After the run has recorded an assigned task, before its task number is written to the directory. */
   beforeTaskRecord?: () => Promise<void> | void;
+  /** After the directory's answer to it, before anything is done with that. */
+  afterTaskRecord?: () => Promise<void> | void;
   /** Before a delivery's secrets are registered to be masked, before the task is recorded. */
   beforeSecretMasks?: () => Promise<void> | void;
   /** When a delivery has failed, before the directory ends its offer or answers it was recorded. */
   beforeDeliveryFailure?: () => Promise<void> | void;
   /** When a delivery has failed, after the directory answered, before the job is failed or kept. */
   afterDeliveryFailure?: () => Promise<void> | void;
-  /** Before the directory is asked about unsettled failed deliveries. */
+  /** Before the directory is asked about unsettled failures. */
   beforeDeliveryRecovery?: () => Promise<void> | void;
   /** After it answered, before their jobs are failed, queued again or kept. */
   afterDeliveryRecovery?: () => Promise<void> | void;
@@ -156,7 +159,7 @@ export interface DispatchHost {
   guarded(job: Job, fn: () => void): void;
   /** Has the dispatch index synced soon (its job runs now). */
   ensureDispatch(): void;
-  /** Has the unsettled failed deliveries looked at by `runAt`, or earlier. */
+  /** Has the unsettled failures looked at by `runAt`, or earlier. */
   ensureRecovery(runAt: number): void;
   /** Resolves once everything written so far is on disk. */
   durable(): Promise<void>;
@@ -266,12 +269,13 @@ export const OFFERS_SQL = `SELECT id, task, ended_at, superseded_at,
   FROM ci_tasks WHERE id IN (SELECT value FROM json_each(?1))`;
 
 /**
- * A failed delivery not settled by its own attempt is settled this long after it was last
- * recorded: by then its offer, unrecorded, is no longer made again (its claim's lease is as long),
- * though an attempt already running may still settle it. Proposed.
+ * A failure (of a delivery, or of a record) not settled by its own attempt is settled this long
+ * after it was last recorded: by then its offer, unrecorded, is no longer made again (its claim's
+ * lease is as long), though an attempt already running may still settle it. Proposed.
  */
 export const DELIVERY_RECOVERY_MS = 30_000;
-/** Failed deliveries one pass settles. Proposed. */
+/** The stored error of an assignment whose record failed: it has none, and fails no job with one. */
+const NOT_RECORDED = "";
 const RECOVERY_PAGE = 100;
 
 /** A job token outlives its job's timeout by this. Proposed. */
@@ -305,6 +309,12 @@ interface DeliveryFailureRow {
   wire_id: number;
   job_id: number;
   task: number;
+  recorded_at: number;
+}
+
+interface HeldAssignment {
+  reservation?: MemoryReservation | undefined;
+  unrecorded?: TaskRef | undefined;
 }
 
 interface OfferRow {
@@ -322,6 +332,8 @@ interface MapRow {
   runner_id: number;
   confirmed_at: number | null;
 }
+
+const assignKey = (wireId: number): string => `t${wireId}`;
 
 export class RunDispatch {
   constructor(private readonly host: DispatchHost) {}
@@ -349,12 +361,21 @@ export class RunDispatch {
     accountId: string,
   ): Promise<AssignTaskAnswer> {
     // The memory reserved for the job's secrets is held until the answer is made, whatever it is.
-    const held: { reservation?: MemoryReservation | undefined } = {};
+    const held: HeldAssignment = {};
     try {
       return await this.#assignTask(wireId, jobId, runnerId, accountId, held);
+    } catch (error) {
+      if (held.unrecorded) this.#notRecorded(wireId, held.unrecorded);
+      throw error;
     } finally {
       held.reservation?.release();
     }
+  }
+
+  assignmentLost(wireId: number, jobId: number): void {
+    const row = this.host.engine.instance(jobId);
+    if (row && row.task !== null && row.assign_key === assignKey(wireId))
+      this.#notRecorded(wireId, { jobId, task: row.task });
   }
 
   async #assignTask(
@@ -362,7 +383,7 @@ export class RunDispatch {
     jobId: number,
     runnerId: number,
     accountId: string,
-    held: { reservation?: MemoryReservation | undefined },
+    held: HeldAssignment,
   ): Promise<AssignTaskAnswer> {
     const { host } = this;
     // Runners serve their own account's repositories. The index can lag a transfer, so the
@@ -435,9 +456,10 @@ export class RunDispatch {
         return { refused: "secrets_unreachable" };
       }
     }
-    const assigned = host.assign(jobId, `t${wireId}`, accountId);
+    const assigned = host.assign(jobId, assignKey(wireId), accountId);
     if (!assigned.ok) return { refused: assigned.code };
     const ref = assigned.task;
+    held.unrecorded = ref;
     // A task out of token masks is never given another: refused before anything is written or
     // minted. Overlapping re-offers can both pass this; registering the token decides.
     if (host.jobTokensFull(ref.task)) return this.#tokensFull(wireId, ref);
@@ -542,6 +564,7 @@ export class RunDispatch {
       );
     this.#count("ci_task_assigned", record.length);
     const [recorded, earlier, offer] = await db.batch(record);
+    await host.hooks.afterTaskRecord?.();
     if ((recorded?.meta.changes ?? 0) === 0) {
       const row = offer?.results[0] as
         | {
@@ -568,6 +591,7 @@ export class RunDispatch {
       }
       return { refused: "released" };
     }
+    held.unrecorded = undefined;
     const previous = ((earlier?.results ?? []) as { token_id: string }[]).map((r) => r.token_id);
     // The task may have ended while it was recorded: no token is minted for it.
     if (!host.taskLive(ref)) return { refused: "task_finished" };
@@ -772,7 +796,7 @@ export class RunDispatch {
     code: string,
     error: string,
     names: readonly string[],
-  ): Promise<{ readonly refused: "task_finished" | "secrets_undeliverable" }> {
+  ): Promise<{ readonly refused: "task_finished" | "secrets_undeliverable" | "released" }> {
     const { host } = this;
     const db = host.env.DIRECTORY;
     const withheld = (reason: string) => {
@@ -807,7 +831,9 @@ export class RunDispatch {
       this.#recovery("scheduled", wireId, ref);
     }
     this.#count("ci_task_undeliverable", 3);
-    let offer: { task: number | null } | undefined;
+    let offer:
+      | { task: number | null; ended_at: number | null; superseded_at: number | null }
+      | undefined;
     let tokens: number;
     try {
       await host.hooks.beforeDeliveryFailure?.();
@@ -815,13 +841,14 @@ export class RunDispatch {
         db
           .prepare(
             `UPDATE ci_tasks SET ended_at = ?1 WHERE id = ?2 AND task IS NULL AND ended_at IS NULL
+               AND superseded_at IS NULL
                AND NOT EXISTS (SELECT 1 FROM ci_job_tokens WHERE task_id = ?2)`,
           )
           .bind(host.now(), wireId),
-        db.prepare("SELECT task FROM ci_tasks WHERE id = ?").bind(wireId),
+        db.prepare("SELECT task, ended_at, superseded_at FROM ci_tasks WHERE id = ?").bind(wireId),
         db.prepare("SELECT 1 FROM ci_job_tokens WHERE task_id = ? LIMIT 1").bind(wireId),
       ]);
-      offer = read?.results[0] as { task: number | null } | undefined;
+      offer = read?.results[0] as typeof offer;
       tokens = minted?.results.length ?? 0;
     } catch {
       return withheld("offer_not_ended");
@@ -831,6 +858,14 @@ export class RunDispatch {
     if ((offer?.task ?? null) !== null || tokens > 0) {
       host.tx(() => this.#settled(wireId, ref));
       return withheld("answered_before");
+    }
+    // Given up unrecorded and never ended: no answer of it can leave, so its job is queued again.
+    if (offer && offer.superseded_at !== null && offer.ended_at === null) {
+      host.tx(() => {
+        host.requeueTask(ref);
+        this.#settled(wireId, ref);
+      });
+      return { refused: "released" };
     }
     // Ended unrecorded, by this attempt or an earlier one: no answer of it ever leaves.
     const failed = host.tx(() => {
@@ -848,7 +883,45 @@ export class RunDispatch {
     return { refused: "task_finished" };
   }
 
-  /** Forgets task `ref`'s failed delivery; another task's, under the same offer, is kept. */
+  /**
+   * A failed delivery of the same task keeps its error and time; another task's row under the
+   * offer is replaced. A failure to store is only logged, so the assignment's own error is thrown.
+   */
+  #notRecorded(wireId: number, ref: TaskRef): void {
+    const { host } = this;
+    try {
+      const stored = host.tx(() => {
+        if (!host.taskLive(ref)) return false;
+        const at = host.now();
+        const written = host.engine.rows(
+          `INSERT INTO ci_delivery_failures (wire_id, job_id, task, error, recorded_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (wire_id) DO UPDATE SET job_id = excluded.job_id, task = excluded.task,
+             error = excluded.error, recorded_at = excluded.recorded_at
+             WHERE ci_delivery_failures.task <> excluded.task
+           RETURNING wire_id`,
+          wireId,
+          ref.jobId,
+          ref.task,
+          NOT_RECORDED,
+          at,
+        );
+        // A row already there has its recovery, backed off or not.
+        if (written.length === 0) return false;
+        host.ensureRecovery(at + DELIVERY_RECOVERY_MS);
+        return true;
+      });
+      if (stored) this.#recovery("scheduled", wireId, ref);
+    } catch (error) {
+      host.log.warn("failed assignment not stored", {
+        taskId: wireId,
+        task: ref.task,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Forgets task `ref`'s failure; another task's, under the same offer, is kept. */
   #settled(wireId: number, ref: TaskRef): void {
     this.host.engine.exec(
       "DELETE FROM ci_delivery_failures WHERE wire_id = ? AND task = ?",
@@ -867,10 +940,11 @@ export class RunDispatch {
   }
 
   /**
-   * Settles the failed deliveries their own attempts did not, once they are due, by what the
-   * directory says of their offers. One neither recorded nor ended is given up there first, so no
-   * attempt still running can record it, and its job is queued again: its next offer reads the
-   * secrets again. One ended unrecorded fails its job with the error its delivery had. One
+   * Settles the failures their own attempts did not, once they are due, by what the directory says
+   * of their offers. One neither recorded nor ended is given up there first, so no attempt still
+   * running can record it, and its job is queued again: its next offer reads the secrets again. One
+   * ended unrecorded fails its job with the error its delivery had; with none, only its record
+   * failed, and its job is queued again (an older task's refused attempt ends the offer too). One
    * recorded, or with a token minted, may have been answered: its job is kept. Nothing is recorded,
    * minted or read of any secret here. An outcome the directory did not answer changes nothing
    * here, and is asked again.
@@ -878,7 +952,7 @@ export class RunDispatch {
   async recoverySlice(job: Job): Promise<SliceResult> {
     const { host } = this;
     const due = host.engine.rows<DeliveryFailureRow>(
-      `SELECT wire_id, job_id, task FROM ci_delivery_failures WHERE recorded_at <= ?
+      `SELECT wire_id, job_id, task, recorded_at FROM ci_delivery_failures WHERE recorded_at <= ?
        ORDER BY recorded_at, wire_id LIMIT ?`,
       host.now() - DELIVERY_RECOVERY_MS,
       RECOVERY_PAGE,
@@ -919,27 +993,32 @@ export class RunDispatch {
         };
   }
 
-  /** Settles one failed delivery, unless its own attempt did, or its slice was taken over. */
+  /**
+   * Settles one failure, unless its own attempt did, or its slice was taken over. One that failed
+   * again since it was read (its delivery did) is left for a later answer of the directory: this
+   * one may be from before that attempt ended the offer.
+   */
   #recover(job: Job, row: DeliveryFailureRow, offer: OfferRow | undefined): void {
     const { host } = this;
     const ref: TaskRef = { jobId: row.job_id, task: row.task };
     let outcome: string | undefined;
     host.guarded(job, () => {
       const [failure] = host.engine.rows<{ error: string }>(
-        "SELECT error FROM ci_delivery_failures WHERE wire_id = ? AND task = ?",
+        "SELECT error FROM ci_delivery_failures WHERE wire_id = ? AND task = ? AND recorded_at = ?",
         row.wire_id,
         row.task,
+        row.recorded_at,
       );
       if (!failure) return;
       let acted = true;
       if (offer && (offer.task !== null || offer.minted !== 0)) outcome = "kept_recorded";
-      else if (!offer || offer.ended_at !== null) {
+      else if ((!offer || offer.ended_at !== null) && failure.error !== NOT_RECORDED) {
         outcome = "failed_ended";
         acted = host.failTask(ref, failure.error);
-      } else if (offer.superseded_at !== null) {
+      } else if (!offer || offer.ended_at !== null || offer.superseded_at !== null) {
         outcome = "requeued";
         acted = host.requeueTask(ref);
-      } else throw new Error("a failed delivery's offer was not given up");
+      } else throw new Error("a failed assignment's offer was not given up");
       if (!acted) outcome = "discarded_not_live";
       this.#settled(row.wire_id, ref);
     });
