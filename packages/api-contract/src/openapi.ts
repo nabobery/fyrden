@@ -49,6 +49,7 @@ function operationObject(op: OperationDef): JsonSchema {
     Object.entries(properties).filter(([name]) => !inPath.has(name)),
   );
   const hasBody = op.method !== "GET" && Object.keys(bodyProps).length > 0;
+  const bodyRequired = [...required].filter((r) => !inPath.has(r));
   const problem = { $ref: "#/components/schemas/Problem" };
   return {
     operationId: op.id,
@@ -60,13 +61,13 @@ function operationObject(op: OperationDef): JsonSchema {
     }),
     ...(hasBody && {
       requestBody: {
-        required: true,
+        required: bodyRequired.length > 0,
         content: {
           "application/json": {
             schema: {
               type: "object",
               properties: bodyProps,
-              required: [...required].filter((r) => !inPath.has(r)),
+              required: bodyRequired,
             },
           },
         },

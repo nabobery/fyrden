@@ -382,7 +382,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -483,7 +483,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -1480,7 +1480,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -1557,7 +1557,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -2569,7 +2569,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -2771,7 +2771,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -3541,7 +3541,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -5587,7 +5587,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "202": {
@@ -6097,7 +6097,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -6203,7 +6203,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -6609,7 +6609,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -7009,7 +7009,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -8634,7 +8634,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "204": {
@@ -9514,7 +9514,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -10671,7 +10671,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -11092,7 +11092,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -12394,7 +12394,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel": {
       "post": {
-        "description": "Cancels a run: queued jobs end, running jobs whose \`if:\` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose \`if:\` still holds (such as \`if: always()\`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 \`run_not_cancellable\` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "description": "Cancels a run: queued jobs end, running jobs whose \`if:\` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose \`if:\` still holds (such as \`if: always()\`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 \`run_not_cancellable\` once the run completed. With \`attempt\` (a Fyrden extension), 409 \`attempt_changed\` when that is not the run's current attempt, checked as the run acts, so a caller never acts on an attempt it has not seen; a retry with the same \`Idempotency-Key\` answers as its first request did, even once the attempt moved on. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
         "operationId": "actions.runs.cancel",
         "parameters": [
           {
@@ -12430,6 +12430,25 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             },
           },
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "attempt": {
+                    "description": "The attempt the caller saw; refused when it is no longer the current one.",
+                    "maximum": 51,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": false,
+        },
         "responses": {
           "202": {
             "content": {
@@ -13917,7 +13936,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun": {
       "post": {
-        "description": "Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 \`rerun_limit\`); one still running, or whose workflow could not run (\`errors\`), is 409 \`run_not_completed\`. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
+        "description": "Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 \`rerun_limit\`); one still running, or whose workflow could not run (\`errors\`), is 409 \`run_not_completed\`. With \`attempt\` (a Fyrden extension), 409 \`attempt_changed\` when that is not the run's current attempt, checked as the run acts, so a caller never acts on an attempt it has not seen; a retry with the same \`Idempotency-Key\` answers as its first request did, even once the attempt moved on. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the \`actions:write\` permission.",
         "operationId": "actions.runs.rerun",
         "parameters": [
           {
@@ -13953,6 +13972,25 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
             },
           },
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "attempt": {
+                    "description": "The attempt the caller saw; refused when it is no longer the current one.",
+                    "maximum": 51,
+                    "minimum": 1,
+                    "type": "integer",
+                  },
+                },
+                "required": [],
+                "type": "object",
+              },
+            },
+          },
+          "required": false,
+        },
         "responses": {
           "201": {
             "content": {
@@ -14922,7 +14960,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "204": {
@@ -17050,7 +17088,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -20606,7 +20644,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -21717,7 +21755,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -26195,7 +26233,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -26800,7 +26838,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -29092,7 +29130,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -29338,7 +29376,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -30259,7 +30297,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -30796,7 +30834,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -31044,7 +31082,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -31958,7 +31996,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -32435,7 +32473,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "202": {
@@ -35962,7 +36000,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -38393,7 +38431,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -38541,7 +38579,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -39328,7 +39366,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -42445,7 +42483,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "202": {
@@ -45202,7 +45240,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -48570,7 +48608,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "200": {
@@ -51090,7 +51128,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -53237,7 +53275,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "201": {
@@ -53406,7 +53444,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "204": {
@@ -53465,7 +53503,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": true,
+          "required": false,
         },
         "responses": {
           "204": {

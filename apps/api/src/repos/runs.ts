@@ -355,16 +355,28 @@ export async function getWorkflowRunGraphOperation(
   };
 }
 
+const attemptChanged = () =>
+  new OperationError(
+    409,
+    "attempt_changed",
+    "The run has a newer attempt; review it before acting.",
+  );
+
 async function cancel(
   ctx: OpContext,
-  input: { owner: string; repo: string; run_id: string },
+  input: { owner: string; repo: string; run_id: string; attempt?: number | undefined },
   mode: "graceful" | "force",
 ): Promise<Record<string, never>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
   await runOf(ctx, entry, input.run_id);
-  const result = await runStub(ctx, input.run_id, "cancel").cancel(actingPrincipal(ctx), mode);
+  const result = await runStub(ctx, input.run_id, "cancel").cancel(
+    actingPrincipal(ctx),
+    mode,
+    input.attempt,
+  );
   if (result.ok) return {};
   if (result.code === "run_not_found") throw runNotFound();
+  if (result.code === "attempt_changed") throw attemptChanged();
   throw new OperationError(409, "run_not_cancellable", "The run has completed.");
 }
 
@@ -391,11 +403,16 @@ export async function rerunWorkflowRunOperation(
 ): Promise<Output<typeof rerunWorkflowRun>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "actions:write");
   await runOf(ctx, entry, input.run_id);
-  const result = await runStub(ctx, input.run_id, "rerun").rerun(actingPrincipal(ctx));
+  const result = await runStub(ctx, input.run_id, "rerun").rerun(
+    actingPrincipal(ctx),
+    input.attempt,
+  );
   if (result.ok) return { run_attempt: result.attempt };
   switch (result.code) {
     case "run_not_found":
       throw runNotFound();
+    case "attempt_changed":
+      throw attemptChanged();
     case "rerun_limit":
       throw new OperationError(409, "rerun_limit", "The run has been re-run 50 times, its limit.");
     case "approval_required":
