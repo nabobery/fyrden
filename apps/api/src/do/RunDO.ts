@@ -2132,24 +2132,31 @@ export class RunDO extends MigratingDO {
       : undefined;
   }
 
-  #takeJobsDone(done: number | undefined, epoch: number | undefined): boolean {
-    if (done === undefined) return false;
+  #takeRepository(answer: {
+    readonly jobsDone?: number | undefined;
+    readonly epoch?: number | undefined;
+    readonly inserted?: boolean | undefined;
+  }): void {
+    const { jobsDone: done, epoch } = answer;
+    if (done === undefined) return;
     const restored =
-      epoch !== undefined && this.#repoEpoch !== undefined && epoch !== this.#repoEpoch;
+      answer.inserted === true ||
+      (epoch !== undefined && this.#repoEpoch !== undefined && epoch !== this.#repoEpoch);
     if (epoch !== undefined) this.#repoEpoch = epoch;
-    const behind = restored || done < this.#jobsReported.done;
-    this.#jobsReported = behind ? { done, live: {} } : jobsDoneTo(this.#jobsReported, done);
-    return behind;
+    if (restored) this.#reported = 0;
+    this.#jobsReported =
+      restored || done < this.#jobsReported.done
+        ? { done, live: {} }
+        : jobsDoneTo(this.#jobsReported, done);
   }
 
   #reportOwed(): boolean {
     return this.#stateOwed() !== undefined || this.jobReports().length > 0;
   }
 
-  #endsOwed(attempt: number): AttemptEnd[] {
+  #earlierEnds(attempt: number): AttemptEnd[] {
     return this.engine
       .rows<AttemptRow>("SELECT * FROM run_attempts WHERE attempt < ? ORDER BY attempt", attempt)
-      .filter((row) => runStateSeq(row.attempt, "completed") > this.#reported)
       .map((row) => ({
         attempt: row.attempt,
         conclusion: row.conclusion as AttemptConclusion,
@@ -2163,7 +2170,7 @@ export class RunDO extends MigratingDO {
     const jobs = this.jobReports();
     const report = this.#stateOwed() ?? (jobs.length > 0 ? this.runReport() : undefined);
     if (!report) return;
-    const earlier = this.#endsOwed(report.attempt);
+    const earlier = this.#earlierEnds(report.attempt);
     const answer = await this.#repoCall(
       "reportRun",
       (repo) =>
@@ -2175,7 +2182,7 @@ export class RunDO extends MigratingDO {
     // By the greatest: a slice taken over may be answered after the one that took over.
     this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
     this.#jobsReported = jobMoves(this.#jobsReported, jobs).told;
-    this.#takeJobsDone(answer.jobsDone, answer.epoch);
+    this.#takeRepository(answer);
   }
 
   /**
@@ -2361,7 +2368,7 @@ export class RunDO extends MigratingDO {
           }) as unknown as ReturnType<RepoDO["registerRun"]>,
       );
       if (!answer.ok) return answer.code === "repo_not_found" ? "gone" : "retry";
-      this.#takeJobsDone(answer.jobsDone, answer.epoch);
+      this.#takeRepository(answer);
       if (this.#reportOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
       return "ok";
     } catch (error) {

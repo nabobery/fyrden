@@ -74,9 +74,12 @@ hooks:
 
 Each is sent once. The exception is a repository object restored from a
 backup (a new `position.epoch`): what happened since the backup may be sent
-again. A run tells it again what its restored record lacks at its next
-report, or at its weekly check, which also registers a run whose record the
-restore removed. Take a new epoch as the sign to read the state
+again. A run tells it again the `workflow_run` and `workflow_job` events its
+restored record lacks, at the run's next report or at its weekly check, which
+also registers a run whose record the restore removed. `check_run` events
+follow the repository's record of checks, which a restore takes back too: a
+check started after the backup is not completed again
+([#127](https://github.com/nabobery/fyrden/issues/127)). Take a new epoch as the sign to read the state
 again. The promise ends with a run's retention: a run whose reports failed
 all that time sends what is owed once more and is then retired, counted in
 `ci.run_retired_owed` ([metrics.md](metrics.md)) if that fails too.

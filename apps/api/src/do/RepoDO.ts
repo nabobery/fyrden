@@ -2577,6 +2577,8 @@ export class RepoDO extends MigratingDO {
         /** As `reportRun` answers them, to a run registering itself (`state`). */
         readonly jobsDone?: number;
         readonly epoch?: number;
+        /** The registration recorded the run anew: the repository had lost it. */
+        readonly inserted?: boolean;
       }
     | {
         readonly ok: false;
@@ -2624,13 +2626,14 @@ export class RepoDO extends MigratingDO {
           input.path,
           this.git.context.now(),
         );
-        if (state) this.runs.register(state, !recorded);
+        if (state) this.runs.register(state);
       });
       if (!state) return { ok: true };
       const jobsDone = this.runs.jobsDone(input.runId);
       return {
         ok: true,
         epoch: this.events.epochGen(),
+        inserted: !recorded,
         ...(jobsDone !== undefined && { jobsDone }),
       };
     });

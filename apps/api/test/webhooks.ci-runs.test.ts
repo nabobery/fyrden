@@ -285,18 +285,114 @@ describe("workflow run events", () => {
     expect((await sent()).map(([action]) => action)).toEqual(["requested", "in_progress"]);
   });
 
-  it("tell nothing again of a run a restore dropped and the weekly check registers", async () => {
+  it("tell again what a restore lost of a run it removed, once the weekly check registers it", async () => {
     await t.createHook({ events: ["workflow_run"] });
     const runId = await started(f, SOURCE);
     await advance(runId, 2_000);
+    await sql((s) => s.exec("DELETE FROM ci_runs WHERE run_id = ?", runId));
     await finish(runId, "build");
     await advance(runId, 2_000);
-    const before = (await t.routed()).length;
-    await sql((s) => s.exec("DELETE FROM ci_runs WHERE run_id = ?", runId));
-    const state = await reportOf(runId);
-    await t.stub().registerRun({ runId, sha: f.sha, path: ".github/workflows/ci.yml", state });
-    await t.stub().reportRun(state);
-    expect(await t.routed()).toHaveLength(before);
+    expect((await sent()).map(([action]) => action)).toEqual(["requested", "in_progress"]);
+    await inRun(runId, (r) => r.ciReconcileAt(r.context.now()));
+    await advance(runId, 2_000);
+    expect(await sent()).toEqual([
+      ["requested", 1, "in_progress", null],
+      ["in_progress", 1, "in_progress", null],
+      ["requested", 1, "completed", "success"],
+      ["completed", 1, "completed", "success"],
+    ]);
+  });
+
+  it("tell again what a restore lost of a run it kept, ended attempts too", async () => {
+    await t.createHook({ events: ["workflow_run"] });
+    const runId = await started(f, SOURCE);
+    await advance(runId, 2_000);
+    const columns = "state_seq, status, conclusion, completed_at, summary, told";
+    const backup = await sql(
+      (s) =>
+        s
+          .exec<Record<string, SqlStorageValue>>(
+            `SELECT ${columns} FROM ci_runs WHERE run_id = ?`,
+            runId,
+          )
+          .toArray()[0],
+    );
+    if (!backup) throw new Error("no record");
+    await finish(runId, "build", "failure");
+    await advance(runId, 2_000);
+    expect((await runStub(runId).rerun(t.owner.principalId)).ok).toBe(true);
+    await drain(runId);
+    await advance(runId, 2_000);
+    await sql((s) => {
+      s.exec(
+        `UPDATE ci_runs SET (${columns}) = (?, ?, ?, ?, ?, ?) WHERE run_id = ?`,
+        ...Object.values(backup),
+        runId,
+      );
+      s.exec("UPDATE repo_meta SET epoch_gen = epoch_gen + 1 WHERE id = 1");
+    });
+    await inRun(runId, (r) => r.ciReconcileAt(r.context.now()));
+    await advance(runId, 2_000);
+    const told = (await t.routed()).map((e) => {
+      const { webhook } = e.data as {
+        webhook: { tree: { action: string; workflow_run: { run_attempt: number } } };
+      };
+      return `${e.id.epochGen}:${webhook.tree.action}:${webhook.tree.workflow_run.run_attempt}`;
+    });
+    expect(told).toEqual([
+      "1:requested:1",
+      "1:in_progress:1",
+      "1:completed:1",
+      "1:in_progress:2",
+      "2:completed:1",
+      "2:in_progress:2",
+    ]);
+  });
+
+  it("tell again what a restore lost of a run it kept, when the run reports before its weekly check", async () => {
+    await t.createHook({ events: ["workflow_run"] });
+    const runId = await started(f, SOURCE);
+    await advance(runId, 2_000);
+    const columns = "state_seq, status, conclusion, completed_at, summary, told";
+    const backup = await sql(
+      (s) =>
+        s
+          .exec<Record<string, SqlStorageValue>>(
+            `SELECT ${columns} FROM ci_runs WHERE run_id = ?`,
+            runId,
+          )
+          .toArray()[0],
+    );
+    if (!backup) throw new Error("no record");
+    await finish(runId, "build", "failure");
+    await advance(runId, 2_000);
+    expect((await runStub(runId).rerun(t.owner.principalId)).ok).toBe(true);
+    await drain(runId);
+    await advance(runId, 2_000);
+    await sql((s) => {
+      s.exec(
+        `UPDATE ci_runs SET (${columns}) = (?, ?, ?, ?, ?, ?) WHERE run_id = ?`,
+        ...Object.values(backup),
+        runId,
+      );
+      s.exec("UPDATE repo_meta SET epoch_gen = epoch_gen + 1 WHERE id = 1");
+    });
+    await finish(runId, "build");
+    await advance(runId, 2_000);
+    const told = (await t.routed()).map((e) => {
+      const { webhook } = e.data as {
+        webhook: { tree: { action: string; workflow_run: { run_attempt: number } } };
+      };
+      return `${e.id.epochGen}:${webhook.tree.action}:${webhook.tree.workflow_run.run_attempt}`;
+    });
+    expect(told).toEqual([
+      "1:requested:1",
+      "1:in_progress:1",
+      "1:completed:1",
+      "1:in_progress:2",
+      "2:completed:1",
+      "2:completed:2",
+    ]);
   });
 
   it("tell only what follows of a run recorded before hooks were told of runs", async () => {

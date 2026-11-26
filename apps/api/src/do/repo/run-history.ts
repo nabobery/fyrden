@@ -230,18 +230,12 @@ export class RunHistory {
 
   /**
    * In the caller's transaction: records the state of a run registering
-   * itself, as `apply` does, telling no one. A run the repository held (not
-   * `inserted` by this registration) still has told what it had.
+   * itself, as `apply` does, telling no one: what webhooks were told of it
+   * stays as it was, nothing for a record this registration inserted.
    */
-  register(report: RunReport, inserted: boolean): void {
+  register(report: RunReport): void {
     const held = this.#held(report.runId);
-    if (!held) return;
-    const told = toldOf(held);
-    this.#record(
-      held,
-      report,
-      inserted ? { ...told, stateSeq: runStateSeq(report.attempt, report.phase) } : told,
-    );
+    if (held) this.#record(held, report, toldOf(held));
   }
 
   #held(runId: string): Pick<RunRow, "state_seq" | "told"> | undefined {
