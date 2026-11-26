@@ -1,7 +1,3 @@
-/*
- * The settings pages for an organization's self-hosted runners: where they
- * are, what a runner's access reads as, and the messages a failed write shows.
- */
 import { MAX_RUNNER_REPOS } from "@fyrden/domain";
 import type { AccessRepository } from "./ci-settings.js";
 
@@ -33,7 +29,6 @@ export interface RunnerDetail extends Runner {
 
 export const runnersPath = (org: string): string => `/settings/orgs/${org}/runners`;
 
-/** The runner operations of an organization under the API. */
 export const runnersApi = (org: string): string =>
   `/orgs/${encodeURIComponent(org)}/actions/runners`;
 
@@ -59,7 +54,6 @@ export const PUBLIC_WARNING =
 export const FORKS_WARNING =
   "Lets pull requests from forks run on this runner once approved, pull_request_target included. The runner takes one job, but the server cannot see the machine: register a fresh machine each time, never one that will run other jobs.";
 
-/** A runner's access in a line. */
 export function accessText(runner: RunnerAccess & { readonly selected_count: number }): string {
   const parts = [
     runner.repository_access === "all"
@@ -101,7 +95,6 @@ export interface RunnerErrors {
 
 const NOT_OURS = "Not a repository of this organization.";
 
-/** What the problem a write answered means for the form. */
 export function runnerErrors(problem: {
   readonly status: number;
   readonly code?: string;

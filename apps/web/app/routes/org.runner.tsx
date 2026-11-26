@@ -35,7 +35,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return { org: params.org, runner };
 }
 
-/** A refused write; a refused save, also with what it changed (shown again for a retry). */
 type Result = { readonly errors: RunnerErrors; readonly change?: Partial<RunnerAccess> };
 
 export async function action({

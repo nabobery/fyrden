@@ -84,7 +84,6 @@ function SettingsNav<S>({
   );
 }
 
-/** A settings page of a repository or an organization: its header, the settings pages, then the page. */
 export function SettingsShell({
   scope,
   active,

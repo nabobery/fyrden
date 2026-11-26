@@ -1,8 +1,3 @@
-// An organization's runner settings: what a token form and a runner's form
-// send to the API, that a page left open changes only what was changed on
-// it, each refusal on its field, a registration token shown once and kept
-// nowhere else, and what each page shows of a runner.
-
 import { matchRoutes } from "react-router";
 import { describe, expect, it } from "vitest";
 import { ORG_SETTINGS } from "../app/components/settings-shell.js";
@@ -320,7 +315,6 @@ describe("the pages", () => {
     expect(long).not.toContain('name="allows_forks"');
     expect(long).not.toContain("was_allows_forks");
     expect(long).toContain("need an ephemeral runner");
-    // The warnings stand beside the controls.
     expect(long).toContain(escaped("A long-lived runner keeps what a job leaves behind"));
     expect(long).toContain("fresh, disposable machine");
     expect(render(runner())).toContain("register a fresh machine each time");

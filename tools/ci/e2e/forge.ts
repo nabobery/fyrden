@@ -1,9 +1,5 @@
 // What the pull request end-to-end tests share: fyrden-api under `wrangler
-// dev` (its own state in a temporary directory, the cron run on request),
-// accounts made through the admin API, a typed REST client, an MCP client,
-// stock git with no user or system config, bounded polling for what the
-// server does in the background (alarms, queues), and reads of its local
-// state where no operation shows what a test checks.
+// dev` (its own state in a temporary directory, the cron run on request).
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
@@ -239,7 +235,6 @@ export interface StoredRun {
   readonly sha: string;
   readonly ref: string;
   readonly event: string;
-  /** The workflow file. */
   readonly path: string;
   readonly createdAt: number;
   /** The `github` context the run's jobs get. */

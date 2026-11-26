@@ -99,7 +99,6 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const field = form.get("value");
   const value = normalizeLineBreaks(typeof field === "string" ? field : "");
   const visibility = scope.kind === "organization" ? visibilityOf(form) : undefined;
-  // A refused save shows what was sent again: the value (readable) and the access chosen.
   const sent = { value, ...(visibility && { visibility }) };
   const name = ciName("variable", params.name ?? String(form.get("name") ?? ""));
   if (name === undefined) return { errors: nameError(), ...sent } satisfies Result;
