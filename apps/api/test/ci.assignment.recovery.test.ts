@@ -39,6 +39,7 @@ import {
   reset,
   setSecret,
   UNSPENT,
+  unjittered,
 } from "./helpers/ci-recovery.js";
 import { encodeFetchTaskRequest } from "./helpers/runner-proto.js";
 import {
@@ -644,6 +645,7 @@ describe("a failed record against a failed delivery", () => {
 describe("a directory that does not answer the recovery of a failed record", () => {
   it("is asked again at its back-off, not earlier for another throw", async () => {
     const p = await notRecorded();
+    await unjittered(p.runId);
     await hooked(p.runId, { beforeDeliveryRecovery: down });
     await later(p.runId);
     for (let wait = 1; wait <= 32; wait *= 2) await advance(p.runId, wait * S);

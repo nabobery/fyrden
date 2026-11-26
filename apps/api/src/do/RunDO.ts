@@ -318,6 +318,8 @@ export class RunDO extends MigratingDO {
   logPurgeCalls = LOG_PURGE_CALLS;
   /** The most the tasks' kept log-mask matchers may hold. Tests may lower it. */
   maskCacheBytes = MASK_CACHE_BYTES;
+  /** The job queue's random source for retry delays. Tests may replace it. */
+  jitter: () => number = Math.random;
 
   readonly context: GitStorageContext;
   readonly jobs: JobQueue;
@@ -358,6 +360,8 @@ export class RunDO extends MigratingDO {
         void ctx.storage.setAlarm(at);
       },
       jobPolicy(env),
+      undefined,
+      () => this.jitter(),
     );
     this.policy = {
       ...RUN_DEFAULTS,
