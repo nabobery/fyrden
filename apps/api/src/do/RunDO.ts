@@ -15,9 +15,17 @@ import {
 } from "@fyrden/adapters-cloudflare/obs";
 import { checkNameKey, MAX_CHECK_BATCH } from "@fyrden/domain";
 import {
+  type AttemptConclusion,
   effectiveScope,
   type InstanceConclusion,
+  type JobAction,
+  type JobsTold,
+  jobMoves,
+  jobOrder,
   jobPayload,
+  jobsDoneTo,
+  labelsFreeOfOutputs,
+  MAX_RUN_TITLE_LENGTH,
   type NeedResult,
   nodeOutcome,
   type RunFacts,
@@ -29,6 +37,7 @@ import {
   type SecretReferences,
   type Step,
   secretReferences,
+  shown,
   type TokenScope,
   toPayloadInstance,
 } from "@fyrden/domain/ci";
@@ -37,8 +46,15 @@ import { MigratingDO } from "./base/MigratingDO.js";
 import type { RepoDO } from "./RepoDO.js";
 import type { CheckStart, CheckUpdate } from "./repo/checks.js";
 import { REPO_DELETED } from "./repo/events.js";
-import type { RunReport } from "./repo/run-history.js";
+import {
+  type AttemptEnd,
+  type JobReport,
+  MAX_JOB_LABELS,
+  MAX_JOB_REPORTS,
+  type RunReport,
+} from "./repo/run-history.js";
 import { planCheckKey } from "./run/check-key.js";
+import { decodeInstance } from "./run/codec.js";
 import {
   type AssignTaskAnswer,
   DISPATCH_RESYNC_MS,
@@ -274,6 +290,8 @@ export interface RunHooks extends DispatchHooks, LogHooks, ReservationHooks {
 /** R2 calls (a list and a delete per 1,000 chunks) one slice of an erased run's log purge makes at most. Proposed. */
 export const LOG_PURGE_CALLS = 20;
 
+const REPORTS_OWED = new Uint8Array([1]);
+
 /**
  * What the repository answers once it is deleted: a refused change, or any call at all while
  * it erases itself (a deletion is never undone, so neither answer is transient).
@@ -323,6 +341,8 @@ export class RunDO extends MigratingDO {
   #facts: { readonly runId: string; readonly facts: RunFacts } | undefined;
   /** The state the repository last took (`runStateSeq`); lost with the instance, which reports again. */
   #reported = 0;
+  #jobsReported: JobsTold = { done: 0, live: {} };
+  #repoEpoch: number | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -933,6 +953,70 @@ export class RunDO extends MigratingDO {
   /** Forgets which state the repository last took, as a new instance has (for tests). */
   forgetReported(): void {
     this.#reported = 0;
+    this.#jobsReported = { done: 0, live: {} };
+    this.#repoEpoch = undefined;
+  }
+
+  jobReports(): JobReport[] {
+    const rows = this.engine.rows<
+      Pick<
+        InstanceRow,
+        | "job_id"
+        | "attempt"
+        | "job_key"
+        | "name"
+        | "instance"
+        | "status"
+        | "conclusion"
+        | "started_at"
+        | "completed_at"
+      > & { triggering_actor_id: string }
+    >(
+      // Told and not ended are only the current attempt's, the last and 256 at most: what is owed
+      // is within the first 512.
+      `SELECT i.job_id, i.attempt, i.job_key, i.name, i.instance, i.status, i.conclusion, i.started_at,
+         i.completed_at, a.triggering_actor_id
+       FROM run_instances i JOIN run_attempts a ON a.attempt = i.attempt
+       WHERE i.job_id > ? AND i.status <> 'blocked' ORDER BY i.job_id LIMIT ?`,
+      this.#jobsReported.done,
+      2 * MAX_JOB_REPORTS,
+    );
+    const owed = rows
+      .map((row) => ({
+        jobId: row.job_id,
+        attempt: row.attempt,
+        triggeringActor: row.triggering_actor_id,
+        key: row.job_key.slice(0, MAX_RUN_TITLE_LENGTH),
+        name: shown(row.name) ?? row.job_key.slice(0, MAX_RUN_TITLE_LENGTH),
+        jobKey: row.job_key,
+        instance: row.instance,
+        action: row.status === "cancelling" ? "in_progress" : (row.status as JobAction),
+        conclusion: row.conclusion,
+        startedAt: row.started_at,
+        completedAt: row.completed_at,
+      }))
+      .filter((job) => jobOrder(job.action) > jobOrder(this.#jobsReported.live[job.jobId]))
+      .slice(0, MAX_JOB_REPORTS);
+    if (owed.length === 0) return [];
+    const free = this.#jobsWithFreeLabels();
+    return owed.map(({ instance, jobKey, ...job }) => ({
+      ...job,
+      labels:
+        instance !== null && free.has(jobKey)
+          ? decodeInstance(instance)
+              .runsOn.slice(0, MAX_JOB_LABELS)
+              .flatMap((label) => shown(label) ?? [])
+          : null,
+    }));
+  }
+
+  #jobsWithFreeLabels(): ReadonlySet<string> {
+    try {
+      const { jobs } = this.#loadModel().workflow;
+      return new Set(jobs.filter(labelsFreeOfOutputs).map((job) => job.id.value));
+    } catch {
+      return new Set();
+    }
   }
 
   /** The run as its current attempt stands; undefined when there is none (or it was erased). */
@@ -2040,7 +2124,7 @@ export class RunDO extends MigratingDO {
     await this.#reportState();
     const left =
       !checks.done ||
-      this.#stateOwed() !== undefined ||
+      this.#reportOwed() ||
       this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
         .length > 0;
     return left
@@ -2056,19 +2140,57 @@ export class RunDO extends MigratingDO {
       : undefined;
   }
 
-  /** Reports the run's state when it moved; the repository keeps the latest of what it is told. */
+  #takeRepository(answer: {
+    readonly jobsDone?: number | undefined;
+    readonly epoch?: number | undefined;
+    readonly inserted?: boolean | undefined;
+  }): void {
+    const { jobsDone: done, epoch } = answer;
+    if (done === undefined) return;
+    const restored =
+      answer.inserted === true ||
+      (epoch !== undefined && this.#repoEpoch !== undefined && epoch !== this.#repoEpoch);
+    if (epoch !== undefined) this.#repoEpoch = epoch;
+    if (restored) this.#reported = 0;
+    this.#jobsReported =
+      restored || done < this.#jobsReported.done
+        ? { done, live: {} }
+        : jobsDoneTo(this.#jobsReported, done);
+  }
+
+  #reportOwed(): boolean {
+    return this.#stateOwed() !== undefined || this.jobReports().length > 0;
+  }
+
+  #earlierEnds(attempt: number): AttemptEnd[] {
+    return this.engine
+      .rows<AttemptRow>("SELECT * FROM run_attempts WHERE attempt < ? ORDER BY attempt", attempt)
+      .map((row) => ({
+        attempt: row.attempt,
+        conclusion: row.conclusion as AttemptConclusion,
+        triggeringActor: row.triggering_actor_id,
+        startedAt: row.started_at,
+        completedAt: row.completed_at as number,
+      }));
+  }
+
   async #reportState(): Promise<void> {
-    const report = this.#stateOwed();
+    const jobs = this.jobReports();
+    const report = this.#stateOwed() ?? (jobs.length > 0 ? this.runReport() : undefined);
     if (!report) return;
+    const earlier = this.#earlierEnds(report.attempt);
     const answer = await this.#repoCall(
       "reportRun",
       (repo) =>
         // The RPC stub's type of a union answer is not assignable to the union; it is the union.
-        repo.reportRun(report) as unknown as ReturnType<RepoDO["reportRun"]>,
+        repo.reportRun(report, { earlier, jobs }) as unknown as ReturnType<RepoDO["reportRun"]>,
     );
     // Retried: a transfer ends, and a deleted repository erases the run (`#marked`).
     if (!answer.ok) throw new Error(answer.code);
+    // By the greatest: a slice taken over may be answered after the one that took over.
     this.#reported = Math.max(this.#reported, runStateSeq(report.attempt, report.phase));
+    this.#jobsReported = jobMoves(this.#jobsReported, jobs).told;
+    this.#takeRepository(answer);
   }
 
   /**
@@ -2253,8 +2375,10 @@ export class RunDO extends MigratingDO {
             ...(state && { state }),
           }) as unknown as ReturnType<RepoDO["registerRun"]>,
       );
-      if (answer.ok) return "ok";
-      return answer.code === "repo_not_found" ? "gone" : "retry";
+      if (!answer.ok) return answer.code === "repo_not_found" ? "gone" : "retry";
+      this.#takeRepository(answer);
+      if (this.#reportOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
+      return "ok";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (repoGone(message)) return "gone";
@@ -2264,8 +2388,8 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * Retires the expired run: sends its check outbox once (best effort), so
-   * a required check is not left pending; asks the repository to forget it;
+   * Retires the expired run: sends its check outbox and reports its state
+   * once (best effort), so a required check is not left pending; asks the repository to forget it;
    * then erases it. A failure is retried at the sweep's interval, the run
    * kept and answered as no run, and never ends the job: once begun, the
    * retirement holds whatever the retention becomes. Work still owed then
@@ -2273,10 +2397,16 @@ export class RunDO extends MigratingDO {
    */
   async #retire(
     job: Job,
-  ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
+  ): Promise<{ done: true } | { done: false; cursor: Uint8Array | null; runAfterMs: number }> {
     const run = this.engine.run();
     if (!run) return { done: true };
-    const retry = { done: false as const, cursor: null, runAfterMs: this.policy.sweepMs };
+    const owedBefore = (job.cursor?.length ?? 0) > 0;
+    let reportsOwed = owedBefore;
+    const retry = () => ({
+      done: false as const,
+      cursor: reportsOwed ? REPORTS_OWED : null,
+      runAfterMs: this.policy.sweepMs,
+    });
     // Answered as no run already: its live log sockets close now, not once the erasure succeeds.
     this.viewers.erased();
     try {
@@ -2287,6 +2417,17 @@ export class RunDO extends MigratingDO {
       });
     }
     try {
+      while (this.#reportOwed()) await this.#reportState();
+    } catch (error) {
+      reportsOwed = true;
+      this.#log.warn("state of a retiring run not reported", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // Once forgotten, the repository accepts reports and tells no one: whether it took them before
+    // is kept across retries.
+    if (!this.jobs.checkpoint(job, reportsOwed ? REPORTS_OWED : new Uint8Array())) return retry();
+    try {
       const answer = await this.#repoCall(
         "forgetRun",
         (repo) =>
@@ -2295,17 +2436,21 @@ export class RunDO extends MigratingDO {
       );
       if (!answer.ok && answer.code !== "repo_not_found") {
         this.#log.warn("retiring run not forgotten by its repository", { code: answer.code });
-        return retry;
+        reportsOwed = owedBefore;
+        return retry();
       }
+      if (!answer.ok) reportsOwed = false;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!repoGone(message)) {
         this.#log.warn("retiring run not forgotten by its repository", { error: message });
-        return retry;
+        return retry();
       }
+      reportsOwed = false;
     }
     try {
       const owed = this.#owedNames();
+      if (reportsOwed) owed.push("reports");
       await this.erase(run.repo_id);
       // Counted once, when the run is gone: a retry before then may still deliver the work.
       if (owed.length > 0) {
@@ -2317,7 +2462,7 @@ export class RunDO extends MigratingDO {
       this.#log.warn("retiring run not erased", {
         error: error instanceof Error ? error.message : String(error),
       });
-      return retry;
+      return retry();
     }
     return { done: true };
   }

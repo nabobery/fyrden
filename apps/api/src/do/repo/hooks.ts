@@ -33,6 +33,10 @@ export const HOOK_EVENTS = [
   "label",
   "milestone",
   "release",
+  "status",
+  "check_run",
+  "workflow_run",
+  "workflow_job",
 ] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 

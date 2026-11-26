@@ -7,10 +7,10 @@ import type {
   Output,
 } from "@fyrden/api-contract";
 import { checkText, MAX_CHECK_NAME_LENGTH } from "@fyrden/domain";
-import type { StatusRecord } from "../do/repo/checks.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { checkRunOutput, statusOutput } from "./ci-shapes.js";
 import type { RepoEntry } from "./directory.js";
 import { actorOf, failure } from "./pulls.js";
 import { sortingFailure } from "./sorting.js";
@@ -24,19 +24,6 @@ const repo = (ctx: OpContext, entry: RepoEntry, method: string) => {
   ctx.metrics.count("do.request", { class: "RepoDO", method });
   return ctx.env.REPO.getByName(entry.id);
 };
-
-function statusOutput(status: StatusRecord) {
-  return {
-    id: status.id,
-    state: status.state,
-    context: status.context,
-    description: status.description,
-    target_url: status.targetUrl,
-    created_at: status.createdAt,
-    updated_at: status.createdAt,
-    creator: { id: status.creator },
-  };
-}
 
 /** The problem for a refusal of a status. */
 function statusFailure(entry: RepoEntry, code: string): OperationError {
@@ -152,20 +139,7 @@ export async function listCheckRunsOperation(
   const { totalCount, checks, next } = result.value;
   return {
     total_count: totalCount,
-    check_runs: checks.map((check) => ({
-      name: check.name,
-      head_sha: check.sha,
-      status: check.status,
-      conclusion: check.conclusion,
-      attempt: check.attempt,
-      run: check.origin && {
-        id: check.origin.runId,
-        run_attempt: check.origin.attempt,
-        job_id: check.origin.jobId,
-      },
-      details_url: check.detailsUrl,
-      updated_at: check.updatedAt,
-    })),
+    check_runs: checks.map(checkRunOutput),
     next_cursor: next === null ? null : encodeCursor(next),
   };
 }

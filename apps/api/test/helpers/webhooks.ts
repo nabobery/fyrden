@@ -165,23 +165,25 @@ export class WebhookTest {
    * webhook effects' queue would: the consumer journals the effects and
    * sends their ids, and the queue's consumer delivers them. The sink makes
    * `firstAttempts` first attempts per event itself (none unless said: a
-   * test makes them, as the webhooks queue's consumer would).
+   * test makes them, as the webhooks queue's consumer would), in the read
+   * model `model`.
    */
-  async materialize(events: DomainEvent[], firstAttempts = 0): Promise<void> {
+  async materialize(
+    events: DomainEvent[],
+    firstAttempts = 0,
+    model: D1Database = env.ORG_READ,
+  ): Promise<void> {
     const { publish, sent } = recordingPublish();
     const sink = createWebhookSink({
       firstAttempts,
       resolver: () => async () => ["93.184.216.34"],
     });
-    await applyEnvelope(
-      this.testEnv(),
-      { sourceId: this.repo.id, events },
-      { sinks: [sink], publish },
-    );
+    const testEnv = { ...this.testEnv(), ORG_READ: model };
+    await applyEnvelope(testEnv, { sourceId: this.repo.id, events }, { sinks: [sink], publish });
     for (let next = sent.shift(); next; next = sent.shift()) {
       const now = Date.now();
       await deliverEffects(
-        { db: admitted(), env: this.testEnv(), sinks: [sink], now: () => now, publish },
+        { db: admitted(model), env: testEnv, sinks: [sink], now: () => now, publish },
         next.sink,
         next.ids,
         invocationBudget(now),

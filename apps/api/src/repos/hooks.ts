@@ -118,12 +118,18 @@ const stub = (ctx: OpContext, entry: RepoEntry, method: string) => {
 };
 
 /** What a repository's webhooks carry: whoever manages them or reads their deliveries reads these. */
-const HOOK_CONTENT = ["issues:read", "pull_requests:read", "contents:write"] as const;
+const HOOK_CONTENT = [
+  "issues:read",
+  "pull_requests:read",
+  "contents:write",
+  "actions:read",
+  "statuses:read",
+] as const;
 
 /**
  * The repository, for a hook operation `permission` allows: a hook sends
- * issue, pull request and release contents out, draft notes among them
- * (which only `contents:write` reads), and its deliveries keep them, so
+ * issue, pull request, CI run, status and release contents out, draft notes
+ * among them (which only `contents:write` reads), and its deliveries keep them, so
  * the caller also needs each content read, checked on its own (the hook
  * permissions imply none of them); refused 403.
  */
@@ -139,7 +145,7 @@ async function hookRepoFor(
       throw new OperationError(
         403,
         "forbidden",
-        `Webhooks carry issue, pull request and draft release contents: this takes ${HOOK_CONTENT.join(", ")} too.`,
+        `Webhooks carry issue, pull request, CI run, status and draft release contents: this takes ${HOOK_CONTENT.join(", ")} too.`,
       );
   return entry;
 }

@@ -260,8 +260,8 @@ describe("the order of reports", () => {
       r.hooks = { beforeRepoCall: (op) => void calls.push(op) };
     });
     const rows = await writesIn(f, async () => {
-      await assignNamed(runId, "build");
-      await advance(runId, 2_000);
+      await inRun(runId, (r) => r.jobs.ensure("run_checks", RUN_JOB.checks));
+      await drain(runId);
     });
     expect(calls).toContain("reportRun");
     expect(rows).toBe(0);
@@ -392,7 +392,7 @@ describe("a run's row", () => {
     const late = await inRun(runId, (r) => r.runReport());
     if (!late) throw new Error("no report");
     expect(await repoOf(f).forgetRun({ runId })).toEqual({ ok: true });
-    expect(await repoOf(f).reportRun(late)).toEqual({ ok: true, recorded: false });
+    expect(await repoOf(f).reportRun(late)).toEqual({ ok: true, recorded: false, epoch: 1 });
     expect(
       await inRepo(
         repoOf(f),

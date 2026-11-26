@@ -18,11 +18,12 @@ import { parseCreatedFilter, runPhase, WORKFLOW_DIRECTORIES } from "@fyrden/doma
 import type { RepoDO } from "../do/RepoDO.js";
 import type { GraphJob, JobView, RunDO, RunView } from "../do/RunDO.js";
 import type { DispatchAnswer } from "../do/repo/ci-triggers.js";
-import type { RunFilter, RunPage, RunReport, WorkflowPage } from "../do/repo/run-history.js";
+import type { RunFilter, RunPage, WorkflowPage } from "../do/repo/run-history.js";
 import { publicOrigin } from "../email/notifications.js";
 import { repoFor } from "../git/chunked/operations.js";
 import { decodeCursor, encodeCursor, invalidCursor } from "../ops/cursor.js";
 import { type OpContext, OperationError } from "../ops/execute.js";
+import { runSummary } from "./ci-shapes.js";
 import { type RepoEntry, settledRepo } from "./directory.js";
 import { principalsByLogin } from "./reviews.js";
 
@@ -51,34 +52,6 @@ export async function runOf(ctx: OpContext, entry: RepoEntry, runId: string): Pr
 /** Who acts: the agent for a token it uses for a user, else the principal. */
 function actingPrincipal(ctx: OpContext): string {
   return ctx.auth.act?.[0] ?? ctx.auth.principalId;
-}
-
-type RunSummary = Output<typeof listWorkflowRuns>["workflow_runs"][number];
-
-/** A run as its repository last heard of it. A held one shows as GitHub shows it: completed, its action required. */
-function runSummary(run: RunReport): RunSummary {
-  return {
-    id: run.runId,
-    run_number: run.runNumber,
-    name: run.name,
-    display_title: run.title,
-    run_attempt: run.attempt,
-    head_sha: run.sha,
-    head_branch: run.headBranch,
-    event: run.event,
-    path: run.path,
-    pull_request: run.pullNumber === null ? null : { number: run.pullNumber },
-    fork: run.fork,
-    ...(run.phase === "waiting"
-      ? { status: "completed" as const, conclusion: "action_required" as const }
-      : { status: run.phase, conclusion: run.conclusion }),
-    actor: { id: run.actor },
-    triggering_actor: { id: run.triggeringActor },
-    created_at: run.createdAt,
-    updated_at: run.updatedAt,
-    run_started_at: run.startedAt,
-    completed_at: run.completedAt,
-  };
 }
 
 function runOutput(view: RunView): Output<typeof getWorkflowRun> {

@@ -315,7 +315,7 @@ CREATE TABLE ci_runs (
         created_at INTEGER NOT NULL
       , state_seq INTEGER NOT NULL DEFAULT 0 CHECK (state_seq >= 0), status TEXT
         CHECK (status IN ('waiting', 'queued', 'pending', 'in_progress', 'completed')), conclusion TEXT
-        CHECK (conclusion IN ('success', 'failure', 'cancelled')), event TEXT, actor_id TEXT, head_branch TEXT, completed_at INTEGER, summary TEXT CHECK (summary IS NULL OR json_valid(summary))) STRICT, WITHOUT ROWID;
+        CHECK (conclusion IN ('success', 'failure', 'cancelled')), event TEXT, actor_id TEXT, head_branch TEXT, completed_at INTEGER, summary TEXT CHECK (summary IS NULL OR json_valid(summary)), told TEXT CHECK (told IS NULL OR json_valid(told))) STRICT, WITHOUT ROWID;
 CREATE TABLE ci_schedule_fires (
         workflow_path TEXT PRIMARY KEY,
         last_fired_at INTEGER NOT NULL

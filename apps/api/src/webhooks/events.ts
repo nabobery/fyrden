@@ -57,6 +57,9 @@ const ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   label: new Set(["created", "edited", "deleted"]),
   milestone: new Set(["created", "edited", "opened", "closed", "deleted"]),
   release: new Set(["created", "edited", "deleted", "published", "released", "prereleased"]),
+  check_run: new Set(["created", "completed"]),
+  workflow_run: new Set(["requested", "in_progress", "completed"]),
+  workflow_job: new Set(["queued", "in_progress", "completed"]),
 };
 
 /** GitHub's name for an entity's webhook event where it differs from the entity's. */
@@ -66,6 +69,7 @@ const EVENT_NAMES: Readonly<Record<string, string>> = { issue: "issues" };
 export function webhookEventOf(type: string): WebhookEventName | undefined {
   if (type === "refs.updated") return { event: "push", action: null };
   if (type === "webhook.ping") return { event: "ping", action: null };
+  if (type === "status.created") return { event: "status", action: null };
   const dot = type.indexOf(".");
   if (dot < 0) return undefined;
   const entity = type.slice(0, dot);
@@ -246,8 +250,12 @@ export function entityBody(name: WebhookEventName, event: DomainEvent): Row {
   const changes = data.changes === undefined ? {} : { changes: data.changes };
   switch (name.event) {
     case "release":
+    case "status":
+    case "check_run":
+    case "workflow_run":
+    case "workflow_job":
       // Always captured when a hook hears it: this default's comment-shaped body would be wrong.
-      throw new Error("a release event's body comes from its capture");
+      throw new Error(`a ${name.event} event's body comes from its capture`);
     case "pull_request":
       // A review request has no snapshot: the pull request's number and the reviewer or team.
       if (row === null)

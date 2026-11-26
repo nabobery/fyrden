@@ -33,9 +33,11 @@ import {
   targetUrl,
 } from "@fyrden/domain";
 import { type Oid, oidFromHex } from "@fyrden/git-core";
+import { captureCheckRun, captureStatus } from "../../webhooks/ci-captures.js";
 import { type CheckOrigin, parseCheckKey } from "../run/check-key.js";
 import type { RepoEvents } from "./events.js";
 import type { PullCaller } from "./pulls.js";
+import type { InBetweenBudget } from "./run-history.js";
 
 /*
  * Commit statuses and check summaries. A status is kept as posted; each
@@ -218,11 +220,13 @@ export class RepoChecks {
   constructor(
     private readonly deps: {
       readonly git: RepoGitStorage;
-      readonly events: Pick<RepoEvents, "emitActivity">;
+      readonly events: Pick<RepoEvents, "emitActivity" | "emitToHooks">;
       /** The checks the active rulesets on a base branch require (none when no rule names any). */
       readonly required?: (baseRef: string) => readonly RequiredStatusCheck[];
       /** Whether CI run `runId` is kept, so that a check may name it. */
       readonly runKept?: (runId: string) => boolean;
+      /** The cap on `created` events, for one call's starts. */
+      readonly createdBudget?: () => InBetweenBudget;
     },
   ) {}
 
@@ -294,7 +298,9 @@ export class RepoChecks {
         now,
       );
       this.reconcileHeads(sha, caller.actor);
-      return statusRecord(made);
+      const record = statusRecord(made);
+      this.deps.events.emitToHooks("status.created", caller.actor, () => captureStatus(record));
+      return record;
     });
     return { ok: true, status };
   }
@@ -314,7 +320,8 @@ export class RepoChecks {
       const now = this.#now();
       const named = new Map<string, { startKey: string; answer: CheckStartAnswer }>();
       let summaries: number | undefined;
-      return items.map((item): CheckStartAnswer => {
+      const budget = this.deps.createdBudget?.();
+      const answers = items.map((item): CheckStartAnswer => {
         if (!validStart(item)) return { ok: false, code: "invalid_check" };
         const key = checkNameKey(item.name);
         const earlier = named.get(key);
@@ -322,7 +329,7 @@ export class RepoChecks {
           return earlier.startKey === item.startKey
             ? earlier.answer
             : { ok: false, code: "duplicate_check" };
-        const answer = this.#start(sha, key, item, now, () => {
+        const answer = this.#start(sha, key, item, now, budget, () => {
           summaries ??=
             this.#exec<{ n: number }>(
               "checks.read",
@@ -336,6 +343,8 @@ export class RepoChecks {
         named.set(key, { startKey: item.startKey, answer });
         return answer;
       });
+      budget?.save();
+      return answers;
     });
   }
 
@@ -420,6 +429,8 @@ export class RepoChecks {
               ...where,
             );
         }
+      for (const state of states.values())
+        if (state?.settledMoved) this.#tellCheck("completed", { ...state.row, updated_at: now });
       for (const sha of settledOn) this.reconcileHeads(sha, null);
       return results;
     });
@@ -650,19 +661,36 @@ export class RepoChecks {
     const shown = rest.slice(0, limit);
     return {
       totalCount: matching.length,
-      checks: shown.map((row) => ({
-        name: row.name,
-        sha: row.sha,
-        status: row.status,
-        conclusion: row.conclusion,
-        attempt: row.attempt as number,
-        detailsUrl: row.details_url,
-        updatedAt: row.updated_at,
-        origin: this.#originOf(row),
-      })),
+      checks: shown.map((row) => this.#checkRun(row)),
       // The name, whose length is bounded, not its key, which can be several times as long.
       next: rest.length > limit ? (shown.at(-1)?.name ?? null) : null,
     };
+  }
+
+  #checkRun(row: SummaryRow): CheckRunRecord {
+    return {
+      name: row.name,
+      sha: row.sha,
+      status: row.status,
+      conclusion: row.conclusion,
+      attempt: row.attempt as number,
+      detailsUrl: row.details_url,
+      updatedAt: row.updated_at,
+      origin: this.#originOf(row),
+    };
+  }
+
+  #tellCheck(
+    action: "created" | "completed",
+    row: SummaryRow,
+    admit: () => boolean = () => true,
+  ): void {
+    this.deps.events.emitToHooks(
+      `check_run.${action}`,
+      row.actor_id === null ? null : { principal: row.actor_id, via: "api" },
+      () => captureCheckRun(this.#checkRun(row)),
+      admit,
+    );
   }
 
   #originOf(row: SummaryRow): CheckOrigin | null {
@@ -700,6 +728,7 @@ export class RepoChecks {
     key: string,
     item: CheckStart,
     now: number,
+    budget: InBetweenBudget | undefined,
     room: () => boolean,
   ): CheckStartAnswer {
     const source = FYRDEN_CI_SOURCE;
@@ -739,14 +768,15 @@ export class RepoChecks {
       attempt,
       item.startKey,
     );
-    this.#exec(
+    const [started] = this.#exec<SummaryRow>(
       "checks.summary",
       `INSERT INTO check_summaries (sha, name_key, source, name, kind, attempt, status, actor_id,
          updated_at)
        VALUES (?, ?, ?, ?, 'check', ?, 'queued', ?, ?)
        ON CONFLICT (sha, name_key, source) DO UPDATE SET name = excluded.name,
          attempt = excluded.attempt, status = 'queued', conclusion = NULL,
-         actor_id = excluded.actor_id, details_url = NULL, updated_at = excluded.updated_at`,
+         actor_id = excluded.actor_id, details_url = NULL, updated_at = excluded.updated_at
+       RETURNING *`,
       sha,
       key,
       source,
@@ -755,6 +785,8 @@ export class RepoChecks {
       item.actor ?? null,
       now,
     );
+    const run = parseCheckKey(item.startKey);
+    this.#tellCheck("created", started as SummaryRow, () => !run || !budget || budget.admit(run));
     return { ok: true, attempt, current: true };
   }
 

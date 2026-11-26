@@ -542,9 +542,14 @@ describe("operations answering with commit statuses", () => {
   );
 });
 
-/** A webhook operation: a hook carries issue and pull request contents out. */
 const isHookOp = (op: OperationDef) => op.id.startsWith("repos.hooks.");
-const HOOK_CONTENT = ["issues:read", "pull_requests:read", "contents:write"];
+const HOOK_CONTENT = [
+  "issues:read",
+  "pull_requests:read",
+  "contents:write",
+  "actions:read",
+  "statuses:read",
+];
 
 describe("webhook operations", () => {
   it.each(repoOps.filter(isHookOp).map((op) => [op.id, op] as const))(
@@ -552,9 +557,7 @@ describe("webhook operations", () => {
     async (_, op) => {
       for (const extra of [
         [],
-        ["issues:read"],
-        ["pull_requests:read"],
-        ["issues:read", "pull_requests:read"],
+        ...HOOK_CONTENT.map((missing) => HOOK_CONTENT.filter((scope) => scope !== missing)),
       ]) {
         const token = await scopedToken(owner.principalId, [op.permission, ...extra]);
         expect(await outcome(await call(op, token))).toEqual({ status: 403, code: "forbidden" });

@@ -47,6 +47,7 @@ import {
   oidToHex,
   PackError,
 } from "@fyrden/git-core";
+import { ciEnv } from "../ci/budget.js";
 import {
   admissionStatements,
   discretionaryAllowance,
@@ -63,6 +64,7 @@ import {
   ChunkedUploads,
   type ChunkedView,
 } from "../git/chunked/session.js";
+import { workersPlan } from "../git/fetch/mode.js";
 import { answerFetchPlan, FETCH_LEASE_TTL_MS } from "../git/fetch/plan.js";
 import type { FetchPlanReply, FetchPlanRequest } from "../git/fetch/wire.js";
 import { type BeginImport, type ImportRecord, RepoImports } from "../git/import/job.js";
@@ -293,7 +295,15 @@ import {
   CiApprovals,
   type SettleAnswer,
 } from "./repo/run-approvals.js";
-import { type RunFilter, RunHistory, type RunReport, validRunReport } from "./repo/run-history.js";
+import {
+  IN_BETWEEN_CAP,
+  type RunFilter,
+  RunHistory,
+  type RunNews,
+  type RunReport,
+  validRunNews,
+  validRunReport,
+} from "./repo/run-history.js";
 import { StorageCharges } from "./repo/storage-charges.js";
 import {
   type Assignee,
@@ -745,14 +755,18 @@ export class RepoDO extends MigratingDO {
     this.events.onPushed = (refs, actor, sourceSeq) =>
       this.ciTriggers.recordPush(refs, actor, sourceSeq);
     this.events.onHeadMoved = (head, actor) => this.ciTriggers.recordHeadChange(head, actor);
-    this.runs = new RunHistory(this.git, () =>
-      runRetentionMs(this.env, (m) => this.#log().warn(m)),
+    this.runs = new RunHistory(
+      this.git,
+      this.events,
+      () => runRetentionMs(this.env, (m) => this.#log().warn(m)),
+      () => (workersPlan(ciEnv(this.env)) === "paid" ? null : IN_BETWEEN_CAP),
     );
     this.checks = new RepoChecks({
       git: this.git,
       events: this.events,
       required: (baseRef) => this.#authority.requiredOn(baseRef).checks.map((c) => c.check),
       runKept: (runId) => this.runs.kept(runId),
+      createdBudget: () => this.runs.createdBudget(),
     });
     this.releases = new RepoReleases({
       git: this.git,
@@ -2558,7 +2572,14 @@ export class RepoDO extends MigratingDO {
     readonly reachableVia?: string;
     readonly state?: RunReport;
   }): Promise<
-    | { readonly ok: true }
+    | {
+        readonly ok: true;
+        /** As `reportRun` answers them, to a run registering itself (`state`). */
+        readonly jobsDone?: number;
+        readonly epoch?: number;
+        /** The registration recorded the run anew: the repository had lost it. */
+        readonly inserted?: boolean;
+      }
     | {
         readonly ok: false;
         readonly code:
@@ -2605,20 +2626,37 @@ export class RepoDO extends MigratingDO {
           input.path,
           this.git.context.now(),
         );
-        if (state) this.runs.apply(state);
+        if (state) this.runs.register(state);
       });
-      return { ok: true };
+      if (!state) return { ok: true };
+      const jobsDone = this.runs.jobsDone(input.runId);
+      return {
+        ok: true,
+        epoch: this.events.epochGen(),
+        inserted: !recorded,
+        ...(jobsDone !== undefined && { jobsDone }),
+      };
     });
   }
 
   /**
-   * A run's state, which it reports after each change: recorded unless the
-   * repository has that state or a later one. It only updates a run the
+   * A run's state, which it reports after each change, with the jobs that
+   * moved: recorded unless the repository has that state or a later one. It only updates a run the
    * repository holds (`recorded`), so a report that lands after the run was
    * forgotten brings nothing back. Refused as `registerRun` is.
    */
-  reportRun(report: RunReport): Promise<
-    | { readonly ok: true; readonly recorded: boolean }
+  reportRun(
+    report: RunReport,
+    news: RunNews = {},
+  ): Promise<
+    | {
+        readonly ok: true;
+        readonly recorded: boolean;
+        /** Every job id up to it was told complete; absent for a run it does not hold. */
+        readonly jobsDone?: number;
+        /** The repository's restore generation: a new one may have lost what it was told. */
+        readonly epoch: number;
+      }
     | {
         readonly ok: false;
         readonly code: "repo_not_found" | "repo_transferring" | "repo_not_ready";
@@ -2626,11 +2664,19 @@ export class RepoDO extends MigratingDO {
   > {
     return this.#measured("reportRun", async () => {
       const state = validRunReport(report);
+      const checked = validRunNews(news, state);
       const refused = this.#runRecordRefusal();
       if (refused) return refused;
+      const recorded = this.git.context.storage.transactionSync(() =>
+        this.runs.apply(state, checked),
+      );
+      this.#armOutbox();
+      const jobsDone = this.runs.jobsDone(state.runId);
       return {
         ok: true,
-        recorded: this.git.context.storage.transactionSync(() => this.runs.apply(state)),
+        recorded,
+        epoch: this.events.epochGen(),
+        ...(jobsDone !== undefined && { jobsDone }),
       };
     });
   }

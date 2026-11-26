@@ -307,6 +307,102 @@ describe("retiring an expired run", () => {
     expect((await state(runId)).erased).toBe(true);
   });
 
+  it.each([
+    ["counts reports the repository never took as owed", "refused", [{ owed: "reports" }]],
+    ["owes nothing to a repository that is gone", "repo_not_found", []],
+  ] as const)("%s", async (_, error, owed) => {
+    const { runId } = await completedRun();
+    const counted = await inRun(runId, async (run) => {
+      run.policy = { ...run.policy, retentionMs: RETENTION };
+      run.hooks.beforeRepoCall = (op) => {
+        if (op === "reportRun" || (op === "forgetRun" && error === "repo_not_found"))
+          throw new Error(error);
+      };
+      const metrics = run.context.metrics as { count: (...args: unknown[]) => void };
+      const original = metrics.count;
+      const seen: unknown[] = [];
+      metrics.count = (...args: unknown[]) => {
+        if (args[0] === "ci.run_retired_owed") seen.push(args[1]);
+        return original.apply(metrics, args);
+      };
+      (run.context as { now: () => number }).now = () => T0 + RETENTION;
+      try {
+        await run.alarm();
+      } finally {
+        metrics.count = original;
+      }
+      return seen;
+    });
+    expect(counted).toEqual(owed);
+    expect((await state(runId)).erased).toBe(true);
+  });
+
+  it.each([
+    ["its erasure fails", "erase"],
+    ["the answer of its forgetting is lost", "forget"],
+  ] as const)("counts reports dropped when %s after the repository forgot it", async (_, what) => {
+    const { runId } = await completedRun();
+    const seen: unknown[] = [];
+    const alarmAt = (t: number, first: boolean) =>
+      inRun(runId, async (run) => {
+        run.policy = { ...run.policy, retentionMs: RETENTION };
+        run.forgetReported();
+        run.hooks = {
+          beforeRepoCall: (op) => {
+            if (first && op === "reportRun") throw new Error("the repository refuses reports");
+          },
+          afterRepoCall: (op) => {
+            if (first && what === "forget" && op === "forgetRun") throw new Error("answer lost");
+          },
+        };
+        const self = run as unknown as { erase?: () => Promise<boolean> };
+        if (first && what === "erase")
+          self.erase = async () => {
+            throw new Error("storage unavailable");
+          };
+        else delete self.erase;
+        const metrics = run.context.metrics as { count: (...args: unknown[]) => void };
+        const original = metrics.count;
+        metrics.count = (...args: unknown[]) => {
+          if (args[0] === "ci.run_retired_owed") seen.push(args[1]);
+          return original.apply(metrics, args);
+        };
+        (run.context as { now: () => number }).now = () => t;
+        try {
+          await run.alarm();
+        } finally {
+          metrics.count = original;
+        }
+      });
+    const sweep = await inRun(runId, (run) => run.policy.sweepMs);
+    await alarmAt(T0 + RETENTION, true);
+    expect(seen).toEqual([]);
+    await alarmAt(T0 + RETENTION + sweep, false);
+    expect(seen).toEqual([{ owed: "reports" }]);
+    expect((await state(runId)).erased).toBe(true);
+  });
+
+  it("forgets nothing from a slice taken over while its reports failed", async () => {
+    const { f, runId } = await completedRun();
+    const calls = await inRun(runId, async (run) => {
+      run.policy = { ...run.policy, retentionMs: RETENTION };
+      const seen: string[] = [];
+      run.hooks.beforeRepoCall = (op) => {
+        seen.push(op);
+        if (op !== "reportRun") return;
+        run.engine.exec("UPDATE jobs SET claim = claim + 1 WHERE kind = 'run_retire'");
+        throw new Error("the repository refuses reports");
+      };
+      (run.context as { now: () => number }).now = () => T0 + RETENTION;
+      await run.alarm();
+      return seen;
+    });
+    expect(calls).toContain("reportRun");
+    expect(calls).not.toContain("forgetRun");
+    expect(await recorded(f, runId)).toBe(true);
+    expect((await state(runId)).erased).toBe(false);
+  });
+
   it("counts a reservation not settled as owed, due or not", async () => {
     const { runId } = await completedRun();
     const counted = await inRun(runId, async (run) => {
