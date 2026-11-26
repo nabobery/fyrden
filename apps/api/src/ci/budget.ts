@@ -641,7 +641,7 @@ export async function pruneCiBudget(
 ): Promise<{ readonly receipts: number; readonly days: number }> {
   const receipts = page(limits.receipts, CI_RECEIPT_PAGE);
   const days = page(limits.days, CI_DAY_PAGE);
-  const [removedReceipts, removedDays] = await db.batch([
+  const [removedReceipts, removedDays, removedLogDays] = await db.batch([
     db
       .prepare(
         `DELETE FROM ci_budget_receipts WHERE key IN (
@@ -660,12 +660,13 @@ export async function pruneCiBudget(
     db
       .prepare(
         `DELETE FROM ci_log_read_days WHERE day IN (
-           SELECT day FROM ci_log_read_days WHERE day < ${TODAY} - ${CI_DAYS_KEPT} ORDER BY day LIMIT ?1)`,
+           SELECT day FROM ci_log_read_days WHERE day < ${TODAY} - ${CI_DAYS_KEPT} ORDER BY day LIMIT ?1)
+         RETURNING day`,
       )
       .bind(days),
   ]);
   return {
     receipts: removedReceipts?.results.length ?? 0,
-    days: removedDays?.results.length ?? 0,
+    days: (removedDays?.results.length ?? 0) + (removedLogDays?.results.length ?? 0),
   };
 }

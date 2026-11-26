@@ -136,6 +136,7 @@ export class LogPages {
     if (host.uploadWaiting()) return { ok: false, code: "log_busy" };
     const charged = await host.charge(chunks.length);
     if (host.hidden()) return { ok: false, code: "run_not_found" };
+    if (host.engine.instance(jobId)?.task !== task) return { ok: false, code: "log_busy" };
     if (charged.status === "spent")
       return {
         ok: false,
@@ -164,8 +165,9 @@ export class LogPages {
       const ended = await this.#readChunks(chunks, page, read.signal);
       if (host.hidden()) return { ok: false, code: "run_not_found" };
       if (ended === "invalid_cursor") return { ok: false, code: "invalid_cursor" };
-      // What was read before it ended is whole: the next page starts after it.
-      if (page.rows.length > 0) return answer(page.rows, page.row, page.offset);
+      // What was read before it ended is whole: the next page starts after it, and finds the fault.
+      const resumes = ended !== "unreadable" || page.row < linesEnd;
+      if (page.rows.length > 0 && resumes) return answer(page.rows, page.row, page.offset);
       return ended === "unreadable"
         ? this.#unreadable(task, start.row)
         : { ok: false, code: "log_busy" };

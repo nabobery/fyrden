@@ -282,6 +282,7 @@ describe("a page of a job's log", () => {
           while (next !== null) {
             const answer: Awaited<ReturnType<typeof ask>> = await ask({ cursor: next });
             expect(answer.rows.length).toBeGreaterThan(0);
+            expect(answer.next).not.toEqual(next);
             rows.push(...answer.rows);
             next = answer.next;
           }
@@ -432,6 +433,15 @@ describe("a job log page is refused", () => {
     const short = await page(u);
     expect(short.rows).toEqual([lines[0]]);
     expect(await read(u, `?cursor=${short.next_cursor}`)).toMatchObject(refusal);
+    // An extra row in the last chunk, after the one it holds.
+    const w = await running();
+    await stored(w, [lines.slice(0, 1)], { closed: "complete" });
+    const extra = `${JSON.stringify(lines[0])}\n${JSON.stringify(lines[1])}\n`;
+    await env.CI.put(`runs/${w.runId}/pages/0.ndjson`, extra);
+    await inRun(w.runId, (run) =>
+      run.engine.exec("UPDATE ci_log_chunks SET bytes = ?", new TextEncoder().encode(extra).length),
+    );
+    expect(await read(w)).toMatchObject(refusal);
     await env.CI.delete(`runs/${t.runId}/pages/1.ndjson`);
     expect(await read(t, "?from=1")).toMatchObject(refusal);
     await inRun(t.runId, (run) =>
@@ -521,6 +531,15 @@ describe("a job's log as text", () => {
     expect(count).toBeGreaterThan(1);
     expect(text === expected).toBe(true);
     expect((await api("GET", `/v3${t.path}`, t.f.owner.token)).status).toBe(200);
+  });
+
+  it("starts at a row or at the last rows, as the rows do", async () => {
+    const t = await running();
+    await stored(t, [[row(0, "a"), row(1, "b"), row(2, "c")]], { closed: "complete" });
+    const text = async (q: string) => (await api("GET", `${t.path}${q}`, t.f.owner.token)).text();
+    expect([await text("?from=1"), await text("?tail=1")]).toEqual(["b\nc\n", "c\n"]);
+    for (const q of ["?from=1&tail=1", "?tail=0", "?from=-1", "?tail=x"])
+      expect((await api("GET", `${t.path}${q}`, t.f.owner.token)).status, q).toBe(422);
   });
 
   it("of a running job ends at what is stored, with no next page", async () => {

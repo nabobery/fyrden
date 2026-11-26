@@ -12,6 +12,7 @@ const PATH = "/repos/:owner/:repo/actions/runs/:run_id/jobs/:job_id/logs";
 const RUN_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 const JOB_ID = /^[1-9][0-9]{0,9}$/;
 const MAX_JOB_ID = 2 ** 31 - 1;
+const COUNT = /^(0|[1-9][0-9]{0,9})$/;
 
 /** Before authentication, so its refusals are not cached either. */
 const noStore: MiddlewareHandler = async (c, next) => {
@@ -57,11 +58,24 @@ export function mountJobLogs(app: Hono<{ Bindings: Env; Variables: AuthVariables
       if (!RUN_ID.test(runId)) return problem(c, 422, "invalid_input", "run_id: a run id.");
       if (!JOB_ID.test(jobId) || Number(jobId) > MAX_JOB_ID)
         return problem(c, 422, "invalid_input", "job_id: a job's id within its run.");
+      const [from, tail] = (["from", "tail"] as const).map((name) => c.req.query(name));
+      const given = [from, tail, c.req.query("cursor")].filter((q) => q !== undefined);
+      if (given.length > 1)
+        return problem(c, 422, "invalid_input", "Give at most one of `from`, `tail` and `cursor`.");
+      if (from !== undefined && !(COUNT.test(from) && Number(from) <= MAX_JOB_ID))
+        return problem(c, 422, "invalid_input", "from: a row index.");
+      if (
+        tail !== undefined &&
+        !(COUNT.test(tail) && Number(tail) >= 1 && Number(tail) <= LOG_PAGE_POLICY.maxTail)
+      )
+        return problem(c, 422, "invalid_input", "tail: 1 to 10000 rows.");
       try {
         const cursor = logPosition(runId, Number(jobId), c.req.query("cursor"));
         const entry = await repoFor(ctx, owner, repo, "actions:read");
         const page = await jobLogPage(ctx, entry, runId, Number(jobId), {
           ...(cursor && { cursor }),
+          ...(from !== undefined && { from: Number(from) }),
+          ...(tail !== undefined && { tail: Number(tail) }),
           maxBytes: LOG_PAGE_POLICY.maxRowBytes,
         });
         if (page.state === "none")

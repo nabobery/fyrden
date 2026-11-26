@@ -568,6 +568,14 @@ describe("pruning the CI ledger", () => {
     expect(await dayRow(day)).toBeNull();
     expect(await logDay(day)).toBeNull();
     expect(await logDay(day + 1)).not.toBeNull();
+    // Only log days left to prune: each page still says it removed some.
+    await db
+      .prepare("INSERT INTO ci_log_read_days (day, class_b) VALUES (?, 1), (?, 1)")
+      .bind(day - 1, day - 2)
+      .run();
+    let pages = 0;
+    while ((await pruneCiBudget(db, { receipts: 1, days: 1 })).days > 0) pages++;
+    expect([pages, await logDay(day - 1), await logDay(day - 2)]).toEqual([2, null, null]);
   });
 
   it("refuses a page outside its bounds", async () => {
