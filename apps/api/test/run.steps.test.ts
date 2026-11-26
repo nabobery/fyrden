@@ -138,6 +138,10 @@ describe("a job's steps", () => {
       expect.objectContaining({ name: "Run echo one" }),
       expect.objectContaining({ number: 6, name: "Complete job", stage: "cleanup" }),
     ]);
+    const one = await json<{ steps: unknown[] }>(
+      api("GET", `${t.f.path}/actions/runs/${t.runId}/jobs/1`, t.f.owner.token),
+    );
+    expect(one.body.steps).toEqual(await listed(t));
     await report(
       t,
       {

@@ -25,6 +25,13 @@ const RunConclusion = z
   .nullable()
   .describe("`action_required`: the run waits for a maintainer's approval.");
 
+const JobId = z.coerce
+  .number()
+  .int()
+  .min(1)
+  .max(2 ** 31 - 1)
+  .describe("The job's id within its run.");
+
 const PerPage = z.coerce.number().int().min(1).max(100).default(30).describe("Page size, 1-100.");
 const Cursor = z
   .string()
@@ -228,6 +235,26 @@ export const listWorkflowRunJobs = defineOperation({
     tool: "list_workflow_run_jobs",
     title: "List a workflow run's jobs",
     description: "List the jobs of a CI run's attempt with their status, conclusion and check.",
+    readOnly: true,
+  },
+});
+
+export const getWorkflowRunJob = defineOperation({
+  id: "actions.runs.jobs.get",
+  method: "GET",
+  path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}",
+  summary: "Get a job for a workflow run",
+  description: `One job of a run, of whichever attempt it ran in, as \`actions.runs.jobs.list\` lists it, steps included. 404 \`job_not_found\` when the run has no such job. ${COMPATIBILITY} GitHub's path has no run (\`/actions/jobs/{job_id}\`): job ids here are per run. Takes the \`actions:read\` permission.`,
+  input: z.object({ ...RepoInput, run_id: RunId, job_id: JobId }),
+  output: WorkflowJob,
+  permission: "actions:read",
+  principals: ["user", "agent"],
+  rateLimit: "read",
+  idempotency: "none",
+  mcp: {
+    tool: "get_job",
+    title: "Get a job of a workflow run",
+    description: "Get one job of a CI run by its id: its status, conclusion, check and steps.",
     readOnly: true,
   },
 });
@@ -525,12 +552,7 @@ export const issueJobLogTicket = defineOperation({
   input: z.object({
     ...RepoInput,
     run_id: RunId,
-    job_id: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(2 ** 31 - 1)
-      .describe("The job's id within its run."),
+    job_id: JobId,
   }),
   output: z.object({
     ticket: z.string(),
@@ -578,12 +600,7 @@ export const readJobLog = defineOperation({
   input: z.object({
     ...RepoInput,
     run_id: RunId,
-    job_id: z.coerce
-      .number()
-      .int()
-      .min(1)
-      .max(2 ** 31 - 1)
-      .describe("The job's id within its run."),
+    job_id: JobId,
     from: z.coerce
       .number()
       .int()

@@ -46,6 +46,7 @@ async function visibility(runId: string) {
   return {
     get: (await run.get()) !== undefined,
     jobs: (await run.listJobs()) !== undefined,
+    job: ((await run.getJob(1)) as { ok: boolean; code?: string }).code ?? "ok",
     cancel: cancelled.ok ? "ok" : cancelled.code,
     approve: ((await run.approve("b", "usr_x")) as { ok: boolean; code?: string }).code,
     ticket: (
@@ -64,6 +65,7 @@ async function visibility(runId: string) {
 const HIDDEN = {
   get: false,
   jobs: false,
+  job: "run_not_found",
   cancel: "run_not_found",
   approve: "run_not_found",
   ticket: "run_not_found",
@@ -73,7 +75,7 @@ describe("run retention", () => {
   it("keeps a completed run until its retention ends, then answers as for no run", async () => {
     const runId = await completedRun();
     await at(runId, T0 + RETENTION - 1);
-    expect(await visibility(runId)).toMatchObject({ get: true, jobs: true });
+    expect(await visibility(runId)).toMatchObject({ get: true, jobs: true, job: "ok" });
     await at(runId, T0 + RETENTION);
     expect(await visibility(runId)).toEqual(HIDDEN);
     await setRetention(runId);

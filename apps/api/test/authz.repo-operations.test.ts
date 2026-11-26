@@ -283,6 +283,7 @@ const CASES: Record<
   "actions.runs.graph.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.list": { input: {}, expected: { status: 404, code: "run_not_found" } },
+  "actions.runs.jobs.get": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.live_ticket": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.jobs.logs.read": { input: {}, expected: { status: 404, code: "run_not_found" } },
   "actions.runs.cancel": { input: {}, expected: { status: 404, code: "run_not_found" } },

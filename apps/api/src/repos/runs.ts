@@ -6,6 +6,7 @@ import type {
   forceCancelWorkflowRun,
   getWorkflowRun,
   getWorkflowRunGraph,
+  getWorkflowRunJob,
   Input,
   listRunsOfWorkflow,
   listWorkflowRunJobs,
@@ -72,9 +73,7 @@ function runOutput(view: RunView): Output<typeof getWorkflowRun> {
 }
 
 /** GitHub's job statuses: a job waiting for a slot or its group is `pending`; one stopping is `in_progress`. */
-function jobStatus(
-  status: JobView["status"],
-): Output<typeof listWorkflowRunJobs>["jobs"][number]["status"] {
+function jobStatus(status: JobView["status"]): Output<typeof getWorkflowRunJob>["status"] {
   switch (status) {
     case "blocked":
       return "pending";
@@ -83,6 +82,34 @@ function jobStatus(
     default:
       return status;
   }
+}
+
+function workflowJob(runId: string, job: JobView): Output<typeof getWorkflowRunJob> {
+  return {
+    id: job.jobId,
+    run_id: runId,
+    run_attempt: job.attempt,
+    name: job.name,
+    job_key: job.jobKey,
+    status: jobStatus(job.status),
+    conclusion: job.conclusion,
+    started_at: job.startedAt,
+    completed_at: job.completedAt,
+    check: { state: job.check.state, code: job.check.code },
+    log_complete: job.logComplete,
+    error: job.error,
+    steps: job.steps.map((step) => ({
+      number: step.number,
+      name: step.name,
+      stage: step.stage,
+      status: step.status,
+      conclusion: step.conclusion,
+      started_at: step.startedAt,
+      completed_at: step.completedAt,
+      log: step.log && { ...step.log },
+    })),
+    waiting_for: job.waitingFor,
+  };
 }
 
 /** The `actions.runs.get` operation. */
@@ -118,33 +145,24 @@ export async function listWorkflowRunJobsOperation(
   );
   if (!page) throw runNotFound();
   return {
-    jobs: page.jobs.map((job) => ({
-      id: job.jobId,
-      run_id: view.runId,
-      run_attempt: job.attempt,
-      name: job.name,
-      job_key: job.jobKey,
-      status: jobStatus(job.status),
-      conclusion: job.conclusion,
-      started_at: job.startedAt,
-      completed_at: job.completedAt,
-      check: { state: job.check.state, code: job.check.code },
-      log_complete: job.logComplete,
-      error: job.error,
-      steps: job.steps.map((step) => ({
-        number: step.number,
-        name: step.name,
-        stage: step.stage,
-        status: step.status,
-        conclusion: step.conclusion,
-        started_at: step.startedAt,
-        completed_at: step.completedAt,
-        log: step.log && { ...step.log },
-      })),
-      waiting_for: job.waitingFor,
-    })),
+    jobs: page.jobs.map((job) => workflowJob(view.runId, job)),
     next_cursor: page.next === null ? null : encodeCursor(`${attempt}:${page.next}`),
   };
+}
+
+/** The `actions.runs.jobs.get` operation: job ids are per run, whatever the attempt. */
+export async function getWorkflowRunJobOperation(
+  ctx: OpContext,
+  input: Input<typeof getWorkflowRunJob>,
+): Promise<Output<typeof getWorkflowRunJob>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
+  const view = await runOf(ctx, entry, input.run_id);
+  const answer = (await runStub(ctx, input.run_id, "getJob").getJob(
+    input.job_id,
+  )) as unknown as ReturnType<RunDO["getJob"]>;
+  if (answer.ok) return workflowJob(view.runId, answer.job);
+  if (answer.code === "run_not_found") throw runNotFound();
+  throw new OperationError(404, "job_not_found", "The run has no such job.");
 }
 
 const repoGone = (entry: RepoEntry) =>

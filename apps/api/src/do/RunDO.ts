@@ -224,6 +224,12 @@ export interface JobView {
   readonly waitingFor: WaitingFor | null;
 }
 
+type JobRow = InstanceRow & {
+  check_desired: string | null;
+  parked: string | null;
+  waiting_for: WaitingFor | null;
+};
+
 /** A job of the workflow in an attempt's graph. */
 export interface GraphJob {
   readonly key: string;
@@ -1033,44 +1039,59 @@ export class RunDO extends MigratingDO {
     if (this.#hidden()) return undefined;
     const run = this.engine.run();
     if (!run) return undefined;
-    const n = attempt ?? run.attempt;
-    const rows = this.engine.rows<
-      InstanceRow & {
-        check_desired: string | null;
-        parked: string | null;
-        waiting_for: WaitingFor | null;
-      }
-    >(
-      `SELECT i.*, c.desired AS check_desired, c.parked AS parked, r.waiting_for AS waiting_for
-       FROM run_instances i
-       LEFT JOIN run_checks c ON c.attempt = i.attempt AND c.job_id = i.job_id
-       LEFT JOIN ci_reservations r ON r.job_id = i.job_id
-       WHERE i.attempt = ? AND i.job_id > ? ORDER BY i.job_id LIMIT ?`,
-      n,
+    const rows = this.#jobRows(
+      "i.attempt = ? AND i.job_id > ? ORDER BY i.job_id LIMIT ?",
+      attempt ?? run.attempt,
       after,
       limit + 1,
     );
     const page = rows.slice(0, limit);
     return {
-      jobs: page.map((row) => ({
-        jobId: row.job_id,
-        attempt: row.attempt,
-        jobKey: row.job_key,
-        name: row.name,
-        status: row.status,
-        conclusion: row.conclusion,
-        startedAt: row.started_at,
-        completedAt: row.completed_at,
-        check: { state: row.check_desired, code: row.parked ?? row.check_code },
-        logComplete: row.log_complete === null ? null : row.log_complete === 1,
-        error: row.error,
-        steps:
-          row.steps === null
-            ? []
-            : jobSteps(row.steps, this.#written(row.job_key), row.status === "completed"),
-        waitingFor: row.status === "queued" ? row.waiting_for : null,
-      })),
+      jobs: page.map((row) => this.#jobView(row)),
       next: rows.length > limit ? (page.at(-1) as InstanceRow).job_id : null,
+    };
+  }
+
+  /** Job `jobId` of whichever attempt it ran in. */
+  getJob(
+    jobId: number,
+  ):
+    | { readonly ok: true; readonly job: JobView }
+    | { readonly ok: false; readonly code: "run_not_found" | "job_not_found" } {
+    if (this.#hidden() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+    const [row] = this.#jobRows("i.job_id = ?", jobId);
+    return row ? { ok: true, job: this.#jobView(row) } : { ok: false, code: "job_not_found" };
+  }
+
+  #jobRows(where: string, ...params: (string | number)[]) {
+    return this.engine.rows<JobRow>(
+      `SELECT i.*, c.desired AS check_desired, c.parked AS parked, r.waiting_for AS waiting_for
+       FROM run_instances i
+       LEFT JOIN run_checks c ON c.attempt = i.attempt AND c.job_id = i.job_id
+       LEFT JOIN ci_reservations r ON r.job_id = i.job_id
+       WHERE ${where}`,
+      ...params,
+    );
+  }
+
+  #jobView(row: JobRow): JobView {
+    return {
+      jobId: row.job_id,
+      attempt: row.attempt,
+      jobKey: row.job_key,
+      name: row.name,
+      status: row.status,
+      conclusion: row.conclusion,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      check: { state: row.check_desired, code: row.parked ?? row.check_code },
+      logComplete: row.log_complete === null ? null : row.log_complete === 1,
+      error: row.error,
+      steps:
+        row.steps === null
+          ? []
+          : jobSteps(row.steps, this.#written(row.job_key), row.status === "completed"),
+      waitingFor: row.status === "queued" ? row.waiting_for : null,
     };
   }
 

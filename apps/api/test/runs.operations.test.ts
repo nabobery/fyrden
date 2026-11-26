@@ -4,10 +4,11 @@
 // the run cannot; another repository's run answers as missing, and the
 // actions permission is needed, apart from contents and statuses.
 import { exports } from "cloudflare:workers";
+import { newUlid } from "@fyrden/adapters-cloudflare/git";
 import { describe, expect, it } from "vitest";
 import { api, json } from "./helpers/api.js";
 import { scopedToken } from "./helpers/principals.js";
-import { drain, finish, job, repoWithCommit, started, workflow } from "./helpers/runs.js";
+import { drain, finish, job, repoWithCommit, runStub, started, workflow } from "./helpers/runs.js";
 
 const source = workflow(
   [job("a"), job("b", ["needs: a", "strategy:", "  max-parallel: 1"])].join("\n"),
@@ -147,6 +148,81 @@ describe("reading a run", () => {
       run_id: runId,
     });
     expect(result?.structuredContent).toMatchObject({ id: runId, status: "in_progress" });
+  });
+});
+
+describe("reading one job", () => {
+  const jobPath = (f: { path: string }, runId: string, jobId: number | string) =>
+    `${f.path}/actions/runs/${runId}/jobs/${jobId}`;
+
+  it("answers the job as the run's jobs list it, steps included", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow([job("a"), job("b")].join("\n")));
+    await finish(runId, "a");
+    const listed = await json<{ jobs: { id: number; name: string }[] }>(
+      api("GET", `${f.path}/actions/runs/${runId}/jobs`, f.owner.token),
+    );
+    for (const item of listed.body.jobs) {
+      const one = await json(api("GET", jobPath(f, runId, item.id), f.owner.token));
+      expect(one).toEqual({ status: 200, body: item });
+    }
+  });
+
+  it("answers a job of an earlier attempt with its own attempt", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    const [first] = (
+      await json<{ jobs: { id: number }[] }>(
+        api("GET", `${f.path}/actions/runs/${runId}/jobs`, f.owner.token),
+      )
+    ).body.jobs;
+    expect((await api("POST", `${f.path}/actions/runs/${runId}/rerun`, f.owner.token)).status).toBe(
+      201,
+    );
+    await drain(runId);
+    const old = await json(api("GET", jobPath(f, runId, first?.id ?? 0), f.owner.token));
+    expect(old).toMatchObject({ status: 200, body: { run_attempt: 1, conclusion: "failure" } });
+    const [second] = (
+      await json<{ jobs: { id: number }[] }>(
+        api("GET", `${f.path}/actions/runs/${runId}/jobs`, f.owner.token),
+      )
+    ).body.jobs;
+    expect(second?.id).not.toBe(first?.id);
+    const current = await json(api("GET", jobPath(f, runId, second?.id ?? 0), f.owner.token));
+    expect(current).toMatchObject({ status: 200, body: { run_attempt: 2, status: "queued" } });
+  });
+
+  it("refuses an unknown job, and a run that is unknown, another repository's or erased", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, source);
+    const missing = await json(api("GET", jobPath(f, runId, 999), f.owner.token));
+    expect(missing).toMatchObject({ status: 404, body: { code: "job_not_found" } });
+    const other = await repoWithCommit();
+    for (const [where, id] of [
+      [other, runId],
+      [f, newUlid()],
+    ] as const)
+      expect(await json(api("GET", jobPath(where, id, 1), where.owner.token))).toMatchObject({
+        status: 404,
+        body: { code: "run_not_found" },
+      });
+    expect(await runStub(runId).erase(f.repo.id)).toBe(true);
+    expect(await json(api("GET", jobPath(f, runId, 1), f.owner.token))).toMatchObject({
+      status: 404,
+      body: { code: "run_not_found" },
+    });
+  });
+
+  it("is the get_job tool", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, source);
+    const rest = await json(api("GET", jobPath(f, runId, 1), f.owner.token));
+    const where = { owner: f.owner.handle, repo: f.repo.name, run_id: runId };
+    const result = await callTool(f.owner.token, "get_job", { ...where, job_id: 1 });
+    expect(result?.structuredContent).toEqual(rest.body);
+    const refused = await callTool(f.owner.token, "get_job", { ...where, job_id: 999 });
+    expect(refused?.isError).toBe(true);
   });
 });
 
