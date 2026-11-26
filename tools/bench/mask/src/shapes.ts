@@ -23,7 +23,6 @@ function generator(seed: number): (n: number) => string {
   };
 }
 
-/** Secrets of `length` chars, as many as the secret allowance takes. */
 function secrets(random: (n: number) => string, length: number): LogMask[] {
   const values: string[] = [];
   for (;;) {
@@ -34,7 +33,6 @@ function secrets(random: (n: number) => string, length: number): LogMask[] {
   return values.map((value) => ({ value, fromIndex: 0, secret: true }));
 }
 
-/** `::add-mask::` values sharing a long prefix, as many as the caps take beside a token. */
 function shared(random: (n: number) => string): LogMask[] {
   const masks: LogMask[] = [];
   let bytes = 0;
@@ -48,7 +46,6 @@ function shared(random: (n: number) => string): LogMask[] {
 }
 
 export const SHAPES: Record<string, () => LogMask[]> = {
-  // Small caches, where the fixed part dominates.
   "no masks": () => [],
   "one 2-char value": () => [{ value: "ab", fromIndex: 0 }],
   "token and three values of a later row": () => {

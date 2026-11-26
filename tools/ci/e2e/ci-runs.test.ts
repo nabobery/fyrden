@@ -1,10 +1,7 @@
 // CI runs against fyrden-api under `wrangler dev`, before triggers exist: a
 // test Worker in front of the API starts a run through the run seam and
 // plays the runner through the run object's calls; everything else goes
-// through the public operations (REST through the SDK). A run's jobs queue
-// as their needs end, a re-run is a new attempt, a cancel ends the run,
-// runs and workflows are listed, and a commit's checks name their run;
-// another repository's run is missing and the actions permission is needed.
+// through the public operations (REST through the SDK).
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -67,7 +64,6 @@ async function startRun(source = WORKFLOW): Promise<string> {
 const jobsOf = (runId: string) =>
   owner.api.call("actions.runs.jobs.list", { owner: owner.handle, repo: REPO, run_id: runId });
 
-/** Assigns the queued job `name` and completes it with `result`. */
 async function runJob(runId: string, name: string, result: string) {
   const job = await eventually(`job ${name} queued`, async () =>
     (await jobsOf(runId)).jobs.find((j) => j.name === name && j.status === "queued"),
