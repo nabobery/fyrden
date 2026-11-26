@@ -1,8 +1,19 @@
-import { data, Form, Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { data, Form, Link, redirect, useActionData, useNavigation } from "react-router";
 import { RepoHeader } from "../components/repo-header.js";
 import { JobGraph } from "../components/run-graph.js";
 import { At, duration, RunState, Who } from "../components/run-ui.js";
-import { apiCallBounded, apiGet, bodyOf } from "../lib/api.server.js";
+import {
+  apiCallBounded,
+  apiFetch,
+  apiGet,
+  assertSameOrigin,
+  bodyOf,
+  type Problem,
+  readForm,
+  signInUrl,
+} from "../lib/api.server.js";
+import { type RunIntent, runActionError, runActions } from "../lib/run-actions.js";
 import {
   attemptOf,
   type Run,
@@ -56,7 +67,152 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     attempt,
     graph,
     canAct: repo.permissions?.push === true,
+    key: crypto.randomUUID(),
+    notice: noticeOf(url.searchParams),
   };
+}
+
+function noticeOf(query: URLSearchParams): string | null {
+  if (query.has("cancelled")) return "Cancel requested: jobs that are told to stop end shortly.";
+  if (query.has("approved")) return "Approved: the run starts.";
+  if (query.has("rerun")) return "Re-run started as a new attempt.";
+  return null;
+}
+
+const INTENTS: readonly RunIntent[] = ["rerun", "cancel", "approve"];
+const KEY = /^[0-9a-f-]{36}$/;
+
+export async function action({ request, context, params }: Route.ActionArgs) {
+  assertSameOrigin(request);
+  const form = await readForm(request, 1024);
+  const intent = String(form.get("intent") ?? "") as RunIntent;
+  const key = String(form.get("key") ?? "");
+  const attempt = Number(form.get("attempt"));
+  if (!INTENTS.includes(intent) || !KEY.test(key) || !Number.isSafeInteger(attempt))
+    return { error: "The form was not understood; reload the page." };
+  if (intent === "cancel" && form.get("confirm") !== "yes") return { confirm: true as const };
+  const path = `${runsApi(params.owner, params.repo)}/runs/${encodeURIComponent(params.run_id)}/${intent}`;
+  const body = intent === "approve" ? "{}" : JSON.stringify({ attempt });
+  const res = await apiFetch(context, request, "POST", path, body, key);
+  if (res.status === 401) throw redirect(signInUrl(request));
+  const answer = (await res.json().catch(() => null)) as
+    | (Problem & { run_attempt?: number })
+    | null;
+  const page = runPath(params.owner, params.repo, params.run_id);
+  if (res.status >= 200 && res.status < 300) {
+    if (intent === "rerun") return redirect(`${page}?rerun=1`);
+    return redirect(`${page}?${intent === "cancel" ? "cancelled" : "approved"}=1`);
+  }
+  return { error: runActionError(res.status, answer?.code, answer?.detail) };
+}
+
+function RunActions({
+  run,
+  attempt,
+  runKey,
+  owner,
+  repo,
+}: {
+  run: Run;
+  attempt: number;
+  runKey: string;
+  owner: string;
+  repo: string;
+}) {
+  const answer = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const confirmDialog = useRef<HTMLDialogElement>(null);
+  const [scripted, setScripted] = useState(false);
+  useEffect(
+    () =>
+      setScripted(
+        typeof HTMLDialogElement !== "undefined" && "showModal" in HTMLDialogElement.prototype,
+      ),
+    [],
+  );
+  const busy = navigation.state !== "idle";
+  const allowed = runActions(run);
+  const form = (
+    intent: RunIntent,
+    label: string,
+    more?: Record<string, string>,
+    onSubmit?: () => void,
+  ) => (
+    <Form method="post" key={intent} onSubmit={onSubmit}>
+      <input type="hidden" name="intent" value={intent} />
+      <input type="hidden" name="key" value={runKey} />
+      <input type="hidden" name="attempt" value={attempt} />
+      {more &&
+        Object.entries(more).map(([name, value]) => (
+          <input key={name} type="hidden" name={name} value={value} />
+        ))}
+      <button type="submit" disabled={busy} className={intent === "cancel" ? "danger" : undefined}>
+        {label}
+      </button>
+    </Form>
+  );
+  const changes = run.pull_request
+    ? `/${owner}/${repo}/pull/${run.pull_request.number}/files`
+    : `/${owner}/${repo}/tree/${run.head_sha}`;
+  return (
+    <div className="run-actions">
+      <div className="row">
+        {allowed.approve && (
+          <>
+            {form("approve", "Approve and run")}
+            <Link to={changes}>Review what it would run first</Link>
+          </>
+        )}
+        {allowed.rerun && form("rerun", "Re-run all jobs")}
+        {allowed.cancel &&
+          !(answer && "confirm" in answer) &&
+          (scripted ? (
+            <button
+              type="button"
+              className="danger"
+              disabled={busy}
+              onClick={() => confirmDialog.current?.showModal()}
+            >
+              Cancel run
+            </button>
+          ) : (
+            form("cancel", "Cancel run")
+          ))}
+      </div>
+      {allowed.cancel && scripted && (
+        <dialog ref={confirmDialog} aria-labelledby="cancel-title" className="panel">
+          <h3 id="cancel-title">Cancel this run?</h3>
+          <p>
+            Jobs that run whatever happens (<code>if: always()</code>) still run.
+          </p>
+          <div className="row">
+            {form("cancel", "Yes, cancel the run", { confirm: "yes" }, () =>
+              confirmDialog.current?.close(),
+            )}
+            <button type="button" onClick={() => confirmDialog.current?.close()}>
+              Keep it running
+            </button>
+          </div>
+        </dialog>
+      )}
+      {answer && "confirm" in answer && (
+        <div className="panel" role="alert">
+          <p>
+            Cancel this run? Jobs that run whatever happens (<code>if: always()</code>) still run.
+          </p>
+          <div className="row">
+            {form("cancel", "Yes, cancel the run", { confirm: "yes" })}
+            <Link to={runPath(owner, repo, run.id)}>Keep it running</Link>
+          </div>
+        </div>
+      )}
+      {answer && "error" in answer && (
+        <p className="error" role="alert">
+          {answer.error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function isTooLarge(error: unknown): boolean {
@@ -189,7 +345,7 @@ function Notes({ run }: { run: Run }) {
 }
 
 export default function RunPage({ loaderData }: Route.ComponentProps) {
-  const { repo, origin, run, attempt, graph } = loaderData;
+  const { repo, origin, run, attempt, graph, canAct, key, notice } = loaderData;
   const owner = repo.owner;
   const name = repo.name;
   const path = runPath(owner, name, run.id);
@@ -206,6 +362,21 @@ export default function RunPage({ loaderData }: Route.ComponentProps) {
       <RepoHeader repo={repo} origin={origin} active="actions" />
       <Header run={run} owner={owner} repo={name} />
       <Attempts run={run} attempt={attempt} path={path} />
+      {notice && (
+        <p className="panel" role="status">
+          {notice}
+        </p>
+      )}
+      {canAct && !past && (
+        <RunActions
+          key={`${run.id}:${attempt}`}
+          run={run}
+          attempt={attempt}
+          runKey={key}
+          owner={owner}
+          repo={name}
+        />
+      )}
       {past && (
         <p className="panel" role="status">
           Attempt {attempt} of {run.run_attempt}: the run's state above is the current attempt's.{" "}
