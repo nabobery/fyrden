@@ -26,7 +26,6 @@ export interface BuiltUnder {
   readonly ownerGen?: number;
 }
 
-/** What records a run in its repository (the repository object's `registerRun` and `forgetRun`). */
 export interface RunRegistrar {
   forgetRun(input: { readonly runId: string }): Promise<
     | { readonly ok: true }

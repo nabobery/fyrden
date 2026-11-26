@@ -1,5 +1,3 @@
-// Names, sizes and counts of Actions secrets and variables: GitHub's rules,
-// and the one Fyrden adds (no secret named GITEA_TOKEN).
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {

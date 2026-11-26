@@ -1,7 +1,3 @@
-/*
- * The settings pages for Actions secrets and variables: which scope a page
- * manages, where its pages are, and the messages a failed write shows.
- */
 import { MAX_CI_VALUE_BYTES } from "@fyrden/domain";
 
 export type CiScope =
@@ -23,11 +19,9 @@ export function settingsPath(scope: CiScope): string {
     : `/settings/orgs/${scope.org}`;
 }
 
-/** The list page of `kind` in `scope`. */
 export const listPath = (scope: CiScope, kind: CiKind): string =>
   `${settingsPath(scope)}/${kind === "secret" ? "secrets" : "variables"}/actions`;
 
-/** The edit page of the entry `name`. */
 export const editPath = (scope: CiScope, kind: CiKind, name: string): string =>
   `${listPath(scope, kind)}/${encodeURIComponent(name)}/edit`;
 
@@ -52,7 +46,6 @@ export const VISIBILITIES: readonly { value: Visibility; label: string; hint: st
   },
 ];
 
-/** A repository an organization entry lists (visibility `selected`). */
 export interface AccessRepository {
   readonly id: string;
   readonly name: string;
@@ -60,7 +53,6 @@ export interface AccessRepository {
   readonly visibility: string;
 }
 
-/** A form's errors: a message per field, and the form's own. */
 export interface FormErrors {
   readonly name?: string;
   readonly value?: string;
@@ -78,7 +70,6 @@ const NAME_RULES = {
   variable: "Use letters, digits and _, not starting with a digit or GITHUB_.",
 } as const;
 
-/** What the problem a write answered means for the form. */
 export function errorsFor(
   kind: CiKind,
   scope: CiScope,

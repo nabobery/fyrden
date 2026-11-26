@@ -58,16 +58,13 @@ const CI = ".github/workflows/ci.yml";
 beforeAll(() => switchCi(true));
 afterAll(() => switchCi(false));
 
-/** The runs the repository allocated, oldest event first. */
 const runIds = async (f: CiRepo) => (await eventRunsOf(f.stub)).map((r) => r.run_id);
 
-/** SHA-256 of `text` as 64 hex digits. */
 async function sha256(text: string): Promise<string> {
   const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** The repository's check summaries on `sha`, by name. */
 const checksOn = async (f: CiRepo, sha: string) =>
   new Map(
     (await inRepo(f.stub, (r: RepoDO) => r.checks.summariesOn(sha))).map((row) => [row.name, row]),
@@ -580,7 +577,6 @@ describe("workflows that fail to plan", () => {
     await drain(runId);
     const names = [...(await checksOn(f, sha)).keys()];
     expect(names.map((n) => n.toLowerCase())).not.toContain("workflow file: x");
-    // The spec helper is the same one the run tests use.
     expect(specFor(fixture, source).repoId).toBe(f.repo.id);
     expect(await runStub(runId).get()).toMatchObject({
       status: "completed",
@@ -786,7 +782,6 @@ describe("failures while deciding an event", () => {
     expect(runs[0]?.started_at).not.toBeNull();
   });
 
-  /** The push event's row, as the inbox holds it. */
   const pushEvent = async (f: CiRepo) =>
     (await eventsOf(f.stub)).find((e) => e.kind === "push") as EventRow;
   const setAttempts = (f: CiRepo, attempts: number) =>
@@ -1045,7 +1040,6 @@ describe("runs allocated before their start is confirmed", () => {
     expect(await eventsOf(f.stub)).toMatchObject([{ state: "done" }]);
   }
 
-  /** The clock's time now, and the event's retry deadline and attempts. */
   const deadline = (f: CiRepo) =>
     inRepo(f.stub, (r: RepoDO) => ({
       now: r.git.context.now(),
@@ -1176,14 +1170,12 @@ describe("runs allocated before their start is confirmed", () => {
   });
 });
 
-/** A commit of `tree` on `parent` made at `at` (seconds). */
 function builtCommit(tree: string, parent: string, at: number, message: string) {
   return buildCommit(oidFromHex(tree) as Oid, [oidFromHex(parent) as Oid], at, message);
 }
 
 const hex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 
-/** A branch's tip as the API reads it. */
 async function tipOf(f: CiRepo, branch: string): Promise<string> {
   const read = await json<{ sha: string }>(
     api("GET", `${f.path}/commits/${branch}`, f.owner.token),

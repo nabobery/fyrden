@@ -40,7 +40,6 @@ import type { Repo } from "./types.js";
  */
 export const CI_VALUE_FORM_MAX_BYTES = 2 * MAX_CI_VALUE_BYTES + 16 * 1024;
 
-/** The scope's operations under the API. */
 export function apiBase(scope: CiScope): string {
   return scope.kind === "repository"
     ? `/repos/${encodeURIComponent(scope.owner)}/${encodeURIComponent(scope.repo)}`
@@ -79,7 +78,6 @@ const base64 = (bytes: Uint8Array): string => {
 const fromBase64 = (text: string): Uint8Array =>
   Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
-/** What a write answered: its status, and the problem when it failed. */
 export interface WriteResult {
   readonly status: number;
   readonly problem: Problem | null;
@@ -134,7 +132,6 @@ export async function putSealedSecret(
   }
 }
 
-/** Any other write of these pages (variables, deletes, repository access). */
 export async function write(
   context: Readonly<RouterContextProvider>,
   request: Request,
@@ -169,7 +166,6 @@ export function pageNumber(request: Request, param: string): number {
   return Math.min(n, 1_000);
 }
 
-/** Links to the next page and the first of a list paged by number under `param`. */
 export function numberedPages(
   request: Request,
   param: string,
@@ -206,7 +202,6 @@ export async function readList<T>(
   );
 }
 
-/** The most of a variable's value a list shows. */
 export const LIST_VALUE_CHARS = 200;
 
 /** `value` cut to what a list shows (never between the halves of a surrogate pair). */
@@ -218,7 +213,6 @@ export function shortValue(value: string): string {
   return `${value.slice(0, end)}…`;
 }
 
-/** The visibility a form chose, if it is one. */
 export function visibilityOf(form: FormData): Visibility | undefined {
   const value = form.get("visibility");
   return VISIBILITIES.find((v) => v.value === value)?.value;

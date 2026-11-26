@@ -38,7 +38,6 @@ const list = (f: Fixture, query = "", token = f.owner.token) =>
   json<Page>(api("GET", `${f.path}/actions/runs${query}`, token));
 const ids = (page: { body: Page }) => page.body.workflow_runs.map((r) => r.id);
 
-/** Follows a list's cursors to its end. */
 async function all(f: Fixture, query: string) {
   const runs: Run[] = [];
   let pages = 0;

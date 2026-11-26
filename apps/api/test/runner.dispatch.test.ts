@@ -70,7 +70,6 @@ afterEach(() => {
   delete dispatchHooks.beforeClaim;
 });
 
-/** Transfers the fixture's repository to organization `to`. */
 async function transfer(f: Fixture & { org: { login: string } }, to: string) {
   const moved = await json<{ state: string }>(
     api("POST", `/repos/${f.org.login}/${f.repo.name}/transfer`, f.owner.token, { new_owner: to }),
@@ -78,7 +77,6 @@ async function transfer(f: Fixture & { org: { login: string } }, to: string) {
   expect(moved).toMatchObject({ status: 200, body: { state: "transferred" } });
 }
 
-/** A git protocol v2 fetch of the fixture's commit with `token`, as git sends it. */
 function uploadPack(f: Fixture & { org: { login: string } }, token: string) {
   return exports.default.fetch(`${ORIGIN}/${f.org.login}/${f.repo.name}.git/git-upload-pack`, {
     method: "POST",
@@ -104,7 +102,6 @@ async function primed(f: Fixture & { org: { id: string } }): Promise<number> {
   return version;
 }
 
-/** `env.RUN`, counting the run objects asked for. */
 function countingRuns(count: { stubs: number }): DurableObjectNamespace<RunDO> {
   return new Proxy(env.RUN, {
     get(target, prop) {

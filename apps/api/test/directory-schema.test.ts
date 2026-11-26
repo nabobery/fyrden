@@ -28,6 +28,7 @@ describe("D1 directory schema", () => {
       "ci_budget_receipts",
       "ci_dispatch",
       "ci_job_tokens",
+      "ci_log_read_days",
       "ci_pending_jobs",
       "ci_runner_registrations",
       "ci_runner_repos",

@@ -37,7 +37,6 @@ export type ReadSecrets =
   /** The account object failed or refused: nothing is known, so nothing is decided. */
   | { readonly ok: false; readonly code: "unreachable"; readonly reason: string };
 
-/** Secrets one job is given at most: the organization's first ones and the repository's own. */
 const MAX_DELIVERED = MAX_RUN_ORG_SECRETS + MAX_REPO_SECRETS;
 
 /**
@@ -162,7 +161,6 @@ export async function readSecrets(
   }
 }
 
-/** Names listed in a job's error at most; the rest are counted. */
 const LISTED = 10;
 
 function listed(items: readonly string[]): string {

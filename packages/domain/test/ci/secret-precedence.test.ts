@@ -1,6 +1,3 @@
-// Which organization secrets and variables reach a repository, and what a run
-// of it gets: the repository's own over the organization's, the first 100
-// organization secrets by name, and GitHub's 256 KB rule for variables.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {

@@ -96,7 +96,6 @@ import type { ApprovalRequest } from "./run-approvals.js";
 
 export const CI_TRIGGERS_JOB = "ci_triggers";
 
-/** What a `workflow_dispatch` request is answered. */
 export type DispatchAnswer =
   | { readonly ok: true; readonly runId: string }
   | {
@@ -222,7 +221,6 @@ type RunKind = PassKind | "workflow_dispatch";
 const isPull = (kind: RunKind): kind is "pull_request" | "pull_request_target" =>
   kind === "pull_request" || kind === "pull_request_target";
 
-/** What a push recorded. */
 interface PushFacts {
   readonly ref: string;
   readonly before: string | null;
@@ -297,7 +295,6 @@ function newBudget(): SliceBudget {
   };
 }
 
-/** The schedules of a commit's workflow files. */
 type ScheduledFiles = { path: string; blob: string; crons: string[] }[];
 
 /** What the trigger resolves once and writes back to the event row. */
@@ -330,7 +327,6 @@ interface RefreshFacts {
   readonly sha: string | null;
 }
 
-/** What a scheduled tick recorded. */
 interface ScheduleFacts {
   readonly path: string;
   readonly cron: string;
@@ -521,8 +517,6 @@ export class CiTriggers {
   readonly work = { trees: 0, blobs: 0 };
 
   constructor(private readonly deps: CiTriggersDeps) {}
-
-  // ---------------------------------------------------------------- recording
 
   /**
    * In a commit's transaction: records the branch and tag moves that may
@@ -737,8 +731,6 @@ export class CiTriggers {
     this.#countWritten("ci.record", cursor.rowsWritten);
     this.deps.git.jobs.ensure(CI_TRIGGERS_JOB, CI_TRIGGERS_JOB);
   }
-
-  // ---------------------------------------------------------------- the job
 
   handler(): JobHandler {
     return { runSlice: () => this.#slice() };
@@ -1236,7 +1228,6 @@ export class CiTriggers {
     return undefined;
   }
 
-  /** A direct ref's value, or undefined. */
   #tip(name: string): string | undefined {
     const row = this.#sql()
       .exec<{ oid: ArrayBuffer | null }>(
@@ -1306,7 +1297,6 @@ export class CiTriggers {
     return stopped;
   }
 
-  /** Gives up an event whose counted retries reached {@link MAX_EVENT_ATTEMPTS}. */
   #exhausted(row: EventRow): undefined {
     this.deps.log().error("a CI trigger event kept failing and was given up", {
       event: row.id,
@@ -1467,8 +1457,6 @@ export class CiTriggers {
       return spec;
     });
   }
-
-  // ---------------------------------------------------------------- shared with evaluations
 
   /** @internal */
   sql() {
@@ -1732,8 +1720,6 @@ class Evaluation {
       );
   }
 
-  // -------------------------------------------------------------- resolving
-
   /**
    * The event's passes and their commits, resolved at the first evaluation
    * and written back, so a retry reads workflows from, and checks out, the
@@ -1831,15 +1817,11 @@ class Evaluation {
     return names;
   }
 
-  /** Who the event's runs act as. */
   #actor(): string {
     if (this.#row.actor_id) return this.#row.actor_id;
     return this.#row.kind === "pull_request" ? this.#facts<PullFacts>().author_id : "";
   }
 
-  // -------------------------------------------------------------- one pass
-
-  /** Every workflow file of one pass from the row's progress; a reason to stop, or nothing once decided. */
   async #runPass(reader: ObjectReader, pass: Pass): Promise<Stopped | "gone" | Closed | undefined> {
     let discovery: Discovery;
     try {
@@ -1950,7 +1932,6 @@ class Evaluation {
     );
   }
 
-  /** The workflow files at `sha`, listed once a slice. */
   async #listing(reader: ObjectReader, sha: string): Promise<Discovery> {
     let discovery = this.#budget.listings.get(sha);
     if (!discovery) {
@@ -1960,7 +1941,6 @@ class Evaluation {
     return discovery;
   }
 
-  /** The schedules of workflow files `listed`. */
   async #schedulesIn(
     reader: ObjectReader,
     listed: readonly WorkflowFile[],
@@ -2118,8 +2098,6 @@ class Evaluation {
     return standing;
   }
 
-  // -------------------------------------------------------------- reading
-
   async #reads<T>(reader: ObjectReader, use: (reads: HeldReads) => Promise<T>): Promise<T> {
     return transient(async () => {
       await this.#t.hooks.beforeRead?.();
@@ -2159,7 +2137,6 @@ class Evaluation {
     return row?.tree;
   }
 
-  /** A workflow's `on:`, from the cache or read and parsed within the budget (null: unreadable). */
   async #triggersOf(reader: ObjectReader, file: WorkflowFile): Promise<readonly Trigger[]> {
     const cached = this.#t.cachedTriggers(file.oid);
     if (cached !== undefined) return cached ?? UNREADABLE_TRIGGERS;
@@ -2243,8 +2220,6 @@ class Evaluation {
       throw error;
     }
   }
-
-  // -------------------------------------------------------------- starting
 
   /**
    * Builds the run of this pass and file, allocates its id and number and
@@ -2565,7 +2540,6 @@ class Evaluation {
     };
   }
 
-  /** Whether a run of this pass is a fork job. */
   #fork(pass: Pass): boolean {
     return (
       isPull(pass.kind) && isForkJob(this.#t.repo.repoId(), this.#facts<PullFacts>().head_repo_id)
@@ -2634,7 +2608,6 @@ class Evaluation {
   }
 }
 
-/** The workflow files under the tree `root`, read through `readTree` (see `discoverWorkflows`). */
 function discoverIn(
   root: Oid,
   readTree: (oid: Oid) => Promise<readonly TreeEntry[]>,
@@ -2659,7 +2632,6 @@ function discoverIn(
   });
 }
 
-/** The `repository` of a run's `github` context, from the names resolved for it. */
 function contextRepository(
   repoId: string,
   names: Names,
@@ -2678,7 +2650,6 @@ function contextRepository(
   };
 }
 
-/** The commit `sha` names, through annotated tags; undefined when it names none. */
 async function peel(reader: ObjectReader, sha: string): Promise<string | undefined> {
   let oid = oidFromHex(sha) as Oid;
   for (let depth = 0; depth < 8; depth++) {
@@ -2691,7 +2662,6 @@ async function peel(reader: ObjectReader, sha: string): Promise<string | undefin
   return undefined;
 }
 
-/** Why a pass cannot be read, when the error is one that ends it; undefined for any other. */
 /**
  * A failure while applying an older failed refresh that is this refresh's
  * own to retry (temporary, a spent budget, busy memory, a test's abort),
@@ -2733,7 +2703,6 @@ function backoff(attempts: number): number {
   return Math.min(RETRY_BASE_MS * 2 ** Math.min(attempts, 20), RETRY_MAX_MS);
 }
 
-/** Collects the principal ids a capture names (`{ $user: id }`). */
 function usersIn(value: unknown, ids: Set<string>): void {
   if (Array.isArray(value)) for (const item of value) usersIn(item, ids);
   else if (value !== null && typeof value === "object") {
@@ -2743,7 +2712,6 @@ function usersIn(value: unknown, ids: Set<string>): void {
   }
 }
 
-/** A capture with each `{ $user: id }` shown as `{ login, id }`, as a webhook body shows it. */
 function withLogins(value: unknown, logins: Readonly<Record<string, string>>): unknown {
   if (Array.isArray(value)) return value.map((item) => withLogins(item, logins));
   if (value !== null && typeof value === "object") {

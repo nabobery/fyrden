@@ -293,7 +293,6 @@ class GcSlice {
           return this.#next(next);
         }
         if (phase === "mark-all") break;
-        // Refs done: keep their marks, then walk from the reflog entries.
         await putScratch(git, cursor.runId, REFS_BITS, encodeBitSets(session.bits), this.counter);
         phase = "mark-all";
         if (cursor.reflogRoots > 0) {
@@ -329,7 +328,6 @@ class GcSlice {
     }
   }
 
-  /** Chooses what to rewrite from the marks, and moves on to writing (or straight to the swap). */
   #decide(cursor: GcCursor, bits: readonly BitSet[]): SliceResult {
     const gcSources: number[] = [];
     const splitSources: number[] = [];
@@ -348,7 +346,7 @@ class GcSlice {
     });
     if (rewriteObjects > this.policy.maxRewriteObjects) {
       // Over the budget for one run: leave the packs as they are rather than
-      // rewrite part of a split (collections this large are not done yet).
+      // rewrite part of a split.
       this.log.warn("garbage collection skipped: too many objects to rewrite in one run", {
         objects: rewriteObjects,
       });

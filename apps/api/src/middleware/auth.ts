@@ -11,7 +11,6 @@ import type { ObsVariables } from "./obs.js";
 
 export interface AuthState {
   record: TokenRecord;
-  /** The mode the request was verified in. */
   mode: VerifyMode;
   /** Re-verifies against the D1 primary; used before a write on a read-verified request. */
   verifyForWrite(): Promise<VerifyResult>;
@@ -95,7 +94,6 @@ async function sessionCredential(
   return { record: first.record, mode: "write", verifyForWrite: record };
 }
 
-/** The token alone (see `extractCredential`). */
 export const extractToken = (header: string | undefined): string | undefined =>
   extractCredential(header)?.token;
 

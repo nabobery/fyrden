@@ -141,7 +141,6 @@ export async function transferRepoOperation(
   return { state: outcome.state, repo: await outputOf(ctx, current ?? entry) };
 }
 
-/** Who will own the repository: the caller, or an organization it may create repositories in. */
 async function targetOf(ctx: OpContext, handle: string): Promise<{ id: string; handle: string }> {
   const { env, auth, metrics } = ctx;
   const self = auth.principalHandle ?? "";
@@ -284,7 +283,6 @@ export async function advanceTransfer(
       .bind(repoId, lease, caught instanceof Error ? caught.message : String(caught), clock())
       .run();
   }
-  // The lease goes with this runner.
   metrics?.count("d1.query", { db: "directory", op: "transfer_unlease" });
   await env.DIRECTORY.prepare(
     "UPDATE repo_transfers SET lease_id = NULL, lease_until = NULL WHERE repo_id = ? AND lease_id = ?",
@@ -526,11 +524,6 @@ async function moveInDirectory(
   return { cancelled: before.taken ? "name_taken" : "quota_exceeded" };
 }
 
-/**
- * The room the new account makes for the repository (see
- * `OrgDO.reserveArrival`): its storage and its collaborators, or why
- * they do not fit.
- */
 async function arrivalRoom(
   env: Env,
   transfer: Transfer,

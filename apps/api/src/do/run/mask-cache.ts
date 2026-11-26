@@ -60,13 +60,11 @@ export class MaskMatcherCaches {
     const bytes = cache.bytes;
     const cap = this.cap();
     if (bytes > cap) return false;
-    // Least recently used first: evict until the new entry fits under the cap.
     for (const [other, kept] of this.#entries) {
       if (this.#bytes + bytes <= cap) break;
       this.#remove(other, kept);
     }
     let reservation = this.memory.tryReserve(bytes);
-    // The pool is short: the kept matchers of other tasks give way to this one.
     while (reservation === undefined && this.#entries.size > 0) {
       const [other, kept] = this.#entries.entries().next().value as [number, Kept];
       this.#remove(other, kept);

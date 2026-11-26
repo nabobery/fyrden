@@ -68,6 +68,10 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * - `ci_delivery_failures`: a failed delivery of a job's secrets not settled
  *   yet: the directory's offer, the task it names, and the error its job gets
  *   if the offer ended. Only the failure of that task is ever acted on.
+ *
+ * v10 (steps):
+ * - `run_instances.steps`: the job's steps as its runner last reported them
+ *   (src/do/run/steps.ts); NULL before a report, and for tasks from before.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -446,5 +450,10 @@ export const runSchema: readonly DoMigration[] = [
         recorded_at INTEGER NOT NULL
       ) STRICT;
     `,
+  },
+  {
+    version: 10,
+    name: "ci_job_steps",
+    sql: "ALTER TABLE run_instances ADD COLUMN steps TEXT;",
   },
 ];

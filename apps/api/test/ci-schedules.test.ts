@@ -44,7 +44,6 @@ const DAY = 24 * 60 * MINUTE;
 beforeAll(() => switchCi(true));
 afterAll(() => switchCi(false));
 
-/** A workflow running on `crons`. */
 function scheduled(crons: readonly string[], name = "nightly"): string {
   return [
     `name: ${name}`,
@@ -132,7 +131,6 @@ const rowsOf = (f: CiRepo) =>
 
 const scheduleJob = (f: CiRepo) => inRepo(f.stub, (r: RepoDO) => r.git.jobs.get(CI_SCHEDULE_JOB));
 
-/** Runs the schedule job at `at`, then the triggers; the schedule runs made since `from`. */
 async function fireAt(f: Clocked, at: number) {
   f.clock.now = at;
   await inRepo(f.stub, (r: RepoDO) =>
@@ -141,7 +139,6 @@ async function fireAt(f: Clocked, at: number) {
   await runTriggers(f.stub);
 }
 
-/** The scheduled runs so far, with the tick each was for, oldest first. */
 async function scheduleRuns(f: CiRepo) {
   const events = new Map(
     (await eventsOf(f.stub)).filter((e) => e.kind === "schedule").map((e) => [e.id, e]),
@@ -1150,7 +1147,6 @@ describe("scheduled workflows", () => {
   });
 });
 
-/** Whether a structured warning starting with `message` was logged. */
 function warned(warn: { mock: { calls: unknown[][] } }, message: string): boolean {
   return warn.mock.calls.some(([line]) => {
     try {
@@ -1162,7 +1158,6 @@ function warned(warn: { mock: { calls: unknown[][] } }, message: string): boolea
 }
 
 describe("schedule refreshes whose evaluation failed", () => {
-  /** A user `f`'s owner made a collaborator with `permission`. */
   async function collaborator(f: CiRepo, permission: "push" | "admin" = "push") {
     const who = await user();
     expect(
@@ -1203,7 +1198,6 @@ describe("schedule refreshes whose evaluation failed", () => {
           .one().refreshed_event,
     );
 
-  /** Runs the trigger job once (one slice and what follows in its invocation), counting what it does. */
   const counted = (f: CiRepo) =>
     inRepo(f.stub, async (r: RepoDO) => {
       const metrics = r.git.context.metrics as { count: (...args: unknown[]) => void };

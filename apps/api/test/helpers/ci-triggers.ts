@@ -161,10 +161,8 @@ export const eventRunsOf = (stub: DurableObjectStub<RepoDO>) =>
       .map((row) => ({ ...row }) as EventRunRow),
   );
 
-/** The run's view (trust and fork included). */
 export const viewOf = async (runId: string) => (await runStub(runId).get()) as RunView;
 
-/** The `github` context the run was created with. */
 export const githubOf = (runId: string) =>
   inRun(
     runId,
@@ -175,11 +173,9 @@ export const githubOf = (runId: string) =>
       >,
   );
 
-/** The workflow source the run was created with. */
 export const sourceOf = (runId: string) =>
   inRun(runId, (r) => (r.engine.run() as { workflow_source: string }).workflow_source);
 
-/** A workflow file's text. */
 export function workflowFile(on: string, name = "ci", job = "build"): string {
   return [
     `name: ${name}`,

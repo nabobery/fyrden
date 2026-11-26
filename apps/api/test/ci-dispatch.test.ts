@@ -86,15 +86,12 @@ async function dispatch(
   return { status: res.status, body: await res.json<Answer>() };
 }
 
-/** A repository whose main holds the dispatchable workflow (and `more`). */
 const dispatchRepo = (more: Record<string, string> = {}) =>
   ciRepo({ [CI]: DISPATCHABLE, "a.txt": "one\n", ...more });
 
-/** The run's typed `inputs` context. */
 const inputsOf = (runId: string) =>
   inRun(runId, (r) => JSON.parse((r.engine.run() as { contexts: string }).contexts).inputs);
 
-/** Runs of `workflow_dispatch` events, oldest first. */
 async function dispatchRuns(f: CiRepo) {
   const events = await inRepo(f.stub, (r: RepoDO) =>
     r.git.context.storage.sql
@@ -672,7 +669,6 @@ describe("workflow_dispatch", () => {
 });
 
 describe("workflow_dispatch over MCP", () => {
-  /** The tool's arguments for `ci.yml` on main, with `more`. */
   const args = (f: CiRepo, more: Record<string, unknown> = {}) => ({
     owner: f.owner.handle,
     repo: f.repo.name,

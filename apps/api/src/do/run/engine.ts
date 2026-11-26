@@ -245,6 +245,7 @@ export interface InstanceRow {
   error: string | null;
   log_complete: number | null;
   check_code: string | null;
+  steps: string | null;
 }
 
 /** What the engine needs from its object. */
@@ -259,6 +260,8 @@ export interface EngineHost {
   logEnded(task: number, completedAt: number): void;
   /** Whether task `task`'s stored log is complete (a whole final request committed). */
   logComplete(task: number): boolean;
+  /** Task `task`'s steps reported since they were last written, given up by the call. */
+  takeSteps?(task: number): string | undefined;
   /** Job `jobId`'s instance completed, by any path, with a task or none: its watchers are told. */
   jobEnded?(jobId: number): void;
   maxJobMinutes(): number | null;
@@ -450,7 +453,12 @@ export class RunEngine {
   applyInstance(
     row: InstanceRow,
     event: InstanceEvent,
-    extra: { outputs?: string | null; error?: string | null; logComplete?: boolean } = {},
+    extra: {
+      outputs?: string | null;
+      error?: string | null;
+      logComplete?: boolean;
+      steps?: string | null;
+    } = {},
   ): boolean {
     const step = advanceInstance(this.#stateOf(row), event);
     if (!step.ok) return false;
@@ -462,6 +470,9 @@ export class RunEngine {
       (event.kind === "grace_expired" ||
         event.kind === "heartbeat_lost" ||
         event.kind === "force_cancel");
+    // Every ending writes the steps last reported, not only a runner's own completion.
+    const reported = completed && row.task !== null ? this.host.takeSteps?.(row.task) : undefined;
+    const steps = extra.steps ?? reported ?? null;
     let taskEnd: number | null = row.task_end_seq;
     if (completed && row.task !== null && taskEnd === null) {
       this.exec("UPDATE runs SET task_end_seq = task_end_seq + 1 WHERE id = 1");
@@ -491,7 +502,7 @@ export class RunEngine {
          completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
          task_end_seq = ?, log_complete = ?,
          outputs = CASE WHEN ? THEN ? ELSE outputs END,
-         error = COALESCE(?, error)
+         error = COALESCE(?, error), steps = COALESCE(?, steps)
        WHERE job_id = ?`,
       next.status,
       next.conclusion,
@@ -507,6 +518,7 @@ export class RunEngine {
       extra.outputs !== undefined ? 1 : 0,
       extra.outputs ?? null,
       extra.error ?? null,
+      steps,
       row.job_id,
     );
     if ((row.status === "queued") !== (next.status === "queued")) this.bumpQueue();

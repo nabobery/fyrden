@@ -20,6 +20,7 @@ export type CiVector = Readonly<Record<CiResource, number>>;
 
 const R = CI_RESOURCES;
 const DAY = 86_400_000;
+export const CI_DAY_MS = DAY;
 const MINUTE = 60_000;
 
 /** R2 Free's Class B operations a month (verified: https://developers.cloudflare.com/r2/pricing/). */
@@ -52,6 +53,15 @@ export const CI_FREE_SHARE: CiVector = {
 
 /** The part of the allowance viewer receipts may take together. Proposed. */
 export const CI_VIEWER_SHARE = 0.25;
+
+/** A UTC day's, on Free. Proposed. */
+export const CI_LOG_READS_DAILY = 8_000;
+const LOG_READS: CiVector = {
+  ...zero(),
+  r2_class_b: CI_LOG_READS_DAILY,
+  d1_rows_read: CI_LOG_READS_DAILY,
+  d1_rows_written: CI_LOG_READS_DAILY,
+};
 
 /** A Free deployment's runners unless `FYRDEN_CI_FLEET` is set. Proposed. */
 export const CI_FREE_FLEET = 2;
@@ -144,7 +154,7 @@ export function ciFleetCap(env: object): number | null {
  * CI's daily allowance, or null on Paid. Free: each resource from
  * `FYRDEN_CI_DAILY` (`resource=n,…`, read as `FYRDEN_DISCRETIONARY_DAILY`
  * is), else `CI_FREE_SHARE`, and never more than Free's limit leaves after
- * the fleet's reservation, live's allowance and discretionary work's.
+ * the fleet's reservation, log pages' allowance, live's and discretionary work's.
  */
 export function ciAllowance(env: object): CiVector | null {
   if (workersPlan(env) === "paid") return null;
@@ -154,7 +164,7 @@ export function ciAllowance(env: object): CiVector | null {
   return Object.fromEntries(
     R.map((r) => {
       const others = isDiscretionary(r) ? LIVE_DAILY[r] + (discretionary?.[r] ?? 0) : 0;
-      const ceiling = Math.max(0, CI_FREE_DAILY[r] - fleet[r] - others);
+      const ceiling = Math.max(0, CI_FREE_DAILY[r] - fleet[r] - LOG_READS[r] - others);
       return [r, Math.floor(Math.min(set[r] ?? CI_FREE_SHARE[r], ceiling))];
     }),
   ) as CiVector;
@@ -623,7 +633,7 @@ function page(limit: number | undefined, max: number): number {
 
 /**
  * Removes a page of receipts a day past their expiry (never before their
- * validity) and a page of days older than `CI_DAYS_KEPT`, by D1's clock.
+ * validity) and a page of days older than `CI_DAYS_KEPT`, log reads' too, by D1's clock.
  */
 export async function pruneCiBudget(
   db: D1Database,
@@ -631,7 +641,7 @@ export async function pruneCiBudget(
 ): Promise<{ readonly receipts: number; readonly days: number }> {
   const receipts = page(limits.receipts, CI_RECEIPT_PAGE);
   const days = page(limits.days, CI_DAY_PAGE);
-  const [removedReceipts, removedDays] = await db.batch([
+  const [removedReceipts, removedDays, removedLogDays] = await db.batch([
     db
       .prepare(
         `DELETE FROM ci_budget_receipts WHERE key IN (
@@ -647,9 +657,16 @@ export async function pruneCiBudget(
          RETURNING day`,
       )
       .bind(days),
+    db
+      .prepare(
+        `DELETE FROM ci_log_read_days WHERE day IN (
+           SELECT day FROM ci_log_read_days WHERE day < ${TODAY} - ${CI_DAYS_KEPT} ORDER BY day LIMIT ?1)
+         RETURNING day`,
+      )
+      .bind(days),
   ]);
   return {
     receipts: removedReceipts?.results.length ?? 0,
-    days: removedDays?.results.length ?? 0,
+    days: (removedDays?.results.length ?? 0) + (removedLogDays?.results.length ?? 0),
   };
 }

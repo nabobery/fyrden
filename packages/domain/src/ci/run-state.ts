@@ -132,7 +132,6 @@ export function isLive(status: InstanceStatus): boolean {
   return status === "queued" || status === "in_progress" || status === "cancelling";
 }
 
-/** A failure that counts: not allowed by `continue-on-error`. */
 function failedHard(state: InstanceState): boolean {
   return (
     (state.conclusion === "failure" || state.conclusion === "timed_out") && !state.continueOnError

@@ -17,8 +17,9 @@ import { findReposById } from "../../repos/directory.js";
 import { clock } from "../../services.js";
 import { LIVE_POLICY } from "../user/live.js";
 import type { RunEngine } from "./engine.js";
-import { LOG_READER_POLICY, type ReadLogLine, readLogLines } from "./log-reader.js";
+import { type ReadLogLine, readLogLines } from "./log-reader.js";
 import { LOG_LATE_MS } from "./logs.js";
+import type { JobLog, LogChunk, LogRead, StoredLogs } from "./stored-logs.js";
 
 type MemoryReservation = NonNullable<ReturnType<DoMemoryBudget["tryReserve"]>>;
 
@@ -241,18 +242,7 @@ export interface ViewersHost {
   accept(ws: WebSocket, tags: string[]): void;
   /** Has the `ci_log_viewers` job run now (sooner than any later run it has). */
   ensureSlice(): void;
-  /** Gives back the memory the tasks' kept log-mask matchers hold (`RunLogs`). */
-  dropMaskCaches(): void;
-}
-
-/** A job's log as delivery sees it. */
-interface JobLog {
-  readonly task: number | null;
-  /** Whether ingestion finalized or its late window ended, or the job ended without a task. */
-  readonly ended: boolean;
-  readonly state: "complete" | "incomplete" | null;
-  /** The end of the last stored chunk: positions below it are stored lines. */
-  readonly linesEnd: number;
+  readonly stored: StoredLogs;
 }
 
 interface Cache {
@@ -260,12 +250,6 @@ interface Cache {
   readonly rows: readonly LogLine[];
   readonly bytes: number;
   readonly reservation: MemoryReservation;
-}
-
-interface BackfillRead {
-  readonly abort: AbortController;
-  readonly released: Promise<void>;
-  readonly finish: () => void;
 }
 
 type Pumped = "done" | "blocked" | "stale" | "closed" | "budget";
@@ -302,8 +286,6 @@ function utf8Length(text: string): number {
 }
 
 const ROWS_OVERHEAD = utf8Length('{"t":"rows","rows":[]}');
-/** Parser buffers, the small-row batch and encoded frame scratch. Proposed. */
-const LOG_READER_SCRATCH_BYTES = 7 * 512 * 1024;
 
 export class LogViewers {
   /** Per task, the latest request's rows known final, while a socket watches its job. */
@@ -314,7 +296,6 @@ export class LogViewers {
   /** Sockets this object closed (a closed socket may still be listed until its peer answers). */
   readonly #closed = new WeakSet<WebSocket>();
   readonly #pendingChecks = new Set<string>();
-  readonly #reads = new Set<BackfillRead>();
   #waitingUploads = 0;
   #backfillDeferred = false;
 
@@ -325,15 +306,14 @@ export class LogViewers {
     let released = false;
     return {
       yieldMemory: async () => {
-        const reads = [...this.#reads];
-        if (reads.length === 0) return;
+        const aborted = this.host.stored.abortReads();
+        if (!aborted) return;
         if (!waiting) {
           waiting = true;
           this.#waitingUploads++;
         }
         this.#backfillDeferred = true;
-        for (const read of reads) read.abort.abort();
-        await Promise.all(reads.map((read) => read.released));
+        await aborted;
       },
       release: () => {
         if (released) return;
@@ -346,6 +326,10 @@ export class LogViewers {
         }
       },
     };
+  }
+
+  uploadWaiting(): boolean {
+    return this.#waitingUploads > 0;
   }
 
   // ------------------------------------------------------------------ tickets and admission
@@ -602,7 +586,7 @@ export class LogViewers {
   logsExpired(): void {
     const jobs = new Set(this.#open().map((ws) => stateOf(ws)?.jobId));
     for (const jobId of jobs)
-      if (jobId !== undefined && this.#jobLog(jobId).ended) this.host.ensureSlice();
+      if (jobId !== undefined && this.host.stored.jobLog(jobId).ended) this.host.ensureSlice();
   }
 
   /** Releases every cache, as a wake leaves the object (or to make room for a log request). */
@@ -781,7 +765,7 @@ export class LogViewers {
     for (const ws of this.#open()) {
       const state = stateOf(ws);
       if (!state || this.#locked.has(state.id)) continue;
-      const log = this.#jobLog(state.jobId);
+      const log = this.host.stored.jobLog(state.jobId);
       this.#pump(ws, this.#fromCache(log.task));
     }
     const ended = new Set<number>();
@@ -801,7 +785,7 @@ export class LogViewers {
     for (const ws of sockets) {
       const state = stateOf(ws);
       if (!state) continue;
-      const work = this.#work(state, this.#jobLog(state.jobId));
+      const work = this.#work(state, this.host.stored.jobLog(state.jobId));
       if (work === "none" && state.checkedAt > 0) continue;
       if (state.blockedSince !== null) {
         const close = state.blockedSince + LOG_VIEWER_POLICY.slowMs;
@@ -839,7 +823,8 @@ export class LogViewers {
       const state = stateOf(ws);
       if (!state || now < state.checkedAt + LOG_VIEWER_POLICY.freshMs) continue;
       // A socket never checked here is checked at once; a stale one only when it has work.
-      if (state.checkedAt > 0 && this.#work(state, this.#jobLog(state.jobId)) === "none") continue;
+      if (state.checkedAt > 0 && this.#work(state, this.host.stored.jobLog(state.jobId)) === "none")
+        continue;
       if (!due.has(state.credentialId) && due.size >= LOG_VIEWER_POLICY.rechecks) continue;
       if (state.budget) {
         if (state.budget.checks < 1) {
@@ -957,8 +942,7 @@ export class LogViewers {
         return true;
       }
       const now = host.now();
-      let wanted: { task: number; start: number; end: number; bytes: number; key: string } | null =
-        null;
+      let wanted: LogChunk | null = null;
       let group: WebSocket[] = [];
       for (const ws of this.#open()) {
         const state = stateOf(ws);
@@ -972,7 +956,7 @@ export class LogViewers {
             page.bytes + LOG_VIEWER_POLICY.windowBytes > LOG_VIEWER_POLICY.pageBytes)
         )
           continue;
-        const log = this.#jobLog(state.jobId);
+        const log = this.host.stored.jobLog(state.jobId);
         if (log.task === null || state.sent >= log.linesEnd) continue;
         if (this.#fromCache(log.task)(state.sent)) continue;
         if (!drained(state.out)) {
@@ -980,7 +964,7 @@ export class LogViewers {
           continue;
         }
         if (wanted === null) {
-          wanted = this.#chunkAt(log.task, state.sent);
+          wanted = this.host.stored.chunkAt(log.task, state.sent);
           if (wanted === null) continue;
         }
         if (log.task === wanted.task && state.sent >= wanted.start && state.sent < wanted.end)
@@ -999,7 +983,7 @@ export class LogViewers {
       charge({ gets: 1, bytes: 0 });
       let read = 0;
       let reservation: MemoryReservation | undefined;
-      let active: BackfillRead | undefined;
+      let active: LogRead | undefined;
       try {
         host.metrics.count("r2.class_b", { bucket: "fyrden-ci", op: "get_log_chunk" });
         const object = await host.env.CI.get(wanted.key);
@@ -1018,29 +1002,13 @@ export class LogViewers {
           await object.body.cancel().catch(() => undefined);
           return true;
         }
-        const need =
-          2 * Math.min(LOG_READER_POLICY.maxDecodedUnits, wanted.bytes) + LOG_READER_SCRATCH_BYTES;
-        reservation = host.memory.tryReserve(need);
-        if (!reservation) {
-          this.dropCaches();
-          reservation = host.memory.tryReserve(need);
-        }
-        if (!reservation) {
-          // Kept matchers only save rebuilding: they give way, or a large chunk could never be read.
-          host.dropMaskCaches();
-          reservation = host.memory.tryReserve(need);
-        }
+        reservation = host.stored.reserve(wanted.bytes);
         if (!reservation) {
           await object.body.cancel().catch(() => undefined);
           return true;
         }
-        let finish!: () => void;
-        const released = new Promise<void>((resolve) => {
-          finish = resolve;
-        });
-        active = { abort: new AbortController(), released, finish };
-        this.#reads.add(active);
-        const signal = active.abort.signal;
+        active = host.stored.beginRead();
+        const { signal } = active;
         for (const ws of group) {
           const state = stateOf(ws);
           if (!state) continue;
@@ -1122,10 +1090,7 @@ export class LogViewers {
         if (read > 0) charge({ gets: 0, bytes: read });
         for (const id of ids) this.#locked.delete(id);
         reservation?.release();
-        if (active) {
-          this.#reads.delete(active);
-          active.finish();
-        }
+        active?.finish();
       }
     }
     return false;
@@ -1169,33 +1134,6 @@ export class LogViewers {
     viewerHooks.beforeSend?.(state.id);
     if (fits(state, utf8Length(text)) && !this.#send(ws, state, text)) return;
     this.#close(ws, "budget", "budget spent: ask for a new ticket");
-  }
-
-  #chunkAt(
-    task: number,
-    index: number,
-  ): { task: number; start: number; end: number; bytes: number; key: string } | null {
-    const chunk = this.host.engine.rows<{
-      start_index: number;
-      end_index: number;
-      bytes: number;
-      r2_key: string;
-    }>(
-      `SELECT start_index, end_index, bytes, r2_key FROM ci_log_chunks
-       WHERE task = ? AND start_index <= ? AND end_index > ? LIMIT 1`,
-      task,
-      index,
-      index,
-    )[0];
-    return chunk
-      ? {
-          task,
-          start: chunk.start_index,
-          end: chunk.end_index,
-          bytes: chunk.bytes,
-          key: chunk.r2_key,
-        }
-      : null;
   }
 
   // ------------------------------------------------------------------ sending
@@ -1262,7 +1200,7 @@ export class LogViewers {
    * `unfinished`), within their window and check, then closed 1000.
    */
   #endCaughtUp(jobId: number): boolean {
-    const log = this.#jobLog(jobId);
+    const log = this.host.stored.jobLog(jobId);
     if (!log.ended) return false;
     let deferred = false;
     const cached = this.#fromCache(log.task);
@@ -1321,49 +1259,6 @@ export class LogViewers {
   /** Open sockets (of `tag`), those this object closed left out. */
   #open(tag?: string): WebSocket[] {
     return this.host.sockets(tag).filter((ws) => !this.#closed.has(ws) && ws.readyState === OPEN);
-  }
-
-  #jobLog(jobId: number): JobLog {
-    const { engine } = this.host;
-    const instance = engine.instance(jobId);
-    const task = instance?.task ?? null;
-    if (task === null)
-      return {
-        task: null,
-        ended: instance === undefined || instance.status === "completed",
-        state: "complete",
-        linesEnd: 0,
-      };
-    const log = engine.rows<{
-      state: string;
-      finalized: number;
-      unmasked: number;
-      ended_at: number | null;
-      lines_end: number | null;
-    }>(
-      `SELECT l.state, l.finalized, l.unmasked, l.ended_at,
-         CASE WHEN l.unmasked = 1 THEN 0
-           ELSE (SELECT MAX(end_index) FROM ci_log_chunks c WHERE c.task = l.task) END AS lines_end
-       FROM ci_logs l WHERE l.task = ?`,
-      task,
-    )[0];
-    const state =
-      log?.unmasked === 1
-        ? "incomplete"
-        : log?.state === "complete" || log?.state === "incomplete"
-          ? log.state
-          : null;
-    return {
-      task,
-      ended:
-        log?.finalized === 1 ||
-        state === "complete" ||
-        (log?.ended_at !== null &&
-          log?.ended_at !== undefined &&
-          log.ended_at + LOG_LATE_MS <= this.host.now()),
-      state,
-      linesEnd: log?.lines_end ?? 0,
-    };
   }
 
   #runId(): string {

@@ -18,7 +18,6 @@ import {
 } from "../../src/ci/index.js";
 import * as oracle from "./mask-oracle.js";
 
-/** Everything a call reports, as one comparable value. */
 function snapshot(result: MaskRowsResult | oracle.MaskRowsResult, rows: number): unknown {
   const carries: (LogMaskCarry | null)[] = [];
   const gaps: number[] = [];
@@ -85,7 +84,6 @@ type Row =
   | { kind: "text"; text: string }
   | { kind: "add"; value: string }
   | { kind: "empty" }
-  /** A variant of a mask the task has, by index modulo the masks and their variants, cut at `cut`. */
   | { kind: "variant"; mask: number; variant: number; cut: number };
 
 const row: fc.Arbitrary<Row> = fc.oneof(
@@ -302,16 +300,13 @@ describe("maskRows with a kept matcher cache", () => {
       { value: SECRET, fromIndex: 0, secret: true },
     ];
     const halves = [`pre ${SECRET.slice(0, 9)}`, `${SECRET.slice(9)} post`];
-    // Across two rows of one request.
     expectSame(masks, null, halves, { start: 0 }, new MaskMatcherCache());
     for (const lose of [false, true]) {
-      // Held, then resent with the rest.
       let cache = new MaskMatcherCache();
       const held = expectSame(masks, null, halves.slice(0, 1), { start: 0 }, cache);
       expect(held.settled).toBe(0);
       if (lose) cache = new MaskMatcherCache();
       expectSame(masks, null, halves, { start: 0 }, cache);
-      // Forced, then resumed from the stored carry.
       cache = new MaskMatcherCache();
       const forced = expectSame(masks, null, halves.slice(0, 1), { start: 0, force: true }, cache);
       const carry = forced.carryAt(1);
@@ -383,7 +378,6 @@ describe("maskRows with a kept matcher cache", () => {
       carry: LogMaskCarry | null;
       rows: string[];
       start: number;
-      /** The first row's masked text, where a case depends on it. */
       first?: string;
     }[] = [
       {

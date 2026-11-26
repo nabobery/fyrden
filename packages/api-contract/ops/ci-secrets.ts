@@ -130,8 +130,6 @@ const write = <T extends string>(tool: T, title: string, description: string) =>
   readOnly: false as const,
 });
 
-// --- Repository secrets -------------------------------------------------------
-
 export const getRepoSecretPublicKey = defineOperation({
   id: "repos.actions.secrets.public_key",
   method: "GET",
@@ -252,8 +250,6 @@ export const listRepoOrgSecrets = defineOperation({
     "List the organization Actions secrets that reach a repository (names only).",
   ),
 });
-
-// --- Organization secrets -------------------------------------------------------
 
 export const getOrgSecretPublicKey = defineOperation({
   id: "orgs.actions.secrets.public_key",
@@ -440,8 +436,6 @@ export const removeOrgSecretRepo = defineOperation({
   ),
 });
 
-// --- Repository variables -----------------------------------------------------
-
 const VALUE_RULE = `At most ${MAX_CI_VALUE_BYTES} bytes of UTF-8 (422 \`variable_too_large\`).`;
 const VariableValue = z
   .string()
@@ -568,8 +562,6 @@ export const listRepoOrgVariables = defineOperation({
     "List the organization Actions variables that reach a repository.",
   ),
 });
-
-// --- Organization variables ---------------------------------------------------
 
 export const listOrgVariables = defineOperation({
   id: "orgs.actions.variables.list",
@@ -759,8 +751,6 @@ export const removeOrgVariableRepo = defineOperation({
     "Stop a repository using an organization Actions variable with visibility selected.",
   ),
 });
-
-// --- Keys -----------------------------------------------------------------------
 
 export const rewrapCiSecrets = defineOperation({
   id: "admin.ci.secrets.rewrap",
