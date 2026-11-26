@@ -1398,7 +1398,7 @@ export class CiTriggers {
    * so its start can be repeated without reading git again. The spec is
    * stored as its JSON without the workflow source, and the source as text:
    * at most 500,000 bytes of source and 1 MiB of contexts
-   * (`validateRunSpec`), so a row stays within about 1.55 MB, kept to here
+   * (`validateRunSpec`), so a row stays within about 1.56 MB, kept to here
    * as a conservative target (Durable Object SQLite allows larger rows:
    * verified 2026-11-16,
    * https://developers.cloudflare.com/durable-objects/platform/limits/#sql-storage-limits).
@@ -2461,18 +2461,7 @@ class Evaluation {
     });
   }
 
-  /**
-   * In one transaction: the next run number of the workflow, a new run id,
-   * and the run's spec, kept for this event before the run is created, so
-   * its start can be repeated without reading git again. The spec is
-   * stored as its JSON without the workflow source, and the source as
-   * text: at most 500,000 bytes of source and 1 MiB of contexts
-   * (`validateRunSpec`), about 1.56 MB at most, within the 2 MB a row is
-   * kept to here as a conservative target (Durable Object SQLite allows
-   * larger rows: verified 2026-11-16,
-   * https://developers.cloudflare.com/durable-objects/platform/limits/#sql-storage-limits).
-   * Throws {@link InvalidSpec}, allocating nothing, for a spec that does not validate.
-   */
+  /** {@link CiTriggers.allocateRun} for this event. */
   #allocate(
     kind: PassKind,
     path: string,
