@@ -634,6 +634,23 @@ describe("log pages' daily allowance", () => {
     expect(await spent()).toBe(CI_LOG_READS_DAILY - 4);
   });
 
+  it("is charged the chunks a page can use, and nothing for a page refused as busy", async () => {
+    const t = await running();
+    ciVariableOverrides.FYRDEN_PLAN = "free";
+    const lines = Array.from({ length: 40 }, (_, i) => row(i, `line ${i} ${"x".repeat(200)}`));
+    await stored(t, [lines.slice(0, 20), lines.slice(20)], { closed: "complete" });
+    await spend(env.DIRECTORY, 0);
+    expect((await page(t, "?from=2&max_bytes=1024")).rows).toHaveLength(4);
+    expect(await spent()).toBe(1);
+    const held = await inRun(t.runId, (run) => {
+      const { totalBytes, reservedBytes } = run.memory.stats();
+      return run.memory.tryReserve(totalBytes - reservedBytes) !== null;
+    });
+    expect(held).toBe(true);
+    expect(await read(t)).toMatchObject({ status: 503, body: { code: "log_busy" } });
+    expect(await spent()).toBe(1);
+  });
+
   it("is not asked on Paid", async () => {
     const t = await running();
     await stored(t, [[row(0, "x")]]);

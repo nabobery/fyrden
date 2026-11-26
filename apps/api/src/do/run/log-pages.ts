@@ -134,18 +134,7 @@ export class LogPages {
       : this.#chunksOn(task, start.row, query.maxBytes);
     if (chunks.length === 0) return this.#unreadable(task, start.row);
     if (host.uploadWaiting()) return { ok: false, code: "log_busy" };
-    const charged = await host.charge(chunks.length);
-    if (host.hidden()) return { ok: false, code: "run_not_found" };
-    if (host.engine.instance(jobId)?.task !== task) return { ok: false, code: "log_busy" };
-    if (charged.status === "spent")
-      return {
-        ok: false,
-        code: "log_reads_spent",
-        retryAt: charged.retryAt,
-        retryAfter: charged.retryAfter,
-      };
-    if (charged.status === "unavailable") return { ok: false, code: "log_reads_unavailable" };
-    if (host.uploadWaiting()) return { ok: false, code: "log_busy" };
+    // The memory first, so that a page refused as busy pays nothing.
     const reservation = host.stored.reserve(
       Math.max(...chunks.map((c) => c.bytes)),
       2 * query.maxBytes,
@@ -153,6 +142,18 @@ export class LogPages {
     if (!reservation) return { ok: false, code: "log_busy" };
     const read = host.stored.beginRead();
     try {
+      const charged = await host.charge(chunks.length);
+      if (host.hidden()) return { ok: false, code: "run_not_found" };
+      if (charged.status === "spent")
+        return {
+          ok: false,
+          code: "log_reads_spent",
+          retryAt: charged.retryAt,
+          retryAfter: charged.retryAfter,
+        };
+      if (charged.status === "unavailable") return { ok: false, code: "log_reads_unavailable" };
+      if (read.signal.aborted || host.engine.instance(jobId)?.task !== task)
+        return { ok: false, code: "log_busy" };
       if (fromEnd) {
         const page = new TailPage(start.row, query.maxBytes);
         const ended = await this.#readChunks(chunks, page, read.signal);
@@ -190,7 +191,7 @@ export class LogPages {
     const first = this.host.stored.chunkAt(task, row);
     if (!first) return [];
     const chunks = [first];
-    let filled = 0;
+    let filled = Math.floor((first.bytes * (first.end - row)) / (first.end - first.start));
     let read = first.bytes;
     for (const chunk of this.host.stored.chunksFrom(task, first.end, LOG_PAGE_POLICY.chunks - 1)) {
       const reached = chunks.at(-1)?.end;

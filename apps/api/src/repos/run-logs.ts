@@ -167,7 +167,10 @@ export async function jobLogPage(
         "The log was stored before logs were masked, so it is not shown.",
       );
     case "log_busy":
-      throw busy("log_busy", "The run is storing uploads. Try again; it may take several tries.");
+      throw busy(
+        "log_busy",
+        "The run is storing uploads or reading other pages of its logs. Try again; it may take several tries.",
+      );
     case "log_unreadable":
       throw new OperationError(503, "log_unreadable", "A stored part of the log cannot be read.");
     case "log_reads_unavailable":
