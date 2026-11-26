@@ -18,7 +18,6 @@ import type { RunResult, WranglerRunner } from "../src/wrangler.ts";
 export function fakeWrangler() {
   const state = {
     d1: new Map<string, string>(),
-    /** Each D1 database's schema objects. */
     d1Schema: new Map<string, SchemaObject[]>(),
     /** The migration files each D1 database has applied, by name (its d1_migrations table). */
     d1Migrations: new Map<string, string[]>(),
