@@ -751,6 +751,7 @@ describe("re-run, cancel and their refusals", () => {
     await cancel.click();
     const dialog = page.getByRole("dialog", { name: "Cancel this run?" });
     await see(dialog).toBeVisible();
+    await see(dialog.getByRole("button", { name: "Keep it running" })).toBeFocused();
     await accessible("cancel confirmation");
     await dialog.getByRole("button", { name: "Keep it running" }).click();
     await see(dialog).toBeHidden();
@@ -794,6 +795,14 @@ describe("re-run, cancel and their refusals", () => {
     await page.getByRole("button", { name: "Re-run all jobs" }).click();
     await see(page.getByRole("alert")).toContainText("newer attempt");
     await accessible("a refused re-run");
+    await runJob(runId, "build", "success");
+    await runJob(runId, "test", "success");
+    await finished(runId);
+    await visit(page, `${runs()}/runs/${runId}?attempt=2`);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/rerun`, {});
+    await page.getByRole("button", { name: "Re-run all jobs" }).click();
+    await see(page.getByRole("alert")).toContainText("newer attempt");
+    await see(page.getByRole("status").filter({ hasText: "Attempt 2 of 3" })).toBeVisible();
   });
 
   it("offers a reader nothing, and the API refuses a reader's forged form", async () => {

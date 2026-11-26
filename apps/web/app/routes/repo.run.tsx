@@ -122,6 +122,7 @@ function RunActions({
   const answer = useActionData<typeof action>();
   const navigation = useNavigation();
   const confirmDialog = useRef<HTMLDialogElement>(null);
+  const keep = useRef<HTMLButtonElement>(null);
   const [scripted, setScripted] = useState(false);
   useEffect(
     () =>
@@ -171,7 +172,10 @@ function RunActions({
               type="button"
               className="danger"
               disabled={busy}
-              onClick={() => confirmDialog.current?.showModal()}
+              onClick={() => {
+                confirmDialog.current?.showModal();
+                keep.current?.focus();
+              }}
             >
               Cancel run
             </button>
@@ -189,7 +193,8 @@ function RunActions({
             {form("cancel", "Yes, cancel the run", { confirm: "yes" }, () =>
               confirmDialog.current?.close(),
             )}
-            <button type="button" onClick={() => confirmDialog.current?.close()}>
+
+            <button type="button" ref={keep} onClick={() => confirmDialog.current?.close()}>
               Keep it running
             </button>
           </div>
@@ -205,11 +210,6 @@ function RunActions({
             <Link to={runPath(owner, repo, run.id)}>Keep it running</Link>
           </div>
         </div>
-      )}
-      {answer && "error" in answer && (
-        <p className="error" role="alert">
-          {answer.error}
-        </p>
       )}
     </div>
   );
@@ -349,6 +349,8 @@ function Notes({ run }: { run: Run }) {
 
 export default function RunPage({ loaderData }: Route.ComponentProps) {
   const { repo, origin, run, attempt, graph, canAct, key, notice } = loaderData;
+  const answer = useActionData<typeof action>();
+  const refusal = answer && "error" in answer ? answer.error : null;
   const owner = repo.owner;
   const name = repo.name;
   const path = runPath(owner, name, run.id);
@@ -368,6 +370,11 @@ export default function RunPage({ loaderData }: Route.ComponentProps) {
       {notice && (
         <p className="panel" role="status">
           {notice}
+        </p>
+      )}
+      {refusal && (
+        <p className="error" role="alert">
+          {refusal}
         </p>
       )}
       {canAct && !past && (
