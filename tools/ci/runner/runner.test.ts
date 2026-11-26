@@ -707,6 +707,40 @@ async function storedLines(
   return { objects, rows };
 }
 
+/** A job's log of the app's run as the API gives it: small pages, its last rows, and text without its times. */
+async function readBack(runId: string, jobId: number) {
+  const job = { owner: org, repo: "app", run_id: runId, job_id: jobId };
+  const rows: { i: number; c: string | undefined }[] = [];
+  const pageAt = (cursor?: string) =>
+    owner.api.call("actions.runs.jobs.logs.read", {
+      ...job,
+      max_bytes: 1024,
+      ...(cursor !== undefined && { cursor }),
+    });
+  let page: Awaited<ReturnType<typeof pageAt>> | undefined;
+  while (page?.next_cursor !== null) {
+    page = await pageAt(page?.next_cursor);
+    rows.push(...page.rows.map((r) => ({ i: r.i, c: "c" in r ? r.c : undefined })));
+  }
+  const tail = await owner.api.call("actions.runs.jobs.logs.read", { ...job, tail: 3 });
+  let text = "";
+  let next: string | undefined =
+    `${forge.origin}/api/v3/repos/${org}/app/actions/runs/${runId}/jobs/${jobId}/logs`;
+  while (next !== undefined) {
+    const page: Response = await fetch(next, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    });
+    expect(page.status).toBe(200);
+    text += await page.text();
+    next = /^<([^>]+)>; rel="next"$/.exec(page.headers.get("Link") ?? "")?.[1];
+  }
+  return {
+    rows,
+    tail: tail.rows.map((r) => r.i),
+    text: text.replace(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z /gm, ""),
+  };
+}
+
 describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
   it("registers, runs the pushed commit's job with its trigger's context, and stores its whole log", async () => {
     const { runId, run, jobs, sha, pushed } = await runWorkflow(WORKFLOW_NAME, WORKFLOW);
@@ -800,6 +834,12 @@ describe(`gitea/runner ${VERSION} against wrangler dev`, () => {
       // Every printed line once, in order; the runner's own lines (step headers, the
       // container's setup) around them.
       expect(rows.map((r) => r.c).filter((c) => /^(burst|trickle) \d+$/.test(c))).toEqual(PRINTED);
+      // Read back through the API, by the page and as text followed by its links.
+      const back = await readBack(runId, jobs[0]?.id as number);
+      expect(back.rows).toEqual(rows.map(({ i, c }) => ({ i, c })));
+      expect(back.tail).toEqual(rows.slice(-3).map((r) => r.i));
+      // A row may hold newlines of its own: the runner prints some such lines.
+      expect(back.text).toBe(`${rows.map((r) => r.c).join("\n")}\n`);
       // The context the push's trigger built, as the job saw it.
       const printed = Object.fromEntries(
         rows

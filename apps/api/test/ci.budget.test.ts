@@ -3,6 +3,7 @@ import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import {
   CI_FREE_DAILY,
+  CI_LOG_READS_DAILY,
   CI_NOW,
   CI_POLL_BUDGET,
   CI_RESOURCES,
@@ -557,8 +558,16 @@ describe("pruning the CI ledger", () => {
     // Days within three of today are kept.
     expect(await dayRow(day)).not.toBeNull();
     clock.now = (day + 4) * DAY;
+    const logDay = (d: number) =>
+      db.prepare("SELECT day FROM ci_log_read_days WHERE day = ?").bind(d).first();
+    await db
+      .prepare("INSERT INTO ci_log_read_days (day, class_b) VALUES (?, 1), (?, 1)")
+      .bind(day, day + 1)
+      .run();
     while ((await pruneCiBudget(db, { receipts: 1, days: 1 })).days > 0);
     expect(await dayRow(day)).toBeNull();
+    expect(await logDay(day)).toBeNull();
+    expect(await logDay(day + 1)).not.toBeNull();
   });
 
   it("refuses a page outside its bounds", async () => {
@@ -680,11 +689,14 @@ describe("the CI allowance", () => {
     });
   });
 
-  it("takes set values, each at most what Free leaves after the fleet, live and discretionary work", () => {
+  it("takes set values, each at most what Free leaves after the fleet, log pages, live and discretionary work", () => {
     const fleet = fleetReservation(2);
     const ceiling = (r: (typeof CI_RESOURCES)[number]) =>
       CI_FREE_DAILY[r] -
       fleet[r] -
+      (r === "r2_class_b" || r === "d1_rows_read" || r === "d1_rows_written"
+        ? CI_LOG_READS_DAILY
+        : 0) -
       (r === "worker_requests" || r === "r2_class_b"
         ? 0
         : LIVE_DAILY[r] + (discretionaryAllowance({})?.[r] as number));

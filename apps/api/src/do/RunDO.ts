@@ -58,6 +58,7 @@ import {
   type RunPolicy,
   type RunRow,
 } from "./run/engine.js";
+import { type LogPageAnswer, type LogPageQuery, LogPages } from "./run/log-pages.js";
 import {
   type AppendLogAnswer,
   LOG_LATE_MS,
@@ -77,6 +78,7 @@ import {
   type WaitingFor,
 } from "./run/reservations.js";
 import { runRetentionMs } from "./run/retention.js";
+import { StoredLogs } from "./run/stored-logs.js";
 import { LogViewers, type StoreTicketAnswer } from "./run/viewers.js";
 
 /** A scope's grant is trusted until this long before the repository said it ends. Proposed. */
@@ -97,6 +99,7 @@ function stringValues(vars: unknown): Record<string, string> {
 
 import { APPROVAL_EXPIRY_MS, approvalBinding } from "../ci/approval.js";
 import { ciEnv } from "../ci/budget.js";
+import { chargeLogReads } from "../ci/log-reads.js";
 import { workflowFileCheckName } from "./run/plan-check.js";
 import {
   isPrincipalId,
@@ -301,6 +304,8 @@ export class RunDO extends MigratingDO {
   readonly #dispatch: RunDispatch;
   readonly #logs: RunLogs;
   readonly #reservations: RunReservations;
+  readonly storedLogs: StoredLogs;
+  readonly #logPages: LogPages;
   /** The job logs' live sockets. */
   readonly viewers: LogViewers;
   /**
@@ -407,6 +412,13 @@ export class RunDO extends MigratingDO {
       },
       dropMaskCaches: () => host.#logs.dropMaskCaches(),
     });
+    this.storedLogs = new StoredLogs({
+      engine: this.engine,
+      memory: this.memory,
+      now: () => host.context.now(),
+      dropViewerCaches: () => host.viewers.dropCaches(),
+      dropMaskCaches: () => host.#logs.dropMaskCaches(),
+    });
     this.viewers = new LogViewers({
       env,
       engine: this.engine,
@@ -419,7 +431,25 @@ export class RunDO extends MigratingDO {
       sockets: (tag) => ctx.getWebSockets(tag),
       accept: (ws, tags) => ctx.acceptWebSocket(ws, tags),
       ensureSlice: () => host.jobs.ensure("ci_log_viewers", RUN_JOB.logViewers),
-      dropMaskCaches: () => host.#logs.dropMaskCaches(),
+      stored: this.storedLogs,
+    });
+    this.#logPages = new LogPages({
+      env,
+      engine: this.engine,
+      metrics: this.context.metrics,
+      log: this.#log,
+      stored: this.storedLogs,
+      hidden: () => host.#hidden(),
+      uploadWaiting: () => host.viewers.uploadWaiting(),
+      charge: async (chunks) => {
+        try {
+          host.context.metrics.count("d1.query", { db: "directory", op: "ci_log_reads" });
+          return await chargeLogReads(ciEnv(env), env.DIRECTORY, chunks);
+        } catch (error) {
+          host.#log.error("a log page was not read: the directory did not answer", { error });
+          return { status: "unavailable" };
+        }
+      },
     });
     // A viewer's keepalive, answered by the runtime without a message for the object to handle.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -1394,6 +1424,11 @@ export class RunDO extends MigratingDO {
     budget: { readonly maxActiveMs: number } | null;
   }): StoreTicketAnswer {
     return this.viewers.storeTicket(input);
+  }
+
+  /** A page of job `jobId`'s log, as stored; the run must be repository `repoId`'s. */
+  readLog(repoId: string, jobId: number, query: LogPageQuery): Promise<LogPageAnswer> {
+    return this.#logPages.read(repoId, jobId, query);
   }
 
   dropLogTicket(hash: string): void {
