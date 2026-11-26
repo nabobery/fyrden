@@ -240,6 +240,7 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
     if (flat === null) return;
     target.current = null;
     box.scrollTop = geometry.physicalTop(Math.max(0, flat * rowPx - viewport / 3));
+    box.scrollIntoView({ block: "nearest" });
   });
 
   const opening = useRef<{ growing: boolean; asked: number | null } | null>(null);

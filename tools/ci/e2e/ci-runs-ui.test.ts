@@ -574,7 +574,7 @@ describe("the log viewer", () => {
     await see(region()).toContainText("line 1 ===");
     await longTasks("step jump", async () => {
       await page.evaluate("location.hash = '#L50002'");
-      await see(page.locator("#L50002")).toBeVisible({ timeout: 30_000 });
+      await see(page.locator("#L50002")).toBeInViewport({ timeout: 30_000 });
     });
     await see(page.locator("#L50002")).toContainText("line 50001 ===");
   });
@@ -582,7 +582,7 @@ describe("the log viewer", () => {
   it("opens a line in a folded step that succeeded, from its link at load", async () => {
     await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}#L2000`);
     const line = page.locator("#L2000");
-    await see(line).toBeVisible({ timeout: 30_000 });
+    await see(line).toBeInViewport({ timeout: 30_000 });
     await see(line).toContainText("line 1999 ===");
   });
 
