@@ -143,7 +143,6 @@ export interface DeployResult {
 /** The deploy config wrangler uses: the committed config plus this account's resource ids. */
 export const API_DEPLOY_CONFIG = "wrangler.deploy.jsonc";
 
-/** The queue of the API's events, paused while the API deploys. */
 const EVENTS_QUEUE = "fyrden-events";
 
 /** Internal calls an invocation makes without `--internal-calls` (Free's, measured). */
@@ -164,10 +163,7 @@ async function writeDeployConfig(apiDir: string, config: Record<string, unknown>
 
 const workersDevUrl = (output: string) => /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
 
-/**
- * Whether a configured migrations folder holds any migration. A folder that
- * cannot be read is an error: skipping it would deploy against an old schema.
- */
+/** A folder that cannot be read is an error: skipping it would deploy against an old schema. */
 async function hasSqlFiles(dir: string): Promise<boolean> {
   return (await readdir(dir)).some((f) => f.endsWith(".sql"));
 }
@@ -192,14 +188,6 @@ export async function workerSecrets(
   throw new WranglerError(args, result);
 }
 
-/**
- * `fyrden deploy`: provisions resources, applies D1 migrations and stops
- * unless each database then matches its expected schema, deploys
- * fyrden-api first and fyrden-web second (fyrden-api must accept the current
- * and previous web RPC version). The required BOOTSTRAP_SECRET and the
- * platform's commit signing key (SIGNING_KEY) are uploaded with the first
- * API deploy that lacks them, from a 0600 file that is removed after.
- */
 /** The variables `deploy` sets from its flags on every run (left out: unset). */
 const DEPLOY_SWITCHES = new Set([
   "FYRDEN_INTERNAL_CALLS",
@@ -225,6 +213,14 @@ const DEPLOY_SWITCHES = new Set([
 /** How far ahead of the clock the API still applies `FYRDEN_CI_SINCE` (apps/api `MAX_CUTOFF_LEAD_MS`). */
 const CI_SINCE_MAX_LEAD_MS = 5 * 60_000;
 
+/**
+ * `fyrden deploy`: provisions resources, applies D1 migrations and stops
+ * unless each database then matches its expected schema, deploys
+ * fyrden-api first and fyrden-web second (fyrden-api must accept the current
+ * and previous web RPC version). The required BOOTSTRAP_SECRET and the
+ * platform's commit signing key (SIGNING_KEY) are uploaded with the first
+ * API deploy that lacks them, from a 0600 file that is removed after.
+ */
 export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const { log } = deps;
   const ci = ciVariables(deps);
@@ -443,8 +439,7 @@ export async function deploy(deps: DeployDeps): Promise<DeployResult> {
  * Asks the deployed API which protocol its read model executor serves
  * (`/healthz`, answered even when its checks are rate limited) and records
  * it in the directory (`read_model_barriers.executor_version`), what a later
- * change to the protocol checks before it applies. Not answered (no
- * workers.dev URL, the API unreachable): nothing recorded, and said so.
+ * change to the protocol checks before it applies.
  */
 async function verifyReadModelProtocol(
   deps: DeployDeps,
@@ -481,7 +476,6 @@ async function verifyReadModelProtocol(
   deps.log(`ok   fyrden-api serves read model protocol ${protocol as number} (recorded)`);
 }
 
-/** The org migration from which writes outside the read model's executor are refused. */
 const ENFORCEMENT_MIGRATION = "0018_read_model_enforced.sql";
 
 /** The read model's data tables (apps/api/src/read-model/export.ts): rows in any are data. */
@@ -776,7 +770,6 @@ async function recordRestoreFloor(
   );
 }
 
-/** 32 random bytes as unpadded base64url. */
 function base64urlKey(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
 }

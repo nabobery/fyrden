@@ -118,7 +118,6 @@ const STATUS_TEXT: Readonly<Record<number, string>> = {
   205: "Reset Content",
 };
 
-/** Whether an operation is a web session's only (its permission is). */
 const sessionOnly = (op: OperationDef) =>
   isPermission(op.permission) && permissionDef(op.permission).sessionOnly === true;
 
