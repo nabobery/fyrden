@@ -264,7 +264,7 @@ describe("the runs list", () => {
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
       await visit(page, runs());
-      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px`).toBe(
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
         width,
       );
     }
@@ -314,7 +314,7 @@ describe("a run and its jobs", () => {
     await accessible("job page");
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
-      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px`).toBe(
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
         width,
       );
     }
@@ -375,7 +375,7 @@ describe("a run and its jobs", () => {
     for (const width of [375, 320]) {
       await page.setViewportSize({ width, height: 800 });
       await visit(page, `${runs()}/runs/${passed}`);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px`).toBe(
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
         width,
       );
     }
