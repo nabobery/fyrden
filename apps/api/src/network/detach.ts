@@ -146,7 +146,6 @@ const KEEP = "dkeep";
 const VERIFY = "dverify";
 const DROP = "ddrop";
 const HELD = markName("dheld", 1);
-/** Commit-graph rows read per query while pruning. */
 const PRUNE_PAGE = 1_000;
 const OID_BYTES = 20;
 
@@ -288,7 +287,6 @@ class DetachSlice {
     ];
   }
 
-  /** The held roots a pack of the round's sources holds. */
   async #heldInSources(cursor: DetachCursor): Promise<Oid[]> {
     const held = this.#heldRoots();
     if (held.length === 0) return [];
@@ -403,7 +401,6 @@ class DetachSlice {
     });
   }
 
-  /** The packs the repository keeps: the new network's sources and the outputs. */
   #newPacks(cursor: DetachCursor): PackId[] {
     return [...cursor.sources.filter((s) => !s.old).map((s) => s.id), ...cursor.outputs];
   }
@@ -521,7 +518,6 @@ class DetachSlice {
     let keepLock = false;
     try {
       if (this.#moved(cursor)) {
-        // Refs moved or packs were replaced: catch up in another round.
         const freeze =
           cursor.round >= FREEZE_AFTER_ROUNDS ? git.locks.renew(lock, FREEZE_MS) : undefined;
         keepLock = freeze !== undefined;
@@ -579,7 +575,6 @@ class DetachSlice {
     }
   }
 
-  /** The cursor of another round (a catch-up), keeping the outputs written so far. */
   #round(cursor: DetachCursor, freeze: LockHandle | undefined): DetachCursor {
     return {
       ...cursor,
@@ -718,7 +713,6 @@ function concatOids(oids: readonly Uint8Array[]): Uint8Array {
   return bytes;
 }
 
-/** The roots of `held` a pack of `session` holds. */
 function heldIn(session: MarkSession, held: readonly Oid[]): Oid[] {
   return held.filter((oid) => session.sources.some((pack) => pack.idx.find(oid) >= 0));
 }

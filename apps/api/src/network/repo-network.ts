@@ -63,11 +63,6 @@ export interface CopyStep {
   readonly pages: number;
 }
 
-/**
- * The repository object's fork-network operations, as the
- * object's RPC methods call them: a parent's export, a fork's set-up, the
- * view-cap compaction, what the network object asks of a member, detach.
- */
 export class RepoNetwork {
   constructor(private readonly wiring: RepoNetworkWiring) {}
 

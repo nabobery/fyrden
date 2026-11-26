@@ -21,7 +21,6 @@ import { type Keyring, keyring } from "../crypto/keyring.js";
 const SECRET_PREFIX = "whsec_";
 const encoder = new TextEncoder();
 
-/** A secret as a hook keeps it. */
 export interface SealedSecret {
   readonly keyId: string;
   readonly nonce: string;
@@ -37,7 +36,6 @@ export const secretKeys = keyring("WEBHOOKS", (raw) =>
   crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]),
 );
 
-/** A new secret: 32 random bytes, `whsec_` + base64. */
 export function newSecret(): string {
   return SECRET_PREFIX + toBase64(crypto.getRandomValues(new Uint8Array(32)));
 }

@@ -24,7 +24,6 @@ export function pageLinks(
   return links.length > 0 ? links.join(", ") : undefined;
 }
 
-/** `url` with one `page`: where the first stood (any others dropped), else last. */
 function withPage(url: URL, page: number): string {
   const parts = url.search === "" ? [] : url.search.slice(1).split("&");
   let placed = false;

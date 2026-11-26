@@ -21,7 +21,6 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: false, ignoreBOM: true });
 const EMPTY_SALT = new Uint8Array(0);
 
-/** The two keys derived from one master key. */
 export interface MasterKey {
   readonly wrap: CryptoKey;
   readonly mask: CryptoKey;
@@ -43,7 +42,6 @@ function aesKey(base: CryptoKey, info: string): Promise<CryptoKey> {
   );
 }
 
-/** The deployment's CI master keys. */
 export const ciSecretKeys = keyring("CI_SECRETS", async (raw): Promise<MasterKey> => {
   const base = await hkdfBase(raw);
   return {
@@ -88,12 +86,10 @@ async function open(
   }
 }
 
-/** A new account data key: 32 random bytes. */
 export function newDataKey(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
-/** Which account data key: its account and generation. */
 export interface DataKeyAt {
   readonly accountId: string;
   readonly generation: number;
@@ -156,7 +152,6 @@ async function encKey(dataKey: Uint8Array): Promise<CryptoKey> {
   return aesKey(await hkdfBase(dataKey.slice()), "fyrden-ci-enc:v1");
 }
 
-/** Seals a secret's value for its place under the data key of its generation. */
 export async function sealSecretValue(
   dataKey: Uint8Array,
   at: SecretAt,
@@ -222,7 +217,6 @@ export interface SealedMask {
   readonly ciphertext: string;
 }
 
-/** What a mask row's additional data is, given the id of the master key it is sealed under. */
 export type MaskAdditionalData = (masterKeyId: string) => string;
 
 /**
