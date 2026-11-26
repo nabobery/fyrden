@@ -10,6 +10,7 @@ import {
 } from "../src/do/run/dispatch.js";
 import { RUN_JOB } from "../src/do/run/engine.js";
 import { CI_RESERVATION_START_MS } from "../src/do/run/reservations.js";
+import { refuseTask, supersedeOffer } from "../src/runner/registry.js";
 import {
   breakSecret,
   credentialOf,
@@ -432,7 +433,7 @@ describe("a failing attempt that outlives its recovery", () => {
       await expectQueued(p);
       await fn(p, async () => {
         held.release();
-        expect(await slow).toEqual({ refused: "task_finished" });
+        expect(await slow).toEqual({ refused: "released" });
       });
     } finally {
       held.release();
@@ -441,10 +442,10 @@ describe("a failing attempt that outlives its recovery", () => {
     }
   }
 
-  it("ends the offer late and leaves the job queued", () =>
+  it("does not end the offer, and leaves the job queued", () =>
     outlived(async (p, finish) => {
       await finish();
-      expect((await taskRow(p.wireId))?.ended_at).not.toBeNull();
+      expect((await taskRow(p.wireId))?.ended_at).toBeNull();
       await expectQueued(p);
       await later(p.runId);
       await expectQueued(p);
@@ -475,7 +476,7 @@ describe("a failing attempt that outlives its recovery", () => {
         await finish();
         expect(await taskRow(p.wireId)).toMatchObject({
           task: null,
-          ended_at: expect.any(Number),
+          ended_at: null,
           superseded_at: expect.any(Number),
         });
         record.release();
@@ -487,7 +488,7 @@ describe("a failing attempt that outlives its recovery", () => {
       await expectQueued(p);
     }));
 
-  it("and a delayed call of the same offer whose delivery fails too: its own failure is kept, and settled", () =>
+  it("and a delayed call of the same offer whose delivery fails too: its own failure is kept, and its job queued again", () =>
     outlived(async (p, finish) => {
       await hooked(p.runId, { beforeDeliveryFailure: down });
       expect(await assignAgain(p)).toEqual({ refused: "secrets_undeliverable" });
@@ -499,7 +500,8 @@ describe("a failing attempt that outlives its recovery", () => {
       expect(await failuresOf(p.runId)).toEqual([second]);
       expect(await jobA(p.runId)).toMatchObject({ status: "in_progress" });
       await later(p.runId);
-      await expectFailed(p);
+      await expectQueued(p);
+      expect((await taskRow(p.wireId))?.ended_at).toBeNull();
     }));
 
   it("finds its job failed by the recovery, when its end committed first", async () => {
@@ -535,12 +537,51 @@ describe("a call of an offer given up by the recovery", () => {
     await expectQueued(p);
   });
 
-  it("whose delivery fails ends it and fails the job", async () => {
+  it("ended before it was given up: a failing call fails the job with its error", async () => {
+    const p = await failing((runId) => ({
+      beforeDeliveryFailure: async () => {
+        await env.DIRECTORY.prepare(
+          "UPDATE ci_tasks SET ended_at = 1 WHERE run_id = ? AND task IS NULL",
+        )
+          .bind(runId)
+          .run();
+        throw new Error("the answer was lost");
+      },
+    }));
+    expect(await supersedeOffer(env.DIRECTORY, { taskId: p.wireId, now: 5 })).toBe(true);
+    expect(await assignAgain(p)).toEqual({ refused: "task_finished" });
+    await expectFailed(p);
+  });
+
+  it("refused by an older call as finished, then failing: its job is queued again, the offer not ended", async () => {
     const p = await notEnded();
     await later(p.runId);
-    expect(await assignAgain(p)).toEqual({ refused: "task_finished" });
+    await expectQueued(p);
+    await refuseTask(env.DIRECTORY, {
+      taskId: p.wireId,
+      code: "task_finished",
+      runId: p.runId,
+      jobId: p.jobId,
+      now: 7,
+    });
+    expect((await taskRow(p.wireId))?.ended_at).toBeNull();
+    expect(await assignAgain(p)).toEqual({ refused: "released" });
     await drain(p.runId);
-    await expectFailed(p);
+    await expectQueued(p);
+  });
+
+  it("whose delivery fails queues its job again, ending nothing", async () => {
+    const p = await notEnded();
+    await later(p.runId);
+    const before = await taskRow(p.wireId);
+    expect(await assignAgain(p)).toEqual({ refused: "released" });
+    await drain(p.runId);
+    await expectQueued(p);
+    expect(await taskRow(p.wireId)).toEqual(before);
+    expect(outcomesOf(p.wireId)).toEqual(["scheduled", "requeued", "scheduled"]);
+    expect(await failuresOf(p.runId)).toEqual([]);
+    await later(p.runId);
+    await expectQueued(p);
   });
 });
 

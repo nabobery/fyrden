@@ -796,7 +796,7 @@ export class RunDispatch {
     code: string,
     error: string,
     names: readonly string[],
-  ): Promise<{ readonly refused: "task_finished" | "secrets_undeliverable" }> {
+  ): Promise<{ readonly refused: "task_finished" | "secrets_undeliverable" | "released" }> {
     const { host } = this;
     const db = host.env.DIRECTORY;
     const withheld = (reason: string) => {
@@ -831,7 +831,9 @@ export class RunDispatch {
       this.#recovery("scheduled", wireId, ref);
     }
     this.#count("ci_task_undeliverable", 3);
-    let offer: { task: number | null } | undefined;
+    let offer:
+      | { task: number | null; ended_at: number | null; superseded_at: number | null }
+      | undefined;
     let tokens: number;
     try {
       await host.hooks.beforeDeliveryFailure?.();
@@ -839,13 +841,14 @@ export class RunDispatch {
         db
           .prepare(
             `UPDATE ci_tasks SET ended_at = ?1 WHERE id = ?2 AND task IS NULL AND ended_at IS NULL
+               AND superseded_at IS NULL
                AND NOT EXISTS (SELECT 1 FROM ci_job_tokens WHERE task_id = ?2)`,
           )
           .bind(host.now(), wireId),
-        db.prepare("SELECT task FROM ci_tasks WHERE id = ?").bind(wireId),
+        db.prepare("SELECT task, ended_at, superseded_at FROM ci_tasks WHERE id = ?").bind(wireId),
         db.prepare("SELECT 1 FROM ci_job_tokens WHERE task_id = ? LIMIT 1").bind(wireId),
       ]);
-      offer = read?.results[0] as { task: number | null } | undefined;
+      offer = read?.results[0] as typeof offer;
       tokens = minted?.results.length ?? 0;
     } catch {
       return withheld("offer_not_ended");
@@ -855,6 +858,14 @@ export class RunDispatch {
     if ((offer?.task ?? null) !== null || tokens > 0) {
       host.tx(() => this.#settled(wireId, ref));
       return withheld("answered_before");
+    }
+    // Given up unrecorded and never ended: no answer of it can leave, so its job is queued again.
+    if (offer && offer.superseded_at !== null && offer.ended_at === null) {
+      host.tx(() => {
+        host.requeueTask(ref);
+        this.#settled(wireId, ref);
+      });
+      return { refused: "released" };
     }
     // Ended unrecorded, by this attempt or an earlier one: no answer of it ever leaves.
     const failed = host.tx(() => {
