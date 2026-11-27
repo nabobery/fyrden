@@ -218,8 +218,10 @@ const CI_SINCE_MAX_LEAD_MS = 5 * 60_000;
  * unless each database then matches its expected schema, deploys
  * fyrden-api first and fyrden-web second (fyrden-api must accept the current
  * and previous web RPC version). The required BOOTSTRAP_SECRET and the
- * platform's commit signing key (SIGNING_KEY) are uploaded with the first
- * API deploy that lacks them, from a 0600 file that is removed after.
+ * generated keys (SIGNING_KEY, WEBHOOKS_KEY, CI_SECRETS_KEY and EMAIL_KEY)
+ * are each uploaded with the first API deploy that lacks it, and the Resend
+ * API key (and webhook secret, when given) with every deploy that sets up
+ * email, all from a 0600 file that is removed after.
  */
 export async function deploy(deps: DeployDeps): Promise<DeployResult> {
   const { log } = deps;

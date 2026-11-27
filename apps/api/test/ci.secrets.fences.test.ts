@@ -132,7 +132,11 @@ describe("a secret write paused between preparation and commit", () => {
 });
 
 describe("a repository a transfer is moving", () => {
-  /** Organization `from`'s repository, with a transfer to `to` held at `step`. */
+  /**
+   * A repository of a new organization, with a transfer to a second new
+   * organization held at `step`. At `grants` the directory already names the
+   * destination as its owner, so `path` is under the destination.
+   */
   async function moving(step: "directory" | "grants") {
     const owner = await user();
     const from = await newOrg(admin, owner);

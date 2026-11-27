@@ -63,7 +63,6 @@ describe("faults", () => {
     const runId = await started(f, one);
     let down = true;
     await failRepo(runId, () => down);
-    // Ten attempts with doubling backoff from 1 s: about 8.5 minutes.
     for (let i = 0; i < 12; i++) await advance(runId, 5 * MIN);
     const view = await runStub(runId).get();
     expect(view?.faults).toEqual([
@@ -81,6 +80,7 @@ describe("faults", () => {
     const runId = await started(f, one);
     let calls = 0;
     await inRun(runId, (r) => {
+      r.jitter = () => 0;
       r.hooks = {
         beforeRepoCall: async () => {
           calls++;
