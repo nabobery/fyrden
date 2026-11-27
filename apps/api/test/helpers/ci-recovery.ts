@@ -42,6 +42,11 @@ export const hooked = (runId: string, hooks: Hooks) =>
     r.hooks = hooks;
   });
 
+export const unjittered = (runId: string) =>
+  inRun(runId, (r) => {
+    r.jitter = () => 0;
+  });
+
 /** A reset: the next request finds a new instance, with nothing in memory. */
 export async function reset(runId: string) {
   await evictDurableObject(runStub(runId));

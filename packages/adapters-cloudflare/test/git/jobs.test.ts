@@ -152,6 +152,156 @@ describe("JobQueue and the reflog prune job", () => {
     expect(result.attempts).toEqual([1, 2, 2, 2]);
     expect(result.state).toBe("failed");
   });
+
+  it("spreads each retry from its back-off up to half again, one draw a failure", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const alarms: number[] = [];
+      const draws = [0, 1 - Number.EPSILON, 0.5, 0.25];
+      let drawn = 0;
+      const jobs = new JobQueue(
+        context,
+        (at) => alarms.push(at),
+        policy,
+        undefined,
+        () => {
+          const draw = draws[drawn++];
+          if (draw === undefined) throw new Error("no draw left");
+          return draw;
+        },
+      );
+      const low = jobs.enqueue("archive", null, clock.now - 1);
+      const high = jobs.enqueue("compact");
+      const failing = {
+        async runSlice(): Promise<never> {
+          throw new Error("D1 unavailable");
+        },
+      };
+      const handlers = { archive: failing, compact: failing };
+      const memory = createDoMemoryBudget(1024);
+      const dueAt = (jobId: string) =>
+        context.storage.sql
+          .exec<{ next_run_at: number }>("SELECT next_run_at FROM jobs WHERE job_id = ?", jobId)
+          .one().next_run_at;
+      const start = clock.now;
+      await jobs.runDue(handlers, memory, clock.now + 10_000);
+      const first = { low: dueAt(low) - start, high: dueAt(high) - start, alarm: alarms.at(-1) };
+      clock.now = dueAt(low) - 1;
+      const early = await jobs.runDue(handlers, memory, clock.now + 10_000);
+      clock.now = dueAt(high);
+      const secondStart = clock.now;
+      await jobs.runDue(handlers, memory, clock.now + 10_000);
+      const second = { low: dueAt(low) - secondStart, high: dueAt(high) - secondStart };
+      clock.now += 10_000;
+      await jobs.runDue(handlers, memory, clock.now + 10_000);
+      return {
+        first,
+        early,
+        second,
+        states: [jobs.get(low)?.state, jobs.get(high)?.state],
+        drawn,
+      };
+    });
+    expect(result.first).toEqual({
+      low: policy.backoffMs,
+      high: policy.backoffMs + policy.backoffMs / 2 - 1,
+      alarm: 1_000_000 + policy.backoffMs,
+    });
+    expect(result.early).toBe(0);
+    expect(result.second).toEqual({
+      low: 2 * policy.backoffMs + policy.backoffMs / 2,
+      high: 2 * policy.backoffMs + policy.backoffMs / 4,
+    });
+    expect(result.states).toEqual(["failed", "failed"]);
+    expect(result.drawn).toBe(4);
+  });
+
+  it("retries at the back-off itself when the random source gives a value outside [0, 1)", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      const delays: number[] = [];
+      for (const draw of [1, -0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const jobs = new JobQueue(
+          context,
+          () => {},
+          policy,
+          undefined,
+          () => draw,
+        );
+        const jobId = jobs.enqueue("archive");
+        const start = clock.now;
+        await jobs.runDue(
+          {
+            archive: {
+              async runSlice(): Promise<never> {
+                throw new Error("R2 unavailable");
+              },
+            },
+          },
+          createDoMemoryBudget(1024),
+          clock.now + 10_000,
+        );
+        const due = context.storage.sql
+          .exec<{ next_run_at: number }>("SELECT next_run_at FROM jobs WHERE job_id = ?", jobId)
+          .one().next_run_at;
+        delays.push(due - start);
+        clock.now += 10_000;
+      }
+      return delays;
+    });
+    expect(result).toEqual([100, 100, 100, 100]);
+  });
+
+  it("draws nothing for a slice's own delay or a short pool", async () => {
+    const { stub } = await newProbe();
+    const result = await inProbe(stub, async ({ git }) => {
+      const clock = { now: 1_000_000 };
+      const context = withClock(git.context, clock);
+      let drawn = 0;
+      const jobs = new JobQueue(
+        context,
+        () => {},
+        policy,
+        undefined,
+        () => {
+          drawn++;
+          return 0.9;
+        },
+      );
+      const later = jobs.enqueue("archive");
+      const short = jobs.enqueue("compact");
+      const memory = createDoMemoryBudget(100);
+      const held = memory.tryReserve(80);
+      const start = clock.now;
+      let slices = 0;
+      await jobs.runDue(
+        {
+          archive: {
+            async runSlice() {
+              slices++;
+              return slices === 1
+                ? { done: false as const, cursor: null, runAfterMs: 300 }
+                : { done: true as const };
+            },
+          },
+          compact: { memoryBytes: 50, runSlice: async () => ({ done: true as const }) },
+        },
+        memory,
+        clock.now + 10_000,
+      );
+      held?.release();
+      const dueAt = (jobId: string) =>
+        context.storage.sql
+          .exec<{ next_run_at: number }>("SELECT next_run_at FROM jobs WHERE job_id = ?", jobId)
+          .one().next_run_at - start;
+      return { later: dueAt(later), short: dueAt(short), drawn };
+    });
+    expect(result).toEqual({ later: 300, short: policy.memoryRetryMs, drawn: 0 });
+  });
   it("a slice that checkpoints and then fails is retried from its checkpoint; a taken-over slice cannot checkpoint", async () => {
     const { stub } = await newProbe();
     const result = await inProbe(stub, async ({ git }) => {
