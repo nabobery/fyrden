@@ -232,7 +232,7 @@ export class LogReader {
     this.#asks.push(this.#now());
     return this.#fetch(asked)
       .then(
-        (answer) => this.#answer(answer, forward),
+        (answer) => this.#answer(answer, forward, new URLSearchParams(asked).has("cursor")),
         () => {
           this.refusal = { status: 0, code: "network" };
           this.#transient = false;
@@ -255,21 +255,24 @@ export class LogReader {
     return row?.kind === "prefix" && !row.cut && row.next === continued.at;
   }
 
-  #answer(answer: PageAnswer, forward: boolean): void {
+  #answer(answer: PageAnswer, forward: boolean, byCursor: boolean): void {
     const problem = (answer.body ?? {}) as { code?: unknown; retry_at?: unknown };
     const code = typeof problem.code === "string" ? problem.code : undefined;
     if (answer.status === 200 && isPage(answer.body)) {
       const page = answer.body;
       this.#answered = true;
       this.#waited = 0;
+      const rows = byCursor
+        ? page.rows.filter((r) => !("o" in r) || r.o === 0 || this.#store.row(r.i) !== undefined)
+        : page.rows;
       this.#store.applyPage({
-        rows: page.rows,
+        rows,
         state: page.state,
         end: page.end,
         next: page.next_cursor,
       });
       const last = page.rows.at(-1);
-      if (last && "o" in last && !last.end && page.next_cursor)
+      if (last && "o" in last && !last.end && page.next_cursor && rows.at(-1) === last)
         this.#continuations.set(last.i, { cursor: page.next_cursor, at: last.o + last.c.length });
       if (forward || !last || last.i + 1 >= page.end) this.#followCursor = page.next_cursor;
       return;

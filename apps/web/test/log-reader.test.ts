@@ -446,6 +446,37 @@ describe("LogReader's dropped continuations", () => {
   });
 });
 
+describe("LogReader's continuations past a dropped prefix", () => {
+  it.each([
+    ["its continuation", (reader: LogReader) => reader.want(0, 1)],
+    ["Load new rows", (reader: LogReader) => reader.more() ?? undefined],
+  ])("reads the row from its start when %s lands after its prefix went", async (_, ask) => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = ask(h.reader);
+    expect(h.asked.at(-1)).toBe("cursor=inside-0&max_bytes=262144");
+    h.store.dropUnfinishedFrom(0);
+    h.answer(page([{ i: 0, t: null, c: "cdef", o: 2, end: true }], 1, "after-0"));
+    await on;
+    expect(h.store.row(0)).toBeUndefined();
+    const again = h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+    h.answer(page([{ i: 0, t: 1, c: "abcdef" }], 1, "after-0"));
+    await again;
+    expect(h.store.row(0)).toMatchObject({ kind: "whole", c: "abcdef" });
+  });
+
+  it("keeps the end of a row a tail read starts inside", async () => {
+    const h = harness();
+    const read = h.reader.tail(1);
+    h.answer(page([{ i: 0, t: null, c: "cdef", o: 2, end: true }], 1, "after-0"));
+    await read;
+    expect(h.store.row(0)).toMatchObject({ kind: "suffix", c: "cdef", o: 2 });
+  });
+});
+
 describe("LogReader's waiting Load new rows press", () => {
   it("keeps the press while a refused read is asked again in its place", async () => {
     const h = harness();
