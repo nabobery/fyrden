@@ -356,6 +356,7 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
     if (box && !following && target.current === null && wanted !== null) {
       if (Math.abs(wanted - logicalTop) >= 1) {
         box.scrollTop = geometry.physicalTop(Math.max(0, wanted));
+        placing.current = box.scrollTop;
         setTop(box.scrollTop);
         anchor.current = anchorAt(layout, geometry.logicalTop(box.scrollTop), rowPx);
         return;
