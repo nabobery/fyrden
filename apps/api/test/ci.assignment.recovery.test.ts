@@ -2,12 +2,8 @@
 // between the run's own assignment and the directory's answer. The run stores
 // that its record failed, and settles it 30 seconds later by what the directory
 // then says of the offer: never recorded, its job is queued again; recorded,
-// everything is left alone. Such a failure never fails a job. Failures are
-// injected through hooks, or by a trigger of the directory, and the run's clock
-// is the test's. An assignment whose run object was reset is reported by the
-// Worker that called it: a call that fails there stands in for one, with an
-// eviction where the object's memory matters. Failed deliveries are in
-// ci.secrets.recovery.test.ts.
+// everything is left alone. Such a failure never fails a job. An assignment
+// whose run object was reset is reported by the Worker that called it.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";

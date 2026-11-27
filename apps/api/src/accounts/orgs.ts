@@ -139,7 +139,6 @@ async function deliverChange(stub: DurableObjectStub<OrgDO>, metrics: Metrics): 
   await stub.deliverAudit().catch(() => {});
 }
 
-/** A user deletion waiting on the organization's last owner goes on now that it has another. */
 async function wakeDeletions(env: Env, orgId: string, metrics: Metrics): Promise<void> {
   await wakeDeletionsBlockedOn(env, orgId, { metrics }).catch((error: unknown) =>
     createLogger({ op: "orgs.owners", orgId }).warn("waking deletions failed", { error }),
@@ -199,7 +198,6 @@ export async function removeMembershipOperation(
   return { org: org.handle, user: user.handle, state: "removed" };
 }
 
-/** The `orgs.members.list` operation, from the organization's object. */
 export async function listMembersOperation(
   ctx: OpContext,
   input: Input<typeof listMembers>,

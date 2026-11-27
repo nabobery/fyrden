@@ -733,7 +733,6 @@ describe("a job only some runners may take, whose delivery failed", () => {
   type Kind = "public" | "fork" | "selected";
   const KINDS: Kind[] = ["public", "fork", "selected"];
 
-  /** Gives the runner the access a job of `kind` needs. */
   const open = (kind: Kind, f: OrgFixture, runner: RegisteredRunner) =>
     kind === "selected"
       ? selectRepos(runner, [f.repo.id])

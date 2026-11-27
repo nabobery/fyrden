@@ -110,7 +110,6 @@ function branch(value: unknown): string | null {
     : null;
 }
 
-/** A positive integer, as a number or as the decimal text a context holds. */
 function positive(value: unknown): number | null {
   const n = typeof value === "string" && /^[1-9][0-9]{0,15}$/.test(value) ? Number(value) : value;
   return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : null;
