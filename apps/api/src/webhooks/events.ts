@@ -65,7 +65,6 @@ const ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
 /** GitHub's name for an entity's webhook event where it differs from the entity's. */
 const EVENT_NAMES: Readonly<Record<string, string>> = { issue: "issues" };
 
-/** The webhook event a repository event of `type` makes, if any. */
 export function webhookEventOf(type: string): WebhookEventName | undefined {
   if (type === "refs.updated") return { event: "push", action: null };
   if (type === "webhook.ping") return { event: "ping", action: null };
@@ -78,9 +77,7 @@ export function webhookEventOf(type: string): WebhookEventName | undefined {
   return ACTIONS[event]?.has(action) ? { event, action } : undefined;
 }
 
-/** Milliseconds since the epoch as an ISO 8601 time, or null. */
 function time(ms: unknown): string | null {
-  // A time no date can hold (recorded before inputs were bounded) is shown as none, not thrown.
   if (typeof ms !== "number") return null;
   const date = new Date(ms);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
@@ -88,7 +85,6 @@ function time(ms: unknown): string | null {
 
 type Row = Record<string, unknown>;
 
-/** The labels, assignees and milestone a snapshot holds (as ids: their objects are not kept). */
 function metaOf(row: Row): Row {
   return {
     labels: ((row.labels ?? []) as number[]).map((id) => ({ id })),
@@ -168,11 +164,6 @@ function milestoneOf(row: Row): Row {
   };
 }
 
-/**
- * What a metadata action changed, beside the entity: the label added or
- * removed, the user assigned or unassigned, the milestone set or cleared
- * (as the event recorded them).
- */
 function subjectOf(data: Row): Row {
   const label = data.label as Row | undefined;
   const milestone = data.milestone as Row | undefined;
@@ -183,7 +174,6 @@ function subjectOf(data: Row): Row {
   };
 }
 
-/** An edit's `changes`, its times as ISO 8601 as everywhere in deliveries. */
 function changesOf(data: Row): Row {
   if (data.changes === undefined) return {};
   const changes = { ...(data.changes as Record<string, Row>) };

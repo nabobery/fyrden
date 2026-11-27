@@ -41,11 +41,6 @@ import {
 import { storedSteps } from "./steps.js";
 
 /*
- * The runner protocol inside a run's object: the run's queued jobs published
- * to the directory's dispatch index, tasks assigned under the wire task ids
- * the directory hands out, job tokens minted for them and revoked when their
- * task ends, and the runner's reports decoded and passed to the run.
- *
  * A failed delivery of a job's secrets is recorded here before the directory
  * is asked to end its offer, so that one whose end did not commit, whose
  * answer was lost, or whose object was reset before its job was failed is
@@ -53,7 +48,6 @@ import { storedSteps } from "./steps.js";
  * assignment not known to be recorded (`assignmentLost`).
  */
 
-/** The error of a job whose secrets are not delivered because its repository changed owner. */
 const OWNER_CHANGED_ERROR =
   "owner_changed: the repository moved to another account after this run was created; its jobs are not given that account's secrets";
 
@@ -108,7 +102,6 @@ export type ReportTaskAnswer =
       readonly message: string;
     };
 
-/** Pause or fail points for tests. */
 export interface DispatchHooks {
   /** Before the dispatch index's D1 batch. */
   beforeDispatchCommit?: () => Promise<void> | void;
@@ -141,11 +134,9 @@ export interface DispatchHooks {
   beforeReport?: () => Promise<void> | void;
   /** After ownership is checked, before the final liveness check and answer. */
   beforeTaskAnswer?: () => Promise<void> | void;
-  /** On every liveness question about a task. */
   onTaskLive?: () => void;
 }
 
-/** What the dispatch work needs from its object. */
 export interface DispatchHost {
   readonly env: Env;
   readonly engine: RunEngine;
@@ -181,7 +172,6 @@ export interface DispatchHost {
       steps?: string | null;
     },
   ): TaskAnswer<{ conclusion: string }>;
-  /** Whether the task's stored log is complete. */
   logComplete(task: number): boolean;
   /**
    * Registers the task's job token to be masked in its log rows, sealed:
@@ -346,8 +336,6 @@ export class RunDispatch {
     return tokenStore(this.host.env, { metrics: this.host.metrics });
   }
 
-  // ---------------------------------------------------------------- assignment
-
   /**
    * Assigns a job and returns its encoded task. Replaying an unconfirmed
    * offer rotates its job token. A confirmed offer is refused without
@@ -428,7 +416,6 @@ export class RunDispatch {
       const bytes = deliveryMemory(request.refs);
       held.reservation = host.memory.tryReserve(bytes);
       if (!held.reservation) {
-        // Kept matchers only save rebuilding: they give way to an assignment.
         host.dropMaskCaches();
         held.reservation = host.memory.tryReserve(bytes);
       }
@@ -1085,8 +1072,6 @@ export class RunDispatch {
     return row.transferring === 1 ? "repo_transferring" : undefined;
   }
 
-  // ---------------------------------------------------------------- reports
-
   /**
    * An UpdateTask for wire task `wireId`: decoded here, the task confirmed
    * once, then a heartbeat (no result) or the completion (a result), and the
@@ -1116,7 +1101,6 @@ export class RunDispatch {
         sentOutputs: [...sent],
       }),
     });
-    // An erased run's runner is told to stop.
     if (host.erased()) return answer(Result.CANCELLED);
     const map = host.engine.rows<MapRow>("SELECT * FROM ci_tasks WHERE wire_id = ?", wireId)[0];
     if (!map) return { ok: false, code: "not_found", message: TASK_NOT_FOUND };
@@ -1180,8 +1164,6 @@ export class RunDispatch {
     );
   }
 
-  // ---------------------------------------------------------------- background work
-
   /**
    * Reconciles the directory's pending rows of this run with its queued
    * instances: what D1 holds is read back each time, so a reset between the
@@ -1218,7 +1200,6 @@ export class RunDispatch {
     );
     const want = new Set(queued.map((q) => q.jobId));
     const inserts = queued.filter((q) => !have.has(q.jobId));
-    // Published under an account that no longer owns the repository: moved to the one that does.
     const moves = queued.filter((q) => have.has(q.jobId) && have.get(q.jobId) !== accountId);
     const deletes = [...have.keys()].filter((id) => !want.has(id));
     const toPublish = inserts.length + moves.length;
@@ -1392,10 +1373,8 @@ export class RunDispatch {
   }
 }
 
-/** The actions instance the runner fetches `uses:` actions from. */
 const DEFAULT_ACTIONS_URL = "https://github.com";
 
-/** The `github` context as a JSON object (none: an empty one). */
 function jsonObject(value: unknown): JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)

@@ -507,7 +507,6 @@ export class RepoEvents {
     return (this.#meta()?.deleting_at ?? null) !== null;
   }
 
-  /** Throws when the repository is frozen (being deleted or transferred): nothing may change it. */
   #assertWritable(meta: MetaRow | undefined): void {
     const reason = frozenReason(meta);
     if (reason) throw new Error(reason);

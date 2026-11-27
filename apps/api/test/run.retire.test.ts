@@ -60,7 +60,6 @@ const state = (runId: string) =>
       .map((row) => `${row.job_id}:${row.state}`),
   }));
 
-/** Moves the run's clock to `t`, its retention set, and runs what is due. */
 async function runAt(runId: string, t: number) {
   await at(runId, t);
   await configure(runId);
@@ -107,7 +106,6 @@ describe("retiring an expired run", () => {
       sweep: run.policy.sweepMs,
     }));
     expect(retry.next).toEqual({ next_run_at: T0 + RETENTION + retry.sweep, attempts: 0 });
-    // Still answered as no run while it waits.
     expect(await runStub(runId).get()).toBeUndefined();
     await configure(runId, (run) => {
       delete run.hooks.beforeRepoCall;

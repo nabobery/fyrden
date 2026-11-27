@@ -338,7 +338,6 @@ describe("executeOperation with an Idempotency-Key", () => {
     expect(first).toEqual({ ok: true, output: { ok: true } });
     expect(again).toEqual({ ok: true, output: { ok: true }, status: 200, replayed: true });
     expect(handler).toHaveBeenCalledTimes(1);
-    // Another token with the same key runs as itself.
     const [other] = keyed(key, "tok_other");
     await executeOperation(writeOp, handler, other, { value: "a" }, { idempotencyKey: key });
     expect(handler).toHaveBeenCalledTimes(2);
@@ -375,7 +374,6 @@ describe("executeOperation with an Idempotency-Key", () => {
     const request = { tokenId: "tok_owner", key, opId: "test.write", hash: "h", now: Date.now() };
     const stale = await startIdempotent(env, request);
     if (stale.kind !== "run") throw new Error(stale.kind);
-    // It expires and another execution claims the key.
     await env.DIRECTORY.prepare("UPDATE idempotency_keys SET expires_at = 1 WHERE key = ?")
       .bind(key)
       .run();

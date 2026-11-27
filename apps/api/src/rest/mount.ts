@@ -140,7 +140,6 @@ async function readInput(c: AppContext, op: OperationDef): Promise<ReadResult> {
   return { ok: true, input: { ...body, ...params } };
 }
 
-/** A strong ETag of a body: its SHA-256, the first 16 bytes in hex. */
 async function etagOf(body: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body));
   const hex = [...new Uint8Array(digest).slice(0, 16)]
@@ -213,7 +212,6 @@ function linkOf(
   return pageLinks(new URL(c.req.url), page, perPage, total);
 }
 
-/** Registers one Hono route per registry operation under /api. */
 /**
  * The operations of a chunked upload session: git's transport, where a git
  * token is taken as git takes it (`fyrden push --chunked` sends one, and
@@ -250,7 +248,6 @@ export function mountRest(app: Hono<{ Bindings: Env; Variables: AuthVariables }>
     mountOperation(app, op, operationHandler(op));
 }
 
-/** Registers one operation's REST route under /api and /api/v3. */
 export function mountOperation(
   app: Hono<{ Bindings: Env; Variables: AuthVariables }>,
   op: OperationDef,
