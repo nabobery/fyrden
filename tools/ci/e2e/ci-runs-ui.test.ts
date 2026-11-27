@@ -1,4 +1,4 @@
-import { type Page, expect as see } from "@playwright/test";
+import { type Page, expect as see, type WebSocket } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eventually } from "./forge.js";
 import {
@@ -696,6 +696,12 @@ describe("the log viewer", () => {
       }
       await route.continue();
     });
+    const sockets: WebSocket[] = [];
+    const closed: Promise<void>[] = [];
+    page.on("websocket", (socket) => {
+      sockets.push(socket);
+      closed.push(new Promise((done) => socket.on("close", () => done())));
+    });
     const asked = page.waitForRequest((request) => request.url().includes("/logs/rows?"));
     await page.goto(`${runs()}/runs/${live.runId}/job/${live.jobId}`);
     await asked;
@@ -716,9 +722,11 @@ describe("the log viewer", () => {
     await sendLog(stack.origin, played, live.taskId, logRows(50, 150), 150);
     await see(log).toContainText("line 200 ===", { timeout: 30_000 });
     await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 200)]);
-    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0, {
-      timeout: 30_000,
-    });
+    expect(sockets.length).toBeGreaterThan(0);
+    await Promise.all(closed);
+    expect(sockets.every((socket) => socket.isClosed())).toBe(true);
+    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0);
+    await see(log).toContainText("line 200 ===");
     await accessible("log viewer, live");
   });
 

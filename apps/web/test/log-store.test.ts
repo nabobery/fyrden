@@ -224,4 +224,52 @@ describe("LogStore", () => {
     expect(tail.c).toBe("b".repeat(DISPLAY_CUT_UNITS - 1));
     expect(tail.o).toBe(50 + 3);
   });
+
+  it("keeps a longer prefix when an older, shorter piece replays from the start", () => {
+    const store = new LogStore();
+    store.applyLive([{ i: 0, t: 1, c: "ab", o: 0, end: false }]);
+    store.applyLive([{ i: 0, t: null, c: "cd", o: 2, end: false }]);
+    store.applyPage({
+      rows: [{ i: 0, t: 1, c: "ab", o: 0, end: false }],
+      state: "streaming",
+      end: 1,
+      next: "c",
+    });
+    expect(store.row(0)).toMatchObject({ kind: "prefix", c: "abcd" });
+    store.applyLive([{ i: 0, t: null, c: "ef", o: 4, end: true }]);
+    expect(store.row(0)).toEqual({ kind: "whole", t: 1, c: "abcdef", cut: false });
+  });
+
+  it("records a cut row's last piece, so a reconnect keeps it", () => {
+    const store = new LogStore();
+    store.applyLive([{ i: 0, t: 1, c: "x".repeat(DISPLAY_CUT_UNITS), o: 0, end: false }]);
+    store.applyLive([{ i: 0, t: null, c: "tail", o: DISPLAY_CUT_UNITS, end: true }]);
+    expect(store.row(0)).toEqual({
+      kind: "whole",
+      t: 1,
+      c: "x".repeat(DISPLAY_CUT_UNITS),
+      cut: true,
+    });
+    store.dropUnfinishedFrom(0);
+    expect(store.row(0)).toBeDefined();
+  });
+
+  it("completes a cut row whose page and live pieces overlap", () => {
+    const store = new LogStore();
+    const piece = (o: number, length: number, end: boolean) => ({
+      i: 0,
+      t: o === 0 ? 1 : null,
+      c: "z".repeat(length),
+      o,
+      end,
+    });
+    store.applyLive([piece(0, 12_000, false)]);
+    store.applyPage({ rows: [piece(0, 25_000, false)], state: "streaming", end: 1, next: "c" });
+    store.applyLive([piece(12_000, 12_000, false)]);
+    store.applyLive([piece(24_000, 12_000, false)]);
+    store.applyLive([piece(36_000, 4_000, true)]);
+    expect(store.row(0)).toMatchObject({ kind: "whole", cut: true });
+    store.dropUnfinishedFrom(0);
+    expect(store.row(0)).toBeDefined();
+  });
 });

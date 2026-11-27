@@ -16,6 +16,8 @@ export type StoredRow =
       readonly t: number | null;
       readonly c: string;
       readonly cut: boolean;
+      /** The source offset the row's next piece starts at; past `c` once the row is cut. */
+      readonly next: number;
     }
   | { readonly kind: "suffix"; readonly t: number | null; readonly c: string; readonly o: number }
   | { readonly kind: "omitted"; readonly bytes: number };
@@ -138,6 +140,10 @@ export class LogStore {
     this.#terminal = true;
   }
 
+  forget(i: number): void {
+    this.#set(i, undefined);
+  }
+
   dropUnfinishedFrom(from: number): void {
     for (const [block, rows] of this.#blocks)
       rows.forEach((row, k) => {
@@ -158,13 +164,18 @@ export class LogStore {
 
   #piece(row: { i: number; t: number | null; c: string; o: number; end: boolean }): void {
     const held = this.row(row.i);
+    const reach = row.o + row.c.length;
     if (row.o === 0) {
       if (held?.kind === "whole") return;
+      if (!row.end && held?.kind === "prefix" && held.next >= reach) return;
       this.#set(row.i, this.#assembled(row.t, row.c, row.end));
       return;
     }
-    if (held?.kind === "prefix" && !held.cut && held.c.length === row.o) {
-      this.#set(row.i, this.#assembled(held.t, held.c + row.c, row.end));
+    if (held?.kind === "prefix" && row.o <= held.next && (reach > held.next || row.end)) {
+      if (!held.cut)
+        this.#set(row.i, this.#assembled(held.t, held.c.slice(0, row.o) + row.c, row.end));
+      else if (row.end) this.#set(row.i, { kind: "whole", t: held.t, c: held.c, cut: true });
+      else this.#set(row.i, { ...held, next: reach });
       return;
     }
     if (held === undefined && row.end) {
@@ -183,7 +194,13 @@ export class LogStore {
       : DISPLAY_CUT_UNITS;
     const shown = cut ? detached(c.slice(0, at)) : c;
     if (end) return { kind: "whole", t, c: shown, cut };
-    return { kind: "prefix", t, c: shown, cut: cut || c.length === DISPLAY_CUT_UNITS };
+    return {
+      kind: "prefix",
+      t,
+      c: shown,
+      cut: cut || c.length === DISPLAY_CUT_UNITS,
+      next: c.length,
+    };
   }
 
   #set(i: number, row: StoredRow | undefined): void {

@@ -47,7 +47,10 @@ export class LogReader {
   readonly #store: LogStore;
   readonly #fetch: (query: string) => Promise<PageAnswer>;
   readonly #now: () => number;
-  readonly #continuations = new Map<number, string>();
+  readonly #continuations = new Map<number, { readonly cursor: string; readonly at: number }>();
+  readonly #restart = new Set<number>();
+  #moreAsked = false;
+  #startedForward = false;
   #followCursor: string | null = null;
   #inflight = false;
   #answered = false;
@@ -126,14 +129,28 @@ export class LogReader {
       const row = this.#store.row(i);
       if (row === undefined)
         return this.#read(new URLSearchParams({ from: String(Math.min(i, MAX_FROM)) }));
-      const cursor = this.#continuations.get(i);
-      if (row.kind === "prefix" && !row.cut && cursor)
-        return this.#read(new URLSearchParams({ cursor }));
+      if (row.kind !== "prefix" || row.cut) continue;
+      const continuation = this.#continuations.get(i);
+      if (continuation?.at === row.next)
+        return this.#read(new URLSearchParams({ cursor: continuation.cursor }));
+      if (this.#restart.has(i) || this.#store.closed) {
+        const read = this.#read(new URLSearchParams({ from: String(i) }));
+        if (read) {
+          this.#restart.delete(i);
+          this.#continuations.delete(i);
+          this.#store.forget(i);
+        }
+        return read;
+      }
     }
     return undefined;
   }
 
   wantRanges(ranges: readonly RowRange[]): Promise<void> | undefined {
+    if (this.moreWaiting) {
+      const read = this.more();
+      if (read) return read;
+    }
     for (const [first, last] of ranges) {
       const read = this.want(first, last);
       if (read) return read;
@@ -156,12 +173,17 @@ export class LogReader {
   more(): Promise<void> | null {
     if (this.#store.closed) return null;
     const cursor = this.#followCursor;
-    return (
-      this.#read(
-        new URLSearchParams(cursor ? { cursor } : { from: String(this.#store.length) }),
-        true,
-      ) ?? null
+    const read = this.#read(
+      new URLSearchParams(cursor ? { cursor } : { from: String(this.#store.length) }),
+      true,
     );
+    this.#moreAsked = read === undefined || !this.#startedForward;
+    return read ?? null;
+  }
+
+  /** A Load new rows press that could not start yet; the next `wantRanges` asks it first. */
+  get moreWaiting(): boolean {
+    return this.#moreAsked && !this.#store.closed;
   }
 
   #read(query: URLSearchParams, forward = false): Promise<void> | undefined {
@@ -178,6 +200,7 @@ export class LogReader {
       asked = this.#refused;
     }
     this.#inflight = true;
+    this.#startedForward = forward;
     this.#asks.push(this.#now());
     return this.#fetch(asked)
       .then(
@@ -212,11 +235,12 @@ export class LogReader {
       });
       const last = page.rows.at(-1);
       if (last && "o" in last && !last.end && page.next_cursor)
-        this.#continuations.set(last.i, page.next_cursor);
+        this.#continuations.set(last.i, { cursor: page.next_cursor, at: last.o + last.c.length });
       if (forward || !last || last.i + 1 >= page.end) this.#followCursor = page.next_cursor;
       return;
     }
     if (answer.status === 422 && code === "invalid_cursor") {
+      for (const i of this.#continuations.keys()) this.#restart.add(i);
       this.#continuations.clear();
       this.#followCursor = null;
       return;
