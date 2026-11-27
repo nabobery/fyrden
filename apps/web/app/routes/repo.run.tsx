@@ -90,7 +90,8 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const attempt = Number(form.get("attempt"));
   if (!INTENTS.includes(intent) || !KEY.test(key) || !Number.isSafeInteger(attempt))
     return { error: "The form was not understood; reload the page." };
-  if (intent === "cancel" && form.get("confirm") !== "yes") return { confirm: true as const };
+  if (intent === "cancel" && form.get("confirm") !== "yes")
+    return { confirm: true as const, attempt };
   const path = `${runsApi(params.owner, params.repo)}/runs/${encodeURIComponent(params.run_id)}/${intent}`;
   const body = intent === "approve" ? "{}" : JSON.stringify({ attempt });
   const res = await apiFetch(context, request, "POST", path, body, key);
@@ -138,11 +139,12 @@ function RunActions({
     label: string,
     more?: Record<string, string>,
     onSubmit?: () => void,
+    asked = attempt,
   ) => (
     <Form method="post" key={intent} onSubmit={onSubmit}>
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="key" value={runKey} />
-      <input type="hidden" name="attempt" value={attempt} />
+      <input type="hidden" name="attempt" value={asked} />
       {more &&
         Object.entries(more).map(([name, value]) => (
           <input key={name} type="hidden" name={name} value={value} />
@@ -206,7 +208,7 @@ function RunActions({
             Cancel this run? Jobs that run whatever happens (<code>if: always()</code>) still run.
           </p>
           <div className="row">
-            {form("cancel", "Yes, cancel the run", { confirm: "yes" })}
+            {form("cancel", "Yes, cancel the run", { confirm: "yes" }, undefined, answer.attempt)}
             <Link to={runPath(owner, repo, run.id)}>Keep it running</Link>
           </div>
         </div>

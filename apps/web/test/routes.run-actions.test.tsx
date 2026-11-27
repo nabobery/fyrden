@@ -115,6 +115,7 @@ describe("the run page's actions", () => {
     const { context, calls } = fakeApi(() => json({}, 202));
     expect(await post(context, { intent: "cancel", key: KEY, attempt: "2" })).toEqual({
       confirm: true,
+      attempt: 2,
     });
     expect(calls).toHaveLength(0);
     const done = (await post(context, {
@@ -145,18 +146,29 @@ describe("the run page's actions", () => {
     expect(calls).toHaveLength(0);
   });
 
-  const draw = (more: Record<string, unknown>) =>
-    renderPage(RunPage, PAGE, {
-      repo: { id: "rep_1", owner: "acme", name: "web", description: null, default_branch: "main" },
-      origin: ORIGIN,
-      run: run(),
-      attempt: 2,
-      graph: { run_id: RUN_ID, run_attempt: 2, jobs: [] },
-      canAct: true,
-      key: KEY,
-      notice: null,
-      ...more,
-    });
+  const draw = (more: Record<string, unknown>, actionData?: unknown) =>
+    renderPage(
+      RunPage,
+      PAGE,
+      {
+        repo: {
+          id: "rep_1",
+          owner: "acme",
+          name: "web",
+          description: null,
+          default_branch: "main",
+        },
+        origin: ORIGIN,
+        run: run(),
+        attempt: 2,
+        graph: { run_id: RUN_ID, run_attempt: 2, jobs: [] },
+        canAct: true,
+        key: KEY,
+        notice: null,
+        ...more,
+      },
+      actionData,
+    );
 
   it("draws the actions a writer may take, and none for a reader or a past attempt", () => {
     expect(draw({})).toContain("Re-run all jobs");
@@ -172,5 +184,18 @@ describe("the run page's actions", () => {
     expect(waiting).toContain("Approve and run");
     expect(waiting).toContain('href="/acme/web/pull/4/files"');
     expect(waiting).toContain("Cancel run");
+  });
+
+  it("confirms a cancel for the attempt it was asked for, not a newer one", () => {
+    const html = draw(
+      { run: run({ status: "in_progress", conclusion: null, run_attempt: 3 }), attempt: 3 },
+      {
+        confirm: true,
+        attempt: 2,
+      },
+    );
+    const confirm = html.slice(html.indexOf('role="alert"'));
+    expect(confirm).toContain('name="attempt" value="2"');
+    expect(confirm).not.toContain('name="attempt" value="3"');
   });
 });

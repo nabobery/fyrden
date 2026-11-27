@@ -785,6 +785,31 @@ describe("re-run, cancel and their refusals", () => {
     await context.close();
   });
 
+  it("refuses a cancel confirmed without JavaScript once a newer attempt started", async () => {
+    const runId = await startRun();
+    const context = await page
+      .context()
+      .browser()
+      ?.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
+    if (!context) throw new Error("no browser");
+    const plain = await context.newPage();
+    await plain.goto(`${runs()}/runs/${runId}`);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/cancel`, { attempt: 1 });
+    await finished(runId);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/rerun`, {});
+    await plain.getByRole("button", { name: "Cancel run" }).click();
+    await see(plain.getByRole("alert")).toContainText("Cancel this run?");
+    await plain.getByRole("button", { name: "Yes, cancel the run" }).click();
+    await see(plain.getByRole("alert")).toContainText("newer attempt");
+    const run = await rest<{ run_attempt: number; status: string }>(
+      "GET",
+      `/repos/${org}/${name}/actions/runs/${runId}`,
+    );
+    expect(run.run_attempt).toBe(2);
+    expect(run.status).not.toBe("completed");
+    await context.close();
+  });
+
   it("names a refusal: a re-run drawn for an attempt that is no longer current", async () => {
     const runId = await startRun();
     await runJob(runId, "build", "success");
