@@ -336,7 +336,17 @@ describe("the runs list", () => {
     await see(page.getByLabel("Commit")).toHaveValue("");
     await page.getByLabel("Commit").fill("nope");
     await page.getByRole("button", { name: "Filter" }).click();
+    await see(page.getByRole("alert")).toContainText("A full commit SHA");
     await see(page.getByLabel("Commit")).toHaveValue("nope");
+  });
+
+  it("clears text typed but not sent, on a list with no filters", async () => {
+    await visit(page, runs());
+    for (const typed of ["typed", "typed again"]) {
+      await page.getByLabel("Branch").fill(typed);
+      await page.getByRole("link", { name: "Clear" }).click();
+      await see(page.getByLabel("Branch")).toHaveValue("");
+    }
   });
 
   it("names a filter it cannot send", async () => {
