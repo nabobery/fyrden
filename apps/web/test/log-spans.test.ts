@@ -95,4 +95,14 @@ describe("SpanCache", () => {
     expect(cache.get(0, "abcd")).toEqual([{ text: "abcd", className: "" }]);
     expect(cache.parsed).toBe(2);
   });
+
+  describe("SpanCache's text bound", () => {
+    it("keeps at most its characters, whatever the span count", () => {
+      const cache = new SpanCache(20_000, 25_000);
+      for (let i = 0; i < 10; i++) cache.get(i, `${i}`.repeat(10_000));
+      expect(cache.units).toBeLessThanOrEqual(25_000);
+      expect(cache.get(9, "9".repeat(10_000))).toHaveLength(1);
+      expect(cache.parsed).toBe(10);
+    });
+  });
 });

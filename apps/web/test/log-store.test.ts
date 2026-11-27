@@ -205,4 +205,23 @@ describe("LogStore", () => {
     expect(store.row(999_999)).toBeDefined();
     expect(store.row(5)).toBeDefined();
   });
+
+  it("never splits a surrogate pair at the display cut", () => {
+    const store = new LogStore();
+    const emoji = "\u{1F600}";
+    store.applyLive([{ i: 0, t: 1, c: `${"a".repeat(DISPLAY_CUT_UNITS - 1)}${emoji}tail` }]);
+    const head = store.row(0) as { c: string };
+    expect(head.c.length).toBe(DISPLAY_CUT_UNITS - 1);
+    expect(head.c.endsWith("a")).toBe(true);
+    const long = `x${emoji}${"b".repeat(DISPLAY_CUT_UNITS - 1)}`;
+    store.applyPage({
+      rows: [{ i: 1, t: null, c: long, o: 50, end: true }],
+      state: "complete",
+      end: 2,
+      next: null,
+    });
+    const tail = store.row(1) as { c: string; o: number };
+    expect(tail.c).toBe("b".repeat(DISPLAY_CUT_UNITS - 1));
+    expect(tail.o).toBe(50 + 3);
+  });
 });

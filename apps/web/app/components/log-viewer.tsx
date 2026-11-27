@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { LiveLog, type LiveSocket, type Ticket } from "../lib/live-log.js";
-import { LogReader } from "../lib/log-reader.js";
+import { LogReader, readRanges } from "../lib/log-reader.js";
 import { type LogSpan, SpanCache } from "../lib/log-spans.js";
 import { LogStore, type StoredRow } from "../lib/log-store.js";
 import {
@@ -318,18 +318,14 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
   );
   useEffect(() => () => clearTimeout(wake.current), []);
 
+  const wanted = useRef(ranges);
+  wanted.current = ranges;
+  const rangesKey = ranges.map(([a, b]) => `${a}-${b}`).join(",");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the view's rows, not live data, restart the wait.
   useEffect(() => {
     if (ranges.length === 0) return;
-    const timer = setTimeout(() => {
-      const read = reader.wantRanges(ranges);
-      if (read) void read.then(bump);
-      else {
-        const wait = reader.waitMs();
-        if (wait) wakeIn(wait);
-      }
-    }, SETTLE_MS);
-    return () => clearTimeout(timer);
-  });
+    return readRanges(reader, () => wanted.current, bump, SETTLE_MS);
+  }, [rangesKey, reader, bump]);
 
   useEffect(() => {
     const wait = reader.retryAfterMs();
@@ -460,8 +456,9 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
             <button
               type="button"
               onClick={() => {
-                reader.clearRefusal();
-                void reader.retry()?.then(bump);
+                const read = reader.tryAgain();
+                if (read) void read.then(bump);
+                else bump();
                 bump();
               }}
             >

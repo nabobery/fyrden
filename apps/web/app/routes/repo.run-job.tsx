@@ -141,7 +141,13 @@ export default function JobPage({ loaderData }: Route.ComponentProps) {
           <Link to={jobLogPath(owner, name, run.id, job.id)}>Read the log as text</Link>
         </p>
         {hydrated ? (
-          <LogViewer key={job.id} owner={owner} repo={name} runId={run.id} job={job} />
+          <LogViewer
+            key={`${run.id}:${job.id}`}
+            owner={owner}
+            repo={name}
+            runId={run.id}
+            job={job}
+          />
         ) : (
           <p className="muted">
             The log viewer needs JavaScript;{" "}

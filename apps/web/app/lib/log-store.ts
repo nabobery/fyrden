@@ -31,6 +31,12 @@ export type RowRange = readonly [first: number, last: number];
 
 const unitsOf = (row: StoredRow | undefined) => (row && "c" in row ? row.c.length : 0);
 
+const isHigh = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLow = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+/** A flat copy, so a cut row does not keep the whole row's text alive through a sliced string (unverified). */
+const detached = (text: string): string => text.split("").join("");
+
 /**
  * A job's log rows as one viewer holds them: from pages and the live socket,
  * pieces of a row joined in order, each drawn up to `DISPLAY_CUT_UNITS`,
@@ -162,14 +168,20 @@ export class LogStore {
       return;
     }
     if (held === undefined && row.end) {
-      const dropped = Math.max(0, row.c.length - DISPLAY_CUT_UNITS);
-      this.#set(row.i, { kind: "suffix", t: row.t, c: row.c.slice(dropped), o: row.o + dropped });
+      let dropped = Math.max(0, row.c.length - DISPLAY_CUT_UNITS);
+      if (dropped > 0 && isLow(row.c.charCodeAt(dropped)) && isHigh(row.c.charCodeAt(dropped - 1)))
+        dropped += 1;
+      const c = dropped > 0 ? detached(row.c.slice(dropped)) : row.c;
+      this.#set(row.i, { kind: "suffix", t: row.t, c, o: row.o + dropped });
     }
   }
 
   #assembled(t: number | null, c: string, end: boolean): StoredRow {
     const cut = c.length > DISPLAY_CUT_UNITS;
-    const shown = cut ? c.slice(0, DISPLAY_CUT_UNITS) : c;
+    const at = isHigh(c.charCodeAt(DISPLAY_CUT_UNITS - 1))
+      ? DISPLAY_CUT_UNITS - 1
+      : DISPLAY_CUT_UNITS;
+    const shown = cut ? detached(c.slice(0, at)) : c;
     if (end) return { kind: "whole", t, c: shown, cut };
     return { kind: "prefix", t, c: shown, cut: cut || c.length === DISPLAY_CUT_UNITS };
   }

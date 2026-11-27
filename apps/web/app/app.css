@@ -908,6 +908,7 @@ ul.runs {
 }
 .log-spacer {
   position: relative;
+  overflow-y: clip;
   min-width: 100%;
   width: max-content;
 }

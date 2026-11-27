@@ -52,10 +52,12 @@ export class LogReader {
   #inflight = false;
   #answered = false;
   #refused: string | null = null;
+  #refusedForward = false;
   #asks: number[] = [];
   #waited = 0;
   #until = 0;
   #transient = false;
+  readonly #settled = new Set<() => void>();
 
   constructor(options: {
     store: LogStore;
@@ -81,6 +83,12 @@ export class LogReader {
     return Math.max(0, this.#until - this.#now(), this.waitMs());
   }
 
+  /** Calls `listener` each time a request settles, answered or refused; returns the unsubscribe. */
+  onSettle(listener: () => void): () => void {
+    this.#settled.add(listener);
+    return () => this.#settled.delete(listener);
+  }
+
   get answered(): boolean {
     return this.#answered;
   }
@@ -89,6 +97,22 @@ export class LogReader {
     this.refusal = null;
     this.#transient = false;
     this.#waited = 0;
+  }
+
+  /**
+   * Asks the refused read again now, or, while the minute's share is spent,
+   * keeps the refusal shown and lets `retryAfterMs` say when it is due.
+   */
+  tryAgain(): Promise<void> | undefined {
+    const wait = this.waitMs();
+    if (wait > 0 && this.refusal) {
+      this.#transient = true;
+      this.#waited = 0;
+      this.#until = this.#now() + wait;
+      return undefined;
+    }
+    this.clearRefusal();
+    return this.retry();
   }
 
   want(first: number, last: number): Promise<void> | undefined {
@@ -119,7 +143,9 @@ export class LogReader {
 
   /** Asks the last refused read again, once a refusal allows it. */
   retry(): Promise<void> | undefined {
-    return this.#refused === null ? undefined : this.#read(new URLSearchParams(this.#refused));
+    return this.#refused === null
+      ? undefined
+      : this.#read(new URLSearchParams(this.#refused), this.#refusedForward);
   }
 
   tail(rows: number): Promise<void> | undefined {
@@ -131,12 +157,14 @@ export class LogReader {
     if (this.#store.closed) return null;
     const cursor = this.#followCursor;
     return (
-      this.#read(new URLSearchParams(cursor ? { cursor } : { from: String(this.#store.length) })) ??
-      null
+      this.#read(
+        new URLSearchParams(cursor ? { cursor } : { from: String(this.#store.length) }),
+        true,
+      ) ?? null
     );
   }
 
-  #read(query: URLSearchParams): Promise<void> | undefined {
+  #read(query: URLSearchParams, forward = false): Promise<void> | undefined {
     if (this.#inflight || this.waitMs() > 0) return undefined;
     if (this.refusal) {
       if (!this.#transient || this.#waited > TRANSIENT_RETRIES || this.#now() < this.#until)
@@ -144,12 +172,16 @@ export class LogReader {
       this.refusal = null;
     }
     query.set("max_bytes", String(PAGE_BYTES));
-    const asked = query.toString();
+    let asked = query.toString();
+    if (this.#refused !== null) {
+      forward = this.#refusedForward || (forward && asked === this.#refused);
+      asked = this.#refused;
+    }
     this.#inflight = true;
     this.#asks.push(this.#now());
     return this.#fetch(asked)
       .then(
-        (answer) => this.#answer(answer),
+        (answer) => this.#answer(answer, forward),
         () => {
           this.refusal = { status: 0, code: "network" };
           this.#transient = false;
@@ -157,13 +189,15 @@ export class LogReader {
       )
       .then(() => {
         this.#refused = this.refusal ? asked : null;
+        this.#refusedForward = this.refusal ? forward : false;
       })
       .finally(() => {
         this.#inflight = false;
+        for (const listener of this.#settled) listener();
       });
   }
 
-  #answer(answer: PageAnswer): void {
+  #answer(answer: PageAnswer, forward: boolean): void {
     const problem = (answer.body ?? {}) as { code?: unknown; retry_at?: unknown };
     const code = typeof problem.code === "string" ? problem.code : undefined;
     if (answer.status === 200 && isPage(answer.body)) {
@@ -179,7 +213,7 @@ export class LogReader {
       const last = page.rows.at(-1);
       if (last && "o" in last && !last.end && page.next_cursor)
         this.#continuations.set(last.i, page.next_cursor);
-      if (!last || last.i + 1 >= page.end) this.#followCursor = page.next_cursor;
+      if (forward || !last || last.i + 1 >= page.end) this.#followCursor = page.next_cursor;
       return;
     }
     if (answer.status === 422 && code === "invalid_cursor") {
@@ -198,4 +232,40 @@ export class LogReader {
     if (this.#transient) this.#waited += 1;
     this.#until = this.#now() + (code === "rate_limited" ? Math.max(wait, MINUTE_MS) : wait);
   }
+}
+
+/**
+ * Reads the rows `ranges` names, page after page, starting `settleMs` after
+ * the call; when the reader cannot read now, it goes on once the minute's
+ * share allows or once any request settles. Returns the stop.
+ */
+export function readRanges(
+  reader: LogReader,
+  ranges: () => readonly RowRange[],
+  onPage: () => void,
+  settleMs: number,
+): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let settling = true;
+  const schedule = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(pump, ms);
+  };
+  const pump = () => {
+    settling = false;
+    const read = reader.wantRanges(ranges());
+    if (read) void read.then(onPage);
+    else {
+      const wait = reader.waitMs();
+      if (wait > 0) schedule(wait);
+    }
+  };
+  const off = reader.onSettle(() => {
+    if (!settling) schedule(0);
+  });
+  schedule(settleMs);
+  return () => {
+    off();
+    clearTimeout(timer);
+  };
 }
