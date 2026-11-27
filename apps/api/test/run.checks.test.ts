@@ -12,9 +12,11 @@ import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
   assignNamed,
+  at,
   checksOf,
   drain,
   expr,
+  type Fixture,
   finish,
   inRun,
   job,
@@ -23,10 +25,12 @@ import {
   repoWithCommit,
   runStub,
   started,
+  T0,
   workflow,
 } from "./helpers/runs.js";
 
 const MIN = 60_000;
+const DAY = 24 * 60 * MIN;
 
 async function countRepoCalls(runId: string, work: () => Promise<unknown>) {
   const calls: string[] = [];
@@ -201,21 +205,21 @@ describe("check batches", () => {
   });
 });
 
-describe("re-runs and their checks", () => {
-  const dynamic = workflow(
-    [
-      job("define", ["outputs:", `  list: ${expr("steps.s.outputs.list")}`]),
-      job("build", [
-        "needs: define",
-        `name: build ${expr("matrix.os")}`,
-        "strategy:",
-        "  fail-fast: false",
-        "  matrix:",
-        `    os: ${expr("fromJSON(needs.define.outputs.list)")}`,
-      ]),
-    ].join("\n"),
-  );
+const dynamic = workflow(
+  [
+    job("define", ["outputs:", `  list: ${expr("steps.s.outputs.list")}`]),
+    job("build", [
+      "needs: define",
+      `name: build ${expr("matrix.os")}`,
+      "strategy:",
+      "  fail-fast: false",
+      "  matrix:",
+      `    os: ${expr("fromJSON(needs.define.outputs.list)")}`,
+    ]),
+  ].join("\n"),
+);
 
+describe("re-runs and their checks", () => {
   it("settles a failing check the re-run no longer produces as cancelled, and leaves passes alone", async () => {
     const f = await repoWithCommit();
     const runId = await started(f, dynamic);
@@ -301,5 +305,232 @@ describe("the check-start guard in the repository", () => {
     ).toEqual([{ ok: true, attempt: 2, current: true }]);
     const rows = await inRepo(repo, (r: RepoDO) => r.checks.summariesOn(f.sha));
     expect(rows).toHaveLength(1);
+  });
+
+  it("refuses an update whose start key does not hold the attempt it names", async () => {
+    const f = await repoWithCommit();
+    const repo = env.REPO.getByName(f.repo.id);
+    await repo.startCheckAttempts(f.sha, [{ name: "c", startKey: "other/a1/j1" }]);
+    const update = { sha: f.sha, name: "c", attempt: 1, status: "completed" as const };
+    expect(
+      await repo.recordCheckUpdates([
+        { ...update, startKey: "mine/a1/j1", conclusion: "failure" },
+        { ...update, startKey: "other/a1/j1", status: "in_progress" },
+      ]),
+    ).toEqual(["unknown_attempt", "applied"]);
+    expect((await checksOf(f)).get("c")).toMatchObject({ status: "in_progress", attempt: 1 });
+  });
+});
+
+describe("checks after a restore of the repository", () => {
+  type Rows = Record<string, SqlStorageValue>[];
+  interface Backup {
+    readonly summaries: Rows;
+    readonly attempts: Rows;
+    readonly runs: Rows;
+  }
+
+  const backupOf = (f: Fixture) =>
+    inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO): Backup => {
+      const { sql } = r.git.context.storage;
+      return {
+        summaries: sql.exec("SELECT * FROM check_summaries WHERE sha = ?", f.sha).toArray(),
+        attempts: sql.exec("SELECT * FROM check_attempts WHERE sha = ?", f.sha).toArray(),
+        runs: sql.exec("SELECT * FROM ci_runs").toArray(),
+      };
+    });
+
+  const restore = (f: Fixture, backup: Backup) =>
+    inRepo(env.REPO.getByName(f.repo.id), (r: RepoDO) => {
+      const { sql } = r.git.context.storage;
+      const put = (table: string, rows: Rows) => {
+        for (const row of rows) {
+          const columns = Object.keys(row);
+          sql.exec(
+            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+            ...Object.values(row),
+          );
+        }
+      };
+      sql.exec("DELETE FROM check_summaries WHERE sha = ?", f.sha);
+      sql.exec("DELETE FROM check_attempts WHERE sha = ?", f.sha);
+      sql.exec("DELETE FROM ci_runs");
+      put("check_summaries", backup.summaries);
+      put("check_attempts", backup.attempts);
+      put("ci_runs", backup.runs);
+      sql.exec("UPDATE repo_meta SET epoch_gen = epoch_gen + 1 WHERE id = 1");
+    });
+
+  const parked = (runId: string) =>
+    inRun(runId, (r) =>
+      r.engine.rows<{ name: string; parked: string }>(
+        "SELECT name, parked FROM run_checks WHERE parked IS NOT NULL",
+      ),
+    );
+
+  const weeklyCheck = async (runId: string) => {
+    await inRun(runId, async (r) => {
+      r.forgetReported();
+      await r.ciReconcileAt(r.context.now());
+    });
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+  };
+
+  it("starts a check again whose start the restore lost, and completes it", async () => {
+    const f = await repoWithCommit();
+    const backup = await backupOf(f);
+    const runId = await started(f, workflow(job("a")));
+    await advance(runId, 2_000);
+    expect((await checksOf(f)).get("a")?.status).toBe("queued");
+    await restore(f, backup);
+    await finish(runId, "a");
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+      attempt: 1,
+    });
+    expect(await parked(runId)).toEqual([]);
+  });
+
+  it("completes again, at the finished run's weekly check, a check whose end the restore lost, after each restore", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    const task = await assignNamed(runId, "a");
+    await advance(runId, 2_000);
+    const backup = await backupOf(f);
+    expect((await checksOf(f)).get("a")?.status).toBe("in_progress");
+    const done = await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    expect(done.ok).toBe(true);
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    expect((await checksOf(f)).get("a")?.conclusion).toBe("success");
+    for (let restores = 0; restores < 2; restores++) {
+      await restore(f, backup);
+      expect((await checksOf(f)).get("a")?.status).toBe("in_progress");
+      await weeklyCheck(runId);
+      expect((await checksOf(f)).get("a")).toMatchObject({
+        status: "completed",
+        conclusion: "success",
+      });
+    }
+    expect(await parked(runId)).toEqual([]);
+  });
+
+  it("starts the checks of a finished run whose record the restore removed again at its weekly check", async () => {
+    const f = await repoWithCommit();
+    const backup = await backupOf(f);
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    await restore(f, backup);
+    expect(await checksOf(f)).toEqual(new Map());
+    await weeklyCheck(runId);
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      status: "completed",
+      conclusion: "failure",
+    });
+  });
+
+  it("starts a re-run's check again after the earlier attempt's, so the re-run's stays current", async () => {
+    const f = await repoWithCommit();
+    const backup = await backupOf(f);
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    await advance(runId, 2_000);
+    expect((await runStub(runId).rerun(f.owner.principalId)).ok).toBe(true);
+    await drain(runId);
+    await finish(runId, "a", "success");
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    expect((await checksOf(f)).get("a")).toMatchObject({ attempt: 2, conclusion: "success" });
+    await restore(f, backup);
+    await weeklyCheck(runId);
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      attempt: 2,
+      status: "completed",
+      conclusion: "success",
+    });
+    expect(await parked(runId)).toEqual([]);
+  });
+
+  it("settles again an earlier failing check the re-run no longer produces", async () => {
+    const f = await repoWithCommit();
+    const backup = await backupOf(f);
+    const runId = await started(f, dynamic);
+    await finish(runId, "define", "success", { list: '["linux","windows"]' });
+    await finish(runId, "build linux");
+    await finish(runId, "build windows", "failure");
+    await advance(runId, 2_000);
+    await runStub(runId).rerun(f.owner.principalId);
+    await drain(runId);
+    await finish(runId, "define", "success", { list: '["linux"]' });
+    await finish(runId, "build linux");
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    expect((await checksOf(f)).get("build windows")?.conclusion).toBe("cancelled");
+    await restore(f, backup);
+    await weeklyCheck(runId);
+    const checks = await checksOf(f);
+    expect(checks.get("build windows")).toMatchObject({ attempt: 2, conclusion: "cancelled" });
+    expect(checks.get("build linux")).toMatchObject({ attempt: 2, conclusion: "success" });
+    expect(await parked(runId)).toEqual([]);
+  });
+
+  it("sends again an end the repository took just before a restore took it back", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    const task = await assignNamed(runId, "a");
+    await advance(runId, 2_000);
+    const backup = await backupOf(f);
+    let restored = false;
+    await inRun(runId, (r) => {
+      r.hooks = {
+        afterRepoCall: async (op) => {
+          if (op !== "recordCheckUpdates" || restored) return;
+          restored = true;
+          await restore(f, backup);
+        },
+      };
+    });
+    await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    await inRun(runId, (r) => {
+      r.hooks = {};
+    });
+    expect(restored).toBe(true);
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      status: "completed",
+      conclusion: "success",
+    });
+  });
+
+  it("completes again the check of a run from before restore generations were kept", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    const task = await assignNamed(runId, "a");
+    await advance(runId, 2_000);
+    const backup = await backupOf(f);
+    await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    await inRun(runId, (r) => r.engine.exec("UPDATE runs SET repo_epoch = 0"));
+    await restore(f, backup);
+    await weeklyCheck(runId);
+    expect((await checksOf(f)).get("a")?.conclusion).toBe("success");
+  });
+
+  it("sends a check the restore took back before its run retires", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    const task = await assignNamed(runId, "a");
+    await advance(runId, 2_000);
+    const backup = await backupOf(f);
+    await runStub(runId).completeTask(task, { result: "success", logComplete: true });
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    await restore(f, backup);
+    await at(runId, T0 + 8 * DAY);
+    await inRun(runId, (r) => {
+      r.policy = { ...r.policy, retentionMs: DAY };
+    });
+    await drain(runId);
+    expect(await runStub(runId).get()).toBeUndefined();
+    expect((await checksOf(f)).get("a")?.conclusion).toBe("success");
   });
 });

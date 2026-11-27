@@ -357,7 +357,6 @@ export class RunDO extends MigratingDO {
   /** The state the repository last took (`runStateSeq`); lost with the instance, which reports again. */
   #reported = 0;
   #jobsReported: JobsTold = { done: 0, live: {} };
-  #repoEpoch: number | undefined;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -971,7 +970,6 @@ export class RunDO extends MigratingDO {
   forgetReported(): void {
     this.#reported = 0;
     this.#jobsReported = { done: 0, live: {} };
-    this.#repoEpoch = undefined;
   }
 
   jobReports(): JobReport[] {
@@ -2193,11 +2191,7 @@ export class RunDO extends MigratingDO {
   ): Promise<{ done: true } | { done: false; cursor: null; runAfterMs: number }> {
     const checks = await this.#flushChecks(job);
     await this.#reportState();
-    const left =
-      !checks.done ||
-      this.#reportOwed() ||
-      this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
-        .length > 0;
+    const left = !checks.done || this.#reportOwed() || this.#checksOwed();
     return left
       ? { done: false, cursor: null, runAfterMs: this.policy.checkFlushMs }
       : { done: true };
@@ -2217,16 +2211,45 @@ export class RunDO extends MigratingDO {
     readonly inserted?: boolean | undefined;
   }): void {
     const { jobsDone: done, epoch } = answer;
+    const restored = this.#takeEpoch(epoch, answer.inserted === true);
     if (done === undefined) return;
-    const restored =
-      answer.inserted === true ||
-      (epoch !== undefined && this.#repoEpoch !== undefined && epoch !== this.#repoEpoch);
-    if (epoch !== undefined) this.#repoEpoch = epoch;
     if (restored) this.#reported = 0;
     this.#jobsReported =
       restored || done < this.#jobsReported.done
         ? { done, live: {} }
         : jobsDoneTo(this.#jobsReported, done);
+  }
+
+  /**
+   * Whether the answer shows a restore of the repository (a newer restore generation than the run
+   * saw, or the run's record lost): then every check the run has not seen superseded is started and
+   * sent again, as the restore may have lost its attempt or its state.
+   */
+  #takeEpoch(epoch: number | undefined, inserted: boolean): boolean {
+    return this.#tx(() => {
+      const seen = this.engine.run()?.repo_epoch;
+      if (seen === undefined || this.#erased()) return false;
+      const newer = epoch !== undefined && (seen === null || epoch > seen);
+      if (newer) this.engine.exec("UPDATE runs SET repo_epoch = ? WHERE id = 1", epoch);
+      const restored = inserted || (newer && seen !== null);
+      if (!restored) return false;
+      this.engine.exec(
+        `UPDATE run_checks SET rev = rev + 1, check_attempt = NULL, parked = NULL
+         WHERE parked IS NULL OR parked IN (${RETRIED_AFTER_RESTORE})`,
+      );
+      this.engine.exec(
+        `UPDATE run_instances SET check_code = NULL WHERE check_code IN (${RETRIED_AFTER_RESTORE})`,
+      );
+      if (this.#checksOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
+      return true;
+    });
+  }
+
+  #checksOwed(): boolean {
+    return (
+      this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
+        .length > 0
+    );
   }
 
   #reportOwed(): boolean {
@@ -2245,9 +2268,9 @@ export class RunDO extends MigratingDO {
       }));
   }
 
-  async #reportState(): Promise<void> {
+  async #reportState({ unowed = false } = {}): Promise<void> {
     const jobs = this.jobReports();
-    const report = this.#stateOwed() ?? (jobs.length > 0 ? this.runReport() : undefined);
+    const report = this.#stateOwed() ?? (jobs.length > 0 || unowed ? this.runReport() : undefined);
     if (!report) return;
     const earlier = this.#earlierEnds(report.attempt);
     const answer = await this.#repoCall(
@@ -2353,6 +2376,7 @@ export class RunDO extends MigratingDO {
           sha: run.sha,
           name: d.name,
           attempt: d.check_attempt,
+          startKey: d.start_key,
           status: live ? (d.desired as "queued" | "in_progress") : "completed",
           conclusion: live ? null : (d.desired as NonNullable<CheckUpdate["conclusion"]>),
         };
@@ -2370,7 +2394,16 @@ export class RunDO extends MigratingDO {
               d.attempt,
               d.name_key,
             );
-          else if (result) {
+          else if (result === "unknown_attempt") {
+            this.engine.exec(
+              "UPDATE run_checks SET check_attempt = NULL WHERE attempt = ? AND name_key = ?",
+              d.attempt,
+              d.name_key,
+            );
+            this.#log.info("check attempt unknown to the repository, starting it again", {
+              check: d.name,
+            });
+          } else if (result) {
             const code = result === "stale_attempt" ? "superseded" : result;
             // A refusal of a state that has moved on answers obsolete state: the row stays dirty.
             this.engine.exec(
@@ -2386,10 +2419,7 @@ export class RunDO extends MigratingDO {
         }),
       );
     }
-    const left = this.engine.rows(
-      "SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1",
-    );
-    return left.length > 0
+    return this.#checksOwed()
       ? { done: false, cursor: null, runAfterMs: this.policy.checkFlushMs }
       : { done: true };
   }
@@ -2448,7 +2478,7 @@ export class RunDO extends MigratingDO {
       );
       if (!answer.ok) return answer.code === "repo_not_found" ? "gone" : "retry";
       this.#takeRepository(answer);
-      if (this.#reportOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
+      if (this.#reportOwed() || this.#checksOwed()) this.jobs.ensure("run_checks", RUN_JOB.checks);
       return "ok";
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -2459,8 +2489,9 @@ export class RunDO extends MigratingDO {
   }
 
   /**
-   * Retires the expired run: sends its check outbox and reports its state
-   * once (best effort), so a required check is not left pending; asks the repository to forget it;
+   * Retires the expired run: sends its check outbox (again when its report shows a restore of the
+   * repository) and reports its state once (best effort), so a required check is not left
+   * pending; asks the repository to forget it;
    * then erases it. A failure is retried at the sweep's interval, the run
    * kept and answered as no run, and never ends the job: once begun, the
    * retirement holds whatever the retention becomes. Work still owed then
@@ -2480,10 +2511,22 @@ export class RunDO extends MigratingDO {
     });
     // Answered as no run already: its live log sockets close now, not once the erasure succeeds.
     this.viewers.erased();
+    const flush = async () => {
+      try {
+        await this.#flushChecks(job);
+      } catch (error) {
+        this.#log.warn("check updates of a retiring run not sent", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    await flush();
     try {
-      await this.#flushChecks(job);
+      // Its weekly check may not have seen a restore since: the answer shows one, and a report,
+      // unlike a registration, records nothing once a retry follows `forgetRun`.
+      if (!this.#reportOwed()) await this.#reportState({ unowed: true });
     } catch (error) {
-      this.#log.warn("check updates of a retiring run not sent", {
+      this.#log.warn("repository of a retiring run not asked", {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -2495,6 +2538,7 @@ export class RunDO extends MigratingDO {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    if (this.#checksOwed()) await flush();
     // Once forgotten, the repository accepts reports and tells no one: whether it took them before
     // is kept across retries.
     if (!this.jobs.checkpoint(job, reportsOwed ? REPORTS_OWED : new Uint8Array())) return retry();
@@ -2553,10 +2597,7 @@ export class RunDO extends MigratingDO {
   #owed(): boolean {
     const run = this.engine.run();
     if (!run) return false;
-    const checks = this.engine.rows(
-      "SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1",
-    );
-    if (checks.length > 0) {
+    if (this.#checksOwed()) {
       this.jobs.ensure("run_checks", RUN_JOB.checks);
       return true;
     }
@@ -2587,11 +2628,7 @@ export class RunDO extends MigratingDO {
     const run = this.engine.run();
     if (!run) return [];
     const owed: string[] = [];
-    if (
-      this.engine.rows("SELECT 1 FROM run_checks WHERE parked IS NULL AND sent_rev < rev LIMIT 1")
-        .length > 0
-    )
-      owed.push("checks");
+    if (this.#checksOwed()) owed.push("checks");
     if (run.queue_synced_rev < run.queue_rev) owed.push("dispatch");
     if (
       this.engine.rows("SELECT 1 FROM run_owners WHERE state IN ('admitting', 'releasing') LIMIT 1")
@@ -2685,6 +2722,16 @@ export class RunDO extends MigratingDO {
     };
   }
 }
+
+const RETRIED_AFTER_RESTORE = [
+  "unknown_attempt",
+  "stale_attempt",
+  "commit_not_found",
+  "check_limit",
+  "attempt_limit",
+]
+  .map((code) => `'${code}'`)
+  .join(", ");
 
 /**
  * Bytes of UTF-8 that hold `points` whole code points whatever they are, read

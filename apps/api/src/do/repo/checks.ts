@@ -148,6 +148,8 @@ export interface CheckUpdate {
   readonly conclusion?: CheckConclusion | null;
   /** Absent or null keeps the one the check has. */
   readonly detailsUrl?: string | null;
+  /** The start key of the attempt: given, the update applies only while that key holds `attempt`. */
+  readonly startKey?: string;
 }
 
 export type CheckUpdateResult =
@@ -375,6 +377,11 @@ export class RepoChecks {
         }
         const state = states.get(id);
         if (!state || update.attempt > (state.row.attempt ?? 0)) return "unknown_attempt";
+        if (
+          update.startKey !== undefined &&
+          this.#attemptOf(update.sha, key, update.startKey) !== update.attempt
+        )
+          return "unknown_attempt";
         if (update.attempt < (state.row.attempt ?? 0)) return "stale_attempt";
         const step = advanceCheck(state.row, { status: update.status, conclusion });
         if (step !== "applied") return step;
@@ -733,27 +740,11 @@ export class RepoChecks {
   ): CheckStartAnswer {
     const source = FYRDEN_CI_SOURCE;
     const row = this.#summary(sha, key, source);
-    const [known] = this.#exec<{ attempt: number }>(
-      "checks.read",
-      `SELECT attempt FROM check_attempts
-       WHERE sha = ? AND name_key = ? AND source = ? AND start_key = ?`,
-      sha,
-      key,
-      source,
-      item.startKey,
-    );
-    if (known) return { ok: true, attempt: known.attempt, current: row?.attempt === known.attempt };
+    const known = this.#attemptOf(sha, key, item.startKey);
+    if (known !== undefined) return { ok: true, attempt: known, current: row?.attempt === known };
     if (item.supersedes !== undefined) {
-      const [replaced] = this.#exec<{ attempt: number }>(
-        "checks.read",
-        `SELECT attempt FROM check_attempts
-         WHERE sha = ? AND name_key = ? AND source = ? AND start_key = ?`,
-        sha,
-        key,
-        source,
-        item.supersedes,
-      );
-      if (!replaced || replaced.attempt !== row?.attempt)
+      const replaced = this.#attemptOf(sha, key, item.supersedes);
+      if (replaced === undefined || replaced !== row?.attempt)
         return { ok: false, code: "stale_attempt" };
     }
     const attempt = (row?.attempt ?? 0) + 1;
@@ -788,6 +779,18 @@ export class RepoChecks {
     const run = parseCheckKey(item.startKey);
     this.#tellCheck("created", started as SummaryRow, () => !run || !budget || budget.admit(run));
     return { ok: true, attempt, current: true };
+  }
+
+  #attemptOf(sha: string, key: string, startKey: string): number | undefined {
+    return this.#exec<{ attempt: number }>(
+      "checks.read",
+      `SELECT attempt FROM check_attempts
+       WHERE sha = ? AND name_key = ? AND source = ? AND start_key = ?`,
+      sha,
+      key,
+      FYRDEN_CI_SOURCE,
+      startKey,
+    )[0]?.attempt;
   }
 
   #summary(sha: string, key: string, source: CheckSource): SummaryRow | undefined {
@@ -873,6 +876,9 @@ function validUpdate(update: CheckUpdate): boolean {
     checkText(update.name, MAX_CHECK_NAME_LENGTH).ok &&
     Number.isSafeInteger(update.attempt) &&
     update.attempt >= 1 &&
+    (update.startKey === undefined ||
+      (typeof update.startKey === "string" &&
+        checkText(update.startKey, MAX_CHECK_NAME_LENGTH).ok)) &&
     CHECK_STATUSES.includes(update.status) &&
     (conclusion === null || CHECK_CONCLUSIONS.includes(conclusion)) &&
     (detailsUrl === null || (typeof detailsUrl === "string" && targetUrl(detailsUrl).ok))
