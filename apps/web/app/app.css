@@ -1008,3 +1008,7 @@ ul.runs {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+dialog.panel {
+  margin: auto;
+  max-width: min(32rem, calc(100vw - 2rem));
+}

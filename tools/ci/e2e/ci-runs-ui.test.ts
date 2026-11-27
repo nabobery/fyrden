@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { type Page, expect as see, type WebSocket } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eventually } from "./forge.js";
@@ -10,6 +14,7 @@ import {
 } from "./runner-play.js";
 import { accessible as axe, startWebStack, visit, type WebStack } from "./web-stack.js";
 
+const run = promisify(execFile);
 let stack: WebStack;
 let page: Page;
 const handle = "runner-of-runs";
@@ -798,5 +803,220 @@ describe("the log viewer", () => {
       );
     }
     await page.setViewportSize({ width: 1280, height: 800 });
+  });
+});
+
+async function branchFromMain(branch: string): Promise<void> {
+  const { token } = await rest<{ token: string }>("POST", "/user/git-tokens", {});
+  const home = await mkdtemp(join(stack.scratch, "git-"));
+  const env = {
+    ...process.env,
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  const remote = `http://x-access-token:${token}@127.0.0.1:${stack.port}/${org}/${name}.git`;
+  const work = join(home, "work");
+  await run("git", ["clone", "-q", "--depth", "1", remote, work], { env });
+  await run("git", ["push", "-q", "origin", `HEAD:refs/heads/${branch}`], { env, cwd: work });
+}
+
+async function signedInAs(login: string): Promise<Page> {
+  const user = await rest<{ id: string }>("POST", "/admin/users", { handle: login });
+  const made = await rest<{ token: string }>("POST", `/admin/users/${user.id}/tokens`, {
+    type: "pat",
+    scopes: [],
+    expires_in_days: 1,
+  });
+  const context = await page.context().browser()?.newContext();
+  if (!context) throw new Error("no browser");
+  const other = await context.newPage();
+  await other.goto(`${stack.origin}/auth/sign-in?return_to=%2F`);
+  await other.getByLabel(/personal access token/i).fill(made.token);
+  await other.getByRole("button", { name: "Sign in with the token" }).click();
+  await other.getByRole("button", { name: "Not now" }).click();
+  await see(other).toHaveURL(`${stack.origin}/`);
+  return other;
+}
+
+describe("re-run, cancel and their refusals", () => {
+  it("re-runs a finished run as a new attempt", async () => {
+    const runId = await startRun();
+    await runJob(runId, "build", "success");
+    await runJob(runId, "test", "success");
+    await finished(runId);
+    await visit(page, `${runs()}/runs/${runId}`);
+    await accessible("run page with actions");
+    await page.getByRole("button", { name: "Re-run all jobs" }).click();
+    await see(page.getByRole("status").filter({ hasText: "Re-run started" })).toBeVisible();
+    await see(page.getByLabel("Attempt")).toHaveValue("2");
+  });
+
+  it("cancels a running run after asking, and says so", async () => {
+    const runId = await startRun();
+    await visit(page, `${runs()}/runs/${runId}`);
+    const cancel = page.getByRole("button", { name: "Cancel run" });
+    await cancel.focus();
+    const key = page.locator('input[name="key"]').first();
+    const before = await key.inputValue();
+    await see(key).not.toHaveValue(before, { timeout: 30_000 });
+    await see(cancel).toBeFocused();
+    await cancel.click();
+    const dialog = page.getByRole("dialog", { name: "Cancel this run?" });
+    await see(dialog).toBeVisible();
+    await see(dialog.getByRole("button", { name: "Keep it running" })).toBeFocused();
+    await accessible("cancel confirmation");
+    await dialog.getByRole("button", { name: "Keep it running" }).click();
+    await see(dialog).toBeHidden();
+    await see(cancel).toBeFocused();
+    await cancel.click();
+    await dialog.getByRole("button", { name: "Yes, cancel the run" }).click();
+    await see(dialog).toBeHidden();
+    await see(page.getByRole("status").filter({ hasText: "Cancel requested" })).toBeVisible();
+    await eventually("the run cancelled", async () => {
+      const run = await rest<{ status: string; conclusion: string | null }>(
+        "GET",
+        `/repos/${org}/${name}/actions/runs/${runId}`,
+      );
+      return run.conclusion === "cancelled" ? run : undefined;
+    });
+  });
+
+  it("asks before cancelling without JavaScript too", async () => {
+    const runId = await startRun();
+    const context = await page
+      .context()
+      .browser()
+      ?.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
+    if (!context) throw new Error("no browser");
+    const plain = await context.newPage();
+    await plain.goto(`${runs()}/runs/${runId}`);
+    await plain.getByRole("button", { name: "Cancel run" }).click();
+    await see(plain.getByRole("alert")).toContainText("Cancel this run?");
+    await plain.getByRole("button", { name: "Yes, cancel the run" }).click();
+    await see(plain.getByRole("status").filter({ hasText: "Cancel requested" })).toBeVisible();
+    await context.close();
+  });
+
+  it("refuses a cancel confirmed without JavaScript once a newer attempt started", async () => {
+    const runId = await startRun();
+    const context = await page
+      .context()
+      .browser()
+      ?.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
+    if (!context) throw new Error("no browser");
+    const plain = await context.newPage();
+    await plain.goto(`${runs()}/runs/${runId}`);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/cancel`, { attempt: 1 });
+    await finished(runId);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/rerun`, {});
+    await plain.getByRole("button", { name: "Cancel run" }).click();
+    await see(plain.getByRole("alert")).toContainText("Cancel this run?");
+    await plain.getByRole("button", { name: "Yes, cancel the run" }).click();
+    await see(plain.getByRole("alert")).toContainText("newer attempt");
+    const run = await rest<{ run_attempt: number; status: string }>(
+      "GET",
+      `/repos/${org}/${name}/actions/runs/${runId}`,
+    );
+    expect(run.run_attempt).toBe(2);
+    expect(run.status).not.toBe("completed");
+    await context.close();
+  });
+
+  it("names a refusal: a re-run drawn for an attempt that is no longer current", async () => {
+    const runId = await startRun();
+    await runJob(runId, "build", "success");
+    await runJob(runId, "test", "success");
+    await finished(runId);
+    await visit(page, `${runs()}/runs/${runId}`);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/rerun`, {});
+    await page.getByRole("button", { name: "Re-run all jobs" }).click();
+    await see(page.getByRole("alert")).toContainText("newer attempt");
+    await accessible("a refused re-run");
+    await runJob(runId, "build", "success");
+    await runJob(runId, "test", "success");
+    await finished(runId);
+    await visit(page, `${runs()}/runs/${runId}?attempt=2`);
+    await rest("POST", `/repos/${org}/${name}/actions/runs/${runId}/rerun`, {});
+    await page.getByRole("button", { name: "Re-run all jobs" }).click();
+    await see(page.getByRole("alert")).toContainText("newer attempt");
+    await see(page.getByRole("status").filter({ hasText: "Attempt 2 of 3" })).toBeVisible();
+  });
+
+  it("offers a reader nothing, and the API refuses a reader's forged form", async () => {
+    const runId = await startRun();
+    const reader = await signedInAs("reader-of-runs");
+    expect((await reader.goto(`${runs()}/runs/${runId}`))?.status()).toBe(404);
+    await rest("PUT", `/repos/${org}/${name}/collaborators/reader-of-runs`, { permission: "pull" });
+    await reader.goto(`${runs()}/runs/${runId}`);
+    await see(reader.getByRole("heading", { level: 2 })).toBeVisible();
+    await see(reader.getByRole("button", { name: "Cancel run" })).toHaveCount(0);
+    const forged = await reader.request.post(`${runs()}/runs/${runId}`, {
+      form: { intent: "cancel", key: crypto.randomUUID(), attempt: "1", confirm: "yes" },
+      headers: { Origin: stack.origin },
+      maxRedirects: 0,
+    });
+    expect(forged.status()).toBe(200);
+    expect(await forged.text()).toContain("permission");
+    const run = await rest<{ conclusion: string | null }>(
+      "GET",
+      `/repos/${org}/${name}/actions/runs/${runId}`,
+    );
+    expect(run.conclusion).not.toBe("cancelled");
+    await reader.context().close();
+  });
+});
+
+describe("a pull request's checks", () => {
+  it("lists the head's check runs, each linked to its job, and sums them up on the conversation", async () => {
+    await branchFromMain("topic");
+    await rest("PUT", `/repos/${org}/${name}/contents/feature.md`, {
+      message: "Add a feature",
+      branch: "topic",
+      content: Buffer.from("# feature\n").toString("base64"),
+    });
+    const pull = await rest<{ number: number; head: { sha: string } }>(
+      "POST",
+      `/repos/${org}/${name}/pulls`,
+      {
+        title: "A feature",
+        head: "topic",
+        base: "main",
+      },
+    );
+    const runId = await startRun(".github/workflows/ci.yml", WORKFLOW, pull.head.sha);
+    await runJob(runId, "build", "failure");
+    await finished(runId);
+    await eventually("the head's checks", async () => {
+      const checks = await rest<{ check_runs: { name: string }[] }>(
+        "GET",
+        `/repos/${org}/${name}/commits/${pull.head.sha}/check-runs`,
+      );
+      return checks.check_runs.length >= 2 ? checks : undefined;
+    });
+    await visit(page, `${stack.origin}/${org}/${name}/pull/${pull.number}`);
+    const box = page
+      .getByRole("region", { name: "Checks" })
+      .or(page.locator("section").filter({ has: page.getByRole("heading", { name: "Checks" }) }));
+    await see(box.first()).toContainText("failing");
+    await accessible("pull request with checks");
+    await page
+      .getByRole("navigation", { name: "Pull request" })
+      .getByRole("link", { name: "Checks" })
+      .click();
+    await see(page.getByRole("heading", { name: "Check runs" })).toBeVisible();
+    const build = page.getByRole("link", { name: "build" });
+    await see(build).toHaveAttribute("href", new RegExp(`/actions/runs/${runId}/job/\\d+$`));
+    await accessible("pull request checks tab");
+    for (const width of [375, 320]) {
+      await page.setViewportSize({ width, height: 800 });
+      expect(await page.locator("html").evaluate((html) => html.scrollWidth), `${width}px`).toBe(
+        width,
+      );
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await build.click();
+    await see(page.getByRole("heading", { name: /build/ })).toBeVisible();
   });
 });

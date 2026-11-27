@@ -1180,25 +1180,41 @@ export class RunDO extends MigratingDO {
   cancel(
     by: string,
     mode: "graceful" | "force",
-  ): { ok: true } | { ok: false; code: "run_not_found" | "run_not_cancellable" } {
+    expectedAttempt?: number,
+  ):
+    | { ok: true }
+    | { ok: false; code: "run_not_found" | "run_not_cancellable" | "attempt_changed" } {
     return this.#tx(() => {
-      if (this.#hidden() || !this.engine.run()) return { ok: false, code: "run_not_found" };
+      const run = this.#hidden() ? undefined : this.engine.run();
+      if (!run) return { ok: false, code: "run_not_found" };
+      if (expectedAttempt !== undefined && expectedAttempt !== run.attempt)
+        return { ok: false, code: "attempt_changed" };
       if (!this.engine.cancel(by, mode)) return { ok: false, code: "run_not_cancellable" };
       this.#endApproval("cancelled");
       return { ok: true };
     });
   }
 
-  rerun(by: string):
+  rerun(
+    by: string,
+    expectedAttempt?: number,
+  ):
     | { ok: true; attempt: number }
     | {
         ok: false;
-        code: "run_not_found" | "run_not_completed" | "rerun_limit" | "approval_required";
+        code:
+          | "run_not_found"
+          | "run_not_completed"
+          | "rerun_limit"
+          | "approval_required"
+          | "attempt_changed";
       } {
     return this.#tx(() => {
       if (this.#hidden()) return { ok: false, code: "run_not_found" };
       const current = this.engine.current();
       if (!current) return { ok: false, code: "run_not_found" };
+      if (expectedAttempt !== undefined && expectedAttempt !== current.attempt.attempt)
+        return { ok: false, code: "attempt_changed" };
       // A run never approved stays unapproved: re-running it would start code no one approved.
       const approval = this.#approvalRow();
       if (approval && approval.state !== "approved")

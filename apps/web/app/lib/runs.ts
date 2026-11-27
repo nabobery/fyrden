@@ -176,6 +176,8 @@ const CONCLUDED: Record<string, StateWords> = {
   cancelled: { words: "Cancelled", mark: "⊘", tone: "idle" },
   skipped: { words: "Skipped", mark: "–", tone: "idle" },
   action_required: { words: "Waiting for approval", mark: "!", tone: "busy" },
+  neutral: { words: "Neutral", mark: "■", tone: "idle" },
+  error: { words: "Error", mark: "✗", tone: "bad" },
 };
 
 const UNDERWAY: Record<string, StateWords> = {

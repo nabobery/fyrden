@@ -5,8 +5,10 @@
 // actions permission is needed, apart from contents and statuses.
 import { exports } from "cloudflare:workers";
 import { newUlid } from "@fyrden/adapters-cloudflare/git";
+import { uniqueId } from "@fyrden/testing";
 import { describe, expect, it } from "vitest";
 import { api, json } from "./helpers/api.js";
+import { ORIGIN } from "./helpers/git-http.js";
 import { scopedToken } from "./helpers/principals.js";
 import { drain, finish, job, repoWithCommit, runStub, started, workflow } from "./helpers/runs.js";
 
@@ -42,10 +44,12 @@ async function callTool(token: string, name: string, args: Record<string, unknow
   });
   const text = await res.text();
   const body = JSON.parse(text.startsWith("{") ? text : (text.split("data: ")[1] ?? "{}")) as {
-    result?: { structuredContent?: unknown; isError?: boolean };
+    result?: { structuredContent?: unknown; isError?: boolean; content?: { text: string }[] };
   };
   return body.result;
 }
+
+const textOf = (result: Awaited<ReturnType<typeof callTool>>) => result?.content?.[0]?.text ?? "";
 
 describe("reading a run", () => {
   it("answers the run and its jobs by GitHub's paths and names", async () => {
@@ -288,5 +292,109 @@ describe("cancelling and re-running", () => {
       api("GET", `${f.path}/actions/runs/${runId}/jobs`, f.owner.token),
     );
     expect(jobs.body.jobs.map((j) => j.status)).toEqual(["queued", "pending"]);
+  });
+
+  it("takes neither an attempt below 1 nor above 51 (422)", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    for (const attempt of [0, 52]) {
+      const res = await json(
+        api("POST", `${f.path}/actions/runs/${runId}/cancel`, f.owner.token, { attempt }),
+      );
+      expect(res).toMatchObject({ status: 422, body: { code: "invalid_input" } });
+    }
+  });
+});
+
+describe("acting on the attempt the caller saw", () => {
+  const keyed = (path: string, token: string, key: string, body: unknown) =>
+    json(
+      exports.default.fetch(`${ORIGIN}/api${path}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": key,
+        },
+        body: JSON.stringify(body),
+      }),
+    );
+
+  async function rerunOnce(f: Awaited<ReturnType<typeof repoWithCommit>>) {
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    const rerun = await json(api("POST", `${f.path}/actions/runs/${runId}/rerun`, f.owner.token));
+    expect(rerun).toMatchObject({ status: 201, body: { run_attempt: 2 } });
+    await drain(runId);
+    return runId;
+  }
+
+  it("refuses a cancel of an earlier attempt (409) and cancels the current one", async () => {
+    const f = await repoWithCommit();
+    const runId = await rerunOnce(f);
+    const path = `${f.path}/actions/runs/${runId}/cancel`;
+    const stale = await json(api("POST", path, f.owner.token, { attempt: 1 }));
+    expect(stale).toMatchObject({ status: 409, body: { code: "attempt_changed" } });
+    const run = await json(api("GET", `${f.path}/actions/runs/${runId}`, f.owner.token));
+    expect(run.body).toMatchObject({ run_attempt: 2, conclusion: null });
+    expect((await api("POST", path, f.owner.token, { attempt: 2 })).status).toBe(202);
+  });
+
+  it("refuses a re-run of an earlier attempt (409) and re-runs the current one", async () => {
+    const f = await repoWithCommit();
+    const runId = await rerunOnce(f);
+    await finish(runId, "a", "failure");
+    const path = `${f.path}/actions/runs/${runId}/rerun`;
+    const stale = await json(api("POST", path, f.owner.token, { attempt: 1 }));
+    expect(stale).toMatchObject({ status: 409, body: { code: "attempt_changed" } });
+    const rerun = await json(api("POST", path, f.owner.token, { attempt: 2 }));
+    expect(rerun).toMatchObject({ status: 201, body: { run_attempt: 3 } });
+  });
+
+  it("replays a retried re-run's 201 after its attempt moved on, refusing a new key (REST)", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    const path = `${f.path}/actions/runs/${runId}/rerun`;
+    const key = uniqueId("key");
+    const first = await keyed(path, f.owner.token, key, { attempt: 1 });
+    expect(first).toMatchObject({ status: 201, body: { run_attempt: 2 } });
+    await drain(runId);
+    await finish(runId, "a", "failure");
+    expect(await keyed(path, f.owner.token, key, { attempt: 1 })).toEqual(first);
+    const fresh = await keyed(path, f.owner.token, uniqueId("key"), { attempt: 1 });
+    expect(fresh).toMatchObject({ status: 409, body: { code: "attempt_changed" } });
+  });
+
+  it("replays a retried re-run and refuses a stale cancel or new-key re-run (MCP)", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    const args = { owner: f.owner.handle, repo: f.repo.name, run_id: runId, attempt: 1 };
+    const key = uniqueId("key");
+    const first = await callTool(f.owner.token, "rerun_workflow_run", {
+      ...args,
+      idempotency_key: key,
+    });
+    expect(first?.structuredContent).toEqual({ run_attempt: 2 });
+    await drain(runId);
+    const stale = await callTool(f.owner.token, "cancel_workflow_run", {
+      ...args,
+      idempotency_key: uniqueId("key"),
+    });
+    expect(stale?.isError).toBe(true);
+    expect(JSON.parse(textOf(stale))).toMatchObject({ status: 409, code: "attempt_changed" });
+    await finish(runId, "a", "failure");
+    const again = await callTool(f.owner.token, "rerun_workflow_run", {
+      ...args,
+      idempotency_key: key,
+    });
+    expect(again?.structuredContent).toEqual({ run_attempt: 2 });
+    const fresh = await callTool(f.owner.token, "rerun_workflow_run", {
+      ...args,
+      idempotency_key: uniqueId("key"),
+    });
+    expect(fresh?.isError).toBe(true);
+    expect(JSON.parse(textOf(fresh))).toMatchObject({ status: 409, code: "attempt_changed" });
   });
 });

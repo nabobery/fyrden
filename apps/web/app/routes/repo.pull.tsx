@@ -4,12 +4,15 @@ import { type Outcome, useBaseline } from "../components/kept-drafts.js";
 import { Markdown } from "../components/markdown.js";
 import { MergeBox } from "../components/merge-box.js";
 import { Pager } from "../components/pager.js";
+import { ChecksSummary } from "../components/pull-checks.js";
 import { PullHeader } from "../components/pull-header.js";
 import { inOrder, Timeline, type TimelineItem } from "../components/pull-timeline.js";
 import { Reactions } from "../components/reactions.js";
 import { ReviewForm } from "../components/review-form.js";
 import { SubjectSidebar } from "../components/subject-sidebar.js";
 import { apiCall, assertSameOrigin, bodyOf, readForm } from "../lib/api.server.js";
+import type { CheckRunsPage, CombinedStatus } from "../lib/checks.js";
+import { optionalRead } from "../lib/checks.server.js";
 import {
   type Continuation,
   readContinuation,
@@ -127,6 +130,25 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     // For the merge box only: where the required checks stand on the head.
     open ? apiCall<RequiredChecks>(context, request, "GET", `${api}/required-checks`) : null,
   ]);
+  const head = encodeURIComponent(pull.head.sha);
+  const [checkRuns, statuses] = await Promise.all([
+    optionalRead(() =>
+      apiCall<CheckRunsPage>(
+        context,
+        request,
+        "GET",
+        `${repoApi}/commits/${head}/check-runs?per_page=100`,
+      ),
+    ),
+    optionalRead(() =>
+      apiCall<CombinedStatus>(
+        context,
+        request,
+        "GET",
+        `${repoApi}/commits/${head}/status?per_page=100`,
+      ),
+    ),
+  ]);
   const rules =
     repo.status === 200 && rulesets?.status === 200
       ? mergeRules(rulesets.body.rulesets, pull.base.ref, repo.body.default_branch)
@@ -212,6 +234,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       requiredChecks?.status === 200 && requiredChecks.body.head_sha === pull.head.sha
         ? requiredChecks.body
         : null,
+    checkRuns,
+    statuses,
     // What the viewer's role allows (none when the repository could not be read).
     permissions: (repo.status === 200 && repo.body.permissions) || null,
   };
@@ -437,6 +461,8 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
     rules,
     requiredChecks,
     permissions,
+    checkRuns,
+    statuses,
   } = loaderData;
   const push = permissions?.push === true;
   // A locked conversation takes reactions from write access only (the API decides each).
@@ -517,6 +543,14 @@ export default function Pull({ loaderData }: Route.ComponentProps) {
       {open && viewer !== null && (
         <ReviewForm headSha={pull.head.sha} isAuthor={isAuthor} hidden={viewerField} />
       )}
+      <ChecksSummary
+        checks={checkRuns}
+        statuses={statuses}
+        required={requiredChecks?.checks ?? null}
+        owner={owner}
+        repo={repo}
+        tab={`${pullPage(owner, repo, pull.number)}/checks`}
+      />
       {open && (
         <MergeBox
           pull={pull}

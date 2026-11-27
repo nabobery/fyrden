@@ -516,13 +516,24 @@ export const getWorkflowRunGraph = defineOperation({
 
 const Accepted = z.object({}).describe("Accepted: the run is being cancelled.");
 
+const ExpectedAttempt = z
+  .number()
+  .int()
+  .min(1)
+  .max(51)
+  .optional()
+  .describe("The attempt the caller saw; refused when it is no longer the current one.");
+
+const EXPECTED_ATTEMPT =
+  "With `attempt` (a Fyrden extension), 409 `attempt_changed` when that is not the run's current attempt, checked as the run acts, so a caller never acts on an attempt it has not seen; a retry with the same `Idempotency-Key` answers as its first request did, even once the attempt moved on.";
+
 export const cancelWorkflowRun = defineOperation({
   id: "actions.runs.cancel",
   method: "POST",
   path: "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel",
   summary: "Cancel a workflow run",
-  description: `Cancels a run: queued jobs end, running jobs whose \`if:\` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose \`if:\` still holds (such as \`if: always()\`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 \`run_not_cancellable\` once the run completed. ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
-  input: z.object({ ...RepoInput, run_id: RunId }),
+  description: `Cancels a run: queued jobs end, running jobs whose \`if:\` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose \`if:\` still holds (such as \`if: always()\`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 \`run_not_cancellable\` once the run completed. ${EXPECTED_ATTEMPT} ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
+  input: z.object({ ...RepoInput, run_id: RunId, attempt: ExpectedAttempt }),
   output: Accepted,
   permission: "actions:write",
   principals: ["user", "agent"],
@@ -532,7 +543,8 @@ export const cancelWorkflowRun = defineOperation({
   mcp: {
     tool: "cancel_workflow_run",
     title: "Cancel a workflow run",
-    description: "Cancel a CI run; jobs with if: always() still run.",
+    description:
+      "Cancel a CI run; jobs with if: always() still run. Give the attempt you saw to refuse a newer one.",
     readOnly: false,
   },
 });
@@ -563,8 +575,8 @@ export const rerunWorkflowRun = defineOperation({
   method: "POST",
   path: "/repos/{owner}/{repo}/actions/runs/{run_id}/rerun",
   summary: "Re-run a workflow",
-  description: `Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 \`rerun_limit\`); one still running, or whose workflow could not run (\`errors\`), is 409 \`run_not_completed\`. ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
-  input: z.object({ ...RepoInput, run_id: RunId }),
+  description: `Runs every job of a completed run again as a new attempt, from the same commit and workflow; its jobs keep the rights of the run's original actor, and the caller is the attempt's triggering actor. A run takes 50 re-runs (409 \`rerun_limit\`); one still running, or whose workflow could not run (\`errors\`), is 409 \`run_not_completed\`. ${EXPECTED_ATTEMPT} ${COMPATIBILITY} Takes the \`actions:write\` permission.`,
+  input: z.object({ ...RepoInput, run_id: RunId, attempt: ExpectedAttempt }),
   output: z.object({ run_attempt: z.number().int() }),
   permission: "actions:write",
   principals: ["user", "agent"],
@@ -574,7 +586,8 @@ export const rerunWorkflowRun = defineOperation({
   mcp: {
     tool: "rerun_workflow_run",
     title: "Re-run a workflow run",
-    description: "Run every job of a completed CI run again as a new attempt.",
+    description:
+      "Run every job of a completed CI run again as a new attempt. Give the attempt you saw to refuse a newer one.",
     readOnly: false,
   },
 });
