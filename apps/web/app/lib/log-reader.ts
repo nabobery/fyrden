@@ -147,9 +147,8 @@ export class LogReader {
         const restart = new URLSearchParams({ from: String(i) });
         const read = this.#read(restart);
         if (read && this.#startedQuery === restart.toString()) {
-          this.#restart.delete(i);
+          this.#restart.add(i);
           this.#continuations.delete(i);
-          this.#store.forget(i);
         }
         return read;
       }
@@ -179,6 +178,12 @@ export class LogReader {
       this.#refusedContinuation = null;
       this.#continuations.delete(continued.i);
       return this.want(continued.i, continued.i + 1);
+    }
+    if (this.#pastEnd(this.#refused)) {
+      this.clearRefusal();
+      this.#refused = null;
+      this.#refusedContinuation = null;
+      return this.wantRanges(this.#store.focused());
     }
     return this.#read(new URLSearchParams(this.#refused), this.#refusedForward, continued);
   }
@@ -217,7 +222,10 @@ export class LogReader {
     }
     query.set("max_bytes", String(PAGE_BYTES));
     let asked = query.toString();
-    if (this.#refused !== null && !this.#stillContinues(this.#refusedContinuation)) {
+    if (
+      this.#refused !== null &&
+      (!this.#stillContinues(this.#refusedContinuation) || this.#pastEnd(this.#refused))
+    ) {
       this.#refused = null;
       this.#refusedContinuation = null;
     }
@@ -232,7 +240,7 @@ export class LogReader {
     this.#asks.push(this.#now());
     return this.#fetch(asked)
       .then(
-        (answer) => this.#answer(answer, forward, new URLSearchParams(asked).has("cursor")),
+        (answer) => this.#answer(answer, forward, new URLSearchParams(asked)),
         () => {
           this.refusal = { status: 0, code: "network" };
           this.#transient = false;
@@ -255,14 +263,22 @@ export class LogReader {
     return row?.kind === "prefix" && !row.cut && row.next === continued.at;
   }
 
-  #answer(answer: PageAnswer, forward: boolean, byCursor: boolean): void {
+  #pastEnd(query: string): boolean {
+    const from = new URLSearchParams(query).get("from");
+    return this.#store.closed && from !== null && Number(from) >= this.#store.durable;
+  }
+
+  #answer(answer: PageAnswer, forward: boolean, asked: URLSearchParams): void {
     const problem = (answer.body ?? {}) as { code?: unknown; retry_at?: unknown };
     const code = typeof problem.code === "string" ? problem.code : undefined;
     if (answer.status === 200 && isPage(answer.body)) {
       const page = answer.body;
       this.#answered = true;
       this.#waited = 0;
-      const rows = byCursor
+      const from = asked.has("from") ? Number(asked.get("from")) : null;
+      if (from !== null && this.#restart.delete(from) && page.rows[0]?.i === from)
+        this.#store.forget(from);
+      const rows = asked.has("cursor")
         ? page.rows.filter((r) => !("o" in r) || r.o === 0 || this.#store.row(r.i) !== undefined)
         : page.rows;
       this.#store.applyPage({

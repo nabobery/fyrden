@@ -186,6 +186,25 @@ describe("LogReader", () => {
     expect(h.asked.at(-1)).toBe("from=99990&max_bytes=262144");
   });
 
+  it("drops a refused read of rows the closed log never stored", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "x" }], 1, "after-0"));
+    await first;
+    h.store.applyLive([{ i: 6, t: 1, c: "live" }]);
+    const past = h.reader.want(5, 6);
+    expect(h.asked.at(-1)).toBe("from=5&max_bytes=262144");
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await past;
+    h.store.applyTerminal(3, "incomplete");
+    h.advance(1_000);
+    expect(h.reader.retry()).toBeUndefined();
+    expect(h.reader.refusal).toBeNull();
+    expect(h.asked).toHaveLength(2);
+    void h.reader.want(0, 7);
+    expect(h.asked.at(-1)).toBe("from=1&max_bytes=262144");
+  });
+
   it("asks a line past the API's largest index as that index", () => {
     const h = harness();
     void h.reader.want(9_999_999_998, 9_999_999_999);
@@ -335,6 +354,30 @@ describe("LogReader's split rows", () => {
     h.answer(page([{ i: 0, t: 1, c: "abcd" }], 1, null, "complete"));
     await again;
     expect(h.store.row(0)).toMatchObject({ kind: "whole", c: "abcd" });
+  });
+
+  it("keeps a split row shown while its restart is refused, then takes the restart's prefix and cursor", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    h.answer({ status: 422, body: { code: "invalid_cursor" }, retryAfter: null });
+    await on;
+    const restart = h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+    expect(h.store.row(0)).toMatchObject({ kind: "prefix", c: "ab" });
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await restart;
+    expect(h.store.row(0)).toMatchObject({ kind: "prefix", c: "ab" });
+    h.advance(1_000);
+    const again = h.reader.retry();
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+    h.answer(page([{ i: 0, t: 1, c: "a", o: 0, end: false }], 1, "inside-0-again"));
+    await again;
+    expect(h.store.row(0)).toMatchObject({ kind: "prefix", c: "a", next: 1 });
+    void h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("cursor=inside-0-again&max_bytes=262144");
   });
 
   it("keeps a Load new rows press the minute's share blocked, for the next read", async () => {
