@@ -71,6 +71,7 @@ export class LiveLog {
   #retries: number[] = [];
   #brokenRetried = false;
   #stopped = false;
+  #attempt = 0;
 
   constructor(options: {
     store: LogStore;
@@ -106,6 +107,7 @@ export class LiveLog {
 
   stop(): void {
     this.#stopped = true;
+    this.#attempt += 1;
     this.#socket?.close();
   }
 
@@ -116,6 +118,8 @@ export class LiveLog {
   }
 
   async #open(from: number): Promise<void> {
+    const attempt = ++this.#attempt;
+    const current = () => attempt === this.#attempt;
     this.#set("connecting");
     this.#store.dropUnfinishedFrom(from);
     this.#position = { i: from, o: 0 };
@@ -126,10 +130,10 @@ export class LiveLog {
     try {
       ticket = await this.#ticket(from);
     } catch {
-      if (!this.#stopped) this.#set("stopped", "ticket_failed");
+      if (current()) this.#set("stopped", "ticket_failed");
       return;
     }
-    if (this.#stopped) return;
+    if (!current()) return;
     if ("refused" in ticket) {
       this.#set("refused", ticket.refused);
       return;
@@ -145,15 +149,15 @@ export class LiveLog {
     let opened = false;
     socket.onopen = () => {
       opened = true;
-      this.#set("live");
+      if (current()) this.#set("live");
     };
     socket.onmessage = (event) => {
-      if (typeof event.data === "string") this.#frame(socket, event.data);
+      if (current() && typeof event.data === "string") this.#frame(socket, event.data);
     };
     socket.onerror = () => undefined;
     socket.onclose = (event) => {
-      if (this.#socket !== socket) return;
-      this.#socket = null;
+      if (this.#socket === socket) this.#socket = null;
+      if (!current()) return;
       this.#closed(event.code, opened);
     };
   }

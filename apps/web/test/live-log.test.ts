@@ -212,6 +212,36 @@ describe("LiveLog", () => {
     expect(h.tickets).toHaveLength(1);
   });
 
+  it("keeps one socket when resumed while a stopped attempt waits for its ticket", async () => {
+    const h = harness();
+    const first = h.start();
+    h.live.stop();
+    const resumed = h.live.resume();
+    await Promise.all([first, resumed]);
+    expect(h.tickets).toHaveLength(2);
+    expect(h.sockets).toHaveLength(1);
+    h.live.stop();
+    expect(h.sockets.every((s) => s.closed)).toBe(true);
+  });
+
+  it("ignores a stopped socket's frames and close once resumed", async () => {
+    const h = harness();
+    await h.start();
+    const old = h.last();
+    old.open();
+    old.frame(rows(0, 2));
+    h.live.stop();
+    const resumed = h.live.resume();
+    old.frame(rows(2, 1));
+    old.end(1001);
+    await resumed;
+    await h.live.settled();
+    expect(h.store.row(2)).toBeUndefined();
+    expect(h.tickets).toEqual([0, 2]);
+    expect(h.sockets).toHaveLength(2);
+    expect(h.live.state).toBe("connecting");
+  });
+
   it.each(["ticket", "connect"] as const)(
     "stops, says so and can resume when the %s fails",
     async (where) => {
