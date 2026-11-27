@@ -144,8 +144,8 @@ export function logSpans(text: string): LogSpan[] {
   let open = "";
   for (const [token, end] of logTokens(text)) {
     if (token.kind === "sgr") {
-      const next = classOf(apply(style, token.params));
       style = apply(style, token.params);
+      const next = classOf(style);
       if (next !== open && current !== "") {
         spans.push({ text: current, className: open });
         current = "";
@@ -204,6 +204,7 @@ export class SpanCache {
     }
     const spans = logSpans(c);
     this.parsed += 1;
+    if (weight(spans) > this.maxSpans || c.length > this.maxUnits) return spans;
     this.#rows.set(i, { c, spans });
     this.#spans += weight(spans);
     this.#units += c.length;

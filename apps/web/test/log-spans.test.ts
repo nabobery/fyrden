@@ -105,4 +105,13 @@ describe("SpanCache", () => {
       expect(cache.parsed).toBe(10);
     });
   });
+
+  it("returns a row over its budget without caching it", () => {
+    const cache = new SpanCache(20_000, 5_000);
+    cache.get(0, "a".repeat(100));
+    expect(cache.get(1, "b".repeat(10_000))).toHaveLength(1);
+    expect(cache.units).toBeLessThanOrEqual(5_000);
+    cache.get(0, "a".repeat(100));
+    expect(cache.parsed).toBe(2);
+  });
 });

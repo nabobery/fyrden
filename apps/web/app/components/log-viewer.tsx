@@ -318,14 +318,11 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
   );
   useEffect(() => () => clearTimeout(wake.current), []);
 
-  const wanted = useRef(ranges);
-  wanted.current = ranges;
   const rangesKey = ranges.map(([a, b]) => `${a}-${b}`).join(",");
   // biome-ignore lint/correctness/useExhaustiveDependencies: the view's rows, not live data, restart the wait.
   useEffect(() => {
-    if (ranges.length === 0) return;
-    return readRanges(reader, () => wanted.current, bump, SETTLE_MS);
-  }, [rangesKey, reader, bump]);
+    return readRanges(reader, () => store.focused(), bump, SETTLE_MS);
+  }, [rangesKey, reader, bump, store]);
 
   useEffect(() => {
     const wait = reader.retryAfterMs();
@@ -431,7 +428,13 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
             </span>
           )}
         {!store.closed && (live === null || live.state !== "live") && (
-          <button type="button" onClick={() => void reader.more()?.then(bump)}>
+          <button
+            type="button"
+            onClick={() => {
+              void reader.more()?.then(bump);
+              bump();
+            }}
+          >
             Load new rows
           </button>
         )}
@@ -465,6 +468,11 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
               Try again
             </button>
           )}
+        </p>
+      )}
+      {reader.moreWaiting && (
+        <p className="muted" role="status">
+          New rows load once the viewer may read again.
         </p>
       )}
       {lineNote && (

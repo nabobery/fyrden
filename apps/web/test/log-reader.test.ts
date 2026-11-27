@@ -310,6 +310,72 @@ describe("LogReader", () => {
   });
 });
 
+describe("LogReader's split rows", () => {
+  it("never sends a continuation saved for a shorter prefix", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 5);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 3, "inside-0"));
+    await first;
+    h.store.applyLive([{ i: 0, t: null, c: "cd", o: 2, end: false }]);
+    void h.reader.want(0, 5);
+    expect(h.asked.at(-1)).toBe("from=1&max_bytes=262144");
+  });
+
+  it("reads a split row again from its start when the server refuses its cursor", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("cursor=inside-0&max_bytes=262144");
+    h.answer({ status: 422, body: { code: "invalid_cursor" }, retryAfter: null });
+    await on;
+    const again = h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+    h.answer(page([{ i: 0, t: 1, c: "abcd" }], 1, null, "complete"));
+    await again;
+    expect(h.store.row(0)).toMatchObject({ kind: "whole", c: "abcd" });
+  });
+
+  it("keeps a Load new rows press the minute's share blocked, for the next read", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "x" }], 1, "c0"));
+    await first;
+    for (let k = 1; k < READS_PER_MINUTE; k++) {
+      const read = h.reader.tail(1);
+      h.answer(page([{ i: 0, t: 1, c: "x" }], 1_000, "n"));
+      await read;
+    }
+    expect(h.reader.more()).toBeNull();
+    expect(h.reader.moreWaiting).toBe(true);
+    h.advance(60_000);
+    void h.reader.wantRanges([]);
+    expect(h.asked.at(-1)).toBe("cursor=c0&max_bytes=262144");
+    expect(h.reader.moreWaiting).toBe(false);
+  });
+});
+
+describe("LogReader's waiting Load new rows press", () => {
+  it("keeps the press while a refused read is asked again in its place", async () => {
+    const h = harness();
+    const refused = h.reader.tail(10);
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await refused;
+    expect(h.reader.more()).toBeNull();
+    expect(h.reader.moreWaiting).toBe(true);
+    h.advance(1_000);
+    const retried = h.reader.wantRanges([]);
+    expect(h.asked.at(-1)).toBe("tail=10&max_bytes=262144");
+    expect(h.reader.moreWaiting).toBe(true);
+    h.answer(page([{ i: 9, t: 1, c: "x" }], 10, "c9"));
+    await retried;
+    void h.reader.wantRanges([]);
+    expect(h.asked.at(-1)).toBe("cursor=c9&max_bytes=262144");
+    expect(h.reader.moreWaiting).toBe(false);
+  });
+});
+
 describe("readRanges", () => {
   afterEach(() => {
     vi.useRealTimers();
