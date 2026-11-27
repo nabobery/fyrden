@@ -32,6 +32,7 @@ import {
   reset,
   setSecret,
   UNSPENT,
+  unjittered,
 } from "./helpers/ci-recovery.js";
 import { putSecret, secretValue } from "./helpers/ci-secrets.js";
 import {
@@ -927,6 +928,7 @@ describe("a recovery that is cut or overlapped", () => {
 describe("a directory that does not answer a recovery", () => {
   it("is asked again with back-off until it does", async () => {
     const p = await notEnded();
+    await unjittered(p.runId);
     let calls = 0;
     await hooked(p.runId, {
       beforeDeliveryRecovery: () => {
@@ -947,6 +949,7 @@ describe("a directory that does not answer a recovery", () => {
 
   it("for too long leaves the job to its heartbeat deadline, and no fault or row once it answers", async () => {
     const p = await notEnded();
+    await unjittered(p.runId);
     await hooked(p.runId, { beforeDeliveryRecovery: down });
     await later(p.runId);
     // Ten attempts, waits doubling from a second: all before the deadline.

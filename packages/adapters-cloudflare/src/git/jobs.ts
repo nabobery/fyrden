@@ -106,7 +106,7 @@ export interface JobPolicy {
   readonly leaseMs: number;
   /** Attempts before a job is marked failed. */
   readonly maxAttempts: number;
-  /** Delay before retrying a failed slice; doubles per attempt. */
+  /** Delay before retrying a failed slice; doubles per attempt, plus up to half again at random. */
   readonly backoffMs: number;
   /** Delay before trying again when the operation pool is short. */
   readonly memoryRetryMs: number;
@@ -161,6 +161,8 @@ export class JobQueue {
     private readonly setAlarm: (at: number) => void,
     private readonly policy: JobPolicy = DEFAULT_JOB_POLICY,
     private readonly internalCalls: () => number = invocationInternalCalls,
+    /** A value in [0, 1) (`Math.random`); one outside it retries at the back-off itself. */
+    private readonly random: () => number = Math.random,
   ) {}
 
   /** Whether the invocation has nearly spent its internal-call budget: no slice starts. */
@@ -476,18 +478,19 @@ export class JobQueue {
         attempts >= this.policy.maxAttempts
           ? this.#finish(job, "failed", message)
           : // The cursor stays as it is: the one the slice started from, or its checkpoint.
-            this.#update(
-              job,
-              undefined,
-              attempts,
-              this.policy.backoffMs * 2 ** (attempts - 1),
-              message,
-            );
+            this.#update(job, undefined, attempts, this.#retryDelay(attempts), message);
     } finally {
       reservation?.release();
     }
     if (!recorded) return ending ? "taken-over-ending" : "taken-over";
     return ending ? "ran-ending" : "ran";
+  }
+
+  #retryDelay(attempts: number): number {
+    const backoff = this.policy.backoffMs * 2 ** (attempts - 1);
+    const draw = this.random();
+    const spread = draw >= 0 && draw < 1 ? draw : 0;
+    return backoff + Math.floor((spread * backoff) / 2);
   }
 
   /** The job's state as `runJob` reports it: `busy` while another run holds it. */
