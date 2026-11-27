@@ -1,3 +1,4 @@
+import type { MouseEvent } from "react";
 import { data, Form, Link, useLocation } from "react-router";
 import { RepoHeader } from "../components/repo-header.js";
 import { At, duration, RunState, Who } from "../components/run-ui.js";
@@ -103,6 +104,9 @@ function workflowOf(pathname: string): string {
   }
 }
 
+const opensInPlace = (event: MouseEvent) =>
+  event.button === 0 && !event.metaKey && !event.altKey && !event.ctrlKey && !event.shiftKey;
+
 function Filters({
   filters,
   errors,
@@ -144,7 +148,7 @@ function Filters({
       action={action}
       className="run-filters"
       aria-label="Filter runs"
-      key={location.key}
+      key={`${action}${location.search}`}
     >
       <div className="row">
         <div>
@@ -167,7 +171,14 @@ function Filters({
       </div>
       <div className="row">
         <button type="submit">Filter</button>
-        <Link to={action}>Clear</Link>
+        <Link
+          to={action}
+          onClick={(event) => {
+            if (opensInPlace(event)) event.currentTarget.closest("form")?.reset();
+          }}
+        >
+          Clear
+        </Link>
       </div>
       {errors.length > 0 && (
         <div role="alert">
