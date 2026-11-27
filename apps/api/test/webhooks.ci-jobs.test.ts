@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { ciVariableOverrides } from "../src/ci/budget.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
-import type { AssignAnswer, RunDO } from "../src/do/RunDO.js";
-import type { JobReport, RunReport } from "../src/do/repo/run-history.js";
+import type { RunDO } from "../src/do/RunDO.js";
+import { type JobReport, MAX_JOB_REPORTS, type RunReport } from "../src/do/repo/run-history.js";
 import { entityBody, webhookEventOf } from "../src/webhooks/events.js";
 import { ciFixture } from "./helpers/ci-webhooks.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -74,12 +74,13 @@ const counts = async (entity: "workflow_job" | "check_run") => {
   return of;
 };
 const finishAll = async (runId: string) => {
-  for (const j of (await runStub(runId).listJobs(undefined, 0, 256))?.jobs ?? []) {
-    if (j.status !== "queued") continue;
-    const answer = (await runStub(runId).assign(j.jobId, `k${j.jobId}`)) as AssignAnswer;
-    if (answer.ok)
-      await runStub(runId).completeTask(answer.task, { result: "success", logComplete: true });
-  }
+  await inRun(runId, (r) => {
+    for (const j of r.listJobs(undefined, 0, 256)?.jobs ?? []) {
+      if (j.status !== "queued") continue;
+      const answer = r.assign(j.jobId, `k${j.jobId}`);
+      if (answer.ok) r.completeTask(answer.task, { result: "success", logComplete: true });
+    }
+  });
   await drain(runId);
 };
 
@@ -470,7 +471,8 @@ describe("job reports", () => {
 
   it("owed over several attempts are all sent, a bounded number at a time", async () => {
     await t.createHook({ events: ["workflow_job"] });
-    const runId = await started(f, matrix(150));
+    const n = Math.ceil((MAX_JOB_REPORTS + 1) / 3);
+    const runId = await started(f, matrix(n));
     await setHooks(runId, failing("reportRun"));
     for (let attempt = 1; attempt <= 3; attempt++) {
       await finishAll(runId);
@@ -487,16 +489,17 @@ describe("job reports", () => {
     });
     await advance(runId, 3_600_000);
     for (let i = 0; i < 3; i++) await advance(runId, 2_000);
-    expect(sizes.slice(0, 2)).toEqual([256, 194]);
-    expect(await counts("workflow_job")).toEqual({ completed: 450 });
+    expect(sizes.slice(0, 2)).toEqual([MAX_JOB_REPORTS, 3 * n - MAX_JOB_REPORTS]);
+    expect(await counts("workflow_job")).toEqual({ completed: 3 * n });
     const ids = (await t.routed()).map((e) => e.data?.webhook as { tree: Record<string, unknown> });
     const seen = new Set(ids.map((w) => (w.tree.workflow_job as { id: number }).id));
-    expect(seen.size).toBe(450);
+    expect(seen.size).toBe(3 * n);
   });
 
   it("go on past jobs a repository without the run could not be told, and send them once it has it", async () => {
     await t.createHook({ events: ["workflow_job"] });
-    const runId = await started(f, matrix(200));
+    const n = Math.ceil((2 * MAX_JOB_REPORTS) / 3);
+    const runId = await started(f, matrix(n));
     await inRepo(t.stub(), (r: RepoDO) =>
       r.git.context.storage.sql.exec("DELETE FROM ci_runs WHERE run_id = ?", runId),
     );
@@ -515,8 +518,9 @@ describe("job reports", () => {
       jobsDone: 0,
     });
     await advance(runId, 2_000);
+    expect(await counts("workflow_job")).toEqual({ queued: n });
     for (let page = 0; page < 3; page++) await advance(runId, 2_000);
-    expect(await counts("workflow_job")).toEqual({ queued: 200, completed: 600 });
+    expect(await counts("workflow_job")).toEqual({ queued: n, completed: 3 * n });
   });
 
   it("are sent again past what a restored repository was told, by a run that knew more", async () => {
