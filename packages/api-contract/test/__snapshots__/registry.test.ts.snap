@@ -11092,7 +11092,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": false,
+          "required": true,
         },
         "responses": {
           "200": {
@@ -26838,7 +26838,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": false,
+          "required": true,
         },
         "responses": {
           "200": {
@@ -38579,7 +38579,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": false,
+          "required": true,
         },
         "responses": {
           "200": {
@@ -39366,7 +39366,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
               },
             },
           },
-          "required": false,
+          "required": true,
         },
         "responses": {
           "201": {

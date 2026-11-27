@@ -244,7 +244,7 @@ describe("generated artifacts", () => {
     expect(openApiDocument(registry, { version: "0.0.0" })).toMatchSnapshot();
   });
 
-  it("marks a request body required only when one of its fields is", () => {
+  it("marks a request body optional only when the operation accepts a request without one", () => {
     const paths = openApiDocument(registry, { version: "0.0.0" }).paths as Record<
       string,
       Record<string, { requestBody?: { required: boolean } }>
@@ -255,6 +255,16 @@ describe("generated artifacts", () => {
     );
     expect(body("/repos/{owner}/{repo}/actions/runs/{run_id}/rerun", "post")?.required).toBe(false);
     expect(body("/repos/{owner}/{repo}/issues", "post")?.required).toBe(true);
+    expect(body("/repos/{owner}/{repo}", "patch")?.required).toBe(true);
+    expect(body("/repos/{owner}/{repo}/issues/{issue_number}/assignees", "delete")?.required).toBe(
+      true,
+    );
+    expect(
+      body("/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", "post")?.required,
+    ).toBe(true);
+    expect(
+      body("/repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers", "delete")?.required,
+    ).toBe(true);
   });
 
   it("publishes no pattern with Unicode property escapes, which not every client's regexes have", () => {

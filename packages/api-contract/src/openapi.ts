@@ -50,6 +50,7 @@ function operationObject(op: OperationDef): JsonSchema {
   );
   const hasBody = op.method !== "GET" && Object.keys(bodyProps).length > 0;
   const bodyRequired = [...required].filter((r) => !inPath.has(r));
+  const bodyOptional = bodyRequired.length === 0 && acceptsNoBody(op.input, inPath);
   const problem = { $ref: "#/components/schemas/Problem" };
   return {
     operationId: op.id,
@@ -61,7 +62,7 @@ function operationObject(op: OperationDef): JsonSchema {
     }),
     ...(hasBody && {
       requestBody: {
-        required: bodyRequired.length > 0,
+        required: !bodyOptional,
         content: {
           "application/json": {
             schema: {
@@ -109,6 +110,18 @@ function operationObject(op: OperationDef): JsonSchema {
     "x-fyrden-permission": op.permission,
     "x-fyrden-principals": op.principals,
   };
+}
+
+function acceptsNoBody(input: z.ZodType, inPath: ReadonlySet<string>): boolean {
+  if (!(input instanceof z.ZodObject)) return false;
+  const anyPathValue = Object.fromEntries(
+    [...inPath].map((name) => [name, z.unknown().optional()]),
+  );
+  try {
+    return input.safeExtend(anyPathValue).safeParse({}).success;
+  } catch {
+    return false;
+  }
 }
 
 const STATUS_TEXT: Readonly<Record<number, string>> = {
