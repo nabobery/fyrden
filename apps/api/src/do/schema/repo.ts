@@ -403,8 +403,8 @@ export const repoSchema: readonly DoMigration[] = [
   },
   {
     version: 18,
-    // Conversation comments on pull requests (issues share them once they
-    // exist), numbered across the repository as GitHub's comment ids are.
+    // Conversation comments on pull requests (issues share them), numbered
+    // across the repository as GitHub's comment ids are.
     name: "comments",
     sql: `
       CREATE TABLE comments (
@@ -1490,8 +1490,7 @@ export const repoSchema: readonly DoMigration[] = [
     // an answer: built in slices for the default branch's tip, one segment
     // row a slice, each holding its paths' raw bytes with a NUL between them.
     // `cursor` is the server's own position in the walk (null once finished);
-    // a build's `epoch_gen` fences it from a restore. No secondary index: each
-    // entry would be one more row written per keep.
+    // a build's `epoch_gen` fences it from a restore.
     name: "path_lists",
     sql: `
       CREATE TABLE path_lists (
@@ -1929,8 +1928,7 @@ export const repoSchema: readonly DoMigration[] = [
     // What lists runs: each run's state as it reported it, so a list asks no run. `state_seq`
     // orders the states (`runStateSeq`), 0 for a run not reported yet, which no list shows;
     // `status` is the run's phase, `completed_at` its attempt's end, and `summary` what is only
-    // shown. `ci_runs_active` holds the reported runs not completed. The other two take no condition on
-    // `state_seq`: it changes with every report, which would rewrite their entries each time.
+    // shown. `ci_runs_active` holds the reported runs not completed.
     name: "ci_run_states",
     sql: `
       ALTER TABLE ci_runs ADD COLUMN state_seq INTEGER NOT NULL DEFAULT 0 CHECK (state_seq >= 0);

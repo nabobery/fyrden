@@ -33,10 +33,8 @@ const SOURCE = workflow(job("build"));
 const WEEK = 7 * 24 * 60 * 60_000;
 const repoOf = (f: Fixture) => env.REPO.getByName(f.repo.id);
 
-/** The run as its repository records it; undefined when it does not. */
 const recorded = (f: Fixture, runId: string) => inRepo(repoOf(f), (r: RepoDO) => r.runs.get(runId));
 
-/** `recorded`, as a list would show it; undefined for a run not reported yet. */
 const listed = async (f: Fixture, runId: string) => {
   const row = await recorded(f, runId);
   return row && { attempt: row.attempt, phase: row.phase, conclusion: row.conclusion };
@@ -321,7 +319,6 @@ describe("the order of reports", () => {
     });
     await advance(runId, 2_000);
     expect(await recorded(f, runId)).toBeUndefined();
-    // Once more it fails; then it is sent.
     await advance(runId, 60_000);
     await advance(runId, 60_000);
     expect((await listed(f, runId))?.phase).toBe("in_progress");
@@ -376,7 +373,6 @@ describe("a run's row", () => {
     });
     await finish(runId, "build");
     await advance(runId, 2_000);
-    // A report only updates: it brings nothing back.
     expect(await recorded(f, runId)).toBeUndefined();
     await advance(runId, WEEK);
     expect(await recorded(f, runId)).toMatchObject({

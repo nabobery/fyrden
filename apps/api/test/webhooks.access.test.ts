@@ -21,7 +21,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A token of the repository's owner limited to `scopes`. */
 async function tokenWith(scopes: string[]): Promise<string> {
   const made = await json<{ token: string }>(
     api("POST", "/user/tokens", t.owner.token, { type: "pat", scopes }),
@@ -39,7 +38,6 @@ const CONTENT = [
   "statuses:read",
 ];
 
-/** Every hook operation, as the token `token` asks it. */
 async function everyOperation(token: string, hook: number, delivery: string) {
   const at = `${t.path}/hooks`;
   const calls: [string, string, string, unknown?][] = [
@@ -82,7 +80,6 @@ describe("managing webhooks and reading their deliveries", () => {
       const statuses = await everyOperation(await tokenWith(scopes), hook, delivery);
       expect(Object.values(statuses).every((status) => status === 403)).toBe(true);
     }
-    // The hook is still there, untouched.
     expect((await api("GET", `${t.path}/hooks/${hook}`, t.owner.token)).status).toBe(200);
   });
 

@@ -1,5 +1,3 @@
-// What the suites of unsettled assignments share: a run's failures and their
-// recovery job, what left the run, and the faults injected into it.
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect } from "vitest";
@@ -103,7 +101,6 @@ export const credentialOf = (runner: RegisteredRunner) =>
 /** Of an ephemeral runner given nothing: neither stamped nor ended. */
 export const UNSPENT = { expires_at: null, task_assigned_at: null, task_confirmed_at: null };
 
-/** The outcomes logged for failed deliveries of `wireId`, in order. */
 export const outcomesOf = (wireId: number) =>
   logs
     .entries()

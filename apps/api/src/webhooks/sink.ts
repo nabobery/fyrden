@@ -80,7 +80,6 @@ export const DELIVERY_POLICY = {
 
 const encoder = new TextEncoder();
 
-/** What the deliveries an event makes, as its effect carries them, are whichever their body. */
 interface PlannedBase {
   readonly repoId: string;
   readonly eventKey: string;
@@ -95,7 +94,6 @@ interface PlannedDeliveries extends PlannedBase {
   readonly body: Record<string, unknown>;
 }
 
-/** An event's deliveries whose body is made from its capture. */
 interface PlannedCapture extends PlannedBase {
   /** When the event happened (the effects' repair reads it here too). */
   readonly occurredAt: number;
@@ -170,7 +168,6 @@ export function bodyOf(event: DomainEvent): Record<string, unknown> | undefined 
   };
 }
 
-/** Hex SHA-256 of `text`, its first 16 bytes. */
 async function hash(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)]
@@ -233,7 +230,6 @@ export interface WebhookSinkOptions {
 
 export const webhookSink: EffectSink = createWebhookSink();
 
-/** The webhook sink, making `firstAttempts` first attempts per event. */
 export function createWebhookSink(options: WebhookSinkOptions = {}): EffectSink {
   const firstAttempts = options.firstAttempts ?? FIRST_ATTEMPTS;
   return {
@@ -374,9 +370,7 @@ interface Body {
   readonly key: string;
   /** Its bytes; none when its deliveries are `dropped`. */
   readonly bytes: Uint8Array | null;
-  /** Why its deliveries are `dropped`, if they are. */
   readonly dropped: string | null;
-  /** Until when the deliveries are kept. */
   readonly expiresAt: number;
   /**
    * Stored while any delivery waits (a body built from the event, stored
@@ -741,7 +735,6 @@ async function makeDeliveries(
           hook: hooks[i] ?? { kind: "unavailable", error: new Error("no hook looked up") },
         });
       } catch (error) {
-        // Not made, or not recorded: queued instead.
         createLogger({ op: "webhooks.deliver" }).warn("a first attempt failed to run; queued", {
           delivery: row.delivery_id,
           error,
@@ -780,7 +773,6 @@ async function enqueueWhenClaimable(
   await enqueue(env, db, [delivery], metrics, Math.ceil(delay / 1000));
 }
 
-/** Sends a message for each delivery's first attempt (after `delaySeconds`), and marks them sent. */
 async function enqueue(
   env: Env,
   db: D1Database,

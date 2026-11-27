@@ -1,8 +1,3 @@
-// Self-hosted runners as the tests drive them: an organization with a
-// repository and a commit (runners serve an organization's repositories),
-// a registered runner, and the runner protocol's calls as the pinned runner
-// sends them. The deployment switch is a Worker variable, so each call runs
-// the app against the test env with it set for that call.
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { uniqueId } from "@fyrden/testing";
@@ -105,7 +100,6 @@ export async function proto(res: Response) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-/** A new organization owned by `owner`. */
 export async function newOrg(owner: Who): Promise<{ id: string; login: string }> {
   const admin = await user(true);
   const login = uniqueId("org").slice(0, 39);
@@ -157,7 +151,6 @@ export async function siblingRepo(f: OrgFixture): Promise<OrgFixture> {
   return { ...f, repo: repo.body, path, sha: commit.body.commit.sha };
 }
 
-/** Transfers the fixture's repository to account `to`. */
 export async function transferTo(f: OrgFixture, to: string): Promise<void> {
   const moved = await json<{ state: string }>(
     api("POST", `/repos/${f.org.login}/${f.repo.name}/transfer`, f.owner.token, { new_owner: to }),
@@ -165,7 +158,6 @@ export async function transferTo(f: OrgFixture, to: string): Promise<void> {
   expect(moved).toMatchObject({ status: 200, body: { state: "transferred" } });
 }
 
-/** Sets a runner's public and fork access in its row. */
 export const allow = (runner: { id: number }, access: { public?: boolean; forks?: boolean }) =>
   env.DIRECTORY.prepare("UPDATE ci_runners SET allows_public = ?, allows_forks = ? WHERE id = ?")
     .bind(access.public ? 1 : 0, access.forks ? 1 : 0, runner.id)
@@ -224,7 +216,6 @@ export async function registerRunner(
   return { id: runner.id, uuid: runner.uuid, token: runner.token };
 }
 
-/** FetchTask with `version`; the decoded answer. */
 export async function fetchTask(
   runner: Credentials,
   version: number,
@@ -256,7 +247,6 @@ export const stateOf = (id: number, result: number = Result.UNSPECIFIED): TaskSt
   reportedSteps: [],
 });
 
-/** UpdateTask for task `id`; the raw response. */
 export function updateTaskRaw(
   runner: Credentials,
   id: number,

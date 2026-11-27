@@ -17,7 +17,6 @@ import {
   tookItsTask,
 } from "./access.js";
 
-/** A runner as its credentials prove it. */
 export interface AuthenticatedRunner {
   readonly id: number;
   readonly uuid: string;
@@ -32,7 +31,6 @@ export interface AuthenticatedRunner {
   readonly tookTask: boolean;
 }
 
-/** A runner as the list operation shows it. */
 export interface ListedRunner {
   readonly id: number;
   readonly name: string;
@@ -485,7 +483,6 @@ export function runnerAuthQuery(kind: "runner" | "task" | "fetch"): string {
        WHERE r.uuid = ?1`;
 }
 
-/** A task row as the runner protocol routes by it. */
 export interface RoutedTask {
   /** The wire task id. */
   readonly id: number;
@@ -498,7 +495,6 @@ export interface RoutedTask {
   readonly assigned: boolean;
 }
 
-/** What FetchTask reads with the runner. */
 export interface DispatchView {
   /** The account's version (0 when nothing was ever published). */
   readonly tasksVersion: number;
@@ -612,7 +608,6 @@ function sameHash(stored: string, presented: string): boolean {
   return a.byteLength === b.byteLength && crypto.subtle.timingSafeEqual(a, b);
 }
 
-/** Records what a runner declared when its daemon started. */
 export async function declareRunner(
   db: D1Database,
   declared: { id: number; version: string; labels: readonly string[]; now: number },

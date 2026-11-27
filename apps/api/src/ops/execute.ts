@@ -97,7 +97,6 @@ export type OpHandler<D extends OperationDef> = (
   input: Input<D>,
 ) => Promise<HandlerOutput<D>>;
 
-/** One handler per registry operation; a missing one is a type error. */
 export type Handlers = { [D in FyrdenRegistry[number] as D["id"]]: OpHandler<D> };
 
 export type OpResult =
@@ -220,10 +219,6 @@ export async function reverified(
   return { ok: true, record: fresh.record };
 }
 
-/**
- * A handler's answer as the operation's result. The wrong shape, or a
- * status the operation does not declare, is a server bug, never sent as-is.
- */
 function success(op: OperationDef, answer: unknown): OpResult {
   if (op.countedList) {
     if (!ListResult.is(answer))
@@ -261,7 +256,6 @@ export async function executeOperation(
 ): Promise<OpResult> {
   // Limited by token (or its source) id, which a re-verification cannot change; checked
   // first so a flood of writes cannot drive D1 primary lookups.
-  // A web session's only operation refuses every other credential before anything else.
   const refused = sessionRefusal(op, ctx.auth);
   if (refused) return fail(ctx, 403, refused.code, refused.detail);
 
@@ -316,7 +310,6 @@ export async function executeOperation(
       .join("; ");
     return fail(ctx, 422, "invalid_input", detail);
   }
-  // The same token's same request with the same key: the first answer, not a second run.
   let claim: Claim | undefined;
   if (options.idempotencyKey !== undefined && op.idempotency === "key") {
     const start = await startIdempotent(
