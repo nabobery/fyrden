@@ -1,4 +1,4 @@
-import { data, Form, Link } from "react-router";
+import { data, Form, Link, useLocation } from "react-router";
 import { RepoHeader } from "../components/repo-header.js";
 import { At, duration, RunState, Who } from "../components/run-ui.js";
 import { apiCall, apiCallBounded, apiGet, bodyOf, type Problem } from "../lib/api.server.js";
@@ -74,7 +74,6 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   return {
     repo: repoBody,
     origin: url.origin,
-    search: url.search,
     workflow,
     filters,
     cursor,
@@ -108,15 +107,14 @@ function Filters({
   filters,
   errors,
   action,
-  search,
 }: {
   filters: RunFilters;
   errors: FilterError[];
   action: string;
-  search: string;
 }) {
+  const location = useLocation();
   const error = (field: FilterError["field"]) => errors.find((e) => e.field === field);
-  const asked = new URLSearchParams(search);
+  const asked = new URLSearchParams(location.search);
   const field = (
     name: string,
     label: string,
@@ -146,7 +144,7 @@ function Filters({
       action={action}
       className="run-filters"
       aria-label="Filter runs"
-      key={`${action}${search}`}
+      key={location.key}
     >
       <div className="row">
         <div>
@@ -294,7 +292,7 @@ function Sidebar({
 }
 
 export default function Actions({ loaderData }: Route.ComponentProps) {
-  const { repo, origin, search, workflow, filters, cursor, listing, workflows, workflowsCursor } =
+  const { repo, origin, workflow, filters, cursor, listing, workflows, workflowsCursor } =
     loaderData;
   const owner = repo.owner;
   const name = repo.name;
@@ -321,7 +319,6 @@ export default function Actions({ loaderData }: Route.ComponentProps) {
             filters={filters}
             errors={listing.kind === "filter-errors" ? listing.errors : []}
             action={here}
-            search={search}
           />
           {listing.kind === "refused" && (
             <p role="alert" className="error">
