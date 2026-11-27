@@ -76,6 +76,8 @@ function noticeOf(query: URLSearchParams): string | null {
   if (query.has("cancelled")) return "Cancel requested: jobs that are told to stop end shortly.";
   if (query.has("approved")) return "Approved: the run starts.";
   if (query.has("rerun")) return "Re-run started as a new attempt.";
+  if (query.has("pending"))
+    return "Your request is still being handled; reload in a few seconds to see its outcome.";
   return null;
 }
 
@@ -104,6 +106,7 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     if (intent === "rerun") return redirect(`${page}?rerun=1`);
     return redirect(`${page}?${intent === "cancel" ? "cancelled" : "approved"}=1`);
   }
+  if (answer?.code === "idempotency_key_in_use") return redirect(`${page}?pending=1`);
   return { error: runActionError(res.status, answer?.code, answer?.detail) };
 }
 

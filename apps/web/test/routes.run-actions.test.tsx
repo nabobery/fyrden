@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runActionError, runActions } from "../app/lib/run-actions.js";
 import type { Run } from "../app/lib/runs.js";
-import RunPage, { action } from "../app/routes/repo.run.js";
+import RunPage, { action, loader } from "../app/routes/repo.run.js";
 import { fakeApi, formPost, json, ORIGIN } from "./helpers/context.js";
 import { renderPage } from "./helpers/render.js";
 
@@ -133,6 +133,45 @@ describe("the run page's actions", () => {
     expect(await post(context, { intent: "rerun", key: KEY, attempt: "1" })).toEqual({
       error: "The run has a newer attempt; review it before acting.",
     });
+  });
+
+  it("answers a second send of the same form while the first still runs without calling it a failure", async () => {
+    const { context, calls } = fakeApi(() =>
+      json({ status: 409, code: "idempotency_key_in_use", detail: "Idempotency-Key" }, 409),
+    );
+    const answer = (await post(context, { intent: "rerun", key: KEY, attempt: "2" })) as Response;
+    expect(answer.status).toBe(302);
+    expect(answer.headers.get("Location")).toBe(`${PAGE}?pending=1`);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("names an earlier send whose outcome is unknown, and a rate limit, in words", async () => {
+    for (const [status, code, words] of [
+      [409, "idempotent_outcome_unknown", "may or may not have taken effect"],
+      [429, "rate_limited", "Too many requests"],
+    ] as const) {
+      const { context } = fakeApi(() => json({ status, code, detail: "Idempotency-Key" }, status));
+      const answer = (await post(context, { intent: "rerun", key: KEY, attempt: "2" })) as {
+        error: string;
+      };
+      expect(answer.error).toContain(words);
+      expect(answer.error).not.toContain("Idempotency-Key");
+    }
+  });
+
+  it("says after that redirect that the request is still being handled", async () => {
+    const { context } = fakeApi((request) => {
+      const path = new URL(request.url).pathname;
+      if (path === API) return json(run());
+      if (path === `${API}/graph`) return json({ run_id: RUN_ID, run_attempt: 2, jobs: [] });
+      return json({ id: "rep_1", owner: "acme", name: "web", permissions: { push: true } });
+    });
+    const data = await loader({
+      request: new Request(`${ORIGIN}${PAGE}?pending=1`),
+      context,
+      params: { owner: "acme", repo: "web", run_id: RUN_ID },
+    } as never);
+    expect(data.notice).toContain("still being handled");
   });
 
   it("refuses a form it does not understand without calling the API", async () => {

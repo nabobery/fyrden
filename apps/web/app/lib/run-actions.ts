@@ -30,6 +30,8 @@ export function runActionError(status: number, code: string | undefined, detail?
       return "CI is off on this deployment.";
     case "rate_limited":
       return "Too many requests; try again shortly.";
+    case "idempotent_outcome_unknown":
+      return "An earlier send of this form may or may not have taken effect; check the run below before trying again.";
   }
   if (status === 403 || status === 404)
     return "You do not have permission to do this, or the run no longer exists.";
