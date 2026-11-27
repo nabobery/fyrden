@@ -559,6 +559,7 @@ describe("the log viewer", () => {
   const drawn = async () => Number(await viewer().getAttribute("data-rows-drawn"));
   const parsed = async () => Number(await viewer().getAttribute("data-rows-parsed"));
   const region = () => page.getByRole("region", { name: /^Log of / });
+  const shownRows = () => region().locator(".log-line[id]:not(:has(> .muted))").count();
 
   beforeAll(async () => {
     await page.addInitScript(LONG_TASKS);
@@ -580,6 +581,7 @@ describe("the log viewer", () => {
     await see(log.locator("[class^='a-f']").first()).toBeVisible();
     expect(await drawn()).toBeLessThanOrEqual(150);
     expect(await parsed()).toBeLessThanOrEqual(150);
+    expect(await parsed()).toBeGreaterThanOrEqual(await shownRows());
     await accessible("log viewer");
   });
 
@@ -594,6 +596,7 @@ describe("the log viewer", () => {
     });
     expect(await drawn()).toBeLessThanOrEqual(150);
     expect(await parsed()).toBeLessThanOrEqual(400);
+    expect(await parsed()).toBeGreaterThanOrEqual(await shownRows());
   });
 
   it("scrolls by wheel, drawing and parsing a bounded number of rows", async () => {
@@ -611,6 +614,7 @@ describe("the log viewer", () => {
     });
     expect(await drawn()).toBeLessThanOrEqual(150);
     expect(await parsed()).toBeLessThanOrEqual((wheels + 1) * 150);
+    expect(await parsed()).toBeGreaterThanOrEqual(await shownRows());
   });
 
   it("opens a line from its link", async () => {
@@ -628,6 +632,32 @@ describe("the log viewer", () => {
     const line = page.locator("#L2000");
     await see(line).toBeInViewport({ timeout: 30_000 });
     await see(line).toContainText("line 1999 ===");
+  });
+
+  it("keeps a line a link opened in view when the router moves the page after it", async () => {
+    await page.setViewportSize({ width: 1280, height: 400 });
+    try {
+      await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}`);
+      const header = page.locator(".log-step button", { hasText: "print.sh" });
+      await header.click();
+      await see(header).toHaveAttribute("aria-expanded", "true");
+      await see(region()).toContainText("line 1 ===");
+      await page.evaluate("scrollTo(0, 0)");
+      expect(await region().evaluate((box) => box.getBoundingClientRect().bottom)).toBeGreaterThan(
+        400,
+      );
+      const commits = (await viewer().getAttribute("data-router-commits")) ?? "";
+      await page.evaluate(`
+        history.pushState({ usr: null, key: "line-2000", idx: history.state.idx + 1 }, "", "#L2000");
+        dispatchEvent(new HashChangeEvent("hashchange"));
+        dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+      `);
+      await see(viewer()).not.toHaveAttribute("data-router-commits", commits);
+      await see(page.locator("#L2000")).toBeInViewport();
+      await see(page.locator("#L2000")).toContainText("line 1999 ===");
+    } finally {
+      await page.setViewportSize({ width: 1280, height: 800 });
+    }
   });
 
   it("says when a line's link is past the log's end, and stays where it is", async () => {
@@ -664,20 +694,21 @@ describe("the log viewer", () => {
 
   it("keeps the line at the top in place when a step above it folds", async () => {
     await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}`);
+    await see(region()).toHaveAccessibleName(new RegExp(`: ${LOG_ROWS + 1} lines$`));
     const headers = page.locator(".log-step button");
     await headers.nth(1).click();
     await headers.nth(0).click();
     await see(headers.nth(0)).toHaveAttribute("aria-expanded", "true");
     await see(headers.nth(0)).toBeFocused();
-    await region().evaluate(
-      (box) =>
-        new Promise<void>((done) => {
-          box.addEventListener("scroll", () => done(), { once: true });
-          box.scrollTop = 1_000 * 20;
-        }),
-    );
+    const [asked, scrolled] = await region().evaluate((box) => {
+      const rowPx = box.querySelector("[data-probe]")?.getBoundingClientRect().height ?? 0;
+      box.scrollTop = 1_000 * rowPx;
+      return [1_000 * rowPx, box.scrollTop];
+    });
+    expect(Math.abs(scrolled - asked)).toBeLessThan(1);
     const line = page.locator("#L1005");
     await see(line).toBeVisible();
+    await see(line).toContainText("line 1004 ===");
     const before = (await line.boundingBox())?.y;
     await page.keyboard.press("Enter");
     await see(page.locator(".log-step button").first()).toHaveAttribute("aria-expanded", "false");
@@ -733,6 +764,33 @@ describe("the log viewer", () => {
     await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0);
     await see(log).toContainText("line 200 ===");
     await accessible("log viewer, live");
+  });
+
+  it("stays on a line near the end that a link opened, as new rows arrive", async () => {
+    const live = await takenRun();
+    const played = runner as PlayedRunner;
+    await sendLog(stack.origin, played, live.taskId, logRows(100), 0, false);
+    await visit(page, `${runs()}/runs/${live.runId}/job/${live.jobId}`);
+    const log = region();
+    await see(log).toContainText("line 100 ===", { timeout: 30_000 });
+    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await log.evaluate(
+      (box) =>
+        new Promise<void>((done) => {
+          box.addEventListener("scroll", () => done(), { once: true });
+          box.scrollTop = 0;
+        }),
+    );
+    await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await page.evaluate("location.hash = '#L100'");
+    await see(page.locator("#L100")).toBeInViewport();
+    await sendLog(stack.origin, played, live.taskId, logRows(50, 100), 100, false);
+    await see(log).toHaveAccessibleName(/: 150 lines$/, { timeout: 30_000 });
+    await see(page.locator("#L100")).toBeInViewport();
+    await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 150)]);
   });
 
   it("fits a phone's width", async () => {

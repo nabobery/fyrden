@@ -38,13 +38,16 @@ async function orgWithMember() {
 }
 
 /** A private repository of `ownerId` in the directory only. */
-async function directoryRepo(ownerId: string): Promise<string> {
+async function directoryRepo(
+  ownerId: string,
+  state: "active" | "deleting" = "active",
+): Promise<string> {
   const id = uniqueId("rep_");
   await env.DIRECTORY.prepare(
-    `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'default', 'private', 0, 0)`,
+    `INSERT INTO repos (id, owner_id, name, network_id, org_shard, visibility, created_at, updated_at, state)
+     VALUES (?, ?, ?, ?, 'default', 'private', 0, 0, ?)`,
   )
-    .bind(id, ownerId, id.toLowerCase(), uniqueId("net"))
+    .bind(id, ownerId, id.toLowerCase(), uniqueId("net"), state)
     .run();
   return id;
 }
@@ -119,7 +122,9 @@ describe("access revocations", () => {
 
   it("name them in events of at most 100 repositories each", async () => {
     const { id, login, owner, dev } = await orgWithMember();
-    const held = await Promise.all(Array.from({ length: 250 }, () => directoryRepo(id)));
+    const held = await Promise.all(
+      Array.from({ length: 250 }, () => directoryRepo(id, "deleting")),
+    );
     expect(
       (await api("DELETE", `/orgs/${login}/memberships/${dev.handle}`, owner.token)).status,
     ).toBe(200);
