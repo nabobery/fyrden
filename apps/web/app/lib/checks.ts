@@ -39,8 +39,16 @@ export function statusTarget(url: string | null): string | null {
   }
 }
 
-const FAILING_CHECKS = new Set(["failure", "timed_out", "cancelled", "action_required"]);
-const PASSING_CHECKS = new Set(["success", "skipped", "neutral"]);
+const PASSING_CHECKS: ReadonlySet<string> = new Set(["success", "skipped", "neutral"]);
+
+/** As a required check counts it: passed on success, skipped or neutral, failing on any other conclusion. */
+export function checkPassed(check: Pick<CheckRunItem, "status" | "conclusion">): boolean {
+  return (
+    check.status === "completed" &&
+    check.conclusion !== null &&
+    PASSING_CHECKS.has(check.conclusion)
+  );
+}
 
 export function checkCounts(
   checks: readonly Pick<CheckRunItem, "status" | "conclusion">[],
@@ -49,8 +57,8 @@ export function checkCounts(
   const counts = { failing: 0, running: 0, passed: 0, total: checks.length + statuses.length };
   for (const c of checks)
     if (c.status !== "completed") counts.running += 1;
-    else if (c.conclusion !== null && FAILING_CHECKS.has(c.conclusion)) counts.failing += 1;
-    else if (c.conclusion !== null && PASSING_CHECKS.has(c.conclusion)) counts.passed += 1;
+    else if (checkPassed(c)) counts.passed += 1;
+    else counts.failing += 1;
   for (const s of statuses)
     if (s.state === "pending") counts.running += 1;
     else if (s.state === "success") counts.passed += 1;

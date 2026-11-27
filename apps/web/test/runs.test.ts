@@ -116,6 +116,11 @@ describe("runWords", () => {
     expect(runWords("completed", "skipped").words).toBe("Skipped");
     expect(runWords("completed", null).words).toBe("Completed");
   });
+
+  it("words a check allowed to fail, and one that errored, apart from a success", () => {
+    expect(runWords("completed", "neutral")).toEqual({ words: "Neutral", mark: "■", tone: "idle" });
+    expect(runWords("completed", "error")).toEqual({ words: "Error", mark: "✗", tone: "bad" });
+  });
 });
 
 const job = (key: string, needs: string[] = []): GraphJob => ({

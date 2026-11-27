@@ -83,6 +83,22 @@ describe("the Checks tab", () => {
     expect(html).toContain(`href="/ada/demo/pull/7/checks?head=${HEAD}&amp;checks_cursor=c2"`);
   });
 
+  it("shows a check allowed to fail as neutral, not as completed", async () => {
+    const { context } = api(
+      routes({
+        [`GET ${BASE}/commits/${HEAD}/check-runs`]: () =>
+          json({
+            total_count: 1,
+            check_runs: [checkRun("flaky", { conclusion: "neutral" })],
+            next_cursor: null,
+          }),
+      }),
+    );
+    const html = renderPage(PullChecks, "/ada/demo/pull/7/checks", await load(context));
+    expect(html).toContain("Neutral");
+    expect(html).not.toContain("Completed");
+  });
+
   it("starts again when the head moved since its cursors", async () => {
     const { context, calls } = api(routes());
     const data = await load(context, `?head=${"c".repeat(40)}&checks_cursor=old`);
@@ -187,6 +203,28 @@ describe("the conversation's checks box", () => {
     expect(mixed).toContain(">build<");
     expect(mixed).toContain(">deploy<");
     expect(mixed).not.toContain(">ok<");
+  });
+
+  it("counts and names an errored check as failing, and a neutral one as passed", () => {
+    const html = draw(
+      {
+        state: "read",
+        body: {
+          total_count: 2,
+          check_runs: [
+            checkRun("broke", { conclusion: "error" }),
+            checkRun("allowed", { conclusion: "neutral" }),
+          ],
+          next_cursor: null,
+        },
+      },
+      { state: "read", body: { total_count: 0, statuses: [], next_cursor: null } },
+    );
+    expect(html.replaceAll("<!-- -->", "")).toContain("1 failing, 0 running, 1 passed");
+    expect(html).toContain(">broke<");
+    expect(html).toContain("Error</span>");
+    expect(html).not.toContain("Completed");
+    expect(html).not.toContain(">allowed<");
   });
 
   it("is absent without checks, and says when it could not read them", () => {

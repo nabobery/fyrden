@@ -3,6 +3,7 @@ import {
   type CheckRunItem,
   CI_SOURCE,
   checkCounts,
+  checkPassed,
   checkTarget,
   isRequired,
   type StatusItem,
@@ -94,10 +95,7 @@ export function ChecksSummary({
   const partial =
     (checks.state === "read" && checks.body.next_cursor !== null) ||
     (statuses.state === "read" && statuses.body.next_cursor !== null);
-  const notPassed = runs.filter(
-    (c) =>
-      c.status !== "completed" || !["success", "skipped", "neutral"].includes(c.conclusion ?? ""),
-  );
+  const notPassed = runs.filter((c) => !checkPassed(c));
   const statusesNotPassed = posted.filter((s) => s.state !== "success");
   const listedStatuses = statusesNotPassed.slice(0, Math.max(0, SUMMARY_LISTED - notPassed.length));
   return (

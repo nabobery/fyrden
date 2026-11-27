@@ -77,4 +77,19 @@ describe("checkCounts", () => {
       ),
     ).toEqual({ failing: 2, running: 2, passed: 3, total: 7 });
   });
+
+  it("counts every completed check that did not pass as failing, as required checks do", () => {
+    expect(
+      checkCounts(
+        [
+          check({ conclusion: "error" }),
+          check({ conclusion: "timed_out" }),
+          check({ conclusion: "cancelled" }),
+          check({ conclusion: "action_required" }),
+          check({ conclusion: "neutral" }),
+        ],
+        [],
+      ),
+    ).toEqual({ failing: 4, running: 0, passed: 1, total: 5 });
+  });
 });
