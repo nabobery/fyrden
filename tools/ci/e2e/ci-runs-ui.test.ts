@@ -689,20 +689,21 @@ describe("the log viewer", () => {
 
   it("keeps the line at the top in place when a step above it folds", async () => {
     await visit(page, `${runs()}/runs/${logged}/job/${loggedJob}`);
+    await see(region()).toHaveAccessibleName(new RegExp(`: ${LOG_ROWS + 1} lines$`));
     const headers = page.locator(".log-step button");
     await headers.nth(1).click();
     await headers.nth(0).click();
     await see(headers.nth(0)).toHaveAttribute("aria-expanded", "true");
     await see(headers.nth(0)).toBeFocused();
-    await region().evaluate(
-      (box) =>
-        new Promise<void>((done) => {
-          box.addEventListener("scroll", () => done(), { once: true });
-          box.scrollTop = 1_000 * 20;
-        }),
-    );
+    const [asked, scrolled] = await region().evaluate((box) => {
+      const rowPx = box.querySelector("[data-probe]")?.getBoundingClientRect().height ?? 0;
+      box.scrollTop = 1_000 * rowPx;
+      return [1_000 * rowPx, box.scrollTop];
+    });
+    expect(Math.abs(scrolled - asked)).toBeLessThan(1);
     const line = page.locator("#L1005");
     await see(line).toBeVisible();
+    await see(line).toContainText("line 1004 ===");
     const before = (await line.boundingBox())?.y;
     await page.keyboard.press("Enter");
     await see(page.locator(".log-step button").first()).toHaveAttribute("aria-expanded", "false");
