@@ -93,19 +93,24 @@ export function fetchTask(origin: string, runner: PlayedRunner): Promise<Task> {
   });
 }
 
-/** Sends `rows` from row 0, as many requests as the bounds take, each acknowledged in full. */
+/**
+ * Sends `rows` from row `from`, as many requests as the bounds take, each
+ * acknowledged in full; the last says it ends the log when `ends`.
+ */
 export async function sendLog(
   origin: string,
   runner: PlayedRunner,
   taskId: number,
   rows: readonly LogRow[],
+  from = 0,
+  ends = true,
 ): Promise<void> {
-  let index = 0;
-  while (index < rows.length) {
+  let index = from;
+  while (index - from < rows.length) {
     const batch: LogRow[] = [];
     let bytes = 0;
-    while (index + batch.length < rows.length && batch.length < ROWS_A_REQUEST) {
-      const row = rows[index + batch.length] as LogRow;
+    while (index - from + batch.length < rows.length && batch.length < ROWS_A_REQUEST) {
+      const row = rows[index - from + batch.length] as LogRow;
       bytes += row.content.length * 3 + 32;
       if (bytes > BYTES_A_REQUEST && batch.length > 0) break;
       batch.push(row);
@@ -118,7 +123,7 @@ export async function sendLog(
           taskId,
           index,
           rows: batch,
-          noMore: index + batch.length === rows.length,
+          noMore: ends && index - from + batch.length === rows.length,
         }),
         runner,
       ),

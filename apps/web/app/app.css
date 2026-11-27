@@ -13,6 +13,22 @@
   --diff-added-word: #d6e7dc;
   --diff-removed-word: #ecd9d7;
   --diff-selected: #dce9eb;
+  --ansi-0: #1f2a2e;
+  --ansi-1: #a1222b;
+  --ansi-2: #1d6b33;
+  --ansi-3: #715500;
+  --ansi-4: #0b4fb8;
+  --ansi-5: #8a2f8f;
+  --ansi-6: #00626b;
+  --ansi-7: #4b5b61;
+  --ansi-8: #52676f;
+  --ansi-9: #a3121c;
+  --ansi-10: #17602b;
+  --ansi-11: #664c00;
+  --ansi-12: #1a52bf;
+  --ansi-13: #8f2794;
+  --ansi-14: #005861;
+  --ansi-15: #36454b;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -31,6 +47,22 @@
     --diff-added-word: #224034;
     --diff-removed-word: #483037;
     --diff-selected: #1f3a42;
+    --ansi-0: #a0b0b7;
+    --ansi-1: #ff8f8a;
+    --ansi-2: #7fd492;
+    --ansi-3: #e6c75a;
+    --ansi-4: #8cb4ff;
+    --ansi-5: #e59cf0;
+    --ansi-6: #6fd6dc;
+    --ansi-7: #dce6e8;
+    --ansi-8: #a0b0b7;
+    --ansi-9: #ffa5a0;
+    --ansi-10: #99e2a8;
+    --ansi-11: #f0d878;
+    --ansi-12: #a8c6ff;
+    --ansi-13: #f0b0f8;
+    --ansi-14: #8fe3e8;
+    --ansi-15: #ffffff;
   }
 }
 :root[data-theme="light"] {
@@ -52,6 +84,22 @@
   --diff-added-word: #224034;
   --diff-removed-word: #483037;
   --diff-selected: #1f3a42;
+  --ansi-0: #a0b0b7;
+  --ansi-1: #ff8f8a;
+  --ansi-2: #7fd492;
+  --ansi-3: #e6c75a;
+  --ansi-4: #8cb4ff;
+  --ansi-5: #e59cf0;
+  --ansi-6: #6fd6dc;
+  --ansi-7: #dce6e8;
+  --ansi-8: #a0b0b7;
+  --ansi-9: #ffa5a0;
+  --ansi-10: #99e2a8;
+  --ansi-11: #f0d878;
+  --ansi-12: #a8c6ff;
+  --ansi-13: #f0b0f8;
+  --ansi-14: #8fe3e8;
+  --ansi-15: #ffffff;
 }
 * {
   box-sizing: border-box;
@@ -848,6 +896,109 @@ ul.runs {
   text-align: right;
   color: var(--muted);
   user-select: none;
+}
+.log-scroller {
+  position: relative;
+  height: 70vh;
+  min-height: 12rem;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.log-spacer {
+  position: relative;
+  overflow-y: clip;
+  min-width: 100%;
+  width: max-content;
+}
+.log-line {
+  position: absolute;
+  left: 0;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 20px;
+  padding-right: 1rem;
+}
+.log-probe {
+  visibility: hidden;
+}
+.log-step button {
+  border: none;
+  background: none;
+  padding: 0 0.25rem;
+  font-weight: 600;
+}
+.log-line .log-no {
+  text-decoration: none;
+}
+.log-tools {
+  margin: 0.5rem 0;
+}
+.a-f0 {
+  color: var(--ansi-0);
+}
+.a-f1 {
+  color: var(--ansi-1);
+}
+.a-f2 {
+  color: var(--ansi-2);
+}
+.a-f3 {
+  color: var(--ansi-3);
+}
+.a-f4 {
+  color: var(--ansi-4);
+}
+.a-f5 {
+  color: var(--ansi-5);
+}
+.a-f6 {
+  color: var(--ansi-6);
+}
+.a-f7 {
+  color: var(--ansi-7);
+}
+.a-f8 {
+  color: var(--ansi-8);
+}
+.a-f9 {
+  color: var(--ansi-9);
+}
+.a-f10 {
+  color: var(--ansi-10);
+}
+.a-f11 {
+  color: var(--ansi-11);
+}
+.a-f12 {
+  color: var(--ansi-12);
+}
+.a-f13 {
+  color: var(--ansi-13);
+}
+.a-f14 {
+  color: var(--ansi-14);
+}
+.a-f15 {
+  color: var(--ansi-15);
+}
+.a-b {
+  font-weight: 700;
+}
+.a-d {
+  color: var(--muted);
+}
+.a-i {
+  font-style: italic;
+}
+.a-u {
+  text-decoration: underline;
+}
+.a-inv {
+  color: var(--panel);
+  background: var(--fg);
 }
 .run-step-name {
   min-width: 0;

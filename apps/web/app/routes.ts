@@ -56,6 +56,7 @@ export default [
   route(":owner/:repo/actions/runs/:run_id/job/:job_id", "routes/repo.run-job.tsx"),
   route(":owner/:repo/actions/runs/:run_id/job/:job_id/log", "routes/repo.run-job-log.tsx"),
   route(":owner/:repo/actions/runs/:run_id/job/:job_id/raw", "routes/repo.run-job-raw.ts"),
+  route(":owner/:repo/actions/runs/:run_id/job/:job_id/live", "routes/repo.run-job-live.ts"),
   route(":owner/:repo/settings", "routes/repo.settings.tsx"),
   // Edit pages end in /edit: matching ignores case, so `…/actions/:name` would
   // send a secret named NEW to the new page.
