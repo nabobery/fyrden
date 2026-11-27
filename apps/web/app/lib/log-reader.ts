@@ -28,6 +28,11 @@ interface Page {
   readonly next_cursor: string | null;
 }
 
+interface Continued {
+  readonly i: number;
+  readonly at: number;
+}
+
 const isPage = (body: unknown): body is Page =>
   typeof body === "object" &&
   body !== null &&
@@ -51,6 +56,8 @@ export class LogReader {
   readonly #restart = new Set<number>();
   #moreAsked = false;
   #startedForward = false;
+  #startedQuery: string | null = null;
+  #refusedContinuation: Continued | null = null;
   #followCursor: string | null = null;
   #inflight = false;
   #answered = false;
@@ -132,10 +139,14 @@ export class LogReader {
       if (row.kind !== "prefix" || row.cut) continue;
       const continuation = this.#continuations.get(i);
       if (continuation?.at === row.next)
-        return this.#read(new URLSearchParams({ cursor: continuation.cursor }));
+        return this.#read(new URLSearchParams({ cursor: continuation.cursor }), false, {
+          i,
+          at: continuation.at,
+        });
       if (this.#restart.has(i) || this.#store.closed) {
-        const read = this.#read(new URLSearchParams({ from: String(i) }));
-        if (read) {
+        const restart = new URLSearchParams({ from: String(i) });
+        const read = this.#read(restart);
+        if (read && this.#startedQuery === restart.toString()) {
           this.#restart.delete(i);
           this.#continuations.delete(i);
           this.#store.forget(i);
@@ -160,9 +171,16 @@ export class LogReader {
 
   /** Asks the last refused read again, once a refusal allows it. */
   retry(): Promise<void> | undefined {
-    return this.#refused === null
-      ? undefined
-      : this.#read(new URLSearchParams(this.#refused), this.#refusedForward);
+    if (this.#refused === null) return undefined;
+    const continued = this.#refusedContinuation;
+    if (continued !== null && !this.#stillContinues(continued)) {
+      this.clearRefusal();
+      this.#refused = null;
+      this.#refusedContinuation = null;
+      this.#continuations.delete(continued.i);
+      return this.want(continued.i, continued.i + 1);
+    }
+    return this.#read(new URLSearchParams(this.#refused), this.#refusedForward, continued);
   }
 
   tail(rows: number): Promise<void> | undefined {
@@ -186,7 +204,11 @@ export class LogReader {
     return this.#moreAsked && !this.#store.closed;
   }
 
-  #read(query: URLSearchParams, forward = false): Promise<void> | undefined {
+  #read(
+    query: URLSearchParams,
+    forward = false,
+    continued: Continued | null = null,
+  ): Promise<void> | undefined {
     if (this.#inflight || this.waitMs() > 0) return undefined;
     if (this.refusal) {
       if (!this.#transient || this.#waited > TRANSIENT_RETRIES || this.#now() < this.#until)
@@ -195,12 +217,18 @@ export class LogReader {
     }
     query.set("max_bytes", String(PAGE_BYTES));
     let asked = query.toString();
+    if (this.#refused !== null && !this.#stillContinues(this.#refusedContinuation)) {
+      this.#refused = null;
+      this.#refusedContinuation = null;
+    }
     if (this.#refused !== null) {
       forward = this.#refusedForward || (forward && asked === this.#refused);
+      continued = this.#refusedContinuation;
       asked = this.#refused;
     }
     this.#inflight = true;
     this.#startedForward = forward;
+    this.#startedQuery = asked;
     this.#asks.push(this.#now());
     return this.#fetch(asked)
       .then(
@@ -213,11 +241,18 @@ export class LogReader {
       .then(() => {
         this.#refused = this.refusal ? asked : null;
         this.#refusedForward = this.refusal ? forward : false;
+        this.#refusedContinuation = this.refusal ? continued : null;
       })
       .finally(() => {
         this.#inflight = false;
         for (const listener of this.#settled) listener();
       });
+  }
+
+  #stillContinues(continued: Continued | null): boolean {
+    if (continued === null) return true;
+    const row = this.#store.row(continued.i);
+    return row?.kind === "prefix" && !row.cut && row.next === continued.at;
   }
 
   #answer(answer: PageAnswer, forward: boolean): void {

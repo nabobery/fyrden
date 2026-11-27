@@ -356,6 +356,96 @@ describe("LogReader's split rows", () => {
   });
 });
 
+describe("LogReader's refused continuations", () => {
+  it("drops a refused continuation once its row grew, and reads the row from its start", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await on;
+    h.store.applyLive([{ i: 0, t: null, c: "cd", o: 2, end: false }]);
+    h.store.applyTerminal(1, "complete");
+    h.advance(1_000);
+    const again = h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+    h.answer(page([{ i: 0, t: 1, c: "abcdef" }], 1, null, "complete"));
+    await again;
+    expect(h.store.row(0)).toMatchObject({ kind: "whole", c: "abcdef" });
+  });
+
+  it("keeps a split row when another refused read is asked in place of its restart", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const refused = h.reader.tail(5);
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await refused;
+    h.store.applyLive([{ i: 0, t: null, c: "cd", o: 2, end: false }]);
+    h.store.applyTerminal(1, "complete");
+    h.advance(1_000);
+    void h.reader.want(0, 1);
+    expect(h.asked.at(-1)).toBe("tail=5&max_bytes=262144");
+    expect(h.store.row(0)).toMatchObject({ kind: "prefix", c: "abcd" });
+  });
+});
+
+describe("LogReader's retried continuations", () => {
+  it("reads an evicted row from its start instead of retrying its refused continuation", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await on;
+    h.store.forget(0);
+    h.advance(1_000);
+    void h.reader.retry();
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+  });
+
+  it("keeps a continuation through a second refusal, and drops it once the row grew", async () => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    h.answer({ status: 503, body: { code: "log_unreadable" }, retryAfter: null });
+    await on;
+    const again = h.reader.tryAgain();
+    expect(h.asked.at(-1)).toBe("cursor=inside-0&max_bytes=262144");
+    h.answer({ status: 503, body: { code: "log_unreadable" }, retryAfter: null });
+    await again;
+    h.store.applyLive([{ i: 0, t: null, c: "cd", o: 2, end: false }]);
+    h.store.applyTerminal(1, "complete");
+    void h.reader.tryAgain();
+    expect(h.asked.at(-1)).toBe("from=0&max_bytes=262144");
+  });
+});
+
+describe("LogReader's dropped continuations", () => {
+  it.each([
+    ["completed", { i: 0, t: null, c: "cd", o: 2, end: true }],
+    ["grown while the log is open", { i: 0, t: null, c: "cd", o: 2, end: false }],
+  ])("leaves no refusal behind when its row was %s", async (_, live) => {
+    const h = harness();
+    const first = h.reader.want(0, 1);
+    h.answer(page([{ i: 0, t: 1, c: "ab", o: 0, end: false }], 1, "inside-0"));
+    await first;
+    const on = h.reader.want(0, 1);
+    h.answer({ status: 503, body: { code: "log_busy" }, retryAfter: "1" });
+    await on;
+    h.store.applyLive([live]);
+    h.advance(1_000);
+    expect(h.reader.retry()).toBeUndefined();
+    expect(h.reader.refusal).toBeNull();
+    expect(h.reader.retryAfterMs()).toBeNull();
+  });
+});
+
 describe("LogReader's waiting Load new rows press", () => {
   it("keeps the press while a refused read is asked again in its place", async () => {
     const h = harness();
