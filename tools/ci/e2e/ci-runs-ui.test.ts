@@ -761,6 +761,36 @@ describe("the log viewer", () => {
     await accessible("log viewer, live");
   });
 
+  it("stops following for a line a link opens as a live frame is drawn", async () => {
+    const live = await takenRun();
+    const played = runner as PlayedRunner;
+    await sendLog(stack.origin, played, live.taskId, logRows(100), 0, false);
+    await visit(page, `${runs()}/runs/${live.runId}/job/${live.jobId}`);
+    const log = region();
+    await see(log).toHaveAccessibleName(/: 100 lines$/, { timeout: 30_000 });
+    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await see(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
+    await page.evaluate(`{
+      const observer = new MutationObserver(() => {
+        observer.disconnect();
+        history.pushState({ usr: null, key: "line-40", idx: history.state.idx + 1 }, "", "#L40");
+        dispatchEvent(new HashChangeEvent("hashchange"));
+        dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+      });
+      observer.observe(document.querySelector(".log-scroller"), {
+        attributes: true,
+        attributeFilter: ["aria-label"],
+      });
+    }`);
+    await sendLog(stack.origin, played, live.taskId, logRows(50, 100), 100, false);
+    await see(log).toHaveAccessibleName(/: 150 lines$/, { timeout: 30_000 });
+    await see(page.locator("#L40")).toBeInViewport();
+    await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 150)]);
+  });
+
   it("stays on a line near the end that a link opened, as new rows arrive", async () => {
     const live = await takenRun();
     const played = runner as PlayedRunner;
