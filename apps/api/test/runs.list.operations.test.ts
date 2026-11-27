@@ -11,11 +11,14 @@ import { scopedToken } from "./helpers/principals.js";
 import { inRepo } from "./helpers/repo-git.js";
 import {
   advance,
+  drain,
   expr,
   type Fixture,
   finish,
+  inRun,
   job,
   repoWithCommit,
+  runStub,
   started,
   workflow,
 } from "./helpers/runs.js";
@@ -446,21 +449,75 @@ describe("a run's job graph", () => {
       api("GET", `${f.path}/actions/runs/${runId}/graph${query}`, f.owner.token),
     );
 
-  it("has the jobs not started, what each needs, and how each ended", async () => {
+  const queued = (id: number, name: string) => ({
+    id,
+    name,
+    name_cut: false,
+    status: "queued",
+    conclusion: null,
+    started_at: null,
+    completed_at: null,
+    waiting_for: null,
+    error: null,
+  });
+
+  async function expectInstancesListed(f: Fixture, runId: string) {
+    const nodes = (await graph(f, runId)).body.jobs as { key: string; jobs: unknown[] }[];
+    const listed = await json<{ jobs: Record<string, unknown>[] }>(
+      api("GET", `${f.path}/actions/runs/${runId}/jobs`, f.owner.token),
+    );
+    for (const node of nodes)
+      expect(node.jobs).toEqual(
+        listed.body.jobs
+          .filter((j) => j.job_key === node.key)
+          .map((j) => ({
+            id: j.id,
+            name: j.name,
+            name_cut: false,
+            status: j.status,
+            conclusion: j.conclusion,
+            started_at: j.started_at,
+            completed_at: j.completed_at,
+            waiting_for: j.waiting_for ?? null,
+            error: j.error,
+          })),
+      );
+    return nodes;
+  }
+
+  it("has the jobs not started, what each needs, how each ended, and each one's instances", async () => {
     const f = await repoWithCommit();
     const runId = await started(f, source);
     expect((await graph(f, runId)).body).toEqual({
       run_id: runId,
       run_attempt: 1,
       jobs: [
-        { key: "build", name: "build", needs: [], status: "in_progress", conclusion: null },
-        { key: "test", name: "test", needs: ["build"], status: "pending", conclusion: null },
+        {
+          key: "build",
+          name: "build",
+          name_cut: false,
+          needs: [],
+          status: "in_progress",
+          conclusion: null,
+          jobs: [queued(1, "Build 1"), queued(2, "Build 2")],
+        },
+        {
+          key: "test",
+          name: "test",
+          name_cut: false,
+          needs: ["build"],
+          status: "pending",
+          conclusion: null,
+          jobs: [],
+        },
         {
           key: "notify",
           name: "notify",
+          name_cut: false,
           needs: ["build", "test"],
           status: "pending",
           conclusion: null,
+          jobs: [],
         },
       ],
     });
@@ -478,6 +535,139 @@ describe("a run's job graph", () => {
       ["test", "completed", "skipped"],
       ["notify", "in_progress", null],
     ]);
+    const nodes = await expectInstancesListed(f, runId);
+    expect(nodes.map((n) => n.jobs.length)).toEqual([2, 1, 1]);
+  });
+
+  it("has the instances of the attempt it is of", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    expect((await api("POST", `${f.path}/actions/runs/${runId}/rerun`, f.owner.token)).status).toBe(
+      201,
+    );
+    await drain(runId);
+    const ids = async (query: string) =>
+      ((await graph(f, runId, query)).body.jobs as { jobs: { id: number; status: string }[] }[])
+        .flatMap((n) => n.jobs)
+        .map((j) => [j.id, j.status]);
+    expect(await ids("?attempt=1")).toEqual([[1, "completed"]]);
+    expect(await ids("")).toEqual([[2, "queued"]]);
+  });
+
+  it("shows a combination waiting for a slot as pending, as the jobs list does", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(
+      f,
+      workflow(job("m", ["strategy:", "  max-parallel: 1", "  matrix:", "    n: [1, 2]"])),
+    );
+    const [node] = await expectInstancesListed(f, runId);
+    expect(((node?.jobs ?? []) as { status: string }[]).map((j) => j.status)).toEqual([
+      "queued",
+      "pending",
+    ]);
+  });
+
+  it("cuts names to 200 UTF-16 units and errors to 500, never inside a surrogate pair; one job read keeps its name", async () => {
+    const f = await repoWithCommit();
+    const at200 = "n".repeat(200);
+    const straddling = `${"s".repeat(199)}\u{1F600}tail`;
+    const ending = `${"e".repeat(198)}\u{1F600}tail`;
+    const runId = await started(
+      f,
+      workflow(
+        [
+          job("exact", [`name: ${at200}`]),
+          job("straddle", [`name: "${straddling}"`]),
+          job("ending", [`name: "${ending}"`]),
+        ].join("\n"),
+      ),
+    );
+    await inRun(runId, (run) =>
+      run.engine.exec(
+        "UPDATE run_instances SET error = ? WHERE job_key = 'exact'",
+        `${"x".repeat(499)}\u{1F600}`,
+      ),
+    );
+    const nodes = (await graph(f, runId)).body.jobs as {
+      key: string;
+      name: string;
+      name_cut: boolean;
+      jobs: { id: number; name: string; name_cut: boolean; error: string | null }[];
+    }[];
+    const byKey = new Map(nodes.map((n) => [n.key, n]));
+    for (const [key, name, cut] of [
+      ["exact", at200, false],
+      ["straddle", "s".repeat(199), true],
+      ["ending", `${"e".repeat(198)}\u{1F600}`, true],
+    ] as const) {
+      const node = byKey.get(key);
+      expect([node?.name, node?.name_cut]).toEqual([name, cut]);
+      expect([node?.jobs[0]?.name, node?.jobs[0]?.name_cut]).toEqual([name, cut]);
+    }
+    expect(byKey.get("exact")?.jobs[0]?.error).toBe("x".repeat(499));
+    const straddled = byKey.get("straddle")?.jobs[0];
+    const one = await json<{ name: string }>(
+      api("GET", `${f.path}/actions/runs/${runId}/jobs/${straddled?.id}`, f.owner.token),
+    );
+    expect(one.body.name).toBe(straddling);
+  });
+
+  it("keeps a name or error with a NUL or a leading byte order mark whole up to its cut", async () => {
+    const f = await repoWithCommit();
+    const runId = await started(
+      f,
+      workflow([job("nul", ['name: "ab\\0cd"']), job("bom", ['name: "\\uFEFFlead"'])].join("\n")),
+    );
+    await inRun(runId, (run) =>
+      run.engine.exec(
+        "UPDATE run_instances SET error = ? WHERE job_key = 'nul'",
+        `x\u0000${"y".repeat(600)}`,
+      ),
+    );
+    const [node] = (await graph(f, runId)).body.jobs as {
+      name: string;
+      jobs: { name: string; name_cut: boolean; error: string | null }[];
+    }[];
+    expect(node?.name).toBe("ab\u0000cd");
+    expect([node?.jobs[0]?.name, node?.jobs[0]?.name_cut]).toEqual(["ab\u0000cd", false]);
+    expect(node?.jobs[0]?.error).toBe(`x\u0000${"y".repeat(498)}`);
+    const nodes = (await graph(f, runId)).body.jobs as { key: string; jobs: { name: string }[] }[];
+    const bom = nodes.find((j) => j.key === "bom");
+    expect(bom?.jobs[0]?.name).toBe("\uFEFFlead");
+  });
+
+  it("stays under 600 KB at its maxima: 256 instances of a very long name, each with a long error", async () => {
+    const f = await repoWithCommit();
+    const long = "L".repeat(9_000);
+    const runId = await started(
+      f,
+      workflow(
+        job("m", [
+          `name: ${long} ${expr("matrix.n")}`,
+          "strategy:",
+          "  matrix:",
+          `    n: [${Array.from({ length: 256 }, (_, i) => i + 1).join(", ")}]`,
+        ]),
+      ),
+    );
+    await inRun(runId, (run) =>
+      run.engine.exec("UPDATE run_instances SET error = ?", "E".repeat(9_000)),
+    );
+    const res = await api("GET", `${f.path}/actions/runs/${runId}/graph`, f.owner.token);
+    const bytes = (await res.arrayBuffer()).byteLength;
+    const [node] = (await graph(f, runId)).body.jobs as {
+      jobs: { name: string; name_cut: boolean; error: string }[];
+    }[];
+    expect(node?.jobs).toHaveLength(256);
+    expect(node?.jobs.every((j) => j.name_cut && j.name.length === 200)).toBe(true);
+    expect(node?.jobs.every((j) => j.error.length === 500)).toBe(true);
+    expect(bytes).toBeLessThan(600_000);
+    const read = await runStub(runId).graph(f.repo.id, undefined, { name: 201, error: 501 });
+    const instances = read.ok ? read.jobs.flatMap((j) => j.jobs) : [];
+    expect(instances.map((j) => [j.name.length, j.error?.length])).toEqual(
+      Array.from({ length: 256 }, () => [201, 501]),
+    );
   });
 
   it("is empty for a workflow that could not run", async () => {

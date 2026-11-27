@@ -8489,15 +8489,91 @@ export type ActionsRunsGraphGetOutput = {
   jobs: ({
     /** The job's id in the workflow file. */
     key: string;
-    /** Its name, without what an expression in it would add. */
+    /** Its name, without what an expression in it would add; cut to 200 UTF-16 units. */
     name: string;
+    /** Whether `name` was cut: the whole name is longer. Never cut inside a surrogate pair. */
+    name_cut: boolean;
     /** The keys of the jobs it waits for. */
     needs: string[];
     /** `pending`: the jobs it needs have not ended. `in_progress`: it has jobs, queued or running. */
     status: "pending" | "in_progress" | "completed";
     /** As its dependents see it: a failure `continue-on-error` allows is a success. */
     conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+    /** Its jobs in this attempt, one per matrix combination, by id, without steps (`actions.runs.jobs.get` has them); empty until the jobs it needs have ended. */
+    jobs: ({
+      /** The job's id within its run. */
+      id: number;
+      /** As `actions.runs.jobs.get` names it, cut to 200 UTF-16 units. */
+      name: string;
+      /** Whether `name` was cut: the whole name is longer. Never cut inside a surrogate pair. */
+      name_cut: boolean;
+      status: "pending" | "queued" | "in_progress" | "completed";
+      conclusion: "success" | "failure" | "cancelled" | "skipped" | "timed_out" | null;
+      started_at: number | null;
+      completed_at: number | null;
+      /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
+      waiting_for: "ci_minutes" | "daily_capacity" | null;
+      /** Cut to 500 UTF-16 units. */
+      error: string | null;
+    })[];
   })[];
+};
+
+/** Input of `actions.runs.jobs.get`: Get a job for a workflow run. */
+export type ActionsRunsJobsGetInput = {
+  /** The owner's handle. */
+  owner: string;
+  /** The repository's name. */
+  repo: string;
+  /** The run's id. */
+  run_id: string;
+  /** The job's id within its run. */
+  job_id: number;
+};
+
+/** Output of `actions.runs.jobs.get`. */
+export type ActionsRunsJobsGetOutput = {
+  /** The job's id within its run. */
+  id: number;
+  run_id: string;
+  run_attempt: number;
+  name: string;
+  /** Fyrden: the job's id in the workflow file; a matrix's combinations share one. */
+  job_key: string;
+  status: "pending" | "queued" | "in_progress" | "completed";
+  conclusion: "success" | "failure" | "cancelled" | "skipped" | "timed_out" | null;
+  started_at: number | null;
+  completed_at: number | null;
+  /** Fyrden: the job's check on the commit. */
+  check: {
+    /** The state its check was last given. */
+    state: string | null;
+    /** Why its check is not published, when it is not (`duplicate_check`, …). */
+    code: string | null;
+  };
+  /** Fyrden: whether every log row reached durable storage; null while it runs. */
+  log_complete: boolean | null;
+  error: string | null;
+  /** As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them. */
+  steps: ({
+    /** Its place among the job's steps, from 1. */
+    number: number;
+    /** As the workflow writes it, expressions in it not evaluated: its `name`, else `Run` and the first line of what it runs. */
+    name: string;
+    /** Fyrden: `main` for the workflow's own steps. */
+    stage: "setup" | "containers" | "pre" | "main" | "post" | "cleanup";
+    status: "queued" | "in_progress" | "completed";
+    conclusion: "success" | "failure" | "cancelled" | "skipped" | null;
+    started_at: number | null;
+    completed_at: number | null;
+    /** Fyrden: its rows of the job's log (the first, and how many). */
+    log: {
+      from: number;
+      rows: number;
+    } | null;
+  })[];
+  /** Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise. */
+  waiting_for?: "ci_minutes" | "daily_capacity" | null;
 };
 
 /** Input of `actions.runs.jobs.list`: List jobs for a workflow run. */
@@ -10472,6 +10548,7 @@ export const OPERATIONS = {
   "actions.runs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs", pathParams: ["owner","repo"], idempotent: false, items: "workflow_runs" },
   "actions.runs.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}", pathParams: ["owner","repo","run_id"], idempotent: false },
   "actions.runs.graph.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/graph", pathParams: ["owner","repo","run_id"], idempotent: false },
+  "actions.runs.jobs.get": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}", pathParams: ["owner","repo","run_id","job_id"], idempotent: false },
   "actions.runs.jobs.list": { method: "GET", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", pathParams: ["owner","repo","run_id"], idempotent: false, items: "jobs" },
   "actions.runs.cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
   "actions.runs.force_cancel": { method: "POST", path: "/repos/{owner}/{repo}/actions/runs/{run_id}/force-cancel", pathParams: ["owner","repo","run_id"], idempotent: true },
@@ -11001,8 +11078,10 @@ export interface Operations {
   "actions.runs.list": { input: ActionsRunsListInput; output: ActionsRunsListOutput };
   /** Get a workflow run. A CI run of the repository as its current attempt stands. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
   "actions.runs.get": { input: ActionsRunsGetInput; output: ActionsRunsGetOutput };
-  /** Get a workflow run's job graph. Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission. */
+  /** Get a workflow run's job graph. Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. `actions.runs.jobs.list` lists what runs: a job here has one there per matrix combination, by `job_key`, once its needs ended, and lists them in its own `jobs`, without steps. Names here are cut to 200 UTF-16 units and errors to 500 (`name_cut` says a name was), so an answer stays small whatever the workflow names its jobs; `actions.runs.jobs.get` has a job's whole name. Empty for a run whose workflow could not run (its `errors` say why). Takes the `actions:read` permission. */
   "actions.runs.graph.get": { input: ActionsRunsGraphGetInput; output: ActionsRunsGraphGetOutput };
+  /** Get a job for a workflow run. One job of a run, of whichever attempt it ran in, as `actions.runs.jobs.list` lists it, steps included. 404 `job_not_found` when the run has no such job. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. GitHub's path has no run (`/actions/jobs/{job_id}`): job ids here are per run. Takes the `actions:read` permission. */
+  "actions.runs.jobs.get": { input: ActionsRunsJobsGetInput; output: ActionsRunsJobsGetOutput };
   /** List jobs for a workflow run. The jobs of a run's attempt (the current one by default), by id: one per matrix combination, and one for a job that never ran (skipped or failed before it started). GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:read` permission. */
   "actions.runs.jobs.list": { input: ActionsRunsJobsListInput; output: ActionsRunsJobsListOutput };
   /** Cancel a workflow run. Cancels a run: queued jobs end, running jobs whose `if:` no longer holds once the run is cancelled are told to stop (as GitHub re-evaluates running jobs), and jobs whose `if:` still holds (such as `if: always()`) run; Fyrden also runs such jobs that have not started yet, which GitHub does not document. 409 `run_not_cancellable` once the run completed. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. Takes the `actions:write` permission. */

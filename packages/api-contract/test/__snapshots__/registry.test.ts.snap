@@ -12548,7 +12548,7 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
     },
     "/repos/{owner}/{repo}/actions/runs/{run_id}/graph": {
       "get": {
-        "description": "Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. \`actions.runs.jobs.list\` lists what runs: a job here has one there per matrix combination, by \`job_key\`, once its needs ended. Empty for a run whose workflow could not run (its \`errors\` say why). Takes the \`actions:read\` permission.",
+        "description": "Fyrden: the jobs of a run's attempt (the current one by default) as the workflow file writes them, with what each needs and where it stands, those not started included. \`actions.runs.jobs.list\` lists what runs: a job here has one there per matrix combination, by \`job_key\`, once its needs ended, and lists them in its own \`jobs\`, without steps. Names here are cut to 200 UTF-16 units and errors to 500 (\`name_cut\` says a name was), so an answer stays small whatever the workflow names its jobs; \`actions.runs.jobs.get\` has a job's whole name. Empty for a run whose workflow could not run (its \`errors\` say why). Takes the \`actions:read\` permission.",
         "operationId": "actions.runs.graph.get",
         "parameters": [
           {
@@ -12624,13 +12624,124 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                             ],
                             "description": "As its dependents see it: a failure \`continue-on-error\` allows is a success.",
                           },
+                          "jobs": {
+                            "description": "Its jobs in this attempt, one per matrix combination, by id, without steps (\`actions.runs.jobs.get\` has them); empty until the jobs it needs have ended.",
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "completed_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "conclusion": {
+                                  "anyOf": [
+                                    {
+                                      "enum": [
+                                        "success",
+                                        "failure",
+                                        "cancelled",
+                                        "skipped",
+                                        "timed_out",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "error": {
+                                  "description": "Cut to 500 UTF-16 units.",
+                                  "type": [
+                                    "string",
+                                    "null",
+                                  ],
+                                },
+                                "id": {
+                                  "description": "The job's id within its run.",
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer",
+                                },
+                                "name": {
+                                  "description": "As \`actions.runs.jobs.get\` names it, cut to 200 UTF-16 units.",
+                                  "type": "string",
+                                },
+                                "name_cut": {
+                                  "description": "Whether \`name\` was cut: the whole name is longer. Never cut inside a surrogate pair.",
+                                  "type": "boolean",
+                                },
+                                "started_at": {
+                                  "anyOf": [
+                                    {
+                                      "maximum": 9007199254740991,
+                                      "minimum": -9007199254740991,
+                                      "type": "integer",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                },
+                                "status": {
+                                  "enum": [
+                                    "pending",
+                                    "queued",
+                                    "in_progress",
+                                    "completed",
+                                  ],
+                                  "type": "string",
+                                },
+                                "waiting_for": {
+                                  "anyOf": [
+                                    {
+                                      "enum": [
+                                        "ci_minutes",
+                                        "daily_capacity",
+                                      ],
+                                      "type": "string",
+                                    },
+                                    {
+                                      "type": "null",
+                                    },
+                                  ],
+                                  "description": "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
+                                },
+                              },
+                              "required": [
+                                "id",
+                                "name",
+                                "name_cut",
+                                "status",
+                                "conclusion",
+                                "started_at",
+                                "completed_at",
+                                "waiting_for",
+                                "error",
+                              ],
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
                           "key": {
                             "description": "The job's id in the workflow file.",
                             "type": "string",
                           },
                           "name": {
-                            "description": "Its name, without what an expression in it would add.",
+                            "description": "Its name, without what an expression in it would add; cut to 200 UTF-16 units.",
                             "type": "string",
+                          },
+                          "name_cut": {
+                            "description": "Whether \`name\` was cut: the whole name is longer. Never cut inside a surrogate pair.",
+                            "type": "boolean",
                           },
                           "needs": {
                             "description": "The keys of the jobs it waits for.",
@@ -12652,9 +12763,11 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
                         "required": [
                           "key",
                           "name",
+                          "name_cut",
                           "needs",
                           "status",
                           "conclusion",
+                          "jobs",
                         ],
                         "type": "object",
                       },
@@ -13083,6 +13196,350 @@ exports[`generated artifacts > produces the OpenAPI document for the whole regis
           },
         ],
         "summary": "List jobs for a workflow run",
+        "x-fyrden-permission": "actions:read",
+        "x-fyrden-principals": [
+          "user",
+          "agent",
+        ],
+      },
+    },
+    "/repos/{owner}/{repo}/actions/runs/{run_id}/jobs/{job_id}": {
+      "get": {
+        "description": "One job of a run, of whichever attempt it ran in, as \`actions.runs.jobs.list\` lists it, steps included. 404 \`job_not_found\` when the run has no such job. GitHub's paths and status codes; Fyrden's ids (a run id string, job ids per run), times in milliseconds and cursor paging. GitHub's path has no run (\`/actions/jobs/{job_id}\`): job ids here are per run. Takes the \`actions:read\` permission.",
+        "operationId": "actions.runs.jobs.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "description": "The owner's handle.",
+              "maxLength": 39,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "repo",
+            "required": true,
+            "schema": {
+              "description": "The repository's name.",
+              "pattern": "^(?!\\.{1,2}$)(?!.*\\.[Gg][Ii][Tt]$)[A-Za-z0-9._-]{1,100}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "description": "The run's id.",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+              "type": "string",
+            },
+          },
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "description": "The job's id within its run.",
+              "maximum": 2147483647,
+              "minimum": 1,
+              "type": "integer",
+            },
+          },
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "check": {
+                      "additionalProperties": false,
+                      "description": "Fyrden: the job's check on the commit.",
+                      "properties": {
+                        "code": {
+                          "description": "Why its check is not published, when it is not (\`duplicate_check\`, …).",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                        "state": {
+                          "description": "The state its check was last given.",
+                          "type": [
+                            "string",
+                            "null",
+                          ],
+                        },
+                      },
+                      "required": [
+                        "state",
+                        "code",
+                      ],
+                      "type": "object",
+                    },
+                    "completed_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "conclusion": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "success",
+                            "failure",
+                            "cancelled",
+                            "skipped",
+                            "timed_out",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null",
+                      ],
+                    },
+                    "id": {
+                      "description": "The job's id within its run.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "job_key": {
+                      "description": "Fyrden: the job's id in the workflow file; a matrix's combinations share one.",
+                      "type": "string",
+                    },
+                    "log_complete": {
+                      "description": "Fyrden: whether every log row reached durable storage; null while it runs.",
+                      "type": [
+                        "boolean",
+                        "null",
+                      ],
+                    },
+                    "name": {
+                      "type": "string",
+                    },
+                    "run_attempt": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer",
+                    },
+                    "run_id": {
+                      "type": "string",
+                    },
+                    "started_at": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                    },
+                    "status": {
+                      "enum": [
+                        "pending",
+                        "queued",
+                        "in_progress",
+                        "completed",
+                      ],
+                      "type": "string",
+                    },
+                    "steps": {
+                      "description": "As the runner last reported them, written at most every 30 seconds while the job runs, so as old as that and the runner's next report; at most 256, each name cut to 200 characters, and none before its first report or for jobs from before this deployment kept them.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "completed_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "conclusion": {
+                            "anyOf": [
+                              {
+                                "enum": [
+                                  "success",
+                                  "failure",
+                                  "cancelled",
+                                  "skipped",
+                                ],
+                                "type": "string",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "log": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "from": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                  "rows": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": -9007199254740991,
+                                    "type": "integer",
+                                  },
+                                },
+                                "required": [
+                                  "from",
+                                  "rows",
+                                ],
+                                "type": "object",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                            "description": "Fyrden: its rows of the job's log (the first, and how many).",
+                          },
+                          "name": {
+                            "description": "As the workflow writes it, expressions in it not evaluated: its \`name\`, else \`Run\` and the first line of what it runs.",
+                            "type": "string",
+                          },
+                          "number": {
+                            "description": "Its place among the job's steps, from 1.",
+                            "maximum": 9007199254740991,
+                            "minimum": -9007199254740991,
+                            "type": "integer",
+                          },
+                          "stage": {
+                            "description": "Fyrden: \`main\` for the workflow's own steps.",
+                            "enum": [
+                              "setup",
+                              "containers",
+                              "pre",
+                              "main",
+                              "post",
+                              "cleanup",
+                            ],
+                            "type": "string",
+                          },
+                          "started_at": {
+                            "anyOf": [
+                              {
+                                "maximum": 9007199254740991,
+                                "minimum": -9007199254740991,
+                                "type": "integer",
+                              },
+                              {
+                                "type": "null",
+                              },
+                            ],
+                          },
+                          "status": {
+                            "enum": [
+                              "queued",
+                              "in_progress",
+                              "completed",
+                            ],
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "number",
+                          "name",
+                          "stage",
+                          "status",
+                          "conclusion",
+                          "started_at",
+                          "completed_at",
+                          "log",
+                        ],
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "waiting_for": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "ci_minutes",
+                            "daily_capacity",
+                          ],
+                          "type": "string",
+                        },
+                        {
+                          "type": "null",
+                        },
+                      ],
+                      "description": "Fyrden: why a queued job is not offered to runners yet: its account's CI minutes for the month, or the deployment's daily CI capacity; it asks again when they may allow it. Null otherwise.",
+                    },
+                  },
+                  "required": [
+                    "id",
+                    "run_id",
+                    "run_attempt",
+                    "name",
+                    "job_key",
+                    "status",
+                    "conclusion",
+                    "started_at",
+                    "completed_at",
+                    "check",
+                    "log_complete",
+                    "error",
+                    "steps",
+                  ],
+                  "type": "object",
+                },
+              },
+            },
+            "description": "OK",
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem",
+                },
+              },
+            },
+            "description": "Error",
+          },
+        },
+        "security": [
+          {
+            "bearer": [],
+          },
+        ],
+        "summary": "Get a job for a workflow run",
         "x-fyrden-permission": "actions:read",
         "x-fyrden-principals": [
           "user",

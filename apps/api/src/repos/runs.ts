@@ -1,18 +1,21 @@
 import { isUlid, newUlid } from "@fyrden/adapters-cloudflare/git";
-import type {
-  approveWorkflowRun,
-  cancelWorkflowRun,
-  dispatchWorkflow,
-  forceCancelWorkflowRun,
-  getWorkflowRun,
-  getWorkflowRunGraph,
-  Input,
-  listRunsOfWorkflow,
-  listWorkflowRunJobs,
-  listWorkflowRuns,
-  listWorkflows,
-  Output,
-  rerunWorkflowRun,
+import {
+  type approveWorkflowRun,
+  type cancelWorkflowRun,
+  type dispatchWorkflow,
+  type forceCancelWorkflowRun,
+  GRAPH_ERROR_UNITS,
+  GRAPH_NAME_UNITS,
+  type getWorkflowRun,
+  type getWorkflowRunGraph,
+  type getWorkflowRunJob,
+  type Input,
+  type listRunsOfWorkflow,
+  type listWorkflowRunJobs,
+  type listWorkflowRuns,
+  type listWorkflows,
+  type Output,
+  type rerunWorkflowRun,
 } from "@fyrden/api-contract";
 import { parseCreatedFilter, runPhase, WORKFLOW_DIRECTORIES } from "@fyrden/domain/ci";
 import type { RepoDO } from "../do/RepoDO.js";
@@ -71,9 +74,7 @@ function runOutput(view: RunView): Output<typeof getWorkflowRun> {
 }
 
 /** GitHub's job statuses: a job waiting for a slot or its group is `pending`; one stopping is `in_progress`. */
-function jobStatus(
-  status: JobView["status"],
-): Output<typeof listWorkflowRunJobs>["jobs"][number]["status"] {
+function jobStatus(status: JobView["status"]): Output<typeof getWorkflowRunJob>["status"] {
   switch (status) {
     case "blocked":
       return "pending";
@@ -82,6 +83,34 @@ function jobStatus(
     default:
       return status;
   }
+}
+
+function workflowJob(runId: string, job: JobView): Output<typeof getWorkflowRunJob> {
+  return {
+    id: job.jobId,
+    run_id: runId,
+    run_attempt: job.attempt,
+    name: job.name,
+    job_key: job.jobKey,
+    status: jobStatus(job.status),
+    conclusion: job.conclusion,
+    started_at: job.startedAt,
+    completed_at: job.completedAt,
+    check: { state: job.check.state, code: job.check.code },
+    log_complete: job.logComplete,
+    error: job.error,
+    steps: job.steps.map((step) => ({
+      number: step.number,
+      name: step.name,
+      stage: step.stage,
+      status: step.status,
+      conclusion: step.conclusion,
+      started_at: step.startedAt,
+      completed_at: step.completedAt,
+      log: step.log && { ...step.log },
+    })),
+    waiting_for: job.waitingFor,
+  };
 }
 
 export async function getWorkflowRunOperation(
@@ -116,33 +145,24 @@ export async function listWorkflowRunJobsOperation(
   );
   if (!page) throw runNotFound();
   return {
-    jobs: page.jobs.map((job) => ({
-      id: job.jobId,
-      run_id: view.runId,
-      run_attempt: job.attempt,
-      name: job.name,
-      job_key: job.jobKey,
-      status: jobStatus(job.status),
-      conclusion: job.conclusion,
-      started_at: job.startedAt,
-      completed_at: job.completedAt,
-      check: { state: job.check.state, code: job.check.code },
-      log_complete: job.logComplete,
-      error: job.error,
-      steps: job.steps.map((step) => ({
-        number: step.number,
-        name: step.name,
-        stage: step.stage,
-        status: step.status,
-        conclusion: step.conclusion,
-        started_at: step.startedAt,
-        completed_at: step.completedAt,
-        log: step.log && { ...step.log },
-      })),
-      waiting_for: job.waitingFor,
-    })),
+    jobs: page.jobs.map((job) => workflowJob(view.runId, job)),
     next_cursor: page.next === null ? null : encodeCursor(`${attempt}:${page.next}`),
   };
+}
+
+/** Job ids are per run, whatever the attempt. */
+export async function getWorkflowRunJobOperation(
+  ctx: OpContext,
+  input: Input<typeof getWorkflowRunJob>,
+): Promise<Output<typeof getWorkflowRunJob>> {
+  const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
+  const view = await runOf(ctx, entry, input.run_id);
+  const answer = (await runStub(ctx, input.run_id, "getJob").getJob(
+    input.job_id,
+  )) as unknown as ReturnType<RunDO["getJob"]>;
+  if (answer.ok) return workflowJob(view.runId, answer.job);
+  if (answer.code === "run_not_found") throw runNotFound();
+  throw new OperationError(404, "job_not_found", "The run has no such job.");
 }
 
 const repoGone = (entry: RepoEntry) =>
@@ -281,15 +301,28 @@ function graphStatus(job: GraphJob) {
   }
 }
 
+function cutText(text: string, units: number): { text: string; cut: boolean } {
+  if (text.length <= units) return { text, cut: false };
+  const high = text.charCodeAt(units - 1);
+  const low = text.charCodeAt(units);
+  const splitsPair = high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  return { text: text.slice(0, splitsPair ? units - 1 : units), cut: true };
+}
+
+function cutName(name: string): { name: string; name_cut: boolean } {
+  const { text, cut } = cutText(name, GRAPH_NAME_UNITS);
+  return { name: text, name_cut: cut };
+}
+
 export async function getWorkflowRunGraphOperation(
   ctx: OpContext,
   input: Input<typeof getWorkflowRunGraph>,
 ): Promise<Output<typeof getWorkflowRunGraph>> {
   const entry = await repoFor(ctx, input.owner, input.repo, "actions:read");
-  const answer = (await runStub(ctx, input.run_id, "graph").graph(
-    entry.id,
-    input.attempt,
-  )) as unknown as ReturnType<RunDO["graph"]>;
+  const answer = (await runStub(ctx, input.run_id, "graph").graph(entry.id, input.attempt, {
+    name: GRAPH_NAME_UNITS + 1,
+    error: GRAPH_ERROR_UNITS + 1,
+  })) as unknown as ReturnType<RunDO["graph"]>;
   if (!answer.ok) {
     if (answer.code === "run_not_found") throw runNotFound();
     throw new OperationError(404, "attempt_not_found", "The run has no such attempt.");
@@ -299,10 +332,20 @@ export async function getWorkflowRunGraphOperation(
     run_attempt: answer.attempt,
     jobs: answer.jobs.map((job) => ({
       key: job.key,
-      name: job.name,
+      ...cutName(job.name),
       needs: [...job.needs],
       status: graphStatus(job),
       conclusion: job.outcome,
+      jobs: job.jobs.map((instance) => ({
+        id: instance.jobId,
+        ...cutName(instance.name),
+        status: jobStatus(instance.status),
+        conclusion: instance.conclusion,
+        started_at: instance.startedAt,
+        completed_at: instance.completedAt,
+        waiting_for: instance.waitingFor,
+        error: instance.error === null ? null : cutText(instance.error, GRAPH_ERROR_UNITS).text,
+      })),
     })),
   };
 }

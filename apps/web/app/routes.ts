@@ -48,6 +48,14 @@ export default [
   route(":owner/:repo/pull/:number/conflicts", "routes/repo.pull.conflicts.tsx"),
   route(":owner/:repo/pull/:number/reviewers", "routes/repo.pull.reviewers.tsx"),
   route(":owner/:repo/pull/:number/code-owners", "routes/repo.pull.code-owners.tsx"),
+  route(":owner/:repo/actions", "routes/repo.actions.tsx"),
+  route(":owner/:repo/actions/workflows/:workflow", "routes/repo.actions.tsx", {
+    id: "repo.actions.workflow",
+  }),
+  route(":owner/:repo/actions/runs/:run_id", "routes/repo.run.tsx"),
+  route(":owner/:repo/actions/runs/:run_id/job/:job_id", "routes/repo.run-job.tsx"),
+  route(":owner/:repo/actions/runs/:run_id/job/:job_id/log", "routes/repo.run-job-log.tsx"),
+  route(":owner/:repo/actions/runs/:run_id/job/:job_id/raw", "routes/repo.run-job-raw.ts"),
   route(":owner/:repo/settings", "routes/repo.settings.tsx"),
   // Edit pages end in /edit: matching ignores case, so `…/actions/:name` would
   // send a secret named NEW to the new page.

@@ -16,6 +16,7 @@ import { startWranglerDev, type WranglerDev } from "./wrangler-dev.js";
 const root = resolve(import.meta.dirname, "../../..");
 const apiConfig = join(root, "apps/api/wrangler.jsonc");
 const webConfig = join(root, "apps/web/build/server/wrangler.json");
+const runSeamConfig = join(import.meta.dirname, "fixtures/run-seam/wrangler.web.jsonc");
 const wranglerBin = join(
   dirname(createRequire(import.meta.url).resolve("wrangler/package.json")),
   "bin",
@@ -81,6 +82,11 @@ export interface WebStackOptions {
   readonly permissions?: string[];
   /** fyrden-api's variables (`FYRDEN_LIVE`, say), set in a copy of its configuration. */
   readonly vars?: Readonly<Record<string, string>>;
+  /**
+   * Serve the port through the run seam (`fixtures/run-seam/wrangler.web.jsonc`): pages
+   * still come from fyrden-web over its real binding, and `/__runs/*` plays the runner.
+   */
+  readonly runSeam?: boolean;
 }
 
 /**
@@ -161,7 +167,17 @@ export async function startWebStack(
       expect(migrated.code, migrated.output).toBe(0);
     }
     server = await startWranglerDev({
-      args: ["-c", webConfig, "-c", config, "--persist-to", persist, "--env-file", envFile],
+      args: [
+        ...(options.runSeam ? ["-c", runSeamConfig] : []),
+        "-c",
+        webConfig,
+        "-c",
+        config,
+        "--persist-to",
+        persist,
+        "--env-file",
+        envFile,
+      ],
       cwd: join(root, "apps/web"),
       onOutput: (text) => {
         output += text;

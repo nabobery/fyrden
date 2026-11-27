@@ -1,4 +1,5 @@
-// See wrangler.jsonc. Routes under /__runs/ are this Worker's; the rest go to fyrden-api.
+// See wrangler.jsonc. Routes under /__runs/ are this Worker's; the rest go to FRONT
+// (fyrden-web, wrangler.web.jsonc) or else fyrden-api.
 import { startRun } from "../../../../../apps/api/src/ci/runs.ts";
 import { readPrefix } from "../../../../../apps/api/src/runner/connect.ts";
 import {
@@ -198,7 +199,7 @@ export default {
       return json(await env.RUN.getByName(runId).ciReserveNow());
     }
     const match = /^\/__runs(?:\/([0-9A-Z]{26}))?\/([a-z]+)$/.exec(url.pathname);
-    if (!match) return env.API.fetch(request);
+    if (!match) return (env.FRONT ?? env.API).fetch(request);
     const [, runId, action] = match;
     if (action === "recorded" && !runId) return json(recorded);
     const body = request.method === "POST" ? await request.json() : {};
@@ -232,7 +233,7 @@ export default {
       case "assign":
         return json(await run.assign(body.jobId, body.key));
       case "update":
-        return json(await run.updateTask(body.task));
+        return json(await run.updateTask(body.task, body.steps ?? null));
       case "complete":
         return json(
           await run.completeTask(body.task, {

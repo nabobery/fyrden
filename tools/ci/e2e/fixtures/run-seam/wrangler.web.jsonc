@@ -1,0 +1,20 @@
+{
+  // The run seam of wrangler.jsonc in front of fyrden-web instead of fyrden-api: pages are
+  // drawn by the web Worker over its real binding to the API, and a test plays the runner
+  // through /__runs/. Never deployed.
+  "name": "fyrden-e2e-run-seam-web",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "services": [
+    { "binding": "API", "service": "fyrden-api" },
+    { "binding": "FRONT", "service": "fyrden-web" }
+  ],
+  "d1_databases": [{ "binding": "DIRECTORY", "database_name": "fyrden-directory" }],
+  "r2_buckets": [{ "binding": "CI", "bucket_name": "fyrden-ci" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "REPO", "class_name": "RepoDO", "script_name": "fyrden-api" },
+      { "name": "RUN", "class_name": "RunDO", "script_name": "fyrden-api" }
+    ]
+  }
+}
