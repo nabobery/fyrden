@@ -625,9 +625,13 @@ describe("the log viewer", () => {
     await headers.nth(0).click();
     await see(headers.nth(0)).toHaveAttribute("aria-expanded", "true");
     await see(headers.nth(0)).toBeFocused();
-    await region().evaluate((box) => {
-      box.scrollTop = 1_000 * 20;
-    });
+    await region().evaluate(
+      (box) =>
+        new Promise<void>((done) => {
+          box.addEventListener("scroll", () => done(), { once: true });
+          box.scrollTop = 1_000 * 20;
+        }),
+    );
     const line = page.locator("#L1005");
     await see(line).toBeVisible();
     const before = (await line.boundingBox())?.y;

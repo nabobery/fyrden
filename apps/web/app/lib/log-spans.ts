@@ -166,6 +166,8 @@ export function logSpans(text: string): LogSpan[] {
 
 /** Spans kept parsed across the rows drawn most recently, at most. Proposed. */
 export const MAX_CACHED_SPANS = 20_000;
+/** Characters of row text the span cache holds at most. Proposed. */
+export const MAX_CACHED_UNITS = 2 * 1024 * 1024;
 
 const weight = (spans: readonly LogSpan[]) => Math.max(1, spans.length);
 
@@ -174,7 +176,16 @@ export class SpanCache {
   #spans = 0;
   parsed = 0;
 
-  constructor(readonly maxSpans = MAX_CACHED_SPANS) {}
+  #units = 0;
+
+  constructor(
+    readonly maxSpans = MAX_CACHED_SPANS,
+    readonly maxUnits = MAX_CACHED_UNITS,
+  ) {}
+
+  get units(): number {
+    return this.#units;
+  }
 
   get spans(): number {
     return this.#spans;
@@ -189,15 +200,18 @@ export class SpanCache {
         return hit.spans;
       }
       this.#spans -= weight(hit.spans);
+      this.#units -= hit.c.length;
     }
     const spans = logSpans(c);
     this.parsed += 1;
     this.#rows.set(i, { c, spans });
     this.#spans += weight(spans);
+    this.#units += c.length;
     for (const [k, old] of this.#rows) {
-      if (this.#spans <= this.maxSpans || k === i) break;
+      if ((this.#spans <= this.maxSpans && this.#units <= this.maxUnits) || k === i) break;
       this.#rows.delete(k);
       this.#spans -= weight(old.spans);
+      this.#units -= old.c.length;
     }
     return spans;
   }

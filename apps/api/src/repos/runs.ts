@@ -52,7 +52,6 @@ export async function runOf(ctx: OpContext, entry: RepoEntry, runId: string): Pr
   return view;
 }
 
-/** Who acts: the agent for a token it uses for a user, else the principal. */
 function actingPrincipal(ctx: OpContext): string {
   return ctx.auth.act?.[0] ?? ctx.auth.principalId;
 }
@@ -114,7 +113,6 @@ function workflowJob(runId: string, job: JobView): Output<typeof getWorkflowRunJ
   };
 }
 
-/** The `actions.runs.get` operation. */
 export async function getWorkflowRunOperation(
   ctx: OpContext,
   input: Input<typeof getWorkflowRun>,
@@ -124,8 +122,8 @@ export async function getWorkflowRunOperation(
 }
 
 /**
- * The `actions.runs.jobs.list` operation. The cursor is the attempt and the
- * last job's id, so a re-run between pages does not switch attempts.
+ * The cursor is the attempt and the last job's id, so a re-run between
+ * pages does not switch attempts.
  */
 export async function listWorkflowRunJobsOperation(
   ctx: OpContext,
@@ -152,7 +150,7 @@ export async function listWorkflowRunJobsOperation(
   };
 }
 
-/** The `actions.runs.jobs.get` operation: job ids are per run, whatever the attempt. */
+/** Job ids are per run, whatever the attempt. */
 export async function getWorkflowRunJobOperation(
   ctx: OpContext,
   input: Input<typeof getWorkflowRunJob>,
@@ -174,7 +172,6 @@ const repoGone = (entry: RepoEntry) =>
     `No repository ${entry.ownerHandle}/${entry.name} was found.`,
   );
 
-/** What a `status` filter asks of a run; undefined for a value no run here has. */
 const STATUS_FILTERS: Readonly<
   Partial<
     Record<
@@ -252,7 +249,7 @@ async function listRuns(
   };
 }
 
-/** The `actions.runs.list` operation. The cursor is the last run id read. */
+/** The cursor is the last run id read. */
 export function listWorkflowRunsOperation(
   ctx: OpContext,
   input: Input<typeof listWorkflowRuns>,
@@ -260,7 +257,6 @@ export function listWorkflowRunsOperation(
   return listRuns(ctx, input);
 }
 
-/** The `actions.workflows.runs.list` operation. */
 export function listRunsOfWorkflowOperation(
   ctx: OpContext,
   input: Input<typeof listRunsOfWorkflow>,
@@ -269,7 +265,7 @@ export function listRunsOfWorkflowOperation(
   return listRuns(ctx, input, [`${first}/${input.workflow_id}`, `${second}/${input.workflow_id}`]);
 }
 
-/** The `actions.workflows.list` operation. The cursor is the last path read. */
+/** The cursor is the last path read. */
 export async function listWorkflowsOperation(
   ctx: OpContext,
   input: Input<typeof listWorkflows>,
@@ -318,7 +314,6 @@ function cutName(name: string): { name: string; name_cut: boolean } {
   return { name: text, name_cut: cut };
 }
 
-/** The `actions.runs.graph.get` operation. */
 export async function getWorkflowRunGraphOperation(
   ctx: OpContext,
   input: Input<typeof getWorkflowRunGraph>,
@@ -380,7 +375,6 @@ async function cancel(
   throw new OperationError(409, "run_not_cancellable", "The run has completed.");
 }
 
-/** The `actions.runs.cancel` operation. */
 export function cancelWorkflowRunOperation(
   ctx: OpContext,
   input: Input<typeof cancelWorkflowRun>,
@@ -388,7 +382,6 @@ export function cancelWorkflowRunOperation(
   return cancel(ctx, input, "graceful");
 }
 
-/** The `actions.runs.force_cancel` operation. */
 export function forceCancelWorkflowRunOperation(
   ctx: OpContext,
   input: Input<typeof forceCancelWorkflowRun>,
@@ -396,7 +389,6 @@ export function forceCancelWorkflowRunOperation(
   return cancel(ctx, input, "force");
 }
 
-/** The `actions.runs.rerun` operation. */
 export async function rerunWorkflowRunOperation(
   ctx: OpContext,
   input: Input<typeof rerunWorkflowRun>,
@@ -438,13 +430,13 @@ const notPending = () =>
   );
 
 /**
- * The `actions.runs.approve` operation: the repository records the
- * approval (checking the approver again), then the run is told at once,
- * with the approver the repository recorded (the first, if two approve
- * before it is told); a failure there is left to the repository's delivery
- * job. A run whose approval ended unapproved (cancelled, expired,
- * superseded) is refused before anything is recorded; one the run refuses
- * on the fast path settles the repository's record as the run ended.
+ * The repository records the approval (checking the approver again), then
+ * the run is told at once, with the approver the repository recorded (the
+ * first, if two approve before it is told); a failure there is left to the
+ * repository's delivery job. A run whose approval ended unapproved
+ * (cancelled, expired, superseded) is refused before anything is recorded;
+ * one the run refuses on the fast path settles the repository's record as
+ * the run ended.
  */
 export async function approveWorkflowRunOperation(
   ctx: OpContext,
@@ -532,10 +524,10 @@ const DISPATCH_REFUSALS: Record<
 export const dispatchHooks: { afterAuthorize?: () => Promise<void> } = {};
 
 /**
- * The `actions.workflows.dispatch` operation. The dispatch is recorded
- * under the request's idempotency claim (a later request with the same
- * key past its window is a new claim, so a new run), or under a fresh id
- * without a key, as GitHub makes one run per such request.
+ * The dispatch is recorded under the request's idempotency claim (a later
+ * request with the same key past its window is a new claim, so a new run),
+ * or under a fresh id without a key, as GitHub makes one run per such
+ * request.
  */
 export async function dispatchWorkflowOperation(
   ctx: OpContext,
@@ -581,7 +573,6 @@ export async function dispatchWorkflowOperation(
   return {
     workflow_run_id: answer.runId,
     run_url: `${ctx.requestOrigin}/api/repos/${path}`,
-    // No run page exists yet: where it will be, on the deployment's public origin.
     html_url: `${publicOrigin(ctx.env) ?? ctx.requestOrigin}/${path}`,
   };
 }

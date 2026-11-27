@@ -1,8 +1,5 @@
-// FetchTask's work in the Worker: offer a lost answer again while its job
-// may still be given to a runner, answer an idle poll from the directory
-// alone, or claim the account's oldest eligible pending job and have its run
-// assign it. A pending row is only leased here; its run withdraws it once
-// the job has left the queue.
+// A pending row is only leased here; its run withdraws it once the job has
+// left the queue.
 
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { ciSecretKeys } from "../ci/envelope.js";
@@ -19,7 +16,6 @@ import {
   supersedeOffer,
 } from "./registry.js";
 
-/** Pause or fail points for tests. */
 export const dispatchHooks: {
   beforeClaim?: () => Promise<void> | void;
   afterClaim?: () => Promise<void> | void;
@@ -37,7 +33,6 @@ export const SECRETS_RETRY_MS = 10_000;
 const RUNNER_DEADLINE_MS = 4_999;
 /** Kept back from the runner's deadline for the answer to reach it. Proposed. */
 const ANSWER_MARGIN_MS = 1_500;
-/** Claims one FetchTask makes at most. */
 const MAX_CLAIMS = 3;
 
 export interface FetchContext {

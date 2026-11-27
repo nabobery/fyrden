@@ -65,7 +65,6 @@ async function checkUrl(ctx: OpContext, url: string, entry: RepoEntry): Promise<
   return checked.url.href;
 }
 
-/** Each hook's newest finished delivery, as GitHub's `last_response`. */
 async function lastResponses(
   ctx: OpContext,
   repoId: string,
@@ -76,7 +75,6 @@ async function lastResponses(
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_last_response" });
   const { results } = await readModelFor(ctx.env, DEFAULT_ORG_SHARD)
     .prepare(
-      // Each hook's newest finished delivery, found through its index (one probe a hook).
       `SELECT d.hook_id, d.state, d.last_status, d.reason
        FROM json_each(?2) h
        JOIN webhook_deliveries d ON d.delivery_id = (
@@ -150,7 +148,6 @@ async function hookRepoFor(
   return entry;
 }
 
-/** The events a hook takes, `*` alone standing for all. */
 const eventsOf = (events: readonly string[]) =>
   (events.includes("*") ? ["*"] : [...new Set(events)]) as HookEvent[];
 
@@ -227,7 +224,6 @@ export async function deleteHookOperation(
 ): Promise<Output<typeof deleteHook>> {
   const entry = await hookRepoFor(ctx, input.owner, input.repo, "repository_hooks:write");
   unwrap(await stub(ctx, entry, "deleteHook").deleteHook(input.hook_id, actorOf(ctx)));
-  // Its waiting deliveries now (an attempt would find the hook gone anyway).
   ctx.metrics.count("d1.query", { db: "org", op: "hooks_cancel" });
   await readModelFor(ctx.env, DEFAULT_ORG_SHARD)
     .prepare(
@@ -333,7 +329,6 @@ function decodeCursor(cursor: string | undefined): [number, string] {
   return [Number(match[1]), match[2] as string];
 }
 
-/** The attempt number a page of attempts starts below: the previous page's oldest. */
 function decodeAttemptCursor(cursor: string | undefined): number {
   if (cursor === undefined) return Number.MAX_SAFE_INTEGER;
   if (!/^[1-9]\d{0,8}$/.test(cursor)) throw invalidCursor();
@@ -369,7 +364,6 @@ export async function getHookDeliveryOperation(
       .bind(input.delivery_id, entry.id, input.hook_id),
     db
       .prepare(
-        // A page of its attempts, newest first, and one more to tell whether older ones follow.
         `SELECT n, at, url, status, duration_ms, response_excerpt, error FROM webhook_attempts
          WHERE delivery_id = ? AND n < ? ORDER BY n DESC LIMIT ?`,
       )
@@ -440,7 +434,6 @@ export async function redeliverHookDeliveryOperation(
       "not_redeliverable",
       `A ${found.state} delivery was never sent and cannot be sent again.`,
     );
-  // Its receiver answered 410: the hook is being turned off (a later change of it settles that).
   if (found.disable_hook_version !== null)
     throw new OperationError(
       409,

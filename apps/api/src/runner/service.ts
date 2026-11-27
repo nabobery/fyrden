@@ -1,6 +1,3 @@
-// The runner protocol's service: the methods a self-hosted runner calls under
-// /api/actions/, its authentication and the deployment switch.
-
 import type { Logger, Metrics } from "@fyrden/adapters-cloudflare/obs";
 import { generateToken, hashToken, parseToken, secureRandomBytes } from "@fyrden/domain";
 import type { Context, Hono } from "hono";
@@ -70,7 +67,6 @@ export const RUNNER_SERVICE_PREFIX = "/api/actions/";
 
 /** Longest runner name, version or label kept. */
 const MAX_FIELD_LENGTH = 255;
-/** Most labels a runner may declare. */
 const MAX_LABELS = 64;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -120,7 +116,6 @@ export function ciSince(env: object): number | null | "unreadable" {
   return Number.isFinite(ms) ? ms : "unreadable";
 }
 
-/** A refusal a method answers as a Connect error. */
 class Refusal extends Error {
   constructor(
     readonly code: ConnectCode,
@@ -196,7 +191,6 @@ async function ping(call: CallContext): Promise<Response> {
   return protoResponse(encodePingResponse({ data: `Hello, ${data}!` }));
 }
 
-/** Labels and version as a runner sends them, within what is kept. */
 function checkDeclared(version: string, labels: readonly string[]): void {
   if (labels.length > MAX_LABELS) throw new Refusal("invalid_argument", TOO_MANY_LABELS);
   if (version.length > MAX_FIELD_LENGTH || labels.some((l) => l.length > MAX_FIELD_LENGTH))
