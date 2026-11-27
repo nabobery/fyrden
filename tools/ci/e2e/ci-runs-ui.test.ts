@@ -140,6 +140,26 @@ async function runJob(
   expect(done.ok).toBe(true);
 }
 
+interface RouterState {
+  navigation: { state: string };
+  location: { key: string };
+}
+
+async function navigationKey(): Promise<string> {
+  return page.evaluate(
+    () =>
+      (globalThis as unknown as { __reactRouterDataRouter: { state: RouterState } })
+        .__reactRouterDataRouter.state.location.key,
+  );
+}
+
+function navigatedSince(before: string): boolean {
+  const { navigation, location } = (
+    globalThis as unknown as { __reactRouterDataRouter: { state: RouterState } }
+  ).__reactRouterDataRouter.state;
+  return navigation.state === "idle" && location.key !== before;
+}
+
 async function finished(runId: string) {
   return eventually(`run ${runId} listed as completed`, async () => {
     const page = await rest<{ workflow_runs: { id: string; status: string }[] }>(
@@ -342,11 +362,25 @@ describe("the runs list", () => {
 
   it("clears text typed but not sent, on a list with no filters", async () => {
     await visit(page, runs());
+    const clear = page.getByRole("link", { name: "Clear" });
     for (const typed of ["typed", "typed again"]) {
       await page.getByLabel("Branch").fill(typed);
-      await page.getByRole("link", { name: "Clear" }).click();
+      await clear.focus();
+      const before = await navigationKey();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(navigatedSince, before);
       await see(page.getByLabel("Branch")).toHaveValue("");
+      await see(clear).toBeFocused();
     }
+  });
+
+  it("keeps text typed but not sent when Clear opens elsewhere", async () => {
+    await visit(page, runs());
+    await page.getByLabel("Branch").fill("typed");
+    const opened = page.context().waitForEvent("page");
+    await page.getByRole("link", { name: "Clear" }).click({ modifiers: ["ControlOrMeta"] });
+    await (await opened).close();
+    await see(page.getByLabel("Branch")).toHaveValue("typed");
   });
 
   it("names a filter it cannot send", async () => {
