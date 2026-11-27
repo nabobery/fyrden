@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import { LiveLog, type LiveSocket, type Ticket } from "../lib/live-log.js";
 import { LogReader, readRanges } from "../lib/log-reader.js";
 import { type LogSpan, SpanCache } from "../lib/log-spans.js";
@@ -60,7 +61,7 @@ function Row({
 }: {
   i: number;
   row: StoredRow | undefined;
-  spans: (c: string) => LogSpan[];
+  spans: readonly LogSpan[];
   notStored: boolean;
   raw: string;
 }) {
@@ -90,7 +91,7 @@ function Row({
     <>
       {number}
       {row.kind === "suffix" && <span className="muted">… </span>}
-      {spans(row.c).map((s, k) =>
+      {spans.map((s, k) =>
         s.className ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: spans of one row never move.
           <span key={k} className={s.className}>
@@ -197,6 +198,8 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
 
   const target = useRef<number | null>(null);
   const jumped = useRef(false);
+  const placing = useRef<number | null>(null);
+  const placedLine = useRef<number | null>(null);
   const jumpTo = useCallback(
     (row: number) => {
       jumped.current = true;
@@ -240,8 +243,19 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
     if (flat === null) return;
     target.current = null;
     box.scrollTop = geometry.physicalTop(Math.max(0, flat * rowPx - viewport / 3));
+    placing.current = box.scrollTop;
+    placedLine.current = row;
     box.scrollIntoView({ block: "nearest" });
   });
+  const location = useLocation();
+  const [routerCommits, setRouterCommits] = useState(0);
+  useEffect(() => {
+    setRouterCommits((seen) => seen + 1);
+    const row = placedLine.current;
+    if (row === null || location.hash !== `#L${row + 1}`) return;
+    placedLine.current = null;
+    scroller.current?.scrollIntoView({ block: "nearest" });
+  }, [location]);
 
   const opening = useRef<{ growing: boolean; asked: number | null } | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once per job, at the first view.
@@ -361,10 +375,13 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
   const onScroll = () => {
     const box = scroller.current;
     if (!box) return;
+    const placed = placing.current === box.scrollTop;
+    placing.current = null;
+    if (!placed) placedLine.current = null;
     anchor.current = anchorAt(layout, geometry.logicalTop(box.scrollTop), rowPx);
     setTop(box.scrollTop);
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - rowPx;
-    if (following !== atBottom) setFollowing(atBottom && live !== null && !store.closed);
+    if (!placed && following !== atBottom) setFollowing(atBottom && live !== null && !store.closed);
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -411,9 +428,57 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
   const raw = jobRawPath(owner, repo, runId, job.id);
   const placed = (flat: number) => top + (flat * rowPx - logicalTop);
   const refusal = reader.refusal;
+  const lines = drawn.map((flat) => {
+    const item = layout.at(flat);
+    if (!item) return null;
+    const key = keyOf(item);
+    const style = { top: placed(flat), height: rowPx };
+    const keep = {
+      "data-key": key,
+      onFocus: () => setFocused(key),
+      onBlur: () => setFocused((f) => (f === key ? null : f)),
+    };
+    if (item.kind === "header") {
+      const step = job.steps.find((s) => s.number === item.step);
+      if (!step) return null;
+      const isOpen = open.has(step.number);
+      return (
+        <div key={key} className="log-line log-step" style={style} {...keep}>
+          <button type="button" aria-expanded={isOpen} onClick={() => toggle(step.number)}>
+            <span aria-hidden="true">{isOpen ? "▾" : "▸"}</span> {step.name}
+          </button>{" "}
+          <RunState status={step.status} conclusion={step.conclusion} />
+        </div>
+      );
+    }
+    const notStored = store.notStored(item.row);
+    const row = store.row(item.row);
+    return (
+      <div
+        key={key}
+        className="log-line"
+        id={notStored ? undefined : `L${item.row + 1}`}
+        style={style}
+        {...keep}
+      >
+        <Row
+          i={item.row}
+          row={row}
+          spans={row && "c" in row ? spans.get(item.row, row.c) : []}
+          notStored={notStored}
+          raw={raw}
+        />
+      </div>
+    );
+  });
 
   return (
-    <div className="log-viewer" data-rows-parsed={spans.parsed} data-rows-drawn={drawn.length}>
+    <div
+      className="log-viewer"
+      data-rows-parsed={spans.parsed}
+      data-rows-drawn={drawn.length}
+      data-router-commits={routerCommits}
+    >
       <div className="row log-tools">
         {live !== null &&
           live.state !== "live" &&
@@ -496,48 +561,7 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
           <span className="log-line log-probe" data-probe aria-hidden="true">
             0
           </span>
-          {drawn.map((flat) => {
-            const item = layout.at(flat);
-            if (!item) return null;
-            const key = keyOf(item);
-            const style = { top: placed(flat), height: rowPx };
-            const keep = {
-              "data-key": key,
-              onFocus: () => setFocused(key),
-              onBlur: () => setFocused((f) => (f === key ? null : f)),
-            };
-            if (item.kind === "header") {
-              const step = job.steps.find((s) => s.number === item.step);
-              if (!step) return null;
-              const isOpen = open.has(step.number);
-              return (
-                <div key={key} className="log-line log-step" style={style} {...keep}>
-                  <button type="button" aria-expanded={isOpen} onClick={() => toggle(step.number)}>
-                    <span aria-hidden="true">{isOpen ? "▾" : "▸"}</span> {step.name}
-                  </button>{" "}
-                  <RunState status={step.status} conclusion={step.conclusion} />
-                </div>
-              );
-            }
-            const notStored = store.notStored(item.row);
-            return (
-              <div
-                key={key}
-                className="log-line"
-                id={notStored ? undefined : `L${item.row + 1}`}
-                style={style}
-                {...keep}
-              >
-                <Row
-                  i={item.row}
-                  row={store.row(item.row)}
-                  spans={(c) => spans.get(item.row, c)}
-                  notStored={notStored}
-                  raw={raw}
-                />
-              </div>
-            );
-          })}
+          {lines}
         </div>
       </section>
       {store.length === 0 && store.closed && <p className="muted">No lines.</p>}
