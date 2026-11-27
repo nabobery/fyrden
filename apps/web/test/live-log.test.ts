@@ -204,7 +204,11 @@ describe("LiveLog", () => {
     await h.start();
     h.last().open();
     h.last().onmessage?.({ data: "not json" });
+    h.last().onmessage?.({ data: "null" });
+    h.last().onmessage?.({ data: "7" });
     h.last().frame({ t: "rows", rows: "nope" });
+    h.last().frame(rows(0, 1));
+    expect(h.store.row(0)).toMatchObject({ c: "r0" });
     h.live.stop();
     expect(h.last().closed).toBe(true);
     h.last().end(1000);

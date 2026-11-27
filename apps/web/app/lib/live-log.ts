@@ -163,12 +163,14 @@ export class LiveLog {
   }
 
   #frame(socket: LiveSocket, data: string): void {
-    let frame: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      frame = JSON.parse(data) as Record<string, unknown>;
+      parsed = JSON.parse(data);
     } catch {
       return;
     }
+    if (typeof parsed !== "object" || parsed === null) return;
+    const frame = parsed as Record<string, unknown>;
     if (frame.t === "rows" && Array.isArray(frame.rows)) {
       const rows = frame.rows.map(rowOf).filter((r): r is IncomingRow => r !== null);
       const last = rows.at(-1);
