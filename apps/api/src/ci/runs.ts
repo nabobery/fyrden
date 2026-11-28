@@ -13,7 +13,11 @@ type RegisterRefusal =
 export type StartRunAnswer = CreateAnswer | { readonly ok: false; readonly code: RegisterRefusal };
 
 type RegisterAnswer =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      /** The repository's restore generation, which the run created next keeps. */
+      readonly epoch: number;
+    }
   | { readonly ok: false; readonly code: RegisterRefusal };
 
 /**
@@ -87,6 +91,7 @@ export async function startRunFrom(
   const created = (await env.RUN.getByName(spec.runId).create(
     spec,
     builtUnder?.owner,
+    registered.epoch,
   )) as unknown as CreateAnswer;
   return !created.ok && created.code === "run_erased" ? forgotten(repo, spec, created) : created;
 }

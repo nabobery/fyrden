@@ -74,6 +74,14 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  * v10 (steps):
  * - `run_instances.steps`: the job's steps as its runner last reported them
  *   (src/do/run/steps.ts); NULL before a report, and for tasks from before.
+ *
+ * v11 (repository restores):
+ * - `runs.repo_epoch`: the greatest restore generation of the repository
+ *   the run has seen, from its repository's registration of it (0 for a run
+ *   created without one). A greater one starts the run's
+ *   checks again. A run from before is set to 0, so the first it sees does
+ *   (it may have missed a restore). Check rows parked as `unknown_attempt`
+ *   (an attempt a restore lost) are sent again.
  */
 export const runSchema: readonly DoMigration[] = [
   {
@@ -457,5 +465,15 @@ export const runSchema: readonly DoMigration[] = [
     version: 10,
     name: "ci_job_steps",
     sql: "ALTER TABLE run_instances ADD COLUMN steps TEXT;",
+  },
+  {
+    version: 11,
+    name: "ci_repo_epoch",
+    sql: `
+      ALTER TABLE runs ADD COLUMN repo_epoch INTEGER;
+      UPDATE runs SET repo_epoch = 0;
+      UPDATE run_checks SET parked = NULL, check_attempt = NULL, rev = rev + 1
+        WHERE parked = 'unknown_attempt';
+    `,
   },
 ];

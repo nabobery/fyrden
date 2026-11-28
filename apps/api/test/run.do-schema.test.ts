@@ -23,6 +23,7 @@ import runV7 from "./fixtures/do-schemas/RunDO/v7.sql?raw";
 import runV8 from "./fixtures/do-schemas/RunDO/v8.sql?raw";
 import runV9 from "./fixtures/do-schemas/RunDO/v9.sql?raw";
 import runV10 from "./fixtures/do-schemas/RunDO/v10.sql?raw";
+import runV11 from "./fixtures/do-schemas/RunDO/v11.sql?raw";
 
 const versions: Record<number, string> = {
   0: runV0,
@@ -36,6 +37,7 @@ const versions: Record<number, string> = {
   8: runV8,
   9: runV9,
   10: runV10,
+  11: runV11,
 };
 
 describe("RunDO schema", () => {
@@ -410,6 +412,48 @@ describe("RunDO schema", () => {
       return sql.exec("SELECT owner_id FROM runs").toArray();
     });
     expect(owners).toEqual([{ owner_id: null }]);
+  });
+
+  it("sends again a v10 run's checks a restore lost, and has it take the next restore generation as one", async () => {
+    const stub = env.RUN.getByName(uniqueId("run"));
+    const rows = await runInDurableObject(stub, async (_, state) => {
+      await state.storage.deleteAll();
+      const sql = state.storage.sql;
+      sql.exec(runV10);
+      sql.exec(
+        `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
+           workflow_source, contexts, spec_digest, attempt, created_at, updated_at)
+         VALUES (1, 'old-run', 'old-repo', ?, 'refs/heads/main', 'push', 'usr_old',
+           '.github/workflows/ci.yml', '', '{}', 'original-digest', 1, 0, 0)`,
+        "a".repeat(40),
+      );
+      sql.exec(
+        `INSERT INTO run_checks (attempt, name_key, name, start_key, job_id, check_attempt, desired,
+           rev, sent_rev, parked)
+         VALUES (1, 'lost', 'lost', 'k1', 1, 2, 'success', 2, 1, 'unknown_attempt'),
+           (1, 'sent', 'sent', 'k2', 2, 1, 'success', 2, 2, NULL),
+           (1, 'other', 'other', 'k3', 3, 1, 'failure', 2, 1, 'superseded')`,
+      );
+      sql.exec(
+        "CREATE TABLE _fyrden_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
+      );
+      sql.exec("INSERT INTO _fyrden_schema_version VALUES (1, 10)");
+      applyDoMigrations(state.storage, runSchema);
+      return {
+        runs: sql.exec("SELECT repo_epoch FROM runs").toArray(),
+        checks: sql
+          .exec("SELECT name, check_attempt, rev, sent_rev, parked FROM run_checks ORDER BY name")
+          .toArray(),
+      };
+    });
+    expect(rows).toEqual({
+      runs: [{ repo_epoch: 0 }],
+      checks: [
+        { name: "lost", check_attempt: null, rev: 3, sent_rev: 1, parked: null },
+        { name: "other", check_attempt: 1, rev: 2, sent_rev: 1, parked: "superseded" },
+        { name: "sent", check_attempt: 1, rev: 2, sent_rev: 2, parked: null },
+      ],
+    });
   });
 
   it("takes secret masks from v7", async () => {

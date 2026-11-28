@@ -246,4 +246,4 @@ CREATE TABLE runs (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       , trust TEXT NOT NULL DEFAULT 'untrusted'
-        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1)), owner_id TEXT) STRICT;
+        CHECK (trust IN ('trusted', 'untrusted')), fork INTEGER NOT NULL DEFAULT 1 CHECK (fork IN (0, 1)), owner_id TEXT, repo_epoch INTEGER) STRICT;

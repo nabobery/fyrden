@@ -77,11 +77,14 @@ backup (a new `position.epoch`): what happened since the backup may be sent
 again. A run tells it again the `workflow_run` and `workflow_job` events its
 restored record lacks, at the run's next report or at its weekly check, which
 also registers a run whose record the restore removed. `check_run` events
-follow the repository's record of checks, which a restore takes back too: a
-check started after the backup, or whose end the repository took after the
-backup, is not completed again
-([#127](https://github.com/nabobery/fyrden/issues/127)). Take a new epoch as the sign to read the state
-again. The promise ends with a run's retention: a run whose reports failed
+follow the repository's record of checks, which a restore takes back too.
+A run that sees the new epoch, at the same moments, starts each of its
+checks again (a check whose attempt the restore lost gets a new attempt
+number) and sends its state, so a check started after the backup, or whose
+end the repository took after the backup, is completed again; one another
+run had taken over is left to that run. Until then the check shows
+what the backup had. A check the commit has no room for (1,000 checks)
+stays refused. Take a new epoch as the sign to read the state again. The promise ends with a run's retention: a run whose reports failed
 all that time sends what is owed once more and is then retired, counted in
 `ci.run_retired_owed` ([metrics.md](metrics.md)) if that fails too.
 

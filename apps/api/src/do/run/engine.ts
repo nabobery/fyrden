@@ -181,6 +181,7 @@ export interface RunRow {
   fork: number;
   /** The account that owned the repository when the run was created; null: given no secrets. */
   owner_id: string | null;
+  repo_epoch: number | null;
 }
 
 export interface AttemptRow {
