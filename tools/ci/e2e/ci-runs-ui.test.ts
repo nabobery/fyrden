@@ -881,17 +881,24 @@ describe("the log viewer", () => {
       await see(jump).toBeVisible();
       await jump.click();
       await see(jump).toHaveCount(0);
+      await region().evaluate(
+        (box) =>
+          new Promise<void>((done) => {
+            const away = () => {
+              if (box.scrollTop + box.clientHeight >= box.scrollHeight - 1) box.scrollTop = 0;
+              else {
+                box.removeEventListener("scroll", away);
+                done();
+              }
+            };
+            box.addEventListener("scroll", away);
+            box.scrollTop = 0;
+          }),
+      );
+      await see(jump).toBeVisible();
     } finally {
       await reads.release();
     }
-    await region().evaluate(
-      (box) =>
-        new Promise<void>((done) => {
-          box.addEventListener("scroll", () => done(), { once: true });
-          box.scrollTop = 0;
-        }),
-    );
-    await see(jump).toBeVisible();
     await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 400)]);
   });
 
