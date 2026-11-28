@@ -159,7 +159,7 @@ describe("a fork's detach and its reflog", () => {
     await detach(f);
     expect(sideOnly.length).toBeGreaterThan(0);
     expect(await missingFrom(f, sideOnly)).toEqual([]);
-    expect(await register(f, fx.side)).toEqual({ ok: true });
+    expect(await register(f, fx.side)).toEqual({ ok: true, epoch: expect.any(Number) });
     await collects(f);
     expect(await missingFrom(f, sideOnly)).toEqual([]);
     // Kept is not served: a want must be reachable from a ref.
@@ -207,7 +207,7 @@ describe("a fork's detach and its reflog", () => {
     });
     expect({ pushed, round }).toEqual({ pushed: true, round: 1 });
     expect(await missingFrom(f, sideOnly)).toEqual([]);
-    expect(await register(f, fx.side)).toEqual({ ok: true });
+    expect(await register(f, fx.side)).toEqual({ ok: true, epoch: expect.any(Number) });
     await collects(f);
   }, 60_000);
 
@@ -384,7 +384,7 @@ describe("a fork's detach and its reflog", () => {
         }),
       );
     });
-    expect(answers).toEqual([{ ok: true }]);
+    expect(answers).toEqual([{ ok: true, epoch: expect.any(Number) }]);
     expect({ verified: phases.filter((p) => p === "verify").length, round }).toEqual({
       verified: 1,
       round: 1,

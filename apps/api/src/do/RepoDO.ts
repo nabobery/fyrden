@@ -2574,9 +2574,10 @@ export class RepoDO extends MigratingDO {
   }): Promise<
     | {
         readonly ok: true;
+        /** As `reportRun` answers it: a run created after this registration keeps it. */
+        readonly epoch: number;
         /** As `reportRun` answers them, to a run registering itself (`state`). */
         readonly jobsDone?: number;
-        readonly epoch?: number;
         /** The registration recorded the run anew: the repository had lost it. */
         readonly inserted?: boolean;
       }
@@ -2628,11 +2629,12 @@ export class RepoDO extends MigratingDO {
         );
         if (state) this.runs.register(state);
       });
-      if (!state) return { ok: true };
+      const epoch = this.events.epochGen();
+      if (!state) return { ok: true, epoch };
       const jobsDone = this.runs.jobsDone(input.runId);
       return {
         ok: true,
-        epoch: this.events.epochGen(),
+        epoch,
         inserted: !recorded,
         ...(jobsDone !== undefined && { jobsDone }),
       };

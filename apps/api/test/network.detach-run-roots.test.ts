@@ -111,7 +111,7 @@ describe("a fork's detach", () => {
       ok: true,
     });
     expect(await runDetach(f.stub)).toBe("done");
-    expect(answers).toEqual([{ ok: true }]);
+    expect(answers).toEqual([{ ok: true, epoch: expect.any(Number) }]);
     expect((await liveObjects(f)).has(fx.side)).toBe(true);
   }, 60_000);
 
@@ -180,7 +180,7 @@ describe("a fork's detach", () => {
       if (cursor.phase === "prune" && answers.length === 0)
         answers.push(await register(repo, fx.side));
     });
-    expect(answers).toEqual([{ ok: true }]);
+    expect(answers).toEqual([{ ok: true, epoch: expect.any(Number) }]);
     const live = await liveObjects(detaching.f);
     expect(fx.repo.objects.filter((o) => !live.has(o))).toEqual([]);
     expect(round).toBe(2);
@@ -201,7 +201,7 @@ describe("a fork's detach", () => {
         }),
       );
     });
-    expect(answers).toEqual([{ ok: true }]);
+    expect(answers).toEqual([{ ok: true, epoch: expect.any(Number) }]);
     expect({ verified, round }).toEqual({ verified: 2, round: 1 });
   }, 60_000);
 
@@ -236,7 +236,7 @@ describe("a fork's detach", () => {
       if (cursor.phase !== "prune" || answers.length > 0) return;
       answers.push(await register(repo, fx.f2));
     });
-    expect(answers).toEqual([{ ok: true }]);
+    expect(answers).toEqual([{ ok: true, epoch: expect.any(Number) }]);
     expect({ verified, round }).toEqual({ verified: 1, round: 1 });
   }, 60_000);
 

@@ -6,6 +6,7 @@
 // produces while leaving another run's newer check alone.
 import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import { startRun } from "../src/ci/runs.js";
 import type { RepoDO } from "../src/do/RepoDO.js";
 import type { AssignAnswer } from "../src/do/RunDO.js";
 import { inRepo } from "./helpers/repo-git.js";
@@ -22,8 +23,10 @@ import {
   job,
   jobNamed,
   jobsOf,
+  ownerOf,
   repoWithCommit,
   runStub,
+  specFor,
   started,
   T0,
   workflow,
@@ -532,5 +535,78 @@ describe("checks after a restore of the repository", () => {
     await drain(runId);
     expect(await runStub(runId).get()).toBeUndefined();
     expect((await checksOf(f)).get("a")?.conclusion).toBe("success");
+  });
+
+  it.each([
+    ["recorded at its registration", true],
+    ["not given to its creation", false],
+  ])(
+    "sends again a check acknowledged before the run's first report was answered, when a restore came between (epoch %s)",
+    async (_, given) => {
+      const f = await repoWithCommit();
+      const spec = specFor(f, workflow(job("a")));
+      const runId = spec.runId;
+      await at(runId, T0);
+      let backup: Backup | undefined;
+      let reportsLost = true;
+      await inRun(runId, (r) => {
+        r.hooks = {
+          beforeRepoCall: async (op) => {
+            if (op === "startCheckAttempts" && !backup) backup = await backupOf(f);
+            if (op === "reportRun" && reportsLost) throw new Error("answer lost");
+          },
+        };
+      });
+      const owner = await ownerOf(f.repo.id);
+      if (given) expect((await startRun(env, spec, { owner })).ok).toBe(true);
+      else {
+        expect((await runStub(runId).reserve(spec)).ok).toBe(true);
+        const repo = env.REPO.getByName(f.repo.id);
+        expect(
+          (await repo.registerRun({ runId, sha: spec.sha, path: spec.workflow.path })).ok,
+        ).toBe(true);
+        expect((await runStub(runId).create(spec, owner)).ok).toBe(true);
+      }
+      await drain(runId);
+      await finish(runId, "a");
+      for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+      expect((await checksOf(f)).get("a")?.conclusion).toBe("success");
+      await restore(f, backup as Backup);
+      expect((await checksOf(f)).get("a")).toBeUndefined();
+      reportsLost = false;
+      for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+      await inRun(runId, (r) => {
+        r.hooks = {};
+      });
+      expect((await checksOf(f)).get("a")).toMatchObject({
+        status: "completed",
+        conclusion: "success",
+      });
+    },
+  );
+
+  it("sends a re-run's check after the earlier attempt's when its retirement first sees the restore", async () => {
+    const f = await repoWithCommit();
+    const backup = await backupOf(f);
+    const runId = await started(f, workflow(job("a")));
+    await finish(runId, "a", "failure");
+    await advance(runId, 2_000);
+    expect((await runStub(runId).rerun(f.owner.principalId)).ok).toBe(true);
+    await drain(runId);
+    await finish(runId, "a", "success");
+    for (let i = 0; i < 3; i++) await advance(runId, 2_000);
+    expect((await checksOf(f)).get("a")).toMatchObject({ attempt: 2, conclusion: "success" });
+    await restore(f, backup);
+    await at(runId, T0 + 8 * DAY);
+    await inRun(runId, (r) => {
+      r.policy = { ...r.policy, retentionMs: DAY };
+    });
+    for (let i = 0; i < 5; i++) await advance(runId, 2_000);
+    expect(await runStub(runId).get()).toBeUndefined();
+    expect((await checksOf(f)).get("a")).toMatchObject({
+      attempt: 2,
+      status: "completed",
+      conclusion: "success",
+    });
   });
 });

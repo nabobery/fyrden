@@ -77,7 +77,8 @@ import type { DoMigration } from "@fyrden/adapters-cloudflare/migrations";
  *
  * v11 (repository restores):
  * - `runs.repo_epoch`: the greatest restore generation of the repository
- *   the run has seen; NULL until its first. A greater one starts the run's
+ *   the run has seen, from its repository's registration of it (0 for a run
+ *   created without one). A greater one starts the run's
  *   checks again. A run from before is set to 0, so the first it sees does
  *   (it may have missed a restore). Check rows parked as `unknown_attempt`
  *   (an attempt a restore lost) are sent again.

@@ -631,9 +631,14 @@ export class RunDO extends MigratingDO {
    * refused. `ownerId`, the account that owned the repository when the spec
    * was built, is kept with a new run: only that account's secrets are ever
    * delivered to its jobs. A run created without one is given no secrets.
+   * `repoEpoch`, the repository's restore generation when it recorded the run, is kept with a new
+   * run, so a restore before its first report is seen as one; without it, the run's first report
+   * sends its checks again, as a run from before restore generations were kept does.
    */
-  async create(spec: RunSpec, ownerId?: string): Promise<CreateAnswer> {
+  async create(spec: RunSpec, ownerId?: string, repoEpoch?: number): Promise<CreateAnswer> {
     if (ownerId !== undefined && !isPrincipalId(ownerId)) throw new TypeError("invalid run owner");
+    if (repoEpoch !== undefined && !(Number.isSafeInteger(repoEpoch) && repoEpoch >= 0))
+      throw new TypeError("invalid repository epoch");
     const contexts = validateRunSpec(spec);
     const digest = await specDigest(spec, contexts);
     const planCheck = await workflowFileCheckName(spec.workflow.path);
@@ -650,8 +655,8 @@ export class RunDO extends MigratingDO {
       this.engine.exec(
         `INSERT INTO runs (id, run_id, repo_id, sha, ref, event, actor_id, workflow_path,
            workflow_source, contexts, spec_digest, attempt, created_at, updated_at, trust, fork,
-           owner_id)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
+           owner_id, repo_epoch)
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
         spec.runId,
         spec.repoId,
         spec.sha,
@@ -667,6 +672,7 @@ export class RunDO extends MigratingDO {
         spec.trust,
         spec.fork ? 1 : 0,
         ownerId ?? null,
+        repoEpoch ?? 0,
       );
       const loaded = loadModel(spec.workflow.path, spec.workflow.source);
       // Variables too large for the contexts fail the run as a workflow that does not plan does.
@@ -2252,6 +2258,16 @@ export class RunDO extends MigratingDO {
     );
   }
 
+  #owedChecks(): string {
+    return this.engine
+      .rows<{ attempt: number; name_key: string; check_attempt: number | null }>(
+        `SELECT attempt, name_key, check_attempt FROM run_checks
+         WHERE parked IS NULL AND sent_rev < rev ORDER BY attempt, name_key`,
+      )
+      .map((row) => `${row.attempt}:${row.name_key}:${row.check_attempt ?? ""}`)
+      .join("\n");
+  }
+
   #reportOwed(): boolean {
     return this.#stateOwed() !== undefined || this.jobReports().length > 0;
   }
@@ -2490,8 +2506,8 @@ export class RunDO extends MigratingDO {
 
   /**
    * Retires the expired run: sends its check outbox (again when its report shows a restore of the
-   * repository) and reports its state once (best effort), so a required check is not left
-   * pending; asks the repository to forget it;
+   * repository), over as many slices as the repository answers, and reports its state once (best
+   * effort), so a required check is not left pending; asks the repository to forget it;
    * then erases it. A failure is retried at the sweep's interval, the run
    * kept and answered as no run, and never ends the job: once begun, the
    * retirement holds whatever the retention becomes. Work still owed then
@@ -2514,10 +2530,12 @@ export class RunDO extends MigratingDO {
     const flush = async () => {
       try {
         await this.#flushChecks(job);
+        return true;
       } catch (error) {
         this.#log.warn("check updates of a retiring run not sent", {
           error: error instanceof Error ? error.message : String(error),
         });
+        return false;
       }
     };
     await flush();
@@ -2538,7 +2556,17 @@ export class RunDO extends MigratingDO {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-    if (this.#checksOwed()) await flush();
+    let progressed = false;
+    if (this.#checksOwed()) {
+      const before = this.#owedChecks();
+      progressed = (await flush()) && this.#owedChecks() !== before;
+    }
+    // A flush sends one attempt of each check: a re-run's follows in the next slice, before the
+    // erasure would drop it. Owed checks an answered flush leaves as they were are dropped.
+    if (progressed && this.#checksOwed()) {
+      reportsOwed = owedBefore;
+      return { ...retry(), runAfterMs: this.policy.checkFlushMs };
+    }
     // Once forgotten, the repository accepts reports and tells no one: whether it took them before
     // is kept across retries.
     if (!this.jobs.checkpoint(job, reportsOwed ? REPORTS_OWED : new Uint8Array())) return retry();

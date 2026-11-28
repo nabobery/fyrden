@@ -290,7 +290,7 @@ describe("listing runs", () => {
     const unreported = newUlid();
     expect(
       await env.REPO.getByName(f.repo.id).registerRun({ runId: unreported, sha: f.sha, path: CI }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: true, epoch: expect.any(Number) });
     expect((await all(f, "per_page=1")).ids).toEqual([kept]);
     expect(old).toBeDefined();
   });

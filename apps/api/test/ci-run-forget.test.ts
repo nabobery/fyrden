@@ -51,7 +51,7 @@ describe("a run's first registration", () => {
   it("records a run whose commit a ref names", async () => {
     const { f, register, recorded } = await setup();
     const runId = newUlid();
-    expect(await register(runId, f.sha, f.sha)).toEqual({ ok: true });
+    expect(await register(runId, f.sha, f.sha)).toEqual({ ok: true, epoch: expect.any(Number) });
     expect(await recorded(runId)).toBe(true);
   });
 
@@ -70,24 +70,33 @@ describe("a run's first registration", () => {
     const { register, recorded, reflogEntry } = await setup();
     await reflogEntry(ELSEWHERE, RETENTION - 60_000);
     const runId = newUlid();
-    expect(await register(runId, ELSEWHERE, ELSEWHERE)).toEqual({ ok: true });
+    expect(await register(runId, ELSEWHERE, ELSEWHERE)).toEqual({
+      ok: true,
+      epoch: expect.any(Number),
+    });
     expect(await recorded(runId)).toBe(true);
   });
 
   it("checks what reaches the commit (an annotated tag's object), not the commit itself", async () => {
     const { f, register } = await setup();
-    expect(await register(newUlid(), ELSEWHERE, f.sha)).toEqual({ ok: true });
+    expect(await register(newUlid(), ELSEWHERE, f.sha)).toEqual({
+      ok: true,
+      epoch: expect.any(Number),
+    });
   });
 
   it("does not check a run already recorded, nor a registration that names no witness", async () => {
     const { f, register, recorded } = await setup();
     const runId = newUlid();
-    expect(await register(runId, f.sha, f.sha)).toEqual({ ok: true });
+    expect(await register(runId, f.sha, f.sha)).toEqual({ ok: true, epoch: expect.any(Number) });
     // The run's weekly check, and a run an earlier version allocated, name none.
     const weekly = newUlid();
-    expect(await register(weekly, ELSEWHERE)).toEqual({ ok: true });
+    expect(await register(weekly, ELSEWHERE)).toEqual({ ok: true, epoch: expect.any(Number) });
     expect(await recorded(weekly)).toBe(true);
-    expect(await register(runId, f.sha, ELSEWHERE)).toEqual({ ok: true });
+    expect(await register(runId, f.sha, ELSEWHERE)).toEqual({
+      ok: true,
+      epoch: expect.any(Number),
+    });
   });
 });
 
