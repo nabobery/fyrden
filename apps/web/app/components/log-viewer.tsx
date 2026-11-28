@@ -223,7 +223,7 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
   useEffect(() => {
     const row = target.current;
     const box = scroller.current;
-    if (row === null || !box || !reader.answered) return;
+    if (row === null || following || !box || !reader.answered) return;
     if (row >= store.length) {
       target.current = null;
       setLineNote(`Line ${row + 1} is past the end of this log (${store.length} lines).`);
@@ -382,7 +382,8 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
     anchor.current = anchorAt(layout, geometry.logicalTop(box.scrollTop), rowPx);
     setTop(box.scrollTop);
     const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - rowPx;
-    if (!placed && following !== atBottom) setFollowing(atBottom && live !== null && !store.closed);
+    if (!placed && target.current === null && following !== atBottom)
+      setFollowing(atBottom && live !== null && !store.closed);
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -508,6 +509,7 @@ export function LogViewer({ owner, repo, runId, job }: Props) {
           <button
             type="button"
             onClick={() => {
+              target.current = null;
               setFollowing(true);
               const box = scroller.current;
               if (box) box.scrollTop = box.scrollHeight;
