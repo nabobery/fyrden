@@ -1834,6 +1834,10 @@ function readRunsOn(w: Walk, e: Entry): Valued<readonly Text[]> | undefined {
   });
 }
 
+// A refused reference is never quoted back: a token can take the shape of a reference
+// (`self:token/x@host`), and messages are stored with the run.
+const THE_REFERENCE = "The step's `uses`";
+
 // The pinned runners resolve `self:` on this instance with the job's token and later reuse its
 // cached tree for any job without asking again, `$/` at the running commit and a URL on its host
 // (verified at gitea/runner v6.0.0: act/runner/step_action_remote.go, act/common/git/fetch_action.go,
@@ -1841,9 +1845,8 @@ function readRunsOn(w: Walk, e: Entry): Valued<readonly Text[]> | undefined {
 function actionRefusal(reference: string): string | undefined {
   if (reference.startsWith("./")) return undefined;
   if (reference.startsWith("docker://") && reference.length > "docker://".length) return undefined;
-  const shown = `\`${cut(withoutUserinfo(reference), 80)}\``;
   const refuse = (reason: string) =>
-    `${shown} is not an action reference Fyrden supports: ${reason} Fyrden runs \`owner/repo[/path]@ref\`, \`./path\` and \`docker://image\`.`;
+    `${THE_REFERENCE} is not an action reference Fyrden supports: ${reason} Fyrden runs \`owner/repo[/path]@ref\`, \`./path\` and \`docker://image\`.`;
   if (reference.startsWith("self:")) return refuse("`self:` names an action on this instance.");
   if (reference.startsWith("builtin:")) return refuse("`builtin:` actions are not supported.");
   if (reference.startsWith("$/")) {
@@ -1859,13 +1862,7 @@ function actionRefusal(reference: string): string | undefined {
   }
   if (owner.includes(".")) return refuse(namesHost);
   if (owner && !owner.includes(":")) return undefined;
-  return `${shown} is not an action reference: use \`owner/repo@ref\`, \`owner/repo/path@ref\`, \`./path\` or \`docker://image\`.`;
-}
-
-/** `reference` without the userinfo of any host in it, so a diagnostic never stores credentials. */
-function withoutUserinfo(reference: string): string {
-  const withoutAuthorities = reference.replace(/\/\/[^/]*@/g, "//");
-  return reference.includes("/") ? withoutAuthorities.replace(/^[^/]*@/, "") : withoutAuthorities;
+  return `${THE_REFERENCE} is not an action reference: use \`owner/repo@ref\`, \`owner/repo/path@ref\`, \`./path\` or \`docker://image\`.`;
 }
 
 type StepFields = {

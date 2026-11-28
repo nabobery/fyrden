@@ -590,24 +590,28 @@ describe("parseWorkflow: action references", () => {
   );
 
   it.each([
-    ["an https URL", "https://user:hunter2@fyrden.example/octo/action@v1"],
-    ["a token before the host", "s3cr3t@fyrden.example/octo/action@v1"],
-    ["a malformed URL", "https://user:hunter2@fyrden.example"],
-    ["a scheme-relative URL", "//user:hunter2@fyrden.example/octo/action@v1"],
-    ["a scheme-relative URL without a path", "//user:hunter2@fyrden.example"],
-    ["a URL after a space", " https://user:hunter2@fyrden.example/octo/action@v1"],
-    ["a URL after a tab", "\thttps://user:hunter2@fyrden.example/octo/action@v1"],
-    ["a URL after other text", "octo https://user:hunter2@fyrden.example/o/a@v1"],
-    ["a password with a space", "https://user:hun ter2@fyrden.example/o/a@v1"],
-    ["a password with a tab", "https://user:hun\tter2@fyrden.example/o/a@v1"],
-    ["a password with a newline", "https://user:hun\nter2@fyrden.example/o/a@v1"],
-    ["a user with a space before the host", "user name:hunter2@fyrden.example/o/a@v1"],
-    ["a URL after a ref", "octo@v1 https://user:hunter2@fyrden.example/o/a@v1"],
-    ["two URLs", "https://user:hunter2@fyrden.example/x https://user:hunter3@fyrden.example/x"],
-  ])("drops the credentials of %s from the message", (_, reference) => {
+    "https://user:hunter2@fyrden.example/octo/action@v1",
+    "s3cr3t@fyrden.example/octo/action@v1",
+    "https://user:hunter2@fyrden.example",
+    "//user:hunter2@fyrden.example/octo/action@v1",
+    " https://user:hunter2@fyrden.example/octo/action@v1",
+    "\thttps://user:hunter2@fyrden.example/octo/action@v1",
+    "octo@v1 https://user:hunter2@fyrden.example/o/a@v1",
+    "https://user:hun ter2@fyrden.example/o/a@v1",
+    "https://user:hun\nter2@fyrden.example/o/a@v1",
+    "https://user:hun/ter2@fyrden.example/octo/action@v1",
+    "https://user://hun/ter2@fyrden.example/octo/action@v1",
+    "user:hunter2@fyrden.example",
+    "self:user:hunter2@fyrden.example",
+    "s3cr3t@fyrden.example",
+    "builtin:s3cr3t@fyrden.example",
+    "octo/action@s3cr3t@fyrden.example",
+    "https://s3/cr3t@fyrden.example",
+    "self:s3/cr3t@fyrden.example",
+  ])("never quotes the refused reference %j, so no credential reaches the message", (reference) => {
     const message = refusalOf(reference);
-    expect(message).not.toMatch(/user|hun|s3cr3t/);
-    expect(message).toContain("fyrden.example");
+    expect(message).toMatch(/^The step's `uses` is not an action reference/);
+    expect(message).not.toMatch(/user|hun|s3|cr3t|fyrden\.example/);
   });
 
   it.each([
