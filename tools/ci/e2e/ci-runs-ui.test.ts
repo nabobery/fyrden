@@ -791,6 +791,110 @@ describe("the log viewer", () => {
     await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 150)]);
   });
 
+  async function holdReads(): Promise<{ reading: Promise<void>; release: () => Promise<void> }> {
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((done) => {
+      release = done;
+    });
+    let held: () => void = () => undefined;
+    const reading = new Promise<void>((done) => {
+      held = done;
+    });
+    await page.route("**/logs/rows?*", async (route) => {
+      if (!new URL(route.request().url()).searchParams.has("tail")) {
+        held();
+        await released;
+      }
+      await route.continue();
+    });
+    return {
+      reading,
+      release: async () => {
+        release();
+        await page.unrouteAll({ behavior: "wait" });
+      },
+    };
+  }
+
+  async function liveTask(rows: number) {
+    const live = await takenRun();
+    const played = runner as PlayedRunner;
+    await sendLog(stack.origin, played, live.taskId, logRows(rows), 0, false);
+    return { live, played };
+  }
+
+  async function openFollowing(live: { runId: string; jobId: number }, rows: number) {
+    await visit(page, `${runs()}/runs/${live.runId}/job/${live.jobId}`);
+    await see(region()).toHaveAccessibleName(new RegExp(`: ${rows} lines$`), { timeout: 30_000 });
+    await see(page.getByRole("button", { name: "Load new rows" })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await see(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
+    await see(page.locator(`#L${rows}`)).toHaveCount(1);
+  }
+
+  it("opens a line a link asked for once its rows load, though the log scrolled to its end meanwhile", async () => {
+    const { live, played } = await liveTask(400);
+    const log = region();
+    const reads = await holdReads();
+    try {
+      await openFollowing(live, 400);
+      await page.evaluate("location.hash = '#L5'");
+      await reads.reading;
+      await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+      await log.evaluate(
+        (box) =>
+          new Promise<void>((done) => {
+            const rowPx = box.querySelector("[data-probe]")?.getBoundingClientRect().height ?? 0;
+            box.addEventListener("scroll", () => done(), { once: true });
+            box.scrollTop = box.scrollHeight - box.clientHeight - 150 * rowPx;
+          }),
+      );
+      await see(page.locator("#L400")).toHaveCount(0);
+      await log.evaluate(
+        (box) =>
+          new Promise<void>((done) => {
+            box.addEventListener("scroll", () => done(), { once: true });
+            box.scrollTop = box.scrollHeight;
+          }),
+      );
+      await see(page.locator("#L400")).toHaveCount(1);
+    } finally {
+      await reads.release();
+    }
+    await see(page.locator("#L5")).toBeInViewport({ timeout: 30_000 });
+    await sendLog(stack.origin, played, live.taskId, logRows(50, 400), 400, false);
+    await see(log).toHaveAccessibleName(/: 450 lines$/, { timeout: 30_000 });
+    await see(page.locator("#L5")).toBeInViewport();
+    await see(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 450)]);
+  });
+
+  it("stops following when scrolled up after Jump to latest, though a line a link asked for was still loading", async () => {
+    const { live, played } = await liveTask(400);
+    const jump = page.getByRole("button", { name: "Jump to latest" });
+    const reads = await holdReads();
+    try {
+      await openFollowing(live, 400);
+      await page.evaluate("location.hash = '#L5'");
+      await reads.reading;
+      await see(jump).toBeVisible();
+      await jump.click();
+      await see(jump).toHaveCount(0);
+    } finally {
+      await reads.release();
+    }
+    await region().evaluate(
+      (box) =>
+        new Promise<void>((done) => {
+          box.addEventListener("scroll", () => done(), { once: true });
+          box.scrollTop = 0;
+        }),
+    );
+    await see(jump).toBeVisible();
+    await finishTask(stack.origin, played, live.taskId, 1, [step(4, 1, 0, 400)]);
+  });
+
   it("stays on a line near the end that a link opened, as new rows arrive", async () => {
     const live = await takenRun();
     const played = runner as PlayedRunner;
