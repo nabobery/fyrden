@@ -538,3 +538,89 @@ ${job()}`,
     expect(errors.map((e) => [e.code, e.path])).toEqual([["limit_exceeded", "jobs.j256"]]);
   });
 });
+
+describe("parseWorkflow: action references", () => {
+  const withUses = (reference: string) => job("", `      - uses: ${JSON.stringify(reference)}\n`);
+  const SUPPORTED = "`owner/repo[/path]@ref`, `./path` and `docker://image`";
+
+  function refusalOf(reference: string) {
+    const parsed = parse(withUses(reference));
+    if (parsed.ok) throw new Error(`${reference} parsed without errors`);
+    expect(parsed.errors).toHaveLength(1);
+    const [{ code, feature, path, line, column, message }] = parsed.errors as [WorkflowError];
+    expect({ code, feature, path, line, column }).toEqual({
+      code: "invalid_value",
+      feature: "jobs.<job_id>.steps[*].uses",
+      path: "jobs.build.steps[1].uses",
+      line: 7,
+      column: 15,
+    });
+    return message;
+  }
+
+  it.each([
+    [
+      "an action on this instance",
+      "self:octo/action@v1",
+      /`self:` names an action on this instance/,
+    ],
+    ["a self: action by full commit", `self:octo/action@${"a".repeat(40)}`, /`self:`/],
+    ["a builtin: action", "builtin:octo/action@v1", /`builtin:` actions are not supported/],
+    ["an action in this repository", "$/actions/build", /`\$\/path`.*`\.\/path`/],
+    ["an action in this repository with a ref", "$/octo/action@v1", /`\$\/path`/],
+    ["a host before the owner", "github.com/actions/checkout@v4", /names a host/],
+    ["a host with a path", "git.example.org/octo/action/sub@v1", /names a host/],
+    ["an https URL", "https://github.com/actions/checkout@v4", /names a host/],
+    ["an http URL", "http://fyrden.example/octo/action@v1", /names a host/],
+    ["an ssh URL", "ssh://git@fyrden.example/octo/action@v1", /names a host/],
+    ["`.` as the repository", "octo/.@v1", /`\.` and `\.\.` are not repository names/],
+    ["`..` as the repository", "octo/..@v1", /`\.` and `\.\.` are not repository names/],
+    ["`..` as the owner", "../action@v1", /`\.` and `\.\.` are not repository names/],
+  ])("refuses %s", (_, reference, reason) => {
+    const message = refusalOf(reference);
+    expect(message).toMatch(reason);
+    expect(message).toContain(SUPPORTED);
+  });
+
+  it.each(["other:octo/action@v1", "SELF:octo/action@v1", "", "self:", "$/", "docker://"])(
+    "refuses %j as a malformed reference",
+    (reference) => {
+      expect(refusalOf(reference)).toMatch(/is not an action reference/);
+    },
+  );
+
+  it.each([
+    ["an https URL", "https://user:hunter2@fyrden.example/octo/action@v1"],
+    ["a token before the host", "s3cr3t@fyrden.example/octo/action@v1"],
+    ["a malformed URL", "https://user:hunter2@fyrden.example"],
+    ["a scheme-relative URL", "//user:hunter2@fyrden.example/octo/action@v1"],
+    ["a scheme-relative URL without a path", "//user:hunter2@fyrden.example"],
+    ["a URL after a space", " https://user:hunter2@fyrden.example/octo/action@v1"],
+    ["a URL after a tab", "\thttps://user:hunter2@fyrden.example/octo/action@v1"],
+    ["a URL after other text", "octo https://user:hunter2@fyrden.example/o/a@v1"],
+    ["a password with a space", "https://user:hun ter2@fyrden.example/o/a@v1"],
+    ["a password with a tab", "https://user:hun\tter2@fyrden.example/o/a@v1"],
+    ["a password with a newline", "https://user:hun\nter2@fyrden.example/o/a@v1"],
+    ["a user with a space before the host", "user name:hunter2@fyrden.example/o/a@v1"],
+    ["a URL after a ref", "octo@v1 https://user:hunter2@fyrden.example/o/a@v1"],
+    ["two URLs", "https://user:hunter2@fyrden.example/x https://user:hunter3@fyrden.example/x"],
+  ])("drops the credentials of %s from the message", (_, reference) => {
+    const message = refusalOf(reference);
+    expect(message).not.toMatch(/user|hun|s3cr3t/);
+    expect(message).toContain("fyrden.example");
+  });
+
+  it.each([
+    "actions/checkout@v4",
+    `octo/action/sub/dir@${"b".repeat(40)}`,
+    "octo/action.js@v1",
+    "octo/.github@v1",
+    "octo/..dots@v1",
+    "localhost/octo/action@v1",
+    "./.github/actions/deploy",
+    "docker://alpine:3",
+  ])("accepts %s unchanged", (reference) => {
+    const step = workflowOf(withUses(reference)).jobs[0]?.steps[1];
+    expect(step?.kind === "uses" && step.uses.value).toBe(reference);
+  });
+});
