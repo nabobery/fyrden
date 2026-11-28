@@ -1,0 +1,21 @@
+name: container-and-services
+on: push
+jobs:
+  services:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24@sha256:49f7adaf9f1574bc45c20ea317139b39a59d7e758d0e93745e112fd85cb42623
+      env:
+        CONTAINER_LEVEL: container-env
+      options: --hostname corpus-container
+    services:
+      store:
+        image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+        env:
+          REDIS_ARGS: --appendonly no
+    steps:
+      - run: echo "container $CONTAINER_LEVEL on $(hostname)"
+      - name: reach the service
+        run: >-
+          node -e "const s = require('net').connect(6379, 'store', () => s.write('PING\r\n'));
+          s.on('data', (d) => { console.log('service ' + d.toString().trim()); s.end(); });"

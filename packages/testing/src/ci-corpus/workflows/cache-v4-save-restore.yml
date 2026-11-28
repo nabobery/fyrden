@@ -1,0 +1,21 @@
+name: cache-v4-save-restore
+on: push
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    steps:
+      - run: mkdir -p cached && echo "cached ${{ github.sha }}" > cached/data.txt
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: cached
+          key: k-${{ github.sha }}
+  restore:
+    runs-on: ubuntu-latest
+    needs: save
+    steps:
+      - id: exact
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: cached
+          key: k-${{ github.sha }}
+      - run: echo "exact [${{ steps.exact.outputs.cache-hit }}] $(cat cached/data.txt)"

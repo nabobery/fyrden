@@ -1,0 +1,13 @@
+name: cache-required-miss
+on: push
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: required restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: absent-${{ github.sha }}
+          fail-on-cache-miss: true
+      - run: echo "never reached"

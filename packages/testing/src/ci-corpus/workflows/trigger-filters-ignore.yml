@@ -1,0 +1,17 @@
+name: trigger-filters-ignore
+on:
+  push:
+    branches-ignore: ['wip/**']
+    tags-ignore: ['nightly-*']
+    paths-ignore: ['docs/**']
+  pull_request:
+    branches: [main]
+    paths: ['src/**']
+  pull_request_target:
+    branches-ignore: ['wip/**']
+    paths-ignore: ['docs/**']
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo filters

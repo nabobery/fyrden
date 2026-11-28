@@ -1,0 +1,8 @@
+name: sustained-rows
+on: push
+jobs:
+  rows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: one short row a second for five minutes
+        run: for i in $(seq 1 300); do echo "row $i"; sleep 1; done

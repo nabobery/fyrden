@@ -14,7 +14,8 @@
         "$TURBO_ROOT$/packages/git-core/stryker/scopes.mjs",
         "$TURBO_ROOT$/apps/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/tools/*/package.json"
+        "$TURBO_ROOT$/tools/*/package.json",
+        "$TURBO_ROOT$/docs/ci/compatibility.md"
       ]
     },
     "test:coverage": {
@@ -23,7 +24,8 @@
         "$TURBO_ROOT$/packages/git-core/stryker/scopes.mjs",
         "$TURBO_ROOT$/apps/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/tools/*/package.json"
+        "$TURBO_ROOT$/tools/*/package.json",
+        "$TURBO_ROOT$/docs/ci/compatibility.md"
       ]
     }
   }

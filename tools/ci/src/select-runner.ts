@@ -1,7 +1,7 @@
 // Whether CI runs the pinned gitea/runner against `wrangler dev` (the
 // `runner` job): on every push and manual run, and on a pull request that
-// changed the runner protocol, the run object, the harness that drives them
-// or CI's workflow.
+// changed the runner protocol, the run object, the harness that drives them,
+// the workflow corpus or CI's workflow.
 //   node tools/ci/src/select-runner.ts <base> <head>
 // Writes `runner=true|false` to $GITHUB_OUTPUT. Unlike select-ci.ts this
 // decides: the job is skipped when it prints false, and the required check
@@ -18,6 +18,9 @@ export const RUNNER_PATHS: readonly string[] = [
   // The workflow payload the runner parses comes from the domain's expansion and expressions.
   "packages/domain/src/ci/",
   "tools/ci/runner/",
+  "packages/testing/src/ci-corpus/",
+  "tools/ci/corpus/",
+  "tools/ci/vitest.corpus.config.ts",
   // The suite decodes the runner's recorded log calls with this helper.
   "apps/api/test/helpers/runner-proto.ts",
   // The suite's Vitest config, and its `test:runner` script.

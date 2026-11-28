@@ -1,0 +1,5 @@
+name: unsupported-feature
+on: push
+jobs:
+  call:
+    uses: octo/repo/.github/workflows/ci.yml@v1

@@ -1,0 +1,7 @@
+name: uses-absolute-other
+on: push
+jobs:
+  absolute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4

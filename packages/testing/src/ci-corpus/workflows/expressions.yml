@@ -1,0 +1,31 @@
+name: expressions
+run-name: expressions on ${{ github.ref_name }}
+on: push
+env:
+  GREETING: hello
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    env: &shared
+      SHARED: anchored
+    steps:
+      - name: functions
+        env:
+          CONTAINS: ${{ contains('corpus', 'orp') }}
+          STARTS: ${{ startsWith('corpus', 'cor') }}
+          ENDS: ${{ endsWith('corpus', 'pus') }}
+          FORMAT: ${{ format('{0}-{1}', 'a', 'b') }}
+          JOIN: ${{ join(fromJSON('["x","y"]'), '+') }}
+          TOJSON: ${{ toJSON('quoted') }}
+          CASE: ${{ case(github.event_name == 'push', 'pushed', 'other') }}
+        run: echo "functions $CONTAINS $STARTS $ENDS $FORMAT $JOIN $TOJSON $CASE"
+      - name: status functions
+        if: success() && always() && !cancelled() && !failure()
+        run: echo "status functions $((1 + 1))"
+      - name: contexts
+        env: *shared
+        run: echo "contexts ${{ github.event_name }} ${{ env.GREETING }} ${{ job.status }} ${{ runner.os }} ${{ vars.CORPUS_VAR }} $SHARED"
+      - name: write a file
+        run: printf 'corpus\n' > hashed.txt
+      - name: hash it
+        run: echo "hash ${{ hashFiles('hashed.txt') }}"
