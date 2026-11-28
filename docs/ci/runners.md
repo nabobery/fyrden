@@ -94,6 +94,13 @@ Plan for that:
   to the public repositories (`selected`). GitHub's advice is stronger: self-hosted runners "should
   almost never be used for public repositories"
   ([secure use](https://docs.github.com/en/actions/reference/security/secure-use)).
+- **Share a runner only between repositories with the same read access, or give each job fresh
+  storage.** The runner keeps downloaded actions on disk by clone URL and ref, and reuses an intact
+  copy of a full commit without fetching or checking access again (`fetchAction` in
+  [`fetch_action.go`](https://gitea.com/gitea/runner/src/tag/v6.0.0/act/common/git/fetch_action.go),
+  called from
+  [`step_action_remote.go`](https://gitea.com/gitea/runner/src/tag/v6.0.0/act/runner/step_action_remote.go);
+  verified at v6.0.0). A job can then read an action another repository's job downloaded.
 
 ## Runner configuration
 
@@ -121,7 +128,11 @@ container:
 | `cache.enabled: false` | A shared cache is a path from a fork's job to a later, trusted one. Or run one cache per level of trust, and never share it between runners that take fork jobs and runners that don't |
 | `runner.capacity: 1` | The default. Jobs at the same time on one machine share its Docker daemon |
 
-With the cache off nothing is restored or saved: a workflow that requires a cache hit fails.
+With the cache off nothing is restored or saved, and a job that sets `fail-on-cache-miss` still
+passes: `actions/cache` returns before reading that input when the cache service is unavailable
+(`restoreImpl` in
+[`src/restoreImpl.ts`](https://github.com/actions/cache/blob/55cc8345863c7cc4c66a329aec7e433d2d1c52a9/src/restoreImpl.ts),
+verified at v6.1.0). Check for the files a step needs instead.
 
 ### Labels, `services:` and `container:`
 
@@ -131,6 +142,32 @@ With the cache off nothing is restored or saved: a workflow that requires a cach
   (`startHostEnvironment` in `run_context.go`, linked above; not checked by running it). A job with
   `container:` is a Docker job whatever the label.
 - The server sees only the label's name, not how the runner runs it, so it cannot check any of this.
+
+## Action references
+
+A step's `uses:` takes `owner/repo[/path]@ref`, fetched from the runner's default action host
+(github.com unless the runner's configuration says otherwise), `./path` in the job's workspace, or
+`docker://image`. Fyrden refuses, when it reads the workflow:
+
+- `self:owner/repo@ref`. The runner fetches it from this Fyrden instance with the job's token, and
+  later reuses its cached copy of a full commit for any job without asking Fyrden again
+  ([`step_action_remote.go`](https://gitea.com/gitea/runner/src/tag/v6.0.0/act/runner/step_action_remote.go)
+  and [`fetch_action.go`](https://gitea.com/gitea/runner/src/tag/v6.0.0/act/common/git/fetch_action.go),
+  verified at v6.0.0).
+- `builtin:` references.
+- `$/path`. GitHub.com runs it as the action at that path in the same repository at the running
+  commit, with no checkout; GitHub Enterprise Server does not
+  ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#example-using-an-action-in-the-same-repository-as-the-workflow-at-the-running-commit-recommended)).
+  Fyrden does not support it yet, a gap in compatibility with GitHub.com. Check the repository out and
+  use `./path`.
+- A reference that names a host: `https://host/owner/repo@ref`, or `host.tld/owner/repo@ref`. A first
+  segment with a dot is read as a host. A host without a dot (`localhost/owner/repo@ref`) cannot be
+  told from an owner, so Fyrden accepts it and the runner looks for owner `localhost` on its default
+  host.
+- `.` or `..` as the owner or repository name.
+
+The `uses:` of steps inside a composite action's `action.yml` are read by the runner, not by Fyrden,
+and are not checked.
 
 ## Capacity
 

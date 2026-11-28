@@ -87,7 +87,8 @@ class Stop extends Error {}
 
 const strict = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const JOB_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
-const REMOTE_ACTION = /^[^\s/@]+\/[^\s/@]+(?:\/[^\s@]+)?@[^\s@]+$/;
+const REMOTE_ACTION = /^([^\s/@]+)\/([^\s/@]+)(?:\/[^\s@]+)?@[^\s@]+$/;
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
 
 /** `path`'s workflow, or every error that stops it running. Never throws on any input. */
 export function parseWorkflow(path: string, bytes: Uint8Array): ParsedWorkflow {
@@ -1833,6 +1834,37 @@ function readRunsOn(w: Walk, e: Entry): Valued<readonly Text[]> | undefined {
   });
 }
 
+// A refused reference is never quoted back: a token can take the shape of a reference
+// (`self:token/x@host`), and messages are stored with the run.
+const THE_REFERENCE = "The step's `uses`";
+
+// The pinned runners resolve `self:` on this instance with the job's token and later reuse its
+// cached tree for any job without asking again, `$/` at the running commit and a URL on its host
+// (verified at gitea/runner v6.0.0: act/runner/step_action_remote.go, act/common/git/fetch_action.go,
+// https://gitea.com/gitea/runner/src/tag/v6.0.0/act/runner/step_action_remote.go).
+function actionRefusal(reference: string): string | undefined {
+  if (reference.startsWith("./")) return undefined;
+  if (reference.startsWith("docker://") && reference.length > "docker://".length) return undefined;
+  const refuse = (reason: string) =>
+    `${THE_REFERENCE} is not an action reference Fyrden supports: ${reason} Fyrden runs \`owner/repo[/path]@ref\`, \`./path\` and \`docker://image\`.`;
+  if (reference.startsWith("self:")) return refuse("`self:` names an action on this instance.");
+  if (reference.startsWith("builtin:")) return refuse("`builtin:` actions are not supported.");
+  if (reference.startsWith("$/")) {
+    return refuse(
+      "`$/path` (an action in this repository at the running commit) is not supported; check the repository out and use `./path`.",
+    );
+  }
+  const namesHost = "it names a host, and actions come only from the runner's default host.";
+  if (URL_SCHEME.test(reference) && !reference.startsWith("docker://")) return refuse(namesHost);
+  const [, owner = "", repo = ""] = REMOTE_ACTION.exec(reference) ?? [];
+  if (owner && [owner, repo].some((name) => name === "." || name === "..")) {
+    return refuse("`.` and `..` are not repository names.");
+  }
+  if (owner.includes(".")) return refuse(namesHost);
+  if (owner && !owner.includes(":")) return undefined;
+  return `${THE_REFERENCE} is not an action reference: use \`owner/repo@ref\`, \`owner/repo/path@ref\`, \`./path\` or \`docker://image\`.`;
+}
+
 type StepFields = {
   id: Text;
   name: Text;
@@ -1865,19 +1897,8 @@ const STEP_READERS = {
         noExpressions(`${STEP}.uses`),
       );
     }
-    const ok =
-      v.startsWith("./") ||
-      (v.startsWith("docker://") && v.length > "docker://".length) ||
-      REMOTE_ACTION.test(v);
-    if (!ok) {
-      return w.fail(
-        "invalid_value",
-        `${STEP}.uses`,
-        e.path,
-        uses.at,
-        `\`${cut(v, 80)}\` is not an action reference: use \`owner/repo@ref\`, \`owner/repo/path@ref\`, \`./path\` or \`docker://image\`.`,
-      );
-    }
+    const refusal = actionRefusal(v);
+    if (refusal) return w.fail("invalid_value", `${STEP}.uses`, e.path, uses.at, refusal);
     return { uses };
   },
   run: (w, e) => opt("run", readText(w, e.value, e.path, `${STEP}.run`, e.offset)),
