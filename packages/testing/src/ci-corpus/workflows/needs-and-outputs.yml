@@ -1,0 +1,26 @@
+name: needs-and-outputs
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      answer: ${{ steps.compute.outputs.value }}
+    steps:
+      - id: compute
+        run: echo "value=42" >> "$GITHUB_OUTPUT"
+  lint:
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      verdict: ${{ steps.check.outputs.verdict }}
+    steps:
+      - id: check
+        run: echo "verdict=clean-${{ needs.build.outputs.answer }}" >> "$GITHUB_OUTPUT"
+  report:
+    runs-on: ubuntu-latest
+    needs: [build, lint]
+    steps:
+      - env:
+          ANSWER: ${{ needs.build.outputs.answer }}
+          VERDICT: ${{ needs.lint.outputs.verdict }}
+        run: echo "report answer=$ANSWER verdict=$VERDICT"

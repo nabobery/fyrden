@@ -2,14 +2,26 @@
   "$schema": "../../node_modules/turbo/schema.json",
   "extends": ["//"],
   // The import-boundary test walks every workspace package's dependencies
-  // and lints probes against the root biome.json (a global dependency).
+  // and lints probes against the root biome.json (a global dependency). The
+  // corpus test checks that the tests it names as proofs exist.
   "tasks": {
     "test": {
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/tools/*/package.json"
+        "$TURBO_ROOT$/tools/*/package.json",
+        "$TURBO_ROOT$/apps/api/test/ci-pull-triggers.test.ts",
+        "$TURBO_ROOT$/apps/api/test/ci-schedules.test.ts",
+        "$TURBO_ROOT$/apps/api/test/ci-triggers.test.ts",
+        "$TURBO_ROOT$/apps/api/test/run.checks.test.ts",
+        "$TURBO_ROOT$/apps/api/test/run.concurrency.test.ts",
+        "$TURBO_ROOT$/apps/api/test/runs.operations.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/cron.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/dispatch-inputs.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/run-state.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/triggers.test.ts",
+        "$TURBO_ROOT$/tools/ci/e2e/ci-triggers.test.ts"
       ]
     },
     "test:coverage": {
@@ -17,7 +29,18 @@
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/apps/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/tools/*/package.json"
+        "$TURBO_ROOT$/tools/*/package.json",
+        "$TURBO_ROOT$/apps/api/test/ci-pull-triggers.test.ts",
+        "$TURBO_ROOT$/apps/api/test/ci-schedules.test.ts",
+        "$TURBO_ROOT$/apps/api/test/ci-triggers.test.ts",
+        "$TURBO_ROOT$/apps/api/test/run.checks.test.ts",
+        "$TURBO_ROOT$/apps/api/test/run.concurrency.test.ts",
+        "$TURBO_ROOT$/apps/api/test/runs.operations.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/cron.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/dispatch-inputs.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/run-state.test.ts",
+        "$TURBO_ROOT$/packages/domain/test/ci/triggers.test.ts",
+        "$TURBO_ROOT$/tools/ci/e2e/ci-triggers.test.ts"
       ]
     }
   }

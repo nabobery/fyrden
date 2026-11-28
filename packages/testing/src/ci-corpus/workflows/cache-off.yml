@@ -1,0 +1,13 @@
+name: cache-off
+on: push
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - id: exact
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: k-${{ github.sha }}
+          fail-on-cache-miss: true
+      - run: echo "cache off [${{ steps.exact.outputs.cache-hit }}] $(test -e cached && echo present || echo absent)"

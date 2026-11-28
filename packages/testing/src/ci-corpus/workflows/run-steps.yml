@@ -1,0 +1,38 @@
+name: run-steps
+on: push
+permissions:
+  contents: read
+env:
+  LEVEL_WORKFLOW: workflow-env
+defaults:
+  run:
+    shell: sh
+    working-directory: /
+jobs:
+  inherits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: workflow defaults
+        run: echo "inherited ${BASH_VERSION:-sh} in $(pwd)"
+  steps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      LEVEL_JOB: job-env
+    defaults:
+      run:
+        shell: bash
+        working-directory: /tmp
+    steps:
+      - name: levels
+        id: levels
+        timeout-minutes: 2
+        env:
+          LEVEL_STEP: step-env
+        run: echo "levels $LEVEL_WORKFLOW/$LEVEL_JOB/$LEVEL_STEP"
+      - name: job defaults
+        run: echo "defaults ${BASH_VERSION:+bash} in $(pwd)"
+      - name: step overrides
+        shell: sh
+        working-directory: /usr
+        run: echo "overrides ${BASH_VERSION:-sh} in $(pwd)"

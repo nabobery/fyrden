@@ -1,0 +1,8 @@
+name: quiet-job
+on: push
+jobs:
+  quiet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: idle for five minutes
+        run: sleep 300

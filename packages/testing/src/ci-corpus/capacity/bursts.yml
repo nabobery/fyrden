@@ -1,0 +1,8 @@
+name: bursts
+on: push
+jobs:
+  bursts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ten bursts of a thousand rows, twenty seconds apart
+        run: for b in $(seq 1 10); do seq -f "burst $b row %g" 1 1000; sleep 20; done

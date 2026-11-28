@@ -1,0 +1,33 @@
+name: job-fields
+on: push
+permissions:
+  actions: read
+  checks: write
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: write
+jobs:
+  fields:
+    runs-on:
+      labels: [ubuntu-latest]
+    permissions:
+      contents: read
+    container:
+      image: node:24@sha256:49f7adaf9f1574bc45c20ea317139b39a59d7e758d0e93745e112fd85cb42623
+      credentials:
+        username: ${{ vars.REGISTRY_USER }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+      ports: [8080]
+      volumes: ['/tmp/corpus:/corpus']
+    services:
+      store:
+        image: redis:7-alpine@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+        credentials:
+          username: ${{ vars.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+        ports: ['6379:6379']
+        volumes: ['/tmp/store:/data']
+        options: --health-cmd "redis-cli ping"
+    steps:
+      - run: echo fields

@@ -1,0 +1,36 @@
+name: cache-save-restore
+on: push
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    steps:
+      - run: mkdir -p cached && echo "cached ${{ github.sha }}" > cached/data.txt
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: k-${{ github.sha }}
+  restore:
+    runs-on: ubuntu-latest
+    needs: save
+    steps:
+      - id: exact
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: k-${{ github.sha }}
+      - run: echo "exact [${{ steps.exact.outputs.cache-hit }}] $(cat cached/data.txt)"
+      - run: rm -rf cached
+      - id: prefix
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: k-${{ github.sha }}-x
+          restore-keys: k-${{ github.sha }}
+      - run: echo "prefix [${{ steps.prefix.outputs.cache-hit }}] $(cat cached/data.txt)"
+      - run: rm -rf cached
+      - id: miss
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: cached
+          key: other-${{ github.sha }}
+      - run: echo "miss [${{ steps.miss.outputs.cache-hit }}] $(test -e cached && echo present || echo absent)"

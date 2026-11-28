@@ -1,0 +1,42 @@
+name: failure-and-conditions
+on: push
+jobs:
+  fails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: tolerated step
+        continue-on-error: true
+        run: exit 3
+      - name: after tolerated
+        if: success()
+        run: echo "still $((40 + 2))"
+      - name: breaks
+        run: exit 1
+      - name: skipped step
+        run: echo "never $((1 + 1))"
+      - name: on step failure
+        if: failure()
+        run: echo "step failure $((2 + 2))"
+  skipped-after-failure:
+    runs-on: ubuntu-latest
+    needs: fails
+    steps:
+      - run: echo never
+  on-failure:
+    runs-on: ubuntu-latest
+    needs: fails
+    if: failure()
+    steps:
+      - run: echo "job failure $((3 + 3))"
+  always:
+    runs-on: ubuntu-latest
+    needs: fails
+    if: always() && !cancelled()
+    steps:
+      - run: echo "always $((4 + 4))"
+  tolerated:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: fails anyway
+        run: exit 1

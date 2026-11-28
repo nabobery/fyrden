@@ -1,0 +1,12 @@
+name: pull-request
+on:
+  pull_request:
+    types: [opened]
+jobs:
+  pr:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+        run: echo "refs $HEAD into $BASE"

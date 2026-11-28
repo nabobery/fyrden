@@ -1,0 +1,22 @@
+name: matrix
+on: push
+jobs:
+  combine:
+    name: combine ${{ matrix.os }} ${{ matrix.size }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [linux, mac]
+        size: [small, large]
+        exclude:
+          - os: mac
+            size: large
+        include:
+          - os: linux
+            size: small
+            extra: bonus
+    steps:
+      - env:
+          CELL: ${{ matrix.os }}-${{ matrix.size }}-${{ matrix.extra }}
+          POSITION: ${{ strategy.job-index }}/${{ strategy.job-total }}
+        run: echo "cell $CELL at $POSITION"
