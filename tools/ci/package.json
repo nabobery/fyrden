@@ -13,7 +13,8 @@
     "test:interop": "vitest run -c vitest.interop.config.ts",
     "test:conformance": "vitest run -c vitest.conformance.config.ts",
     "test:schemathesis": "vitest run -c vitest.schemathesis.config.ts",
-    "test:runner": "vitest run -c vitest.runner.config.ts"
+    "test:runner": "vitest run -c vitest.runner.config.ts",
+    "test:corpus": "vitest run -c vitest.corpus.config.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
@@ -22,6 +23,8 @@
     "@fyrden/domain": "workspace:*",
     "@fyrden/sdk": "workspace:*",
     "@fyrden/testing": "workspace:*",
+    "@noble/ciphers": "catalog:",
+    "@noble/hashes": "catalog:",
     "@playwright/test": "catalog:",
     "@types/node": "catalog:",
     "@vitest/coverage-istanbul": "catalog:",

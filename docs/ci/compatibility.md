@@ -6,7 +6,7 @@ Which GitHub Actions workflow features Fyrden accepts, and what shows each one w
 
 ## How each feature is shown
 
-- **runs**: a workflow in the corpus (`packages/testing/src/ci-corpus/`) runs on the pinned runners below and its outcome is checked through the REST API.
+- **runs**: a workflow in the corpus (`packages/testing/src/ci-corpus/`) runs on the pinned runners below and its outcome is checked through the REST API. The nightly workflow runs every such case on both runner versions ([runs](https://github.com/nabobery/fyrden/actions/workflows/nightly.yml)), and pull requests that change the corpus or the runner paths run them on the newer one.
 - **tested**: an existing test named in the row shows the behaviour, because it is decided by the forge before any runner is involved.
 - **parsed**: the parser accepts and models it, checked on every pull request; the row says why the runner tier shows no more.
 

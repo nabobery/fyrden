@@ -254,13 +254,15 @@ jobs:
   # the run object, the domain's CI code, the harness, its setup, the
   # workflows; every push). Both releases, one after the other: each took 20 to 30 s with
   # wrangler's start on a laptop (measured), so the older one costs less than
-  # a second job's setup. The binaries are cached by their pins.
+  # a second job's setup. The binaries are cached by their pins. Then the
+  # workflow corpus's runner cases on 6.0.0; the nightly workflow runs them on
+  # both releases.
   runner:
     name: gitea/runner against wrangler dev (6.0.0, 5.4.1)
     needs: [detect]
     if: needs.detect.outputs.runner == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -280,6 +282,11 @@ jobs:
         env:
           RUNNER_VERSION: "5.4.1"
         run: pnpm --filter @fyrden/ci-tools test:runner
+      - name: Workflow corpus on gitea/runner 6.0.0
+        if: success() || failure()
+        env:
+          RUNNER_VERSION: "6.0.0"
+        run: pnpm --filter @fyrden/ci-tools test:corpus
 
   # The git interoperability matrix, pull request subset: the pinned current
   # git (built once from its checked tarball and cached) against fyrden-api

@@ -191,6 +191,8 @@ export async function startWranglerDev(options: {
   readonly cwd: string;
   readonly onOutput: (text: string) => void;
   readonly timeoutMs?: number;
+  /** The address it listens on: `127.0.0.1` unless a test's containers must reach it from a bridge network. */
+  readonly ip?: string;
   /** The HTTP and inspector ports for each start; a test's way to make one taken. */
   readonly pickPorts?: () => Promise<[number, number]>;
 }): Promise<WranglerDev> {
@@ -204,7 +206,7 @@ export async function startWranglerDev(options: {
         "dev",
         ...options.args,
         "--ip",
-        "127.0.0.1",
+        options.ip ?? "127.0.0.1",
         "--port",
         String(port),
         // Its own inspector port: servers each probing up from 9229 can pick the same one.

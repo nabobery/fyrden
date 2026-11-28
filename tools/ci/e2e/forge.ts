@@ -102,7 +102,12 @@ export interface Forge {
  */
 export async function startForge(
   name: string,
-  options: { readonly primary?: string; readonly vars?: Readonly<Record<string, string>> } = {},
+  options: {
+    readonly primary?: string;
+    readonly vars?: Readonly<Record<string, string>>;
+    /** The address `wrangler dev` listens on, `127.0.0.1` by default. */
+    readonly listen?: string;
+  } = {},
 ): Promise<Forge> {
   const scratch = await mkdtemp(join(tmpdir(), `fyrden-e2e-${name}-`));
   const persist = join(scratch, "state");
@@ -157,6 +162,7 @@ export async function startForge(
         "--test-scheduled",
       ],
       cwd: apiDir,
+      ...(options.listen && { ip: options.listen }),
       onOutput: (text) => {
         output += text;
       },
