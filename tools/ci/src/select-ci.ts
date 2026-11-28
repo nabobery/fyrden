@@ -33,6 +33,9 @@ const ADAPTERS = "@fyrden/adapters-cloudflare";
 const CI_TOOLS = "@fyrden/ci-tools";
 
 const DOCUMENTATION = /^docs\/.+\.md$/;
+const GENERATED_PAGES: ReadonlyMap<string, string> = new Map([
+  ["docs/ci/compatibility.md", CI_TOOLS],
+]);
 const PACKAGE_SOURCE = /^(?:apps|packages)\/[^/]+\/|^tools\/ci\//;
 
 /**
@@ -66,7 +69,12 @@ function everything(workspace: readonly string[], reason: string): CiSelection {
   };
 }
 
-export function selectCi({ event, paths, affected, workspace }: SelectionInput): CiSelection {
+export function selectCi({
+  event,
+  paths,
+  affected: changed,
+  workspace,
+}: SelectionInput): CiSelection {
   if (event !== "pull_request") return everything(workspace, `${event}: every job`);
   if (paths.length === 0) return everything(workspace, "no changed paths: every job");
   const global = paths.find((path) => RUN_EVERYTHING.some((pattern) => pattern.test(path)));
@@ -74,6 +82,9 @@ export function selectCi({ event, paths, affected, workspace }: SelectionInput):
   const unplaced = paths.find((path) => !DOCUMENTATION.test(path) && !PACKAGE_SOURCE.test(path));
   if (unplaced) return everything(workspace, `${unplaced} is outside any package: every job`);
 
+  const affected = [
+    ...new Set([...changed, ...paths.flatMap((path) => GENERATED_PAGES.get(path) ?? [])]),
+  ];
   const unknown = affected.find((name) => !workspace.includes(name));
   if (unknown) throw new Error(`Turbo reports an unknown package affected: ${unknown}`);
   const api = affected.includes(API);

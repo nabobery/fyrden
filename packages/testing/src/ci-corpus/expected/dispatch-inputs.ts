@@ -1,7 +1,7 @@
 import type { CorpusCase } from "../types.js";
 
 const INPUT_CHECKS =
-  "Checked when the dispatch request arrives, before any runner; the run pages show descriptions.";
+  "Checked when the dispatch request arrives, before any runner; a description is accepted and shown nowhere yet.";
 
 export default {
   id: "dispatch-inputs",

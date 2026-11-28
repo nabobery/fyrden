@@ -51,6 +51,12 @@ describe("selectCi", () => {
     expect(selection.reason).toMatch(/documentation only/);
   });
 
+  it("runs the CI tools' tests for a change to the compatibility page their test checks", () => {
+    const selection = select({ paths: ["docs/ci/compatibility.md"] });
+    expect(selection.coveragePackages).toEqual(["@fyrden/ci-tools"]);
+    expect(selection.reason).toBe("affected: @fyrden/ci-tools");
+  });
+
   it("runs web coverage and end to end, not the API's jobs, for a web change", () => {
     const selection = select({
       paths: ["apps/web/app/routes/home.tsx"],
